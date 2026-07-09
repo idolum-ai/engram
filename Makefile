@@ -8,7 +8,7 @@ LDFLAGS := -X github.com/idolum-ai/engram/internal/version.Version=$(VERSION) -X
 GOCACHE ?= /tmp/engram-go-build
 GOMODCACHE ?= /tmp/engram-go-mod
 
-.PHONY: build install uninstall install-service uninstall-service test run
+.PHONY: build install uninstall install-service uninstall-service test test-race check architecture public-readiness secrets workflow-sanity smoke run
 
 build:
 	mkdir -p bin
@@ -48,6 +48,26 @@ uninstall-service:
 
 test:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test ./...
+
+test-race:
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test -race ./internal/state ./internal/lockfile ./internal/telegram ./internal/tmux
+
+check: test build architecture public-readiness secrets workflow-sanity smoke
+
+architecture:
+	bash scripts/check-architecture.sh
+
+public-readiness:
+	bash scripts/check-public-readiness.sh
+
+secrets:
+	bash scripts/check-secrets.sh
+
+workflow-sanity:
+	bash scripts/check-workflows.sh
+
+smoke: build
+	bash scripts/smoke.sh
 
 run:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/engram run --env .env

@@ -15,6 +15,17 @@ terminal state.
 
 Engram uses only the Go standard library.
 
+## Quality Gate
+
+Run the local quality gate before pushing:
+
+```sh
+make check
+```
+
+The gate runs build/tests, package-boundary checks, public-readiness checks,
+workflow sanity checks, and a tracked-file secret scan.
+
 ## Configure
 
 Create `~/.engram/.env`:
