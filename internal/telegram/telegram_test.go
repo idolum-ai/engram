@@ -55,6 +55,16 @@ func TestMarkdownToHTMLCodeFence(t *testing.T) {
 	}
 }
 
+func TestMarkdownToHTMLBlockquote(t *testing.T) {
+	t.Parallel()
+
+	got := MarkdownToHTML("evidence:\n> error: <denied>\n> retry with --force\n\nnext")
+	want := "evidence:\n<blockquote>error: &lt;denied&gt;\nretry with --force</blockquote>\nnext"
+	if got != want {
+		t.Fatalf("MarkdownToHTML blockquote = %q, want %q", got, want)
+	}
+}
+
 func TestSendHTMLMessagePayload(t *testing.T) {
 	t.Parallel()
 

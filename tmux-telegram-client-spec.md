@@ -236,7 +236,8 @@ Service behavior:
 2. Captures the current visible pane without Haiku simplification.
 3. Sends the raw capture as a text attachment to the configured Telegram chat.
 
-`/raw` is for inspecting what Haiku saw. It should not edit the anchor message.
+`/raw` is for inspecting the unfiltered visible pane capture. It should not edit
+the anchor message.
 
 ### Logs
 
@@ -639,7 +640,9 @@ avoiding blind polling.
 
 Anchor messages should not be raw terminal buffers. They should be short Haiku
 guide reports that explain, in plain English, what the terminal appears to be
-doing and what the user should do next.
+doing and what the user should do next. When useful, they should include short
+source-evidence quote blocks reconstructed from the terminal text most relevant
+to that next step.
 
 The simplifier input should include:
 
@@ -651,20 +654,47 @@ The simplifier input should include:
 - Previous guide report, if available.
 - Full scrollback only on the single bounded retry described below.
 
+Before the visible capture is sent to Haiku, Engram should remove repeated
+stale lines that are likely fixed terminal affordances or old suggestions. For
+each terminal session, keep an in-memory rolling cache of the previous five
+visible capture line sets. If a line in the current visible capture is exactly
+equal to any line seen in that rolling cache, omit that line from the
+`visible_terminal_capture` prompt field. Record the unfiltered current capture
+after filtering so future prompts can compare against it.
+
+This filter must not alter stored raw captures, `/raw`, `/dump`, render hashes,
+or visible-path extraction. It only changes the visible capture text sent to
+Haiku. Tapping the anchor refresh button clears this cache for that session
+before queuing the forced refresh, so the next Haiku prompt can see the full
+current visible pane again.
+
 The guide output should be constrained to a compact JSON schema:
 
 ```json
 {
   "status_report": "one or two short plain-English paragraphs",
   "recommended_action": "one clear sentence",
+  "citations": ["zero to three short reconstructed excerpts from terminal text"],
   "confidence": "high|medium|low",
   "needs_full_buffer": false,
   "reason": "hidden confidence diagnostic"
 }
 ```
 
-Only `status_report` and `recommended_action` are rendered to Telegram.
-`confidence`, `needs_full_buffer`, and `reason` are hidden pipeline fields.
+`status_report`, `recommended_action`, and `citations` are rendered to Telegram.
+`citations` should be displayed as quote blocks. `confidence`,
+`needs_full_buffer`, and `reason` are hidden pipeline fields.
+
+Citation rules:
+
+- Cite terminal text that grounds the next step: prompts, errors, commands
+  waiting for input, failing checks, file paths, or completion messages.
+- Reconstruct citation text only from terminal captures. The model may repair
+  broken line wraps, repeated whitespace, and obvious terminal-control
+  artifacts, but must not add unsupported words or facts.
+- Keep each citation short enough to read on a phone, with an implementation
+  target of 280 characters or less.
+- Leave citations empty when no reliable excerpt is available.
 
 The system prompt should frame the model as an operator guide, not as a general
 assistant and not as a literal terminal emulator:
@@ -672,8 +702,10 @@ assistant and not as a literal terminal emulator:
 ```text
 You are Engram's terminal guide for a technical user reading Telegram on a
 phone. Explain the terminal state in plain English, point out likely blockers or
-prompts, and recommend one concrete next action. Do not pretend to be the
-process, do not invent success, and mark uncertainty clearly. Return JSON only.
+prompts, and recommend one concrete next action. Include short source citations
+reconstructed from the terminal text when they clarify the next step. Do not
+pretend to be the process, do not invent success or citation text, and mark
+uncertainty clearly. Return JSON only.
 ```
 
 ### LLM Token Budget
@@ -718,11 +750,16 @@ Rules:
 - Do not use the LLM for authorization decisions.
 - Do not send the full scrollback to Haiku by default.
 - First ask Haiku for a guide report from the visible pane only.
+- The visible-pane prompt should omit exact lines repeated in the prior five
+  visible captures for the same session unless the user has just tapped the
+  refresh button.
 - If the hidden confidence is low or `needs_full_buffer` is true, make exactly
   one retry with full scrollback captured from tmux, then render that result.
 - If Haiku fails, keep the last successful summary and add a local stale marker.
 - `/dump <id>` remains the raw full-buffer path and does not use the LLM.
 - Never imply a command succeeded unless the terminal output supports it.
+- Never include a citation unless it is supported by the visible capture or the
+  bounded full-scrollback retry capture.
 - Do not edit the Telegram anchor until the full Haiku response has been
   received, parsed, and rendered.
 - If the visible buffer appears to be a TUI, summarize the screen state and
@@ -890,9 +927,10 @@ Rendering rules:
 - Strip unsupported ANSI before sending terminal excerpts to Haiku.
 - Include the last prompt or a short final line when it helps navigation.
 - After the Haiku report, append a local deterministic `visible paths` section
-  when absolute or home-relative paths are visible in the current pane. Render
-  them in a fenced code block so Telegram shows copyable path snippets. Haiku
-  must not generate this list.
+  when absolute or home-relative paths are visible in the current pane and
+  currently exist as regular files or directories. Render them in a fenced code
+  block so Telegram shows copyable path snippets. Haiku must not generate this
+  list.
 
 The service should use `capture-pane` for the visible snapshot sent to Haiku and
 avoid sending the full scrollback by default.

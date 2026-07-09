@@ -405,6 +405,14 @@ func MarkdownToHTML(text string) string {
 			i += 3 + end + 3
 			continue
 		}
+		if atLineStart(text, i) && text[i] == '>' {
+			next, block := consumeBlockquote(text, i)
+			b.WriteString("<blockquote>")
+			b.WriteString(escapeHTML(block))
+			b.WriteString("</blockquote>")
+			i = next
+			continue
+		}
 		if strings.HasPrefix(text[i:], "**") {
 			if end := strings.Index(text[i+2:], "**"); end >= 0 {
 				b.WriteString("<b>")
@@ -436,6 +444,30 @@ func MarkdownToHTML(text string) string {
 		i++
 	}
 	return b.String()
+}
+
+func atLineStart(text string, i int) bool {
+	return i == 0 || text[i-1] == '\n'
+}
+
+func consumeBlockquote(text string, start int) (int, string) {
+	var lines []string
+	i := start
+	for i < len(text) && atLineStart(text, i) && text[i] == '>' {
+		lineEnd := strings.IndexByte(text[i:], '\n')
+		end := len(text)
+		if lineEnd >= 0 {
+			end = i + lineEnd
+		}
+		line := strings.TrimPrefix(text[i:end], ">")
+		line = strings.TrimPrefix(line, " ")
+		lines = append(lines, line)
+		i = end
+		if i < len(text) && text[i] == '\n' {
+			i++
+		}
+	}
+	return i, strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
 func escapeHTML(text string) string {

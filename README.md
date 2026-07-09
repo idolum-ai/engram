@@ -3,7 +3,7 @@
 Engram is a Telegram client for tmux sessions. It creates tmux-backed terminal
 sessions from Telegram messages, keeps one editable Telegram anchor per session,
 and uses Anthropic Haiku to render a compact plain-English status report with a
-recommended next action.
+recommended next action plus short source-evidence quote blocks when useful.
 
 ## Requirements
 

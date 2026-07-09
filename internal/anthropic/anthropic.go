@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const SystemPrompt = `You are Engram's terminal guide for a technical user reading Telegram on a phone. Explain the terminal state in plain English, point out likely blockers or prompts, and recommend one concrete next action. Do not pretend to be the process, do not invent success, and mark uncertainty clearly. Return JSON only.`
+const SystemPrompt = `You are Engram's terminal guide for a technical user reading Telegram on a phone. Explain the terminal state in plain English, point out likely blockers or prompts, and recommend one concrete next action. Include short source citations reconstructed from the terminal text when they clarify the next step. Do not pretend to be the process, do not invent success or citation text, and mark uncertainty clearly. Return JSON only.`
 
 type Client struct {
 	APIKey     string
@@ -30,11 +30,12 @@ type SummaryInput struct {
 }
 
 type GuideReport struct {
-	StatusReport      string `json:"status_report"`
-	RecommendedAction string `json:"recommended_action"`
-	Confidence        string `json:"confidence"`
-	NeedsFullBuffer   bool   `json:"needs_full_buffer"`
-	Reason            string `json:"reason"`
+	StatusReport      string   `json:"status_report"`
+	RecommendedAction string   `json:"recommended_action"`
+	Citations         []string `json:"citations"`
+	Confidence        string   `json:"confidence"`
+	NeedsFullBuffer   bool     `json:"needs_full_buffer"`
+	Reason            string   `json:"reason"`
 }
 
 func New(apiKey, model string) *Client {
@@ -129,6 +130,7 @@ func buildPrompt(in SummaryInput) string {
 	fmt.Fprintf(&b, "last_input_mode: %s\n", in.LastInputMode)
 	fmt.Fprintf(&b, "last_input_preview: %s\n", in.LastInput)
 	b.WriteString("last_input_preview_note: this is a shortened metadata preview; do not treat truncation here as user-visible truncation.\n\n")
+	b.WriteString("visible_capture_filter_note: repeated lines identical to lines in recent visible captures for this same session may have been omitted before this prompt; treat missing repeated boilerplate as intentional, not as terminal corruption.\n\n")
 	if strings.TrimSpace(in.PreviousSummary) != "" {
 		b.WriteString("previous_summary:\n")
 		b.WriteString(limit(in.PreviousSummary, 800))
@@ -146,12 +148,19 @@ func buildPrompt(in SummaryInput) string {
 {
   "status_report": "one or two short plain-English paragraphs explaining what the session appears to be doing and any blocker/prompt/error",
   "recommended_action": "one clear sentence recommending the user's next action",
+  "citations": ["zero to three short reconstructed excerpts from the terminal text that support the status or recommendation"],
   "confidence": "high|medium|low",
   "needs_full_buffer": false,
   "reason": "hidden one-sentence reason for confidence and whether full scrollback is needed"
 }
 
-Use needs_full_buffer=true when the visible pane is ambiguous, mid-scroll, or missing earlier context needed for a useful recommendation. Treat last_input_preview as a shortened metadata hint, not proof that the user's message was cut off. If a prompt appears at the bottom, describe it as the current visible prompt only; do not merge it into unrelated work.`)
+Citation rules:
+- Use citations for the terminal text most relevant to the user's next action: prompts, errors, commands waiting for input, failing checks, file paths, or completion messages.
+- Reconstruct citation text only from the terminal captures. You may repair broken line wraps, repeated whitespace, and obvious terminal-control artifacts, but do not add facts or words that are not supported by the capture.
+- Keep each citation under 280 characters. Use plain text, not Markdown.
+- Leave citations empty when no reliable excerpt is available.
+
+Use needs_full_buffer=true when the visible pane is ambiguous, mid-scroll, or missing earlier context needed for a useful recommendation. Treat last_input_preview as a shortened metadata preview, not proof that the user's message was cut off. If a prompt appears at the bottom, describe it as the current visible prompt only; do not merge it into unrelated work.`)
 	return b.String()
 }
 
@@ -172,6 +181,7 @@ func parseGuideReport(text string) (GuideReport, error) {
 	}
 	report.StatusReport = strings.TrimSpace(report.StatusReport)
 	report.RecommendedAction = strings.TrimSpace(report.RecommendedAction)
+	report.Citations = normalizeCitations(report.Citations)
 	report.Confidence = normalizeConfidence(report.Confidence)
 	report.Reason = strings.TrimSpace(report.Reason)
 	if report.StatusReport == "" {
@@ -222,7 +232,11 @@ func (r GuideReport) TelegramText() string {
 	if action == "" {
 		action = "Review the raw terminal output before acting."
 	}
-	return "status:\n" + status + "\n\nrecommendation:\n" + action
+	text := "status:\n" + status + "\n\nrecommendation:\n" + action
+	if citations := normalizeCitations(r.Citations); len(citations) > 0 {
+		text += "\n\nevidence:\n" + renderCitationBlocks(citations)
+	}
+	return text
 }
 
 func limit(s string, n int) string {
@@ -230,4 +244,53 @@ func limit(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+func normalizeCitations(values []string) []string {
+	out := make([]string, 0, min(len(values), 3))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		value = strings.Join(strings.Fields(value), " ")
+		value = limitHead(value, 280)
+		out = append(out, value)
+		if len(out) == 3 {
+			break
+		}
+	}
+	return out
+}
+
+func renderCitationBlocks(values []string) string {
+	var b strings.Builder
+	for i, value := range values {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		for _, line := range strings.Split(value, "\n") {
+			b.WriteString("> ")
+			b.WriteString(strings.TrimSpace(line))
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func limitHead(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n <= 12 {
+		return s[:n]
+	}
+	return s[:n-12] + " [truncated]"
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

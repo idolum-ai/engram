@@ -1,6 +1,10 @@
 package app
 
-import "strings"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 const maxVisiblePaths = 12
 
@@ -38,7 +42,7 @@ func extractVisiblePaths(capture string, limit int) []string {
 			end++
 		}
 		path := strings.TrimRight(capture[i:end], ".,;:)]}>\"'")
-		if validVisiblePath(path) && !seen[path] {
+		if validVisiblePath(path) && visiblePathExists(path) && !seen[path] {
 			seen[path] = true
 			paths = append(paths, path)
 		}
@@ -71,6 +75,22 @@ func validVisiblePath(path string) bool {
 		return false
 	}
 	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~/")
+}
+
+func visiblePathExists(path string) bool {
+	expanded := path
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return false
+		}
+		expanded = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	}
+	info, err := os.Stat(expanded)
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular() || info.IsDir()
 }
 
 func pathChar(ch byte) bool {

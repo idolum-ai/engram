@@ -57,7 +57,7 @@ user answer three questions quickly:
 
 Anchors should be compact, stable, and easy to scan. They should include the
 session handle, state, title, last input preview, Haiku status, one recommended
-action, deterministic visible paths when present, and a refresh button.
+action, deterministic visible paths that currently exist, and a refresh button.
 
 ### Fast input path
 
@@ -88,14 +88,22 @@ interpret terminal content; Engram should render known metadata.
 
 ### Haiku guides; Engram renders
 
-Haiku's job is to explain the visible terminal state in plain English and offer
-one concrete next action for the content inside the tmux pane.
+Haiku's job is to explain the visible terminal state in plain English, offer one
+concrete next action for the content inside the tmux pane, and include short
+source-evidence citations when terminal text grounds the recommendation.
 
 Haiku should not explain Engram features unless the terminal itself is showing
 Engram-related output. It should not produce raw terminal mirrors, long
-analysis, markdown-heavy prose, or broad coaching. Hidden confidence and the
-single full-scrollback retry are implementation details; Telegram should show
-the useful result.
+analysis, markdown-heavy prose, or broad coaching. Citations should be
+reconstructed only from captured terminal text; hidden confidence and the single
+full-scrollback retry are implementation details; Telegram should show the
+useful result.
+
+Persistent terminal boilerplate should not be allowed to dominate the guide. If
+the same line appears in recent visible captures for the same session, Engram
+should omit that exact line from the next Haiku prompt while preserving the raw
+capture for `/raw`, `/dump`, and local deterministic rendering. The refresh
+button is the user's reset lever for this filter.
 
 ### Existing tmux first
 
@@ -165,4 +173,3 @@ When changing Engram, ask:
   avoid?
 - Is the behavior covered by focused tests around the real loop: Telegram in,
   tmux action out, anchor back?
-

@@ -39,11 +39,14 @@ type App struct {
 	summaryQueued  map[int]bool
 	summaryRunning map[int]bool
 	summaryForce   map[int]bool
+	captureMu      sync.Mutex
+	captureHistory map[int][]map[string]bool
 	sleepHook      func(time.Duration)
 	refreshHook    func(context.Context, int, bool)
 }
 
 const summaryQuietPeriod = 2 * time.Second
+const haikuCaptureHistoryLimit = 5
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
@@ -75,6 +78,7 @@ func New(cfg config.Config) (*App, error) {
 		summaryQueued:  map[int]bool{},
 		summaryRunning: map[int]bool{},
 		summaryForce:   map[int]bool{},
+		captureHistory: map[int][]map[string]bool{},
 	}, nil
 }
 
@@ -195,6 +199,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "failed_bad_callback_id"
 		}
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "refreshing")
+		a.clearHaikuCaptureHistory(id)
 		a.queueRefresh(id, true, 0)
 	case "watch":
 		id, err := strconv.Atoi(parts[1])
@@ -703,13 +708,14 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 }
 
 func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string) (string, error) {
+	visibleForHaiku := a.filterHaikuVisibleCapture(ts.ID, capture)
 	input := anthropic.SummaryInput{
 		SessionID:       ts.ID,
 		State:           string(ts.State),
 		LastInput:       ts.LastInputPreview,
 		LastInputMode:   ts.LastInputMode,
 		PreviousSummary: ts.LastSummary,
-		VisibleCapture:  capture,
+		VisibleCapture:  visibleForHaiku,
 	}
 	report, err := a.Anthropic.Guide(ctx, input)
 	if err != nil {
@@ -730,6 +736,45 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 		return report.TelegramText(), nil
 	}
 	return refined.TelegramText(), nil
+}
+
+func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {
+	a.captureMu.Lock()
+	defer a.captureMu.Unlock()
+	if a.captureHistory == nil {
+		a.captureHistory = map[int][]map[string]bool{}
+	}
+	history := a.captureHistory[sessionID]
+	repeated := map[string]bool{}
+	for _, previous := range history {
+		for line := range previous {
+			repeated[line] = true
+		}
+	}
+	lines := strings.Split(capture, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if repeated[line] {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	current := map[string]bool{}
+	for _, line := range lines {
+		current[line] = true
+	}
+	history = append(history, current)
+	if len(history) > haikuCaptureHistoryLimit {
+		history = history[len(history)-haikuCaptureHistoryLimit:]
+	}
+	a.captureHistory[sessionID] = history
+	return strings.Join(filtered, "\n")
+}
+
+func (a *App) clearHaikuCaptureHistory(sessionID int) {
+	a.captureMu.Lock()
+	defer a.captureMu.Unlock()
+	delete(a.captureHistory, sessionID)
 }
 
 func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, final bool) {

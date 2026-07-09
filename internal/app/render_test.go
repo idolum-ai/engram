@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,15 +28,32 @@ func TestRenderLocalIsStableForSameInput(t *testing.T) {
 }
 
 func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
+	root := t.TempDir()
+	pdf := filepath.Join(root, "engram-aphelion-feature-lessons.pdf")
+	pdf2 := filepath.Join(root, "engram-aphelion-feature-lessons.pdf2")
+	if err := os.WriteFile(pdf, []byte("pdf"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pdf2, []byte("pdf2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(root, "home")
+	homePath := filepath.Join(home, "code/github.com/idolum-ai/engram")
+	if err := os.MkdirAll(homePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
 	session := state.TerminalSession{
 		ID:    7,
 		State: state.TerminalRunning,
 		Title: "build",
 		LastRawCapture: strings.Join([]string{
-			`wrote "/tmp/engram-aphelion-feature-lessons.pdf"`,
-			"next: /tmp/engram-aphelion-feature-lessons.pdf2)",
+			`wrote "` + pdf + `"`,
+			"next: " + pdf2 + ")",
 			"ignore https://example.test/path",
-			"again /tmp/engram-aphelion-feature-lessons.pdf",
+			"drop missing " + filepath.Join(root, "missing.txt"),
+			"again " + pdf,
 			"home ~/code/github.com/idolum-ai/engram",
 		}, "\n"),
 	}
@@ -43,8 +62,8 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 	for _, want := range []string{
 		"[Haiku]",
 		"\n\nvisible paths:\n```",
-		"/tmp/engram-aphelion-feature-lessons.pdf\n",
-		"/tmp/engram-aphelion-feature-lessons.pdf2\n",
+		pdf + "\n",
+		pdf2 + "\n",
 		"~/code/github.com/idolum-ai/engram\n",
 	} {
 		if !strings.Contains(got, want) {
@@ -54,7 +73,10 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 	if strings.Contains(got, "example.test/path") {
 		t.Fatalf("renderLocal included URL path:\n%s", got)
 	}
-	if strings.Count(got, "/tmp/engram-aphelion-feature-lessons.pdf\n") != 1 {
+	if strings.Contains(got, "missing.txt") {
+		t.Fatalf("renderLocal included missing path:\n%s", got)
+	}
+	if strings.Count(got, pdf+"\n") != 1 {
 		t.Fatalf("renderLocal did not dedupe visible path:\n%s", got)
 	}
 	if strings.Contains(got, "\n---\n") {

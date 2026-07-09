@@ -22,7 +22,7 @@ func TestGuideUsesNonStreamingMessagesRequest(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewBufferString(`{"type":"message","content":[{"type":"text","text":"{\"status_report\":\"tests are running\",\"recommended_action\":\"wait for the check to finish\",\"confidence\":\"high\",\"needs_full_buffer\":false,\"reason\":\"visible output is clear\"}"}]}`)),
+			Body:       io.NopCloser(bytes.NewBufferString(`{"type":"message","content":[{"type":"text","text":"{\"status_report\":\"tests are running\",\"recommended_action\":\"wait for the check to finish\",\"citations\":[\"go test ./...\"],\"confidence\":\"high\",\"needs_full_buffer\":false,\"reason\":\"visible output is clear\"}"}]}`)),
 			Header:     make(http.Header),
 		}, nil
 	})}
@@ -59,7 +59,11 @@ func TestPromptTreatsLastInputAsPreview(t *testing.T) {
 		"last_input_preview:",
 		"shortened metadata preview",
 		"do not treat truncation",
+		"visible_capture_filter_note",
+		"recent visible captures",
 		"do not merge it into unrelated work",
+		"citations",
+		"Reconstruct citation text only from the terminal captures",
 		"needs_full_buffer",
 		"recommended_action",
 	} {
@@ -79,6 +83,31 @@ func TestParseGuideReportFallbackRequestsFullBuffer(t *testing.T) {
 	}
 	if !strings.Contains(got.TelegramText(), "recommendation:") {
 		t.Fatalf("telegram text = %q", got.TelegramText())
+	}
+}
+
+func TestGuideReportTelegramTextRendersCitations(t *testing.T) {
+	got := GuideReport{
+		StatusReport:      "The build failed on a missing generated file.",
+		RecommendedAction: "Run the generator, then retry the build.",
+		Citations: []string{
+			"  error: missing generated file internal/foo.go  ",
+			strings.Repeat("x", 400),
+			"",
+		},
+		Confidence: "high",
+	}.TelegramText()
+	for _, want := range []string{
+		"evidence:",
+		"> error: missing generated file internal/foo.go",
+		"> " + strings.Repeat("x", 268) + " [truncated]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("telegram text missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "> \n") {
+		t.Fatalf("telegram text included empty citation:\n%s", got)
 	}
 }
 
