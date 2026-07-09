@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -13,7 +14,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+)
+
+const (
+	maxRateLimitRetries   = 1
+	maxRetryAfter         = 30 * time.Second
+	maxConcurrentOutbound = 4
+	defaultSendInterval   = 35 * time.Millisecond
 )
 
 type Client struct {
@@ -21,6 +30,13 @@ type Client struct {
 	FileBase   string
 	Token      string
 	HTTPClient *http.Client
+
+	outboundOnce     sync.Once
+	outboundSlots    chan struct{}
+	outboundMu       sync.Mutex
+	nextOutbound     time.Time
+	outboundInterval time.Duration
+	retrySleep       func(context.Context, time.Duration) error
 }
 
 func New(token string) *Client {
@@ -31,13 +47,76 @@ func New(token string) *Client {
 		HTTPClient: &http.Client{
 			Timeout: 70 * time.Second,
 		},
+		outboundInterval: defaultSendInterval,
 	}
 }
 
 type Response[T any] struct {
-	OK          bool   `json:"ok"`
-	Description string `json:"description,omitempty"`
-	Result      T      `json:"result"`
+	OK          bool               `json:"ok"`
+	ErrorCode   int                `json:"error_code,omitempty"`
+	Description string             `json:"description,omitempty"`
+	Parameters  ResponseParameters `json:"parameters,omitempty"`
+	Result      T                  `json:"result"`
+}
+
+type ResponseParameters struct {
+	RetryAfter      int   `json:"retry_after,omitempty"`
+	MigrateToChatID int64 `json:"migrate_to_chat_id,omitempty"`
+}
+
+// Error is a sanitized Telegram Bot API or request failure.
+type Error struct {
+	Method          string
+	StatusCode      int
+	ErrorCode       int
+	Description     string
+	RetryAfter      time.Duration
+	MigrateToChatID int64
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return "telegram request failed"
+	}
+	detail := make([]string, 0, 2)
+	if e.StatusCode != 0 {
+		detail = append(detail, fmt.Sprintf("HTTP %d", e.StatusCode))
+	}
+	if e.ErrorCode != 0 && e.ErrorCode != e.StatusCode {
+		detail = append(detail, fmt.Sprintf("error %d", e.ErrorCode))
+	}
+	message := "telegram request failed"
+	if e.Method != "" {
+		message = "telegram " + e.Method + " failed"
+	}
+	if len(detail) != 0 {
+		message += " (" + strings.Join(detail, ", ") + ")"
+	}
+	if e.Description != "" {
+		message += ": " + e.Description
+	}
+	return message
+}
+
+func (e *Error) IsRateLimited() bool {
+	return e != nil && (e.StatusCode == http.StatusTooManyRequests || e.ErrorCode == http.StatusTooManyRequests)
+}
+
+func (e *Error) IsMessageNotModified() bool {
+	return e != nil && strings.Contains(strings.ToLower(e.Description), "message is not modified")
+}
+
+// IsRateLimited reports whether err is a Telegram HTTP or Bot API 429 error.
+func IsRateLimited(err error) bool {
+	var telegramErr *Error
+	return errors.As(err, &telegramErr) && telegramErr.IsRateLimited()
+}
+
+// IsMessageNotModified reports whether Telegram rejected an edit because its
+// content and markup already match the existing message.
+func IsMessageNotModified(err error) bool {
+	var telegramErr *Error
+	return errors.As(err, &telegramErr) && telegramErr.IsMessageNotModified()
 }
 
 type Update struct {
@@ -206,15 +285,22 @@ func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
 func (c *Client) DownloadFile(ctx context.Context, filePath, dest string, maxBytes int64) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.FileBase+"/"+filePath, nil)
 	if err != nil {
-		return 0, err
+		return 0, c.requestError("downloadFile", "could not create request")
 	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return 0, err
+		if ctxErr := contextError(ctx, err); ctxErr != nil {
+			return 0, ctxErr
+		}
+		return 0, c.requestError("downloadFile", "transport request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("telegram file download status %s", resp.Status)
+		return 0, &Error{
+			Method:      "downloadFile",
+			StatusCode:  resp.StatusCode,
+			Description: http.StatusText(resp.StatusCode),
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return 0, err
@@ -230,7 +316,10 @@ func (c *Client) DownloadFile(ctx context.Context, filePath, dest string, maxByt
 	}
 	n, err := io.Copy(f, r)
 	if err != nil {
-		return n, err
+		if ctxErr := contextError(ctx, err); ctxErr != nil {
+			return n, ctxErr
+		}
+		return n, c.requestError("downloadFile", "response copy failed")
 	}
 	if maxBytes > 0 && n > maxBytes {
 		_ = os.Remove(dest)
@@ -240,48 +329,11 @@ func (c *Client) DownloadFile(ctx context.Context, filePath, dest string, maxByt
 }
 
 func (c *Client) SendDocument(ctx context.Context, chatID int64, path string, caption string) (Message, error) {
-	pr, pw := io.Pipe()
-	writer := multipart.NewWriter(pw)
-	go func() {
-		var err error
-		defer func() {
-			if err != nil {
-				_ = pw.CloseWithError(err)
-			} else {
-				_ = pw.Close()
-			}
-		}()
-		if err = writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
-			return
-		}
-		if caption != "" {
-			if err = writer.WriteField("caption", clampText(caption)); err != nil {
-				return
-			}
-		}
-		var part io.Writer
-		part, err = writer.CreateFormFile("document", filepath.Base(path))
-		if err != nil {
-			return
-		}
-		var f *os.File
-		f, err = os.Open(path)
-		if err != nil {
-			return
-		}
-		defer f.Close()
-		if _, err = io.Copy(part, f); err != nil {
-			return
-		}
-		err = writer.Close()
-	}()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/sendDocument", pr)
-	if err != nil {
-		return Message{}, err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
 	var out Message
-	return out, c.do(req, &out)
+	err := c.do(ctx, "sendDocument", true, func() (*http.Request, error) {
+		return c.documentRequest(ctx, chatID, path, caption)
+	}, &out)
+	return out, err
 }
 
 func (m Message) FileAttachment() (Document, bool) {
@@ -346,45 +398,256 @@ func SessionListMarkup(ids []int, attachTargets []AttachTarget) *InlineKeyboardM
 func (c *Client) postJSON(ctx context.Context, method string, payload any, out any) error {
 	b, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return c.requestError(method, "could not encode request")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+method, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return c.do(req, out)
+	return c.do(ctx, method, isOutboundMethod(method), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+method, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	}, out)
 }
 
 func (c *Client) postForm(ctx context.Context, method string, values url.Values, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+method, strings.NewReader(values.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return c.do(req, out)
+	encoded := values.Encode()
+	return c.do(ctx, method, false, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+method, strings.NewReader(encoded))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return req, nil
+	}, out)
 }
 
-func (c *Client) do(req *http.Request, out any) error {
+func (c *Client) do(ctx context.Context, method string, outbound bool, newRequest func() (*http.Request, error), out any) error {
+	if outbound {
+		if err := c.acquireOutbound(ctx); err != nil {
+			return err
+		}
+		defer c.releaseOutbound()
+	}
+
+	for attempt := 0; ; attempt++ {
+		if outbound {
+			if err := c.waitOutboundTurn(ctx); err != nil {
+				return err
+			}
+		}
+		req, err := newRequest()
+		if err != nil {
+			return c.requestError(method, "could not create request")
+		}
+		err = c.doOnce(ctx, method, req, out)
+		var telegramErr *Error
+		if !errors.As(err, &telegramErr) || !telegramErr.IsRateLimited() || attempt >= maxRateLimitRetries {
+			return err
+		}
+		if telegramErr.RetryAfter <= 0 || telegramErr.RetryAfter > maxRetryAfter {
+			return err
+		}
+		if err := c.sleepRetry(ctx, telegramErr.RetryAfter); err != nil {
+			return err
+		}
+	}
+}
+
+func (c *Client) doOnce(ctx context.Context, method string, req *http.Request, out any) error {
 	resp, err := c.HTTPClient.Do(req)
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
 	if err != nil {
-		return err
+		if ctxErr := contextError(ctx, err); ctxErr != nil {
+			return ctxErr
+		}
+		return c.requestError(method, "transport request failed")
 	}
 	defer resp.Body.Close()
 	var envelope Response[json.RawMessage]
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
-		return err
-	}
-	if !envelope.OK {
-		if envelope.Description == "" {
-			envelope.Description = resp.Status
+		return &Error{
+			Method:      method,
+			StatusCode:  resp.StatusCode,
+			Description: "invalid Telegram response",
 		}
-		return fmt.Errorf("telegram %s: %s", req.URL.Path, envelope.Description)
+	}
+	if !envelope.OK || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if envelope.Description == "" {
+			envelope.Description = http.StatusText(resp.StatusCode)
+		}
+		return &Error{
+			Method:          method,
+			StatusCode:      resp.StatusCode,
+			ErrorCode:       envelope.ErrorCode,
+			Description:     c.sanitize(envelope.Description, req),
+			RetryAfter:      retryAfterDuration(envelope.Parameters.RetryAfter),
+			MigrateToChatID: envelope.Parameters.MigrateToChatID,
+		}
 	}
 	if out == nil {
 		return nil
 	}
-	return json.Unmarshal(envelope.Result, out)
+	if err := json.Unmarshal(envelope.Result, out); err != nil {
+		return &Error{
+			Method:      method,
+			StatusCode:  resp.StatusCode,
+			Description: "invalid Telegram result",
+		}
+	}
+	return nil
+}
+
+func (c *Client) documentRequest(ctx context.Context, chatID int64, path, caption string) (*http.Request, error) {
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/sendDocument", pr)
+	if err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	go func() {
+		var writeErr error
+		defer func() {
+			if writeErr != nil {
+				_ = pw.CloseWithError(writeErr)
+			} else {
+				_ = pw.Close()
+			}
+		}()
+		if writeErr = writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); writeErr != nil {
+			return
+		}
+		if caption != "" {
+			if writeErr = writer.WriteField("caption", clampText(caption)); writeErr != nil {
+				return
+			}
+		}
+		part, err := writer.CreateFormFile("document", filepath.Base(path))
+		if err != nil {
+			writeErr = err
+			return
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		defer f.Close()
+		if _, writeErr = io.Copy(part, f); writeErr != nil {
+			return
+		}
+		writeErr = writer.Close()
+	}()
+	return req, nil
+}
+
+func isOutboundMethod(method string) bool {
+	switch method {
+	case "sendMessage", "editMessageText", "sendDocument":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) acquireOutbound(ctx context.Context) error {
+	c.outboundOnce.Do(func() {
+		c.outboundSlots = make(chan struct{}, maxConcurrentOutbound)
+	})
+	select {
+	case c.outboundSlots <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *Client) releaseOutbound() {
+	<-c.outboundSlots
+}
+
+func (c *Client) waitOutboundTurn(ctx context.Context) error {
+	if c.outboundInterval <= 0 {
+		return nil
+	}
+	for {
+		c.outboundMu.Lock()
+		now := time.Now()
+		if !now.Before(c.nextOutbound) {
+			c.nextOutbound = now.Add(c.outboundInterval)
+			c.outboundMu.Unlock()
+			return nil
+		}
+		wait := time.Until(c.nextOutbound)
+		c.outboundMu.Unlock()
+		if err := sleepContext(ctx, wait); err != nil {
+			return err
+		}
+	}
+}
+
+func (c *Client) sleepRetry(ctx context.Context, delay time.Duration) error {
+	if c.retrySleep != nil {
+		return c.retrySleep(ctx, delay)
+	}
+	return sleepContext(ctx, delay)
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func contextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func (c *Client) requestError(method, description string) *Error {
+	return &Error{Method: method, Description: c.sanitize(description, nil)}
+}
+
+func (c *Client) sanitize(description string, req *http.Request) string {
+	if req != nil && req.URL != nil {
+		description = strings.ReplaceAll(description, req.URL.String(), "[request URL]")
+		description = strings.ReplaceAll(description, req.URL.Path, "[request path]")
+		description = strings.ReplaceAll(description, req.URL.EscapedPath(), "[request path]")
+	}
+	if c.Token != "" {
+		description = strings.ReplaceAll(description, c.Token, "[REDACTED]")
+		description = strings.ReplaceAll(description, url.QueryEscape(c.Token), "[REDACTED]")
+	}
+	return description
+}
+
+func retryAfterDuration(seconds int) time.Duration {
+	const maxDuration = time.Duration(1<<63 - 1)
+	if seconds <= 0 {
+		return 0
+	}
+	if int64(seconds) > int64(maxDuration/time.Second) {
+		return maxDuration
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func clampText(text string) string {
