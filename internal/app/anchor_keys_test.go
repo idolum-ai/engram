@@ -32,9 +32,9 @@ func TestKeyCallbackSendsCtrlC(t *testing.T) {
 	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
-	want := [][]string{{"send-keys", "-t", "%1", "C-c"}}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("tmux calls = %#v, want %#v", runner.calls, want)
+	want := []string{"send-keys", "-t", "%1", "C-c"}
+	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || !reflect.DeepEqual(runner.calls[1], want) {
+		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
 	}
 	ts, ok := app.Store.FindSession(1)
 	if !ok || ts.LastInputPreview != "Ctrl+C" || ts.LastInputMode != "keys" {
@@ -73,8 +73,8 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 		{"send-keys", "-t", "%1", "Escape"},
 		{"send-keys", "-t", "%1", "Escape"},
 	}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("tmux calls = %#v, want %#v", runner.calls, want)
+	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || !reflect.DeepEqual(runner.calls[1:], want) {
+		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
 	}
 	ts, ok := app.Store.FindSession(1)
 	if !ok || ts.LastInputPreview != "Esc Esc" || ts.LastInputMode != "keys" {
@@ -148,5 +148,8 @@ type anchorKeyRunner struct {
 
 func (r *anchorKeyRunner) Run(ctx context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "display-message" {
+		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+	}
 	return "", nil
 }

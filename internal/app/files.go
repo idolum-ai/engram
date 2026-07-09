@@ -35,6 +35,10 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if err := a.validateSessionPane(tctx, ts); err != nil {
+		a.reply(ctx, msg, "session lost; use /sessions to attach the intended pane again")
+		return
+	}
 	var text string
 	var err error
 	name := "raw"

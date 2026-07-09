@@ -42,6 +42,9 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if err := a.validateSessionPane(tctx, ts); err != nil {
+		return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
+	}
 	var err error
 	if enter {
 		err = a.Tmux.SendCommand(tctx, ts.TmuxPaneID, text)
@@ -89,6 +92,9 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if err := a.validateSessionPane(tctx, ts); err != nil {
+		return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
+	}
 	for i, keys := range groups {
 		if err := a.Tmux.SendKeys(tctx, ts.TmuxPaneID, keys); err != nil {
 			a.updateAnchorLocal(ctx, id, "tmux key error: "+err.Error(), true)

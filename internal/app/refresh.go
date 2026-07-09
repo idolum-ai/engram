@@ -21,6 +21,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if err := a.validateSessionPane(tctx, ts); err != nil {
+		return
+	}
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}

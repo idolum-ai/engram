@@ -63,11 +63,12 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
-		if _, ok := a.Store.FindSession(id); !ok {
+		ts, ok := a.Store.FindSession(id)
+		if !ok {
 			a.answerCallback(ctx, cb.ID, "session not found")
 			return "callback_user_error"
 		}
-		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, fmt.Sprintf("Close [%d]? Engram-created windows will be closed; attached windows will only be untracked.", id), cb.Message.MessageID, closeConfirmationMarkup(id)); err != nil {
+		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(id)); err != nil {
 			a.answerCallback(ctx, cb.ID, "could not open confirmation")
 			return "callback_telegram_failed"
 		}

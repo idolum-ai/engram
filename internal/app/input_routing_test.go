@@ -65,8 +65,8 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 		{"send-keys", "-t", "%1", "-l", "--", "/clear"},
 		{"send-keys", "-t", "%1", "Enter"},
 	}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("tmux calls = %#v, want %#v", runner.calls, want)
+	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || !reflect.DeepEqual(runner.calls[1:], want) {
+		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
 	}
 	got, ok := store.FindSession(ts.ID)
 	if !ok || got.LastInputPreview != "/clear" || got.LastInputMode != "command" {
@@ -105,5 +105,8 @@ type slashEscapeRunner struct {
 
 func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "display-message" {
+		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+	}
 	return "", nil
 }

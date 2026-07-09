@@ -33,6 +33,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 	ts.TmuxSessionID = sessionID
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.TmuxSessionID = sessionID
+		s.Origin = state.TerminalOriginCreated
 		s.LastInputPreview = preview(input)
 		s.LastInputMode = "command"
 	})
@@ -92,6 +93,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionStateFailed, Message: "state error"}
 	}
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+		s.Origin = state.TerminalOriginAttached
 		s.LastKnownCWD = window.CurrentPath
 		s.LastInputPreview = "attached " + strings.TrimSpace(target)
 		s.LastInputMode = "attach"
@@ -139,6 +141,10 @@ func (a *App) cwd(ctx context.Context, id int, msg telegram.Message) {
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if err := a.validateSessionPane(tctx, ts); err != nil {
+		a.reply(ctx, msg, "session lost; use /sessions to attach the intended pane again")
+		return
+	}
 	cwd, err := a.Tmux.PaneCWD(tctx, ts.TmuxPaneID)
 	if err != nil {
 		a.reply(ctx, msg, "cwd error: "+err.Error())
@@ -189,8 +195,25 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
+	if ts.Origin != state.TerminalOriginCreated {
+		if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+			s.State = state.TerminalClosed
+			s.WatchEnabled = false
+			s.LastSummary = "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed."
+		}); err != nil {
+			_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
+			return actionResult{Outcome: actionStateFailed, Message: "state update failed while untracking"}
+		}
+		a.updateAnchorLocal(ctx, id, "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed.", true)
+		_ = a.audit("tmux.untrack", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "origin": ts.Origin})
+		return actionResult{Outcome: actionOK, Message: "untracked; tmux remains open"}
+	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if _, err := a.Tmux.ValidatePane(tctx, ts.TmuxPaneID, ts.TmuxWindowID); err != nil {
+		a.markSessionLost(ctx, ts, err)
+		return actionResult{Outcome: actionTmuxFailed, Message: "close failed: session identity is no longer valid"}
+	}
 	if err := a.Tmux.KillWindow(tctx, ts.TmuxWindowID); err != nil {
 		_ = a.audit("tmux.close", "failed", map[string]any{"session_id": id, "window_id": ts.TmuxWindowID, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "status:\nClose failed; the tmux window remains open.\n\nrecommendation:\nCheck the session with /sessions and retry when tmux is available.", true)
@@ -199,13 +222,46 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
-		s.LastSummary = "summary:\n- Session closed by request."
+		s.LastSummary = "status:\nThe Engram-created tmux window was closed."
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after close"}
 	}
-	a.updateAnchorLocal(ctx, id, "summary:\n- Session closed by request.", true)
+	a.updateAnchorLocal(ctx, id, "status:\nThe Engram-created tmux window was closed.", true)
 	return actionResult{Outcome: actionOK, Message: "closed"}
+}
+
+func closeConfirmationText(ts state.TerminalSession) string {
+	if ts.Origin == state.TerminalOriginCreated {
+		return fmt.Sprintf("Close [%d]? This will kill its Engram-created tmux window.", ts.ID)
+	}
+	return fmt.Sprintf("Untrack [%d]? Its existing tmux window will remain open.", ts.ID)
+}
+
+func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
+	message := "session identity is no longer valid"
+	if cause != nil {
+		message = cause.Error()
+	}
+	if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+		s.State = state.TerminalLost
+		s.WatchEnabled = false
+		s.PendingRefresh = false
+		s.LastTelegramError = message
+	}); err != nil {
+		_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
+		return
+	}
+	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
+	a.updateAnchorLocal(ctx, ts.ID, "status:\nThe tracked tmux pane no longer matches this session. Engram stopped watching it.\n\nrecommendation:\nUse /sessions and attach the intended pane again.", true)
+}
+
+func (a *App) validateSessionPane(ctx context.Context, ts state.TerminalSession) error {
+	_, err := a.Tmux.ValidatePane(ctx, ts.TmuxPaneID, ts.TmuxWindowID)
+	if err != nil {
+		a.markSessionLost(ctx, ts, err)
+	}
+	return err
 }
 
 func (a *App) sessions(ctx context.Context, msg telegram.Message) {

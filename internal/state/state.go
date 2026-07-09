@@ -16,6 +16,7 @@ import (
 )
 
 type TerminalState string
+type TerminalOrigin string
 
 const (
 	TerminalRunning TerminalState = "running"
@@ -24,6 +25,11 @@ const (
 	TerminalLost    TerminalState = "lost"
 	TerminalClosed  TerminalState = "closed"
 	TerminalKilled  TerminalState = "killed"
+)
+
+const (
+	TerminalOriginCreated  TerminalOrigin = "created"
+	TerminalOriginAttached TerminalOrigin = "attached"
 )
 
 type State struct {
@@ -41,33 +47,34 @@ type State struct {
 }
 
 type TerminalSession struct {
-	ID                 int           `json:"id"`
-	ChatID             int64         `json:"chat_id"`
-	CreatedByUserID    int64         `json:"created_by_user_id"`
-	TmuxSessionName    string        `json:"tmux_session_name"`
-	TmuxSessionID      string        `json:"tmux_session_id,omitempty"`
-	TmuxWindowID       string        `json:"tmux_window_id"`
-	TmuxPaneID         string        `json:"tmux_pane_id"`
-	Title              string        `json:"title"`
-	LastKnownCWD       string        `json:"last_known_cwd,omitempty"`
-	State              TerminalState `json:"state"`
-	CreatedAt          time.Time     `json:"created_at"`
-	UpdatedAt          time.Time     `json:"updated_at"`
-	LastActivityAt     time.Time     `json:"last_activity_at"`
-	LastInputPreview   string        `json:"last_input_preview,omitempty"`
-	LastInputMode      string        `json:"last_input_mode,omitempty"`
-	LastRawCaptureHash string        `json:"last_raw_capture_hash,omitempty"`
-	LastSummaryHash    string        `json:"last_summary_hash,omitempty"`
-	LastRenderHash     string        `json:"last_render_hash,omitempty"`
-	LastSummary        string        `json:"last_summary,omitempty"`
-	LastSummaryModel   string        `json:"last_summary_model,omitempty"`
-	AnchorChatID       int64         `json:"anchor_chat_id,omitempty"`
-	AnchorMessageID    int           `json:"anchor_message_id,omitempty"`
-	WatchEnabled       bool          `json:"watch_enabled"`
-	LastAnchorEditAt   time.Time     `json:"last_anchor_edit_at,omitempty"`
-	PendingRefresh     bool          `json:"pending_refresh,omitempty"`
-	LastTelegramError  string        `json:"last_telegram_error,omitempty"`
-	LastRawCapture     string        `json:"last_raw_capture,omitempty"`
+	ID                 int            `json:"id"`
+	ChatID             int64          `json:"chat_id"`
+	CreatedByUserID    int64          `json:"created_by_user_id"`
+	TmuxSessionName    string         `json:"tmux_session_name"`
+	TmuxSessionID      string         `json:"tmux_session_id,omitempty"`
+	TmuxWindowID       string         `json:"tmux_window_id"`
+	TmuxPaneID         string         `json:"tmux_pane_id"`
+	Origin             TerminalOrigin `json:"origin,omitempty"`
+	Title              string         `json:"title"`
+	LastKnownCWD       string         `json:"last_known_cwd,omitempty"`
+	State              TerminalState  `json:"state"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	LastActivityAt     time.Time      `json:"last_activity_at"`
+	LastInputPreview   string         `json:"last_input_preview,omitempty"`
+	LastInputMode      string         `json:"last_input_mode,omitempty"`
+	LastRawCaptureHash string         `json:"last_raw_capture_hash,omitempty"`
+	LastSummaryHash    string         `json:"last_summary_hash,omitempty"`
+	LastRenderHash     string         `json:"last_render_hash,omitempty"`
+	LastSummary        string         `json:"last_summary,omitempty"`
+	LastSummaryModel   string         `json:"last_summary_model,omitempty"`
+	AnchorChatID       int64          `json:"anchor_chat_id,omitempty"`
+	AnchorMessageID    int            `json:"anchor_message_id,omitempty"`
+	WatchEnabled       bool           `json:"watch_enabled"`
+	LastAnchorEditAt   time.Time      `json:"last_anchor_edit_at,omitempty"`
+	PendingRefresh     bool           `json:"pending_refresh,omitempty"`
+	LastTelegramError  string         `json:"last_telegram_error,omitempty"`
+	LastRawCapture     string         `json:"last_raw_capture,omitempty"`
 }
 
 type Attachment struct {
