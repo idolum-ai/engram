@@ -1,22 +1,59 @@
-# Security
+# Security Policy
 
-Engram bridges Telegram and local tmux panes. Treat the Telegram bot token as
-shell access to the configured account.
+Engram bridges Telegram and local tmux panes. Control of the authorized
+Telegram account can become shell access to the local account running Engram.
+A stolen bot token can expose bot traffic, impersonate bot replies, or disrupt
+polling and must be revoked immediately.
 
-## Supported Scope
+## Supported Versions
 
-- One configured Telegram user.
-- One configured Telegram chat.
-- Local tmux and local filesystem access on the host running Engram.
+Engram is pre-release software. Security fixes are made on the current code
+line and are not backported broadly.
 
-## Reporting
+| Version | Security updates |
+| --- | --- |
+| Current `main` | Yes |
+| Latest tagged release, when available | Yes |
+| Older releases, commits, and forks | No |
 
-Open a private report through the repository owner before disclosing issues that
-could expose credentials, send unauthorized tmux input, or upload local files.
+## Report A Vulnerability
+
+Use GitHub's private
+[Report a vulnerability](https://github.com/idolum-ai/engram/security/advisories/new)
+route. Include the affected version or commit, impact, reproduction steps, and
+any proposed mitigation. Do not open a public issue for a suspected
+vulnerability and do not include live bot tokens, API keys, private terminal
+transcripts, or downloaded files in the report. Use synthetic values and the
+smallest redacted evidence that demonstrates the problem.
+
+Reports about unauthorized tmux input, authorization bypass, credential
+exposure, unsafe local file upload/download, attachment handling, or redaction
+failure are in scope.
+
+## Security Boundary
+
+- Exactly one Telegram user and one chat are authorized. DM-only operation is
+  the supported deployment.
+- Authorized Telegram input can execute shell commands and key presses in tmux.
+- `/download` can upload a chosen local regular file to Telegram. `/raw` and
+  `/dump` upload terminal content.
+- Visible pane captures, previous summaries, and input previews are sent to
+  Anthropic Haiku. One bounded full-scrollback retry may also be sent.
+- State, logs, generated captures, and attachments remain on the local host and
+  may contain sensitive transcript data.
 
 ## Operational Guidance
 
-- Keep `~/.engram/.env` mode `0600`.
-- Do not track `.env`, logs, state files, PEM files, or downloaded attachments.
+- Keep `~/.engram/.env` mode `0600` and its parent directory private.
+- Use a dedicated Telegram bot in a direct message. Do not add it to groups.
+- Revoke and replace the bot token or Anthropic key immediately if exposed.
+- Do not track `.env` files, state, logs, PEM files, generated captures, or
+  downloaded attachments.
+- Review exact paths before using `/download` and review every artifact before
+  sharing it.
 - Run `make secrets` before pushing.
-- Prefer DM-only operation unless group support is explicitly tested.
+
+Audit and `/logs` redaction is pattern-based. It can miss unknown credential
+formats and sensitive prose, and it does not redact terminal captures,
+`state.json`, `/raw`, `/dump`, `/download`, attachments, Telegram history, or
+Anthropic requests.

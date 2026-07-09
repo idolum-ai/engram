@@ -7,6 +7,7 @@ DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X github.com/idolum-ai/engram/internal/version.Version=$(VERSION) -X github.com/idolum-ai/engram/internal/version.Commit=$(COMMIT) -X github.com/idolum-ai/engram/internal/version.Date=$(DATE)
 GOCACHE ?= /tmp/engram-go-build
 GOMODCACHE ?= /tmp/engram-go-mod
+ENGRAM_ENV ?= $(HOME)/.engram/.env
 
 .PHONY: build install uninstall install-service uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
 
@@ -83,4 +84,4 @@ smoke: build
 	bash scripts/smoke.sh
 
 run:
-	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/engram run --env .env
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go run ./cmd/engram run --env "$(ENGRAM_ENV)"
