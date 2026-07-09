@@ -293,6 +293,9 @@ func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 }
 
 func SessionListMarkup(ids []int) *InlineKeyboardMarkup {
+	if len(ids) == 0 {
+		return nil
+	}
 	rows := make([][]InlineKeyboardButton, 0, len(ids))
 	for _, id := range ids {
 		rows = append(rows, []InlineKeyboardButton{

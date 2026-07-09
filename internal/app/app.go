@@ -196,6 +196,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		cmd = cmd[:at]
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
+	_ = a.Store.Audit("telegram.command", "received", map[string]any{"command": cmd, "message_id": msg.MessageID})
 	switch cmd {
 	case "help":
 		a.reply(ctx, msg, commands.HelpText())
@@ -500,7 +501,9 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	if len(ids) == 0 {
 		b.WriteString("No sessions.")
 	}
-	_, _ = a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids))
+	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids)); err != nil {
+		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
+	}
 }
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
@@ -757,7 +760,9 @@ func (a *App) logs(ctx context.Context, msg telegram.Message) {
 }
 
 func (a *App) reply(ctx context.Context, msg telegram.Message, text string) {
-	_, _ = a.Telegram.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID, nil)
+	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID, nil); err != nil {
+		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"reply_to": msg.MessageID, "error": err.Error()})
+	}
 }
 
 func (a *App) statusText() string {
