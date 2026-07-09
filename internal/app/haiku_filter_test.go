@@ -14,6 +14,7 @@ import (
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
+	"github.com/idolum-ai/engram/internal/tmux"
 )
 
 func TestFilterHaikuVisibleCaptureDropsLinesSeenInRecentCaptures(t *testing.T) {
@@ -158,8 +159,59 @@ func TestGuideSummarySendsFilteredVisibleCaptureToHaiku(t *testing.T) {
 	if !strings.Contains(second, "fresh compiler error") {
 		t.Fatalf("second prompt missing fresh line:\n%s", second)
 	}
-	if !strings.Contains(second, "visible_capture_filter_note") {
+	if !strings.Contains(second, "capture_filter_note") {
 		t.Fatalf("second prompt missing filter note:\n%s", second)
+	}
+}
+
+func TestGuideSummaryFiltersFullScrollbackRetry(t *testing.T) {
+	var prompts []string
+	client := anthropic.New("key", "claude-haiku-4-5-20251001")
+	client.HTTPClient = &http.Client{Transport: appRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		prompts = append(prompts, payload.Messages[0].Content)
+		if len(prompts) == 1 {
+			return appJSONGuideResponse(t, anthropic.GuideReport{
+				StatusReport:      "The visible pane is ambiguous.",
+				RecommendedAction: "Check the full scrollback.",
+				Confidence:        "low",
+				NeedsFullBuffer:   true,
+			}), nil
+		}
+		return appJSONGuideResponse(t, anthropic.GuideReport{
+			StatusReport:      "The full scrollback shows the real failure.",
+			RecommendedAction: "Fix the compiler error.",
+			Confidence:        "high",
+		}), nil
+	})}
+	app := &App{
+		Anthropic:      client,
+		Tmux:           tmux.New(fakeCaptureRunner{full: "earlier\nRun /review on my current changes\nfresh compiler error"}),
+		captureHistory: map[int][]map[string]bool{},
+	}
+	ts := state.TerminalSession{ID: 3, State: state.TerminalRunning, TmuxPaneID: "%1"}
+
+	_ = app.filterHaikuVisibleCapture(3, "Run /review on my current changes\nold output")
+	if _, err := app.guideSummary(context.Background(), ts, "Run /review on my current changes\nfresh visible"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("prompt count = %d, want 2", len(prompts))
+	}
+	for i, prompt := range prompts {
+		if strings.Contains(prompt, "Run /review on my current changes") {
+			t.Fatalf("prompt %d included repeated stale line:\n%s", i+1, prompt)
+		}
+	}
+	if !strings.Contains(prompts[1], "full_scrollback_capture:") || !strings.Contains(prompts[1], "fresh compiler error") {
+		t.Fatalf("full retry prompt missing filtered full scrollback:\n%s", prompts[1])
 	}
 }
 
@@ -190,4 +242,15 @@ func appJSONGuideResponse(t *testing.T, report anthropic.GuideReport) *http.Resp
 		Body:       io.NopCloser(bytes.NewReader(envelope)),
 		Header:     make(http.Header),
 	}
+}
+
+type fakeCaptureRunner struct {
+	full string
+}
+
+func (r fakeCaptureRunner) Run(ctx context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "capture-pane" && strings.Contains(strings.Join(args, " "), " -S - ") {
+		return r.full, nil
+	}
+	return "", nil
 }

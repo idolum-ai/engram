@@ -59,7 +59,7 @@ func TestPromptTreatsLastInputAsPreview(t *testing.T) {
 		"last_input_preview:",
 		"shortened metadata preview",
 		"do not treat truncation",
-		"visible_capture_filter_note",
+		"capture_filter_note",
 		"recent visible captures",
 		"do not merge it into unrelated work",
 		"citations",

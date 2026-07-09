@@ -654,19 +654,19 @@ The simplifier input should include:
 - Previous guide report, if available.
 - Full scrollback only on the single bounded retry described below.
 
-Before the visible capture is sent to Haiku, Engram should remove repeated
-stale lines that are likely fixed terminal affordances or old suggestions. For
-each terminal session, keep an in-memory rolling cache of the previous five
-visible capture line sets. If a line in the current visible capture is exactly
-equal to any line seen in that rolling cache, omit that line from the
-`visible_terminal_capture` prompt field. Record the unfiltered current capture
-after filtering so future prompts can compare against it.
+Before capture text is sent to Haiku, Engram should remove repeated stale lines
+that are likely fixed terminal affordances or old suggestions. For each terminal
+session, keep an in-memory rolling cache of the previous five visible capture
+line sets. If a line in the current visible capture or optional full-scrollback
+retry capture is exactly equal to any line seen in that rolling cache, omit that
+line from the corresponding prompt field. Record the unfiltered current visible
+capture after filtering so future prompts can compare against it.
 
 This filter must not alter stored raw captures, `/raw`, `/dump`, render hashes,
-or visible-path extraction. It only changes the visible capture text sent to
-Haiku. Tapping the anchor refresh button clears this cache for that session
-before queuing the forced refresh, so the next Haiku prompt can see the full
-current visible pane again.
+or visible-path extraction. It only changes prompt text sent to Haiku. Tapping
+the anchor refresh button clears this cache for that session before queuing the
+forced refresh, so the next Haiku prompt can see the full current visible pane
+again.
 
 The guide output should be constrained to a compact JSON schema:
 
@@ -750,9 +750,9 @@ Rules:
 - Do not use the LLM for authorization decisions.
 - Do not send the full scrollback to Haiku by default.
 - First ask Haiku for a guide report from the visible pane only.
-- The visible-pane prompt should omit exact lines repeated in the prior five
+- Haiku prompt captures should omit exact lines repeated in the prior five
   visible captures for the same session unless the user has just tapped the
-  refresh button.
+  refresh button. This includes the optional full-scrollback retry prompt.
 - If the hidden confidence is low or `needs_full_buffer` is true, make exactly
   one retry with full scrollback captured from tmux, then render that result.
 - If Haiku fails, keep the last successful summary and add a local stale marker.

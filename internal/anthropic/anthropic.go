@@ -130,7 +130,7 @@ func buildPrompt(in SummaryInput) string {
 	fmt.Fprintf(&b, "last_input_mode: %s\n", in.LastInputMode)
 	fmt.Fprintf(&b, "last_input_preview: %s\n", in.LastInput)
 	b.WriteString("last_input_preview_note: this is a shortened metadata preview; do not treat truncation here as user-visible truncation.\n\n")
-	b.WriteString("visible_capture_filter_note: repeated lines identical to lines in recent visible captures for this same session may have been omitted before this prompt; treat missing repeated boilerplate as intentional, not as terminal corruption.\n\n")
+	b.WriteString("capture_filter_note: repeated lines identical to lines in recent visible captures for this same session may have been omitted before this prompt, including from the optional full-scrollback retry; treat missing repeated boilerplate as intentional, not as terminal corruption.\n\n")
 	if strings.TrimSpace(in.PreviousSummary) != "" {
 		b.WriteString("previous_summary:\n")
 		b.WriteString(limit(in.PreviousSummary, 800))

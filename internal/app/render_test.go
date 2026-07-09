@@ -53,6 +53,7 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 			"next: " + pdf2 + ")",
 			"ignore https://example.test/path",
 			"drop missing " + filepath.Join(root, "missing.txt"),
+			"drop root fragments /2 /p /Venue/BoundaryCountertermKernel.lean /bidi /review",
 			"again " + pdf,
 			"home ~/code/github.com/idolum-ai/engram",
 		}, "\n"),
@@ -75,6 +76,11 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 	}
 	if strings.Contains(got, "missing.txt") {
 		t.Fatalf("renderLocal included missing path:\n%s", got)
+	}
+	for _, bogus := range []string{"/2", "/p", "/Venue/BoundaryCountertermKernel.lean", "/bidi", "/review"} {
+		if strings.Contains(got, bogus+"\n") {
+			t.Fatalf("renderLocal included bogus missing path %q:\n%s", bogus, got)
+		}
 	}
 	if strings.Count(got, pdf+"\n") != 1 {
 		t.Fatalf("renderLocal did not dedupe visible path:\n%s", got)

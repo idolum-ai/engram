@@ -708,7 +708,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 }
 
 func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string) (string, error) {
-	visibleForHaiku := a.filterHaikuVisibleCapture(ts.ID, capture)
+	visibleForHaiku, repeatedLines := a.prepareHaikuVisibleCapture(ts.ID, capture)
 	input := anthropic.SummaryInput{
 		SessionID:       ts.ID,
 		State:           string(ts.State),
@@ -730,7 +730,7 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 	if err != nil || strings.TrimSpace(full) == "" {
 		return report.TelegramText(), nil
 	}
-	input.FullCapture = full
+	input.FullCapture = filterCaptureLines(full, repeatedLines)
 	refined, err := a.Anthropic.Guide(ctx, input)
 	if err != nil {
 		return report.TelegramText(), nil
@@ -739,6 +739,11 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 }
 
 func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {
+	filtered, _ := a.prepareHaikuVisibleCapture(sessionID, capture)
+	return filtered
+}
+
+func (a *App) prepareHaikuVisibleCapture(sessionID int, capture string) (string, map[string]bool) {
 	a.captureMu.Lock()
 	defer a.captureMu.Unlock()
 	if a.captureHistory == nil {
@@ -751,6 +756,22 @@ func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {
 			repeated[line] = true
 		}
 	}
+	current := map[string]bool{}
+	for _, line := range strings.Split(capture, "\n") {
+		current[line] = true
+	}
+	history = append(history, current)
+	if len(history) > haikuCaptureHistoryLimit {
+		history = history[len(history)-haikuCaptureHistoryLimit:]
+	}
+	a.captureHistory[sessionID] = history
+	return filterCaptureLines(capture, repeated), repeated
+}
+
+func filterCaptureLines(capture string, repeated map[string]bool) string {
+	if len(repeated) == 0 {
+		return capture
+	}
 	lines := strings.Split(capture, "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -759,15 +780,6 @@ func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {
 		}
 		filtered = append(filtered, line)
 	}
-	current := map[string]bool{}
-	for _, line := range lines {
-		current[line] = true
-	}
-	history = append(history, current)
-	if len(history) > haikuCaptureHistoryLimit {
-		history = history[len(history)-haikuCaptureHistoryLimit:]
-	}
-	a.captureHistory[sessionID] = history
 	return strings.Join(filtered, "\n")
 }
 

@@ -101,9 +101,10 @@ useful result.
 
 Persistent terminal boilerplate should not be allowed to dominate the guide. If
 the same line appears in recent visible captures for the same session, Engram
-should omit that exact line from the next Haiku prompt while preserving the raw
-capture for `/raw`, `/dump`, and local deterministic rendering. The refresh
-button is the user's reset lever for this filter.
+should omit that exact line from the next Haiku visible prompt and any bounded
+full-scrollback retry prompt while preserving the raw capture for `/raw`,
+`/dump`, and local deterministic rendering. The refresh button is the user's
+reset lever for this filter.
 
 ### Existing tmux first
 
