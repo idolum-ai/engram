@@ -28,6 +28,9 @@ Telegram is Engram's only user interface.
 - Anchor messages may use Telegram HTML, but fall back to plain text only for
   formatting parse errors. Rate limits and deleted messages must not amplify
   into an immediate second edit.
+- A failed initial anchor delivery leaves the session unwatched. Replacement
+  anchors are created only when Telegram reports the original missing, too old,
+  or otherwise uneditable; transient server errors retain the original anchor.
 - Bot API errors are typed and sanitized at the client boundary; request URLs,
   paths, and bot tokens must never appear in returned errors.
 - Telegram `retry_after` is honored with bounded, context-aware retry. A
@@ -49,3 +52,4 @@ Telegram is Engram's only user interface.
   stale callbacks. Positive text is sent only after validating the target.
 - Close buttons open a second confirm/cancel prompt using a random, single-use
   token that expires after two minutes and is invalidated by restart.
+- Closed and lost anchors expose no key or refresh controls.

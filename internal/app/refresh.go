@@ -17,7 +17,7 @@ const maxStoredVisibleCaptureBytes = 16 * 1024
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.TmuxPaneID == "" {
+	if !ok || ts.TmuxPaneID == "" || ts.State == state.TerminalClosed || ts.State == state.TerminalLost || (!force && !ts.WatchEnabled) {
 		return
 	}
 	if !force && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
@@ -25,22 +25,32 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	if err := a.validateSessionPane(tctx, ts); err != nil {
+	identityLock := a.sessionMutex(id)
+	identityLock.Lock()
+	current, currentOK := a.Store.FindSession(id)
+	if !currentOK || current.State == state.TerminalClosed || current.State == state.TerminalLost {
+		identityLock.Unlock()
 		return
 	}
+	if err := a.validateSessionPane(tctx, current); err != nil {
+		identityLock.Unlock()
+		return
+	}
+	ts = current
+	identityLock.Unlock()
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}
 	capture, err := a.Tmux.CaptureVisibleSemantic(tctx, ts.TmuxPaneID)
 	releaseSlot(a.captureSlots)
 	if err != nil {
-		if _, _, stateErr := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
-			s.State = state.TerminalLost
-			s.LastTelegramError = err.Error()
-		}); stateErr != nil {
-			_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
+		lock := a.sessionMutex(id)
+		lock.Lock()
+		latest, found := a.Store.FindSession(id)
+		if found && latest.State != state.TerminalClosed {
+			a.markSessionLost(ctx, latest, err)
 		}
-		a.updateAnchorLocal(ctx, id, "lost: "+err.Error(), true)
+		lock.Unlock()
 		return
 	}
 	hash := sha(capture)
@@ -62,6 +72,13 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
 	}
+	lock := a.sessionMutex(id)
+	lock.Lock()
+	latest, found := a.Store.FindSession(id)
+	if !found || latest.State == state.TerminalClosed || latest.State == state.TerminalLost || latest.TmuxPaneID != ts.TmuxPaneID || latest.TmuxWindowID != ts.TmuxWindowID {
+		lock.Unlock()
+		return
+	}
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.LastRawCapture = tailUTF8(capture, maxStoredVisibleCaptureBytes)
 		s.LastRawCaptureHash = hash
@@ -70,10 +87,12 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		s.LastSummaryModel = a.Config.AnthropicModel
 		s.PendingRefresh = false
 	}); err != nil {
+		lock.Unlock()
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "state update error after refresh: "+err.Error(), true)
 		return
 	}
+	lock.Unlock()
 	a.updateAnchorLocal(ctx, id, summary, force)
 }
 
@@ -190,6 +209,10 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 	if !ok || ts.AnchorMessageID == 0 {
 		return
 	}
+	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
+		summary = firstNonEmpty(ts.LastSummary, summary)
+		final = true
+	}
 	rendered := renderLocal(ts, summary)
 	renderHash := sha(rendered)
 	if renderHash == ts.LastRenderHash && !final {
@@ -198,13 +221,18 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 	if !final && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
 		return
 	}
-	_, err := a.editAnchor(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, telegram.RefreshMarkup(id))
+	markup := anchorMarkup(ts)
+	_, err := a.editAnchor(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, markup)
 	if err != nil {
 		if telegram.IsRateLimited(err) {
 			_ = a.audit("telegram.anchor_edit", "rate_limited", map[string]any{"session_id": id, "error": err.Error()})
 			return
 		}
-		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, telegram.RefreshMarkup(id))
+		if !isTelegramAnchorUnavailable(err) {
+			_ = a.audit("telegram.anchor_edit", "failed", map[string]any{"session_id": id, "error": err.Error()})
+			return
+		}
+		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, markup)
 		if sendErr == nil {
 			if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
@@ -407,6 +435,25 @@ func isTelegramFormattingError(err error) bool {
 	}
 	description := strings.ToLower(telegramErr.Description)
 	return strings.Contains(description, "parse entities") || strings.Contains(description, "can't parse") || strings.Contains(description, "unsupported start tag")
+}
+
+func isTelegramAnchorUnavailable(err error) bool {
+	var telegramErr *telegram.Error
+	if !errors.As(err, &telegramErr) || (telegramErr.ErrorCode != 400 && telegramErr.StatusCode != 400) {
+		return false
+	}
+	description := strings.ToLower(telegramErr.Description)
+	return strings.Contains(description, "message to edit not found") ||
+		strings.Contains(description, "message can't be edited") ||
+		strings.Contains(description, "message can not be edited") ||
+		strings.Contains(description, "message is too old")
+}
+
+func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
+	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
+		return nil
+	}
+	return telegram.RefreshMarkup(ts.ID)
 }
 
 func (a *App) scheduler(ctx context.Context) {

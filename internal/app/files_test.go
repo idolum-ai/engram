@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -145,7 +146,10 @@ func TestDownloadRejectsFileAboveTelegramCloudLimit(t *testing.T) {
 		return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
 	})}
 	app := &App{Config: config.Config{TelegramChatID: 100}, Telegram: client}
-	app.download(context.Background(), telegram.Message{MessageID: 1, Chat: telegram.Chat{ID: 100}}, path)
+	result := app.download(context.Background(), telegram.Message{MessageID: 1, Chat: telegram.Chat{ID: 100}}, path)
+	if result.Outcome != actionUserError {
+		t.Fatalf("download outcome = %q, want %q", result.Outcome, actionUserError)
+	}
 	if len(replies) != 1 || !strings.Contains(replies[0], "exceeds Telegram's") {
 		t.Fatalf("replies = %#v", replies)
 	}
@@ -179,6 +183,70 @@ func TestAttachmentBypassStillHonorsHardLimit(t *testing.T) {
 	}, telegram.Document{FileID: "large", FileSize: 5 * 1024 * 1024})
 	if len(replies) != 1 || !strings.Contains(replies[0], "hard limit") {
 		t.Fatalf("replies = %#v", replies)
+	}
+}
+
+func TestDownloadSnapshotUsesOpenedFileAfterPathReplacement(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	path := filepath.Join(dir, "source.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, _, err := openDownloadSource(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if err := os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{Config: config.Config{Home: dir}}
+	snapshot, err := app.snapshotDownloadSource(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(snapshot)
+	data, err := os.ReadFile(snapshot)
+	if err != nil || string(data) != "original" {
+		t.Fatalf("snapshot = %q, err=%v", data, err)
+	}
+}
+
+func TestBoundedWriterStopsAtUploadLimit(t *testing.T) {
+	var dst bytes.Buffer
+	writer := &boundedWriter{Writer: &dst, Remaining: 5}
+	written, err := writer.Write([]byte("123456"))
+	if written != 5 || !errors.Is(err, errArtifactTooLarge) || dst.String() != "12345" {
+		t.Fatalf("bounded write = %d, %v, %q", written, err, dst.String())
+	}
+}
+
+func TestTransferQueueRejectsExcessWork(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app := &App{
+		runCtx:        ctx,
+		transferSlots: make(chan struct{}, 1),
+		transferQueue: make(chan struct{}, 1),
+	}
+	app.transferSlots <- struct{}{}
+	ran := make(chan struct{}, 1)
+	if !app.queueTransfer(func(context.Context) { ran <- struct{}{} }) {
+		t.Fatal("first transfer was rejected")
+	}
+	if app.queueTransfer(func(context.Context) {}) {
+		t.Fatal("excess transfer was queued")
+	}
+	<-app.transferSlots
+	app.transferWG.Wait()
+	select {
+	case <-ran:
+	default:
+		t.Fatal("accepted transfer did not run")
 	}
 }
 

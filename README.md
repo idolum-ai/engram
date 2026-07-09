@@ -181,9 +181,10 @@ the bot channel and must be revoked immediately.
   under `/tmp/engram/attachments`. `/raw`, `/dump`, `/logs`, and command metadata
   create files under `/tmp/engram`. These files are not automatically removed
   by uninstall and may remain until manual or operating-system cleanup.
-- **Downloads:** `/download <absolute-path>` uploads a local regular file to
-  Telegram. It rejects symlinks, but it is still an intentional file-exfiltration
-  command. Review the exact path before sending it.
+- **Downloads:** `/download <absolute-path>` opens a local regular file, copies
+  that opened file into a private bounded snapshot, and uploads the snapshot to
+  Telegram. It rejects symlinks, but it is still an intentional
+  file-exfiltration command. Review the exact path before sending it.
 
 Audit events redact configured credentials and common token, key, password, and
 private-key patterns. `/logs` applies the same pattern-based redaction to a
@@ -295,6 +296,8 @@ legacy session and leaves its tmux window running. Inline close buttons always
 ask for confirmation. `/raw` preserves the visible pane as a physical terminal
 capture; `/dump` streams the pane's scrollback to an attachment. Cloud Bot API
 downloads are hard-limited to 20 MiB and `/download` uploads to 50 MiB.
+Generated captures and upload snapshots are also capped at 50 MiB, and Engram
+accepts at most eight queued file transfers with two running concurrently.
 Those ceilings follow the hosted [Telegram Bot API file limits](https://core.telegram.org/bots/api#sending-files);
 a local Bot API server is not currently configurable.
 

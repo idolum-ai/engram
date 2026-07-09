@@ -11,24 +11,25 @@ import (
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
-func (a *App) newSession(ctx context.Context, msg telegram.Message, input string) {
+func (a *App) newSession(ctx context.Context, msg telegram.Message, input string) actionResult {
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	sessionName, err := a.targetTmuxSession(tmuxCtx, msg.Chat.ID)
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
-		return
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux session unavailable"}
 	}
 	title := tmux.WindowTitle(0, input)
 	sessionID, windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionName, a.Config.Workdir, title)
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
-		return
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux window creation failed"}
 	}
 	ts, err := a.Store.AllocateSession(msg.Chat.ID, msg.From.ID, sessionName, windowID, paneID, title)
 	if err != nil {
+		_ = a.Tmux.KillWindow(tmuxCtx, windowID)
 		a.reply(ctx, msg, "state error: "+err.Error())
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "session state allocation failed"}
 	}
 	ts.TmuxSessionID = sessionID
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
@@ -39,14 +40,15 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 	})
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "session state update failed"}
 	}
 	ts = updated
 	if err := a.Tmux.SendCommand(tmuxCtx, paneID, input); err != nil {
 		a.reply(ctx, msg, "tmux send error: "+err.Error())
-		return
+		return actionResult{Outcome: actionTmuxFailed, Message: "initial tmux input failed"}
 	}
 	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	anchorReady := false
 	if err == nil {
 		if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 			s.AnchorChatID = resp.Chat.ID
@@ -54,11 +56,18 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 			s.WatchEnabled = true
 		}); err != nil {
 			_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
+			return actionResult{Outcome: actionStateFailed, Message: "session anchor state update failed"}
+		} else {
+			anchorReady = true
 		}
 	} else {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "new", "error": err.Error()})
+		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
-	a.queueRefresh(ts.ID, true, summaryQuietPeriod)
+	if anchorReady {
+		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
+	}
+	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("created [%d]", ts.ID)}
 }
 
 func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, error) {
@@ -104,6 +113,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 	}
 	ts = updated
 	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	anchorReady := false
 	if err == nil {
 		if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 			s.AnchorChatID = resp.Chat.ID
@@ -111,50 +121,56 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 			s.WatchEnabled = true
 		}); err != nil {
 			_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
+		} else {
+			anchorReady = true
 		}
 	} else {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "attach", "error": err.Error()})
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
-	a.queueRefresh(ts.ID, true, summaryQuietPeriod)
+	if anchorReady {
+		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
+	}
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("attached [%d]", ts.ID)}
 }
 
-func (a *App) rename(ctx context.Context, id int, name string, msg telegram.Message) {
+func (a *App) rename(ctx context.Context, id int, name string, msg telegram.Message) actionResult {
 	_, ok, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) { s.Title = strings.TrimSpace(name) })
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 	}
 	if !ok {
 		a.reply(ctx, msg, "session not found")
-		return
+		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
 	a.reply(ctx, msg, fmt.Sprintf("[%d] renamed to %s", id, strings.TrimSpace(name)))
+	return actionResult{Outcome: actionOK, Message: "renamed"}
 }
 
-func (a *App) cwd(ctx context.Context, id int, msg telegram.Message) {
+func (a *App) cwd(ctx context.Context, id int, msg telegram.Message) actionResult {
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		a.reply(ctx, msg, "session not found")
-		return
+		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	if err := a.validateSessionPane(tctx, ts); err != nil {
 		a.reply(ctx, msg, "session lost; use /sessions to attach the intended pane again")
-		return
+		return actionResult{Outcome: actionTmuxFailed, Message: "session identity lost"}
 	}
 	cwd, err := a.Tmux.PaneCWD(tctx, ts.TmuxPaneID)
 	if err != nil {
 		a.reply(ctx, msg, "cwd error: "+err.Error())
-		return
+		return actionResult{Outcome: actionTmuxFailed, Message: "cwd lookup failed"}
 	}
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) { s.LastKnownCWD = cwd }); err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "cwd state update failed"}
 	}
 	a.reply(ctx, msg, fmt.Sprintf("[%d] cwd\n%s", id, cwd))
+	return actionResult{Outcome: actionOK, Message: cwd}
 }
 
 func (a *App) cd(ctx context.Context, id int, path string) actionResult {
@@ -166,6 +182,9 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
+	}
+	if ts.State == state.TerminalLost || ts.State == state.TerminalClosed {
+		return actionResult{Outcome: actionUserError, Message: "session is " + string(ts.State) + "; use /sessions to attach an active pane"}
 	}
 	if ts.AnchorMessageID == 0 {
 		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
@@ -191,6 +210,9 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 }
 
 func (a *App) closeSession(ctx context.Context, id int) actionResult {
+	lock := a.sessionMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}

@@ -18,6 +18,7 @@ import (
 func TestAnchorEditClassifiesTelegramFailures(t *testing.T) {
 	tests := []struct {
 		name            string
+		httpStatus      int
 		editDescription string
 		editCode        int
 		wantPaths       []string
@@ -26,6 +27,7 @@ func TestAnchorEditClassifiesTelegramFailures(t *testing.T) {
 	}{
 		{
 			name:            "not modified is success",
+			httpStatus:      http.StatusBadRequest,
 			editDescription: "Bad Request: message is not modified",
 			editCode:        400,
 			wantPaths:       []string{"/botTOKEN/editMessageText"},
@@ -34,6 +36,7 @@ func TestAnchorEditClassifiesTelegramFailures(t *testing.T) {
 		},
 		{
 			name:            "rate limit does not create replacement",
+			httpStatus:      http.StatusTooManyRequests,
 			editDescription: "Too Many Requests: retry later",
 			editCode:        429,
 			wantPaths:       []string{"/botTOKEN/editMessageText"},
@@ -42,6 +45,7 @@ func TestAnchorEditClassifiesTelegramFailures(t *testing.T) {
 		},
 		{
 			name:            "format failure retries plain edit",
+			httpStatus:      http.StatusBadRequest,
 			editDescription: "Bad Request: can't parse entities",
 			editCode:        400,
 			wantPaths:       []string{"/botTOKEN/editMessageText", "/botTOKEN/editMessageText"},
@@ -50,16 +54,26 @@ func TestAnchorEditClassifiesTelegramFailures(t *testing.T) {
 		},
 		{
 			name:            "deleted message creates replacement",
+			httpStatus:      http.StatusBadRequest,
 			editDescription: "Bad Request: message to edit not found",
 			editCode:        400,
 			wantPaths:       []string{"/botTOKEN/editMessageText", "/botTOKEN/sendMessage"},
 			wantAnchorID:    88,
 			wantHash:        true,
 		},
+		{
+			name:            "server failure does not create replacement",
+			httpStatus:      http.StatusInternalServerError,
+			editDescription: "Internal Server Error",
+			editCode:        500,
+			wantPaths:       []string{"/botTOKEN/editMessageText"},
+			wantAnchorID:    77,
+			wantHash:        false,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			app, paths, id := newAnchorDeliveryApp(t, test.editCode, test.editDescription)
+			app, paths, id := newAnchorDeliveryApp(t, test.httpStatus, test.editCode, test.editDescription)
 			app.updateAnchorLocal(context.Background(), id, "status:\nready", true)
 			if !reflect.DeepEqual(*paths, test.wantPaths) {
 				t.Fatalf("request paths = %#v, want %#v", *paths, test.wantPaths)
@@ -75,7 +89,7 @@ func TestAnchorEditClassifiesTelegramFailures(t *testing.T) {
 	}
 }
 
-func newAnchorDeliveryApp(t *testing.T, editCode int, editDescription string) (*App, *[]string, int) {
+func newAnchorDeliveryApp(t *testing.T, httpStatus, editCode int, editDescription string) (*App, *[]string, int) {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
@@ -101,7 +115,7 @@ func newAnchorDeliveryApp(t *testing.T, editCode int, editDescription string) (*
 		if req.URL.Path == "/botTOKEN/editMessageText" {
 			editCalls++
 			if editCalls == 1 {
-				return telegramTestResponse(t, http.StatusBadRequest, map[string]any{
+				return telegramTestResponse(t, httpStatus, map[string]any{
 					"ok":          false,
 					"error_code":  editCode,
 					"description": editDescription,

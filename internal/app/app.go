@@ -40,6 +40,7 @@ type App struct {
 	captureSlots   chan struct{}
 	haikuSlots     chan struct{}
 	transferSlots  chan struct{}
+	transferQueue  chan struct{}
 	summaryMu      sync.Mutex
 	summaryQueued  map[int]bool
 	summaryRunning map[int]bool
@@ -48,6 +49,7 @@ type App struct {
 	captureHistory map[int][]map[string]bool
 	closeConfirmMu sync.Mutex
 	closeConfirms  map[string]closeConfirmation
+	sessionLocks   sync.Map
 	sleepHook      func(time.Duration)
 	refreshHook    func(context.Context, int, bool)
 }
@@ -57,6 +59,7 @@ const haikuCaptureHistoryLimit = 5
 const maxConcurrentCaptures = 2
 const maxConcurrentHaikuRequests = 2
 const maxConcurrentTransfers = 2
+const maxQueuedTransfers = 8
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
@@ -88,6 +91,7 @@ func New(cfg config.Config) (*App, error) {
 		captureSlots:   make(chan struct{}, maxConcurrentCaptures),
 		haikuSlots:     make(chan struct{}, maxConcurrentHaikuRequests),
 		transferSlots:  make(chan struct{}, maxConcurrentTransfers),
+		transferQueue:  make(chan struct{}, maxQueuedTransfers),
 		summaryQueued:  map[int]bool{},
 		summaryRunning: map[int]bool{},
 		summaryForce:   map[int]bool{},
@@ -186,8 +190,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		return "failed_state_mark_message"
 	}
 	if doc, ok := msg.FileAttachment(); ok {
-		a.handleAttachment(ctx, msg, doc)
-		return "handled_attachment"
+		return a.handleAttachment(ctx, msg, doc).status("attachment")
 	}
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
@@ -220,8 +223,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		a.reply(ctx, msg, "session not found for this reply; use /sessions to find an active anchor")
 		return "anchor_reply_user_error"
 	}
-	a.newSession(ctx, msg, text)
-	return "handled_new_session"
+	return a.newSession(ctx, msg, text).status("new_session")
 }
 
 func escapedSlashInput(text string) (string, bool) {
@@ -269,10 +271,11 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		status = a.attachTarget(ctx, msg, args).status("command")
 	case "new":
 		if args == "" {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /new <text>")
 			return
 		}
-		a.newSession(ctx, msg, args)
+		status = a.newSession(ctx, msg, args).status("command")
 	case "send", "run":
 		id, rest, ok := parseIDRest(args)
 		if !ok {
@@ -312,17 +315,19 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "rename":
 		id, rest, ok := parseIDRest(args)
 		if !ok || strings.TrimSpace(rest) == "" {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /rename <id> <name>")
 			return
 		}
-		a.rename(ctx, id, rest, msg)
+		status = a.rename(ctx, id, rest, msg).status("command")
 	case "cwd":
 		id, ok := parseID(args)
 		if !ok {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /cwd <id>")
 			return
 		}
-		a.cwd(ctx, id, msg)
+		status = a.cwd(ctx, id, msg).status("command")
 	case "cd":
 		id, rest, ok := parseIDRest(args)
 		if !ok || strings.TrimSpace(rest) == "" {
@@ -348,9 +353,9 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, result.Message)
 		}
 	case "dump":
-		a.captureFile(ctx, msg, args, true)
+		status = a.captureFile(ctx, msg, args, true).status("command")
 	case "raw":
-		a.captureFile(ctx, msg, args, false)
+		status = a.captureFile(ctx, msg, args, false).status("command")
 	case "close":
 		id, ok := parseID(args)
 		if !ok {
@@ -366,7 +371,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "attachments":
 		a.attachments(ctx, msg)
 	case "download":
-		a.download(ctx, msg, args)
+		status = a.download(ctx, msg, args).status("command")
 	case "logs":
 		a.logs(ctx, msg)
 	case "stop", "unwatch":
@@ -401,6 +406,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "attachment-bypass", "attachment_bypass":
 		hash := parseBypassHash(args)
 		if hash == "" || !validSHA256Hex(hash) {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /attachment_bypass sha256:<hash>")
 			return
 		}
@@ -412,6 +418,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			CreatedAt: time.Now().UTC(),
 			ExpiresAt: expires,
 		}); err != nil {
+			status = "command_state_failed"
 			a.reply(ctx, msg, "state error: "+err.Error())
 			return
 		}

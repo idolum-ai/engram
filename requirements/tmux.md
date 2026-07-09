@@ -53,6 +53,8 @@ tmux is the source of terminal truth.
 - `/raw` preserves physical wrapped lines and terminal attributes in the
   visible pane capture.
 - `/dump` streams physical full scrollback directly to an attachment file.
+- `/raw` and `/dump` stop before exceeding Telegram's 50 MiB cloud upload
+  ceiling rather than creating an artifact that cannot be delivered.
 - Haiku receives ANSI-clean semantic visible capture. Its optional confidence
   retry receives at most 24,000 bytes and 800 lines of scrollback.
 
@@ -66,4 +68,6 @@ tmux is the source of terminal truth.
   tmux windows remain open.
 - Inline close controls require a separate confirm/cancel callback. A failed
   tmux close does not mark the session closed.
-- Closed sessions must not continue refreshing.
+- Closed and lost sessions must not continue refreshing or retain inline
+  controls. Closing and refreshing the same session concurrently must preserve
+  the closed result.

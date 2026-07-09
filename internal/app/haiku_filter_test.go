@@ -112,7 +112,7 @@ func TestRefreshCallbackClearsHaikuCaptureHistory(t *testing.T) {
 		},
 		Data: "refresh:1",
 	})
-	if status != "handled_callback" {
+	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
 	select {

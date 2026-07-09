@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
@@ -36,6 +37,9 @@ func (r actionResult) status(prefix string) string {
 }
 
 func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bool) actionResult {
+	lock := a.sessionMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
@@ -86,6 +90,9 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 			return actionResult{Outcome: actionUserError, Message: err.Error()}
 		}
 	}
+	lock := a.sessionMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
@@ -116,6 +123,11 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))}
+}
+
+func (a *App) sessionMutex(id int) *sync.Mutex {
+	lock, _ := a.sessionLocks.LoadOrStore(id, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 func flattenKeyPreview(groups [][]string) string {

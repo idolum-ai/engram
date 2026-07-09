@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,7 +23,9 @@ const (
 	attachmentDiskReserve    = uint64(64 * 1024 * 1024)
 )
 
-func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string, full bool) {
+var errArtifactTooLarge = errors.New("artifact exceeds Telegram cloud upload limit")
+
+func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string, full bool) actionResult {
 	id, ok := parseID(arg)
 	if !ok {
 		if full {
@@ -30,12 +33,12 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 		} else {
 			a.reply(ctx, msg, "usage: /raw <id>")
 		}
-		return
+		return actionResult{Outcome: actionUserError, Message: "invalid capture session"}
 	}
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		a.reply(ctx, msg, "session not found")
-		return
+		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
 	kind := "raw"
 	if full {
@@ -45,8 +48,10 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 	if !a.queueTransfer(func(transferCtx context.Context) {
 		a.captureSessionFile(transferCtx, msg, ts, full)
 	}) {
-		a.reply(ctx, msg, "capture canceled: Engram is stopping")
+		a.reply(ctx, msg, "capture unavailable: Engram is stopping or the transfer queue is full")
+		return actionResult{Outcome: actionStateFailed, Message: "capture transfer unavailable"}
 	}
+	return actionResult{Outcome: actionOK, Message: kind + " queued"}
 }
 
 func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts state.TerminalSession, full bool) {
@@ -66,10 +71,14 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 			a.reply(ctx, msg, "write error: "+err.Error())
 			return
 		}
-		dumpErr := a.Tmux.DumpScrollback(tctx, ts.TmuxPaneID, file)
+		dumpErr := a.Tmux.DumpScrollback(tctx, ts.TmuxPaneID, &boundedWriter{Writer: file, Remaining: telegramCloudUploadMax})
 		closeErr := file.Close()
 		if dumpErr != nil || closeErr != nil {
 			_ = os.Remove(path)
+			if errors.Is(dumpErr, errArtifactTooLarge) {
+				a.reply(ctx, msg, fmt.Sprintf("capture rejected: scrollback exceeds Telegram's %d-byte cloud Bot API limit", telegramCloudUploadMax))
+				return
+			}
 			a.reply(ctx, msg, "capture error: "+firstError(dumpErr, closeErr).Error())
 			return
 		}
@@ -77,6 +86,10 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 		text, err := a.Tmux.CaptureVisibleRaw(tctx, ts.TmuxPaneID)
 		if err != nil {
 			a.reply(ctx, msg, "capture error: "+err.Error())
+			return
+		}
+		if int64(len(text)) > telegramCloudUploadMax {
+			a.reply(ctx, msg, fmt.Sprintf("capture rejected: visible pane exceeds Telegram's %d-byte cloud Bot API limit", telegramCloudUploadMax))
 			return
 		}
 		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -87,6 +100,28 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, fmt.Sprintf("[%d] %s", ts.ID, name)); err != nil {
 		a.reply(ctx, msg, "upload error: "+err.Error())
 	}
+}
+
+type boundedWriter struct {
+	Writer    io.Writer
+	Remaining int64
+}
+
+func (w *boundedWriter) Write(data []byte) (int, error) {
+	if w.Remaining <= 0 {
+		return 0, errArtifactTooLarge
+	}
+	if int64(len(data)) > w.Remaining {
+		written, err := w.Writer.Write(data[:w.Remaining])
+		w.Remaining -= int64(written)
+		if err != nil {
+			return written, err
+		}
+		return written, errArtifactTooLarge
+	}
+	written, err := w.Writer.Write(data)
+	w.Remaining -= int64(written)
+	return written, err
 }
 
 func firstError(errs ...error) error {
@@ -114,7 +149,7 @@ func (a *App) commandsMetadata(ctx context.Context, msg telegram.Message) {
 	}
 }
 
-func (a *App) handleAttachment(ctx context.Context, msg telegram.Message, doc telegram.Document) {
+func (a *App) handleAttachment(ctx context.Context, msg telegram.Message, doc telegram.Document) actionResult {
 	allowLarge := strings.Contains(msg.Caption, "/attachment-bypass") || strings.Contains(msg.Caption, "/attachment_bypass")
 	expectedHash := parseBypassHash(msg.Caption)
 	if expectedHash == "" {
@@ -127,22 +162,24 @@ func (a *App) handleAttachment(ctx context.Context, msg telegram.Message, doc te
 	softMax := minInt64(a.Config.AttachmentSoftMaxBytes, hardMax)
 	if doc.FileSize > hardMax {
 		a.reply(ctx, msg, fmt.Sprintf("attachment rejected: %d bytes exceeds the hard limit %d bytes; the Telegram cloud Bot API cannot download it", doc.FileSize, hardMax))
-		return
+		return actionResult{Outcome: actionUserError, Message: "attachment exceeds hard limit"}
 	}
 	if doc.FileSize > softMax && !allowLarge {
 		a.reply(ctx, msg, a.largeAttachmentMessage(doc.FileSize))
-		return
+		return actionResult{Outcome: actionUserError, Message: "attachment exceeds soft limit"}
 	}
 	if allowLarge && !validSHA256Hex(expectedHash) {
 		a.reply(ctx, msg, "large attachment bypass requires sha256:<hash>")
-		return
+		return actionResult{Outcome: actionUserError, Message: "invalid attachment bypass"}
 	}
 	a.reply(ctx, msg, "receiving attachment...")
 	if !a.queueTransfer(func(transferCtx context.Context) {
 		a.downloadAttachment(transferCtx, msg, doc, allowLarge, expectedHash, softMax, hardMax)
 	}) {
-		a.reply(ctx, msg, "attachment transfer canceled: Engram is stopping")
+		a.reply(ctx, msg, "attachment transfer unavailable: Engram is stopping or the transfer queue is full")
+		return actionResult{Outcome: actionStateFailed, Message: "attachment transfer unavailable"}
 	}
+	return actionResult{Outcome: actionOK, Message: "attachment queued"}
 }
 
 func (a *App) downloadAttachment(ctx context.Context, msg telegram.Message, doc telegram.Document, allowLarge bool, expectedHash string, softMax, hardMax int64) {
@@ -217,25 +254,91 @@ func (a *App) attachments(ctx context.Context, msg telegram.Message) {
 	a.reply(ctx, msg, b.String())
 }
 
-func (a *App) download(ctx context.Context, msg telegram.Message, path string) {
+func (a *App) download(ctx context.Context, msg telegram.Message, path string) actionResult {
 	path = strings.TrimSpace(path)
-	info, err := validateDownloadPath(path)
+	source, info, err := openDownloadSource(path)
 	if err != nil {
 		a.reply(ctx, msg, err.Error())
-		return
+		return actionResult{Outcome: actionUserError, Message: "invalid download path"}
 	}
 	if info.Size() > telegramCloudUploadMax {
+		source.Close()
 		a.reply(ctx, msg, fmt.Sprintf("upload rejected: %d bytes exceeds Telegram's %d-byte cloud Bot API limit", info.Size(), telegramCloudUploadMax))
-		return
+		return actionResult{Outcome: actionUserError, Message: "download exceeds upload limit"}
 	}
 	a.reply(ctx, msg, fmt.Sprintf("uploading %s (%d bytes)...", filepath.Base(path), info.Size()))
 	if !a.queueTransfer(func(transferCtx context.Context) {
-		if _, err := a.Telegram.SendDocument(transferCtx, a.Config.TelegramChatID, path, filepath.Base(path)); err != nil {
+		defer source.Close()
+		snapshot, err := a.snapshotDownloadSource(source)
+		if err != nil {
+			a.reply(transferCtx, msg, "upload snapshot error: "+err.Error())
+			return
+		}
+		defer os.Remove(snapshot)
+		if _, err := a.Telegram.SendDocument(transferCtx, a.Config.TelegramChatID, snapshot, filepath.Base(path)); err != nil {
 			a.reply(transferCtx, msg, "upload error: "+err.Error())
 		}
 	}) {
-		a.reply(ctx, msg, "upload canceled: Engram is stopping")
+		source.Close()
+		a.reply(ctx, msg, "upload unavailable: Engram is stopping or the transfer queue is full")
+		return actionResult{Outcome: actionStateFailed, Message: "upload transfer unavailable"}
 	}
+	return actionResult{Outcome: actionOK, Message: "upload queued"}
+}
+
+func openDownloadSource(path string) (*os.File, os.FileInfo, error) {
+	before, err := validateDownloadPath(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	source, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open error: %w", err)
+	}
+	after, err := source.Stat()
+	if err != nil {
+		source.Close()
+		return nil, nil, fmt.Errorf("stat opened file: %w", err)
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(before, after) {
+		source.Close()
+		return nil, nil, fmt.Errorf("file changed during validation")
+	}
+	return source, after, nil
+}
+
+func (a *App) snapshotDownloadSource(source *os.File) (string, error) {
+	if err := os.MkdirAll(a.Config.ArtifactDir(), 0o700); err != nil {
+		return "", err
+	}
+	snapshot, err := os.CreateTemp(a.Config.ArtifactDir(), "engram-download-*.bin")
+	if err != nil {
+		return "", err
+	}
+	path := snapshot.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(path)
+		}
+	}()
+	if err := snapshot.Chmod(0o600); err != nil {
+		snapshot.Close()
+		return "", err
+	}
+	written, copyErr := io.Copy(snapshot, io.LimitReader(source, telegramCloudUploadMax+1))
+	closeErr := snapshot.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	if written > telegramCloudUploadMax {
+		return "", errArtifactTooLarge
+	}
+	keep = true
+	return path, nil
 }
 
 func (a *App) logs(ctx context.Context, msg telegram.Message) {
@@ -349,9 +452,19 @@ func (a *App) queueTransfer(fn func(context.Context)) bool {
 		return false
 	default:
 	}
+	if a.transferQueue != nil {
+		select {
+		case a.transferQueue <- struct{}{}:
+		default:
+			return false
+		}
+	}
 	a.transferWG.Add(1)
 	go func() {
 		defer a.transferWG.Done()
+		if a.transferQueue != nil {
+			defer func() { <-a.transferQueue }()
+		}
 		if !acquireSlot(ctx, a.transferSlots) {
 			return
 		}

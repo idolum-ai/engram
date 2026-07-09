@@ -54,10 +54,14 @@ filesystem. The security and privacy model must stay small and explicit.
   from Telegram-provided file metadata.
 - `/download` only accepts absolute paths and uploads regular files.
 - `/download` rejects symlinks and non-regular files.
+- `/download` uploads from a private bounded snapshot of the already-opened
+  source so path replacement cannot redirect a queued transfer.
 - `/download` rejects files above Telegram's 50 MiB cloud Bot API multipart
   upload ceiling before opening a network request.
 - Attachment downloads hash while streaming, and long file transfers run in
-  bounded background workers so polling remains responsive.
+  bounded background workers and a bounded queue so polling remains responsive.
+- Generated `/raw` and `/dump` artifacts must not exceed the same 50 MiB cloud
+  upload ceiling.
 
 ## Process Ownership
 

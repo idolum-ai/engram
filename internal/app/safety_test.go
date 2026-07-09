@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -149,6 +150,90 @@ func TestUnauthorizedAndStaleCallbacksAreAlwaysAnswered(t *testing.T) {
 	}
 }
 
+func TestClosedSessionCannotRefreshAndHasNoControls(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.State = state.TerminalClosed
+		session.WatchEnabled = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.refreshSession(context.Background(), id, true)
+	if len(runner.calls) != 0 {
+		t.Fatalf("closed refresh touched tmux: %#v", runner.calls)
+	}
+	ts, _ := app.Store.FindSession(id)
+	if anchorMarkup(ts) != nil {
+		t.Fatal("closed anchor retained controls")
+	}
+}
+
+func TestStaleAnchorUpdateUsesClosedSummary(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.State = state.TerminalClosed
+		session.WatchEnabled = false
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.LastSummary = "status:\nclosed truthfully"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"message_id":77,"chat":{"id":100}}}`)), Header: make(http.Header)}, nil
+	})}
+	app.Telegram = client
+	app.updateAnchorLocal(context.Background(), id, "status:\nstale running output", true)
+	text, _ := payload["text"].(string)
+	if !strings.Contains(text, "closed truthfully") || strings.Contains(text, "stale running output") {
+		t.Fatalf("closed edit text = %q", text)
+	}
+	if _, ok := payload["reply_markup"]; ok {
+		t.Fatalf("closed edit retained reply markup: %#v", payload)
+	}
+}
+
+func TestInitialAnchorFailureLeavesSessionUnwatched(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network unavailable")
+	})}
+	app := &App{
+		Config:         config.Config{TelegramChatID: 100, TmuxSession: "main", Workdir: dir},
+		Store:          store,
+		Tmux:           tmux.New(&newSessionRunner{}),
+		Telegram:       client,
+		summaryQueued:  map[int]bool{},
+		summaryRunning: map[int]bool{},
+		summaryForce:   map[int]bool{},
+	}
+	result := app.newSession(context.Background(), telegram.Message{MessageID: 1, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 42}}, "pwd")
+	if result.Outcome != actionTelegramFailed {
+		t.Fatalf("new session outcome = %q, want %q", result.Outcome, actionTelegramFailed)
+	}
+	sessions := store.Snapshot().TerminalSessions
+	if len(sessions) != 1 || sessions[0].WatchEnabled || sessions[0].AnchorMessageID != 0 {
+		t.Fatalf("session after anchor failure = %#v", sessions)
+	}
+	app.summaryMu.Lock()
+	defer app.summaryMu.Unlock()
+	if len(app.summaryQueued) != 0 || len(app.summaryRunning) != 0 {
+		t.Fatalf("anchor failure queued refresh: %#v %#v", app.summaryQueued, app.summaryRunning)
+	}
+}
+
 func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunner, int) {
 	t.Helper()
 	dir := t.TempDir()
@@ -162,6 +247,7 @@ func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunne
 	}
 	if _, _, err := store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
 		session.Origin = origin
+		session.WatchEnabled = true
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +263,15 @@ type safetyRunner struct {
 	calls          [][]string
 	identityWindow string
 	failKill       bool
+}
+
+type newSessionRunner struct{}
+
+func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "new-window" {
+		return "$1\t@1\t%1\n", nil
+	}
+	return "", nil
 }
 
 func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {

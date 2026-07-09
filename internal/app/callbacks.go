@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 )
 
@@ -21,7 +22,9 @@ type closeConfirmation struct {
 
 func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) string {
 	if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramChatID {
-		a.answerCallback(ctx, cb.ID, "not authorized")
+		if !a.answerCallback(ctx, cb.ID, "not authorized") {
+			return "rejected_unauthorized_callback_answer_failed"
+		}
 		return "rejected_unauthorized_callback"
 	}
 	parts := strings.SplitN(cb.Data, ":", 2)
@@ -36,13 +39,21 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
-		if _, ok := a.Store.FindSession(id); !ok {
+		ts, ok := a.Store.FindSession(id)
+		if !ok {
 			a.answerCallback(ctx, cb.ID, "session not found")
 			return "callback_user_error"
 		}
-		a.answerCallback(ctx, cb.ID, "refreshing")
+		if ts.State == state.TerminalLost || ts.State == state.TerminalClosed {
+			a.answerCallback(ctx, cb.ID, "session is "+string(ts.State))
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "refreshing") {
+			return "callback_telegram_failed"
+		}
 		a.clearHaikuCaptureHistory(id)
 		a.queueRefresh(id, true, 0)
+		return "callback_ok"
 	case "key":
 		id, preset, ok := parseKeyCallback(parts[1])
 		if !ok {
@@ -55,7 +66,9 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "failed_unknown_callback_key"
 		}
 		result := a.sendKeyGroups(ctx, id, action.Groups, action.Label, action.Delay)
-		a.answerCallback(ctx, cb.ID, result.Message)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
 		return result.status("callback")
 	case "watch":
 		id, err := strconv.Atoi(parts[1])
@@ -64,7 +77,9 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "failed_bad_callback_id"
 		}
 		result := a.watchSession(ctx, id, cb.Message.MessageID)
-		a.answerCallback(ctx, cb.ID, result.Message)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
 		return result.status("callback")
 	case "close":
 		id, err := strconv.Atoi(parts[1])
@@ -87,7 +102,9 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "could not open confirmation")
 			return "callback_telegram_failed"
 		}
-		a.answerCallback(ctx, cb.ID, "confirm below")
+		if !a.answerCallback(ctx, cb.ID, "confirm below") {
+			return "callback_telegram_failed"
+		}
 		return "callback_ok"
 	case "close-confirm":
 		confirmation, ok := a.consumeCloseConfirmation(parts[1])
@@ -96,23 +113,32 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_user_error"
 		}
 		result := a.closeSession(ctx, confirmation.SessionID)
-		a.answerCallback(ctx, cb.ID, result.Message)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
 		return result.status("callback")
 	case "close-cancel":
 		a.consumeCloseConfirmation(parts[1])
-		a.answerCallback(ctx, cb.ID, "canceled")
-		return "callback_ok"
+		return callbackAnswerStatus(a.answerCallback(ctx, cb.ID, "canceled"), "callback_ok")
 	case "attach":
 		msg := *cb.Message
 		msg.From = &cb.From
 		result := a.attachTarget(ctx, msg, parts[1])
-		a.answerCallback(ctx, cb.ID, result.Message)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
 		return result.status("callback")
 	default:
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
-	return "handled_callback"
+}
+
+func callbackAnswerStatus(answered bool, status string) string {
+	if !answered {
+		return "callback_telegram_failed"
+	}
+	return status
 }
 
 func (a *App) answerCallback(ctx context.Context, id, text string) bool {

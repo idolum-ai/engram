@@ -306,7 +306,7 @@ func (s *Store) AllocateSession(chatID, userID int64, tmuxSessionName, windowID,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		LastActivityAt:  now,
-		WatchEnabled:    true,
+		WatchEnabled:    false,
 	}
 	s.state.TerminalSessions = append(s.state.TerminalSessions, ts)
 	return ts, s.saveLocked()
