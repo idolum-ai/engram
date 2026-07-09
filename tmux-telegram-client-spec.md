@@ -967,6 +967,43 @@ Engram should treat terminal work as durable and Telegram messages as replaceabl
 - During network outages, keep tmux sessions alive and retry Telegram and
   Anthropic independently with backoff.
 
+## Performance Design
+
+Engram should maximize performance by avoiding unnecessary work. The core hot
+path is:
+
+```text
+tmux dirty -> wait/coalesce -> capture -> hash -> maybe Haiku -> maybe edit Telegram -> atomic state write
+```
+
+Rules:
+
+- Hash normalized visible tmux captures before calling Haiku. If the capture hash
+  did not change, skip summarization.
+- Run at most one Haiku request per terminal session at a time. If new output
+  arrives while a request is in flight, mark one pending refresh rather than
+  queueing another request.
+- Keep the 10 second anchor cadence as the default even when tmux output is
+  noisy.
+- Send Haiku only the visible pane capture, previous summary, and a small recent
+  delta. Full scrollback belongs to `/dump`, not the summarization path.
+- Use one scheduler loop for dirty sessions rather than one busy polling loop per
+  session.
+- Reuse long-lived `http.Client` instances for Telegram and Anthropic, each with
+  explicit timeouts.
+- Use Telegram long polling with a high timeout and exponential backoff after
+  network or API errors.
+- Persist input/update IDs promptly for idempotency, then coalesce lower-risk
+  render metadata writes where practical.
+- Do not implement a terminal emulator. Tmux owns terminal state; Engram uses
+  `capture-pane` as the source of truth.
+- Stream file downloads/uploads where possible. Do not load large `/dump`,
+  `/raw`, `/logs`, `/download`, or attachment files fully into memory.
+- Bound generated artifacts under `/tmp/engram` by size and clean them up when
+  they are no longer needed.
+- Prefer simple O(n) scans over indexes until state size proves otherwise; MVP
+  state is expected to be small.
+
 ## Security
 
 This service gives Telegram users shell access through tmux, so authorization is
