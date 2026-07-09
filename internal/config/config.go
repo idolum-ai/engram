@@ -2,7 +2,6 @@ package config
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,8 +20,6 @@ type Config struct {
 	TelegramBotToken           string
 	TelegramAllowedUserID      int64
 	TelegramChatID             int64
-	TelegramAPIID              string
-	TelegramAPIHash            string
 	LLMProvider                string
 	AnthropicAPIKey            string
 	AnthropicModel             string
@@ -42,25 +39,34 @@ func Load(path string) (Config, error) {
 		path = DefaultEnvPath()
 	}
 	path = ExpandPath(path)
+	if err := validateEnvFileMetadata(path); err != nil {
+		return Config{}, err
+	}
 	values, err := parseEnvFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	softMax, err := parseInt64Default(values["ENGRAM_ATTACHMENT_SOFT_MAX_BYTES"], "ENGRAM_ATTACHMENT_SOFT_MAX_BYTES", DefaultSoftMaxSize)
+	if err != nil {
+		return Config{}, err
+	}
+	pollTimeout, err := parseInt64Default(values["TELEGRAM_POLL_TIMEOUT_SECONDS"], "TELEGRAM_POLL_TIMEOUT_SECONDS", 50)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg := Config{
 		EnvPath:                    path,
 		TelegramBotToken:           values["TELEGRAM_BOT_TOKEN"],
-		TelegramAPIID:              values["TELEGRAM_API_ID"],
-		TelegramAPIHash:            values["TELEGRAM_API_HASH"],
 		LLMProvider:                firstNonEmpty(values["LLM_PROVIDER"], "anthropic"),
 		AnthropicAPIKey:            values["ANTHROPIC_API_KEY"],
 		AnthropicModel:             firstNonEmpty(values["ANTHROPIC_MODEL"], DefaultModel),
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
-		AttachmentSoftMaxBytes:     parseInt64Default(values["ENGRAM_ATTACHMENT_SOFT_MAX_BYTES"], DefaultSoftMaxSize),
-		TelegramPollTimeoutSeconds: int(parseInt64Default(values["TELEGRAM_POLL_TIMEOUT_SECONDS"], 50)),
+		AttachmentSoftMaxBytes:     softMax,
+		TelegramPollTimeoutSeconds: int(pollTimeout),
 	}
-	if cfg.TelegramAllowedUserID, err = parseRequiredInt64(values, "TELEGRAM_ALLOWED_USER_ID"); err != nil {
+	if cfg.TelegramAllowedUserID, err = parseOptionalInt64(values["TELEGRAM_ALLOWED_USER_ID"], "TELEGRAM_ALLOWED_USER_ID"); err != nil {
 		return Config{}, err
 	}
 	if cfg.TelegramChatID, err = parseOptionalInt64(firstNonEmpty(values["TELEGRAM_CHAT_ID"], values["TELEGRAM_GROUP_CHAT_ID"]), "TELEGRAM_CHAT_ID"); err != nil {
@@ -168,18 +174,6 @@ func unquote(value string) string {
 	return value
 }
 
-func parseRequiredInt64(values map[string]string, key string) (int64, error) {
-	raw := strings.TrimSpace(values[key])
-	if raw == "" {
-		return 0, nil
-	}
-	n, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
-	}
-	return n, nil
-}
-
 func parseOptionalInt64(raw string, key string) (int64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -192,16 +186,16 @@ func parseOptionalInt64(raw string, key string) (int64, error) {
 	return n, nil
 }
 
-func parseInt64Default(raw string, def int64) int64 {
+func parseInt64Default(raw string, key string, def int64) (int64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return def
+		return def, nil
 	}
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		return def
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
-	return n
+	return n, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -222,4 +216,16 @@ func EnsureDirs(cfg Config) error {
 	return nil
 }
 
-var ErrUnauthorized = errors.New("unauthorized")
+func validateEnvFileMetadata(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("env file must be a regular file: %s", path)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("env file permissions must not grant group/other access: %s", path)
+	}
+	return nil
+}

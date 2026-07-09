@@ -135,8 +135,8 @@ Input rules:
   automatically.
 
 The service should not attempt to fully emulate the TUI. Tmux remains the source
-of truth; the bot only captures the visible pane, asks Haiku for a faithful
-phone-sized rendering, and sends explicit user keystrokes back to tmux.
+of truth; the bot captures terminal state, asks Haiku for a phone-sized guide
+report, and sends explicit user keystrokes back to tmux.
 
 ### List Sessions
 
@@ -506,8 +506,6 @@ Required and defaulted variables:
 ```sh
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_USER_ID=
-TELEGRAM_API_ID=
-TELEGRAM_API_HASH=
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
@@ -519,11 +517,9 @@ ENGRAM_ATTACHMENT_SOFT_MAX_BYTES=52428800
 `TELEGRAM_CHAT_ID` may also be set. For DMs, leave it unset and Engram defaults
 it to `TELEGRAM_ALLOWED_USER_ID`.
 
-`TELEGRAM_BOT_TOKEN` is the MVP credential for Bot API operation. Telegram app
-credentials are usually called API ID and API hash rather than client ID and
-client secret; the `.env` should still allow them through `TELEGRAM_API_ID` and
-`TELEGRAM_API_HASH` so later MTProto/user-client features do not require a
-configuration rename.
+`TELEGRAM_BOT_TOKEN` is the MVP credential for Bot API operation. Telegram API
+ID/hash credentials are not part of the Bot API design and should only be added
+with a future MTProto/user-client feature.
 
 Startup validation:
 
@@ -534,7 +530,6 @@ Startup validation:
   It may be set explicitly for a group or supergroup.
 - The service must reject every update not sent by `TELEGRAM_ALLOWED_USER_ID`.
 - The service must reject messages outside `TELEGRAM_CHAT_ID`.
-- `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are optional in MVP Bot API mode.
 - `LLM_PROVIDER` must be exactly `anthropic`.
 - `ANTHROPIC_MODEL` must be exactly the configured Haiku model ID or an allowed
   Anthropic Haiku alias. Initially allowed values are
@@ -643,7 +638,8 @@ avoiding blind polling.
 ### LLM Simplification
 
 Anchor messages should not be raw terminal buffers. They should be short Haiku
-summaries of what changed and what the terminal appears to need next.
+guide reports that explain, in plain English, what the terminal appears to be
+doing and what the user should do next.
 
 The simplifier input should include:
 
@@ -651,29 +647,33 @@ The simplifier input should include:
 - Current state: `running`, `idle`, `exited`, `lost`, `closed`, or `killed`.
 - Last user input.
 - Input mode hint: shell-like command, literal text, or explicit key input.
-- Previous summary, if available.
 - Current visible capture.
-- Optional small tail of recent raw output since the last summary.
+- Previous guide report, if available.
+- Full scrollback only on the single bounded retry described below.
 
-The simplifier output should be constrained to a compact schema:
+The guide output should be constrained to a compact JSON schema:
 
-```text
-status: running
-summary:
-- ...
-next:
-- ...
-prompt: "$"
+```json
+{
+  "status_report": "one or two short plain-English paragraphs",
+  "recommended_action": "one clear sentence",
+  "confidence": "high|medium|low",
+  "needs_full_buffer": false,
+  "reason": "hidden confidence diagnostic"
+}
 ```
 
-The system prompt should frame the model as a readable screen renderer, not as a
-general assistant:
+Only `status_report` and `recommended_action` are rendered to Telegram.
+`confidence`, `needs_full_buffer`, and `reason` are hidden pipeline fields.
+
+The system prompt should frame the model as an operator guide, not as a general
+assistant and not as a literal terminal emulator:
 
 ```text
-Imagine you are a small phone screen re-rendering a terminal. Preserve the
-meaning, current state, errors, prompts, and actionable output faithfully, but
-compress the raw buffer into a readable Telegram message. Do not invent success,
-files, commands, or next steps that are not supported by the visible buffer.
+You are Engram's terminal guide for a technical user reading Telegram on a
+phone. Explain the terminal state in plain English, point out likely blockers or
+prompts, and recommend one concrete next action. Do not pretend to be the
+process, do not invent success, and mark uncertainty clearly. Return JSON only.
 ```
 
 ### LLM Token Budget
@@ -684,8 +684,8 @@ should be planned as:
 ```text
 system prompt budget
 + visible tmux capture budget
-+ optional recent-output delta budget
 + previous-summary budget
++ optional full-scrollback retry budget
 + max reply budget
 ```
 
@@ -700,7 +700,7 @@ Initial defaults:
 - Visible capture budget: roughly the captured character count, converted to a
   conservative token estimate before sending.
 - Previous summary budget: 800 characters.
-- Recent-output delta budget: 2,000 characters.
+- Full scrollback retry budget: 24,000 tail characters.
 - `max_tokens`: 700.
 - Hard rendered anchor target: 2,000 characters.
 - Absolute rendered anchor ceiling: 3,500 characters.
@@ -717,7 +717,9 @@ Rules:
   `false`; do not use server-sent events or partial token streaming.
 - Do not use the LLM for authorization decisions.
 - Do not send the full scrollback to Haiku by default.
-- Prefer deltas plus visible pane captures to control token use.
+- First ask Haiku for a guide report from the visible pane only.
+- If the hidden confidence is low or `needs_full_buffer` is true, make exactly
+  one retry with full scrollback captured from tmux, then render that result.
 - If Haiku fails, keep the last successful summary and add a local stale marker.
 - `/dump <id>` remains the raw full-buffer path and does not use the LLM.
 - Never imply a command succeeded unless the terminal output supports it.
@@ -730,18 +732,20 @@ Rules:
 
 For each watched terminal session:
 
-1. Tmux control-mode output marks the pane dirty.
-2. Scheduler waits for a short debounce window.
-3. Controller captures the pane.
-4. If the raw capture hash changed, the simplifier makes one non-streaming Haiku
-   request for a complete new summary.
-5. Renderer builds Telegram text from metadata and the Haiku summary.
-6. If the rendered hash differs from the last sent hash, edit the anchor message.
-7. Store the new hashes, edit timestamp, model ID, and status.
+1. Tmux output or user input marks the pane dirty.
+2. Scheduler waits for a short quiet period.
+3. Controller captures the visible pane.
+4. If the raw capture hash changed, the guide pipeline makes one non-streaming
+   Haiku request for a structured report.
+5. If hidden confidence is low or full context is requested, the pipeline makes
+   one bounded retry with full tmux scrollback.
+6. Renderer builds Telegram text from metadata plus the visible report fields.
+7. If the rendered hash differs from the last sent hash, edit the anchor message.
+8. Store the new hashes, edit timestamp, model ID, and status.
 
 Recommended defaults:
 
-- Debounce: 500 ms to 1 s.
+- Debounce: 2 s after user input.
 - Minimum edit interval per anchor: 10 s.
 - Maximum forced refresh interval while dirty: 10 s, and only when the rendered
   summary hash changed.
@@ -885,6 +889,10 @@ Rendering rules:
 - Do not include raw terminal buffers in live anchors by default.
 - Strip unsupported ANSI before sending terminal excerpts to Haiku.
 - Include the last prompt or a short final line when it helps navigation.
+- After the Haiku report, append a local deterministic `visible paths` section
+  when absolute or home-relative paths are visible in the current pane. Render
+  them in a fenced code block so Telegram shows copyable path snippets. Haiku
+  must not generate this list.
 
 The service should use `capture-pane` for the visible snapshot sent to Haiku and
 avoid sending the full scrollback by default.
@@ -975,8 +983,10 @@ Engram should treat terminal work as durable and Telegram messages as replaceabl
   shell/window actually ended.
 - Do not claim a command is complete solely because output paused. Prompt
   detection is advisory; summaries should be worded conservatively.
-- Telegram polling updates must be idempotent. Track processed update IDs and
-  input message IDs so retries do not duplicate shell input.
+- Telegram polling uses deliberate at-most-once input delivery: persist the
+  latest update ID before message handling so a crash cannot replay shell input
+  into tmux. Track processed message IDs as an additional guard against retries
+  before the offset is durably advanced.
 - If Haiku times out, rate limits, or returns an invalid response, keep the last
   successful summary, mark it stale, and back off. Tmux input delivery should not
   depend on summarization success.
@@ -1017,8 +1027,8 @@ Rules:
   queueing another request.
 - Keep the 10 second anchor cadence as the default even when tmux output is
   noisy.
-- Send Haiku only the visible pane capture, previous summary, and a small recent
-  delta. Full scrollback belongs to `/dump`, not the summarization path.
+- Send Haiku only the visible pane capture and previous summary. Full scrollback
+  belongs to `/dump`, not the summarization path.
 - Use one scheduler loop for dirty sessions rather than one busy polling loop per
   session.
 - Reuse long-lived `http.Client` instances for Telegram and Anthropic, each with

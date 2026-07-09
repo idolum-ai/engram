@@ -50,3 +50,34 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 		t.Fatal("Load accepted non-Haiku model")
 	}
 }
+
+func TestLoadRejectsMalformedNumericConfig(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+ANTHROPIC_API_KEY=anthropic-key
+ENGRAM_ATTACHMENT_SOFT_MAX_BYTES=not-a-number
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil {
+		t.Fatal("Load accepted malformed numeric config")
+	}
+}
+
+func TestLoadRejectsWeakEnvPermissions(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+ANTHROPIC_API_KEY=anthropic-key
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil {
+		t.Fatal("Load accepted weak env permissions")
+	}
+}

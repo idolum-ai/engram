@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
-func TestSummarizeUsesNonStreamingMessagesRequest(t *testing.T) {
+func TestGuideUsesNonStreamingMessagesRequest(t *testing.T) {
 	var payload map[string]any
 	client := New("key", "claude-haiku-4-5-20251001")
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -21,22 +22,63 @@ func TestSummarizeUsesNonStreamingMessagesRequest(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewBufferString(`{"type":"message","content":[{"type":"text","text":"summary:\n- ok"}]}`)),
+			Body:       io.NopCloser(bytes.NewBufferString(`{"type":"message","content":[{"type":"text","text":"{\"status_report\":\"tests are running\",\"recommended_action\":\"wait for the check to finish\",\"confidence\":\"high\",\"needs_full_buffer\":false,\"reason\":\"visible output is clear\"}"}]}`)),
 			Header:     make(http.Header),
 		}, nil
 	})}
-	got, err := client.Summarize(context.Background(), SummaryInput{SessionID: 1, State: "running", VisibleCapture: "$ ls"})
+	got, err := client.Guide(context.Background(), SummaryInput{SessionID: 1, State: "running", VisibleCapture: "$ ls"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == "" {
-		t.Fatal("empty summary")
+	if got.StatusReport != "tests are running" || got.RecommendedAction != "wait for the check to finish" {
+		t.Fatalf("report = %#v", got)
+	}
+	if got.WantsFullBuffer() {
+		t.Fatalf("GuideReport unexpectedly wants full buffer: %#v", got)
 	}
 	if _, ok := payload["stream"]; ok {
 		t.Fatalf("payload included stream: %#v", payload["stream"])
 	}
 	if payload["max_tokens"].(float64) != 700 {
 		t.Fatalf("max_tokens = %#v", payload["max_tokens"])
+	}
+}
+
+func TestPromptTreatsLastInputAsPreview(t *testing.T) {
+	prompt := buildPrompt(SummaryInput{
+		SessionID:      1,
+		State:          "running",
+		LastInput:      "merged! review the logs for summaries made by Haiku, specially as they might rel",
+		LastInputMode:  "command",
+		VisibleCapture: "visible terminal says work is running\n\n› Find and fix a bug in @filename",
+	})
+	if strings.Contains(prompt, "last_input:") {
+		t.Fatalf("prompt still exposes last_input as full input:\n%s", prompt)
+	}
+	for _, want := range []string{
+		"last_input_preview:",
+		"shortened metadata preview",
+		"do not treat truncation",
+		"do not merge it into unrelated work",
+		"needs_full_buffer",
+		"recommended_action",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestParseGuideReportFallbackRequestsFullBuffer(t *testing.T) {
+	got, err := parseGuideReport("plain status text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StatusReport != "plain status text" || !got.WantsFullBuffer() {
+		t.Fatalf("fallback report = %#v", got)
+	}
+	if !strings.Contains(got.TelegramText(), "recommendation:") {
+		t.Fatalf("telegram text = %q", got.TelegramText())
 	}
 }
 

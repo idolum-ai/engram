@@ -27,7 +27,15 @@ Secrets must be redacted before logs are uploaded through `/logs`.
 
 - State lives under `~/.engram` by default.
 - State writes must be atomic.
-- Processed Telegram messages must be tracked to keep polling idempotent.
+- Telegram update offsets are advanced before message handling. This gives tmux
+  input at-most-once delivery after a crash, avoiding surprise replayed shell
+  commands at the cost of possibly dropping the in-flight Telegram update.
+- A bounded update journal records accepted and handled/skipped update states so
+  recent polling behavior remains inspectable after restart.
+- Processed Telegram messages must still be tracked to avoid duplicate handling
+  when Telegram or the process retries before the offset is durably advanced.
+- If the state file is corrupt, Engram must preserve a timestamped corrupt
+  backup and start with a fresh state file.
 - A lock keyed by Telegram settings prevents duplicate pollers.
 
 ## Degradation

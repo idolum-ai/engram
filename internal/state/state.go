@@ -21,15 +21,17 @@ const (
 )
 
 type State struct {
-	Version           int               `json:"version"`
-	NextSessionID     int               `json:"next_session_id"`
-	LastUpdateID      int               `json:"last_update_id"`
-	LastPollAt        time.Time         `json:"last_poll_at,omitempty"`
-	LastHaikuAt       time.Time         `json:"last_haiku_at,omitempty"`
-	LastHaikuError    string            `json:"last_haiku_error,omitempty"`
-	TerminalSessions  []TerminalSession `json:"terminal_sessions"`
-	Attachments       []Attachment      `json:"attachments"`
-	ProcessedMessages map[string]bool   `json:"processed_messages,omitempty"`
+	Version            int                `json:"version"`
+	NextSessionID      int                `json:"next_session_id"`
+	LastUpdateID       int                `json:"last_update_id"`
+	LastPollAt         time.Time          `json:"last_poll_at,omitempty"`
+	LastHaikuAt        time.Time          `json:"last_haiku_at,omitempty"`
+	LastHaikuError     string             `json:"last_haiku_error,omitempty"`
+	TerminalSessions   []TerminalSession  `json:"terminal_sessions"`
+	Attachments        []Attachment       `json:"attachments"`
+	AttachmentBypasses []AttachmentBypass `json:"attachment_bypasses,omitempty"`
+	UpdateJournal      []UpdateEvent      `json:"update_journal,omitempty"`
+	ProcessedMessages  map[string]bool    `json:"processed_messages,omitempty"`
 }
 
 type TerminalSession struct {
@@ -57,7 +59,6 @@ type TerminalSession struct {
 	AnchorMessageID    int           `json:"anchor_message_id,omitempty"`
 	WatchEnabled       bool          `json:"watch_enabled"`
 	LastAnchorEditAt   time.Time     `json:"last_anchor_edit_at,omitempty"`
-	SummaryInFlight    bool          `json:"-"`
 	PendingRefresh     bool          `json:"pending_refresh,omitempty"`
 	LastTelegramError  string        `json:"last_telegram_error,omitempty"`
 	LastRawCapture     string        `json:"last_raw_capture,omitempty"`
@@ -76,6 +77,32 @@ type Attachment struct {
 	StoredPath           string    `json:"stored_path"`
 	ReceivedAt           time.Time `json:"received_at"`
 	BypassRequested      bool      `json:"bypass_requested"`
+}
+
+type AttachmentBypass struct {
+	ChatID    int64     `json:"chat_id"`
+	UserID    int64     `json:"user_id"`
+	SHA256    string    `json:"sha256"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	UsedAt    time.Time `json:"used_at,omitempty"`
+}
+
+type UpdateRefs struct {
+	ChatID    int64 `json:"chat_id,omitempty"`
+	UserID    int64 `json:"user_id,omitempty"`
+	MessageID int   `json:"message_id,omitempty"`
+}
+
+type UpdateEvent struct {
+	UpdateID  int       `json:"update_id"`
+	Kind      string    `json:"kind"`
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason,omitempty"`
+	ChatID    int64     `json:"chat_id,omitempty"`
+	UserID    int64     `json:"user_id,omitempty"`
+	MessageID int       `json:"message_id,omitempty"`
+	At        time.Time `json:"at"`
 }
 
 type Store struct {
@@ -106,7 +133,16 @@ func Open(path, auditPath string) (*Store, error) {
 		return s, nil
 	}
 	if err := json.Unmarshal(b, &s.state); err != nil {
-		return nil, fmt.Errorf("parse state: %w", err)
+		backup := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
+		if renameErr := os.Rename(path, backup); renameErr != nil {
+			return nil, fmt.Errorf("parse state: %w; backup failed: %v", err, renameErr)
+		}
+		s.state = State{Version: 1, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
+		if saveErr := s.Save(); saveErr != nil {
+			return nil, fmt.Errorf("parse state: %w; backup at %s; initialize replacement: %v", err, backup, saveErr)
+		}
+		_ = s.Audit("state.recover", "corrupt_replaced", map[string]any{"backup": backup})
+		return s, nil
 	}
 	if s.state.Version == 0 {
 		s.state.Version = 1
@@ -237,13 +273,41 @@ func (s *Store) FindByPane(paneID string) (TerminalSession, bool) {
 	return TerminalSession{}, false
 }
 
-func (s *Store) MarkPoll(updateID int) error {
+// MarkPoll advances the Telegram offset before handling the update. This gives
+// shell input at-most-once delivery after a crash instead of risking replayed
+// commands into tmux.
+func (s *Store) MarkPoll(updateID int, kind string, refs UpdateRefs) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if updateID > s.state.LastUpdateID {
 		s.state.LastUpdateID = updateID
 	}
 	s.state.LastPollAt = time.Now().UTC()
+	s.appendUpdateLocked(UpdateEvent{
+		UpdateID:  updateID,
+		Kind:      kind,
+		Status:    "accepted",
+		ChatID:    refs.ChatID,
+		UserID:    refs.UserID,
+		MessageID: refs.MessageID,
+		At:        s.state.LastPollAt,
+	})
+	return s.saveLocked()
+}
+
+func (s *Store) RecordUpdate(updateID int, kind string, status string, reason string, refs UpdateRefs) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendUpdateLocked(UpdateEvent{
+		UpdateID:  updateID,
+		Kind:      kind,
+		Status:    status,
+		Reason:    reason,
+		ChatID:    refs.ChatID,
+		UserID:    refs.UserID,
+		MessageID: refs.MessageID,
+		At:        time.Now().UTC(),
+	})
 	return s.saveLocked()
 }
 
@@ -268,6 +332,40 @@ func (s *Store) AddAttachment(a Attachment) error {
 	return s.saveLocked()
 }
 
+func (s *Store) AddAttachmentBypass(bypass AttachmentBypass) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneAttachmentBypassesLocked(time.Now().UTC())
+	s.state.AttachmentBypasses = append(s.state.AttachmentBypasses, bypass)
+	return s.saveLocked()
+}
+
+func (s *Store) FindAttachmentBypass(chatID, userID int64) (AttachmentBypass, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	for _, bypass := range s.state.AttachmentBypasses {
+		if bypass.ChatID == chatID && bypass.UserID == userID && bypass.UsedAt.IsZero() && bypass.ExpiresAt.After(now) {
+			return bypass, true
+		}
+	}
+	return AttachmentBypass{}, false
+}
+
+func (s *Store) ConsumeAttachmentBypass(chatID, userID int64, sha256 string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	for i := range s.state.AttachmentBypasses {
+		bypass := &s.state.AttachmentBypasses[i]
+		if bypass.ChatID == chatID && bypass.UserID == userID && bypass.SHA256 == sha256 && bypass.UsedAt.IsZero() && bypass.ExpiresAt.After(now) {
+			bypass.UsedAt = now
+			return s.saveLocked()
+		}
+	}
+	return nil
+}
+
 func (s *Store) NoteHaiku(errText string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -286,10 +384,34 @@ func maxSessionID(sessions []TerminalSession) int {
 	return max
 }
 
+func (s *Store) appendUpdateLocked(event UpdateEvent) {
+	if event.At.IsZero() {
+		event.At = time.Now().UTC()
+	}
+	s.state.UpdateJournal = append(s.state.UpdateJournal, event)
+	const maxUpdateJournal = 200
+	if len(s.state.UpdateJournal) > maxUpdateJournal {
+		s.state.UpdateJournal = append([]UpdateEvent(nil), s.state.UpdateJournal[len(s.state.UpdateJournal)-maxUpdateJournal:]...)
+	}
+}
+
+func (s *Store) pruneAttachmentBypassesLocked(now time.Time) {
+	out := s.state.AttachmentBypasses[:0]
+	for _, bypass := range s.state.AttachmentBypasses {
+		if !bypass.UsedAt.IsZero() || bypass.ExpiresAt.Before(now) {
+			continue
+		}
+		out = append(out, bypass)
+	}
+	s.state.AttachmentBypasses = out
+}
+
 func cloneState(in State) State {
 	out := in
 	out.TerminalSessions = append([]TerminalSession(nil), in.TerminalSessions...)
 	out.Attachments = append([]Attachment(nil), in.Attachments...)
+	out.AttachmentBypasses = append([]AttachmentBypass(nil), in.AttachmentBypasses...)
+	out.UpdateJournal = append([]UpdateEvent(nil), in.UpdateJournal...)
 	out.ProcessedMessages = make(map[string]bool, len(in.ProcessedMessages))
 	for k, v := range in.ProcessedMessages {
 		out.ProcessedMessages[k] = v

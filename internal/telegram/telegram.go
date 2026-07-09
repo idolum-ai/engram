@@ -66,23 +66,20 @@ type Chat struct {
 }
 
 type Message struct {
-	MessageID       int       `json:"message_id"`
-	From            *User     `json:"from,omitempty"`
-	Chat            Chat      `json:"chat"`
-	Date            int64     `json:"date,omitempty"`
-	Text            string    `json:"text,omitempty"`
-	Caption         string    `json:"caption,omitempty"`
-	ReplyToMessage  *Message  `json:"reply_to_message,omitempty"`
-	Document        *Document `json:"document,omitempty"`
-	Photo           []Photo   `json:"photo,omitempty"`
-	Video           *Document `json:"video,omitempty"`
-	Audio           *Document `json:"audio,omitempty"`
-	Voice           *Document `json:"voice,omitempty"`
-	Animation       *Document `json:"animation,omitempty"`
-	Sticker         *Document `json:"sticker,omitempty"`
-	EffectiveFileID string    `json:"-"`
-	EffectiveName   string    `json:"-"`
-	EffectiveSize   int64     `json:"-"`
+	MessageID      int       `json:"message_id"`
+	From           *User     `json:"from,omitempty"`
+	Chat           Chat      `json:"chat"`
+	Date           int64     `json:"date,omitempty"`
+	Text           string    `json:"text,omitempty"`
+	Caption        string    `json:"caption,omitempty"`
+	ReplyToMessage *Message  `json:"reply_to_message,omitempty"`
+	Document       *Document `json:"document,omitempty"`
+	Photo          []Photo   `json:"photo,omitempty"`
+	Video          *Document `json:"video,omitempty"`
+	Audio          *Document `json:"audio,omitempty"`
+	Voice          *Document `json:"voice,omitempty"`
+	Animation      *Document `json:"animation,omitempty"`
+	Sticker        *Document `json:"sticker,omitempty"`
 }
 
 type Document struct {

@@ -2,8 +2,8 @@
 
 Engram is a Telegram client for tmux sessions. It creates tmux-backed terminal
 sessions from Telegram messages, keeps one editable Telegram anchor per session,
-and uses Anthropic Haiku to render a compact, faithful summary of the visible
-terminal state.
+and uses Anthropic Haiku to render a compact plain-English status report with a
+recommended next action.
 
 ## Requirements
 
@@ -24,7 +24,13 @@ make check
 ```
 
 The gate runs build/tests, package-boundary checks, public-readiness checks,
-workflow sanity checks, and a tracked-file secret scan.
+workflow sanity checks, a stdlib-only check, docs freshness checks, and a
+tracked-file secret scan.
+
+For a feature-by-feature readiness view, see
+[`docs/feature-matrix.md`](docs/feature-matrix.md).
+For the product and implementation principles behind those features, see
+[`docs/design-principles.md`](docs/design-principles.md).
 
 ## Configure
 
@@ -32,7 +38,7 @@ Create `~/.engram/.env`:
 
 ```sh
 mkdir -p ~/.engram
-cp .env.example ~/.engram/.env
+install -m 0600 .env.example ~/.engram/.env
 ```
 
 Fill in:
@@ -95,6 +101,12 @@ Common commands:
 - `/logs`
 - `/status`
 - `/version`
+
+Local service checks:
+
+- `engram preflight --env ~/.engram/.env`
+- `engram status --env ~/.engram/.env`
+- `engram dry-start --env ~/.engram/.env`
 
 `/sessions` shows both Engram-tracked terminal sessions and native tmux sessions.
 By default, new Engram windows are created in an existing tmux session when one

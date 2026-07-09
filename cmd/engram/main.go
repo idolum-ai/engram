@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/idolum-ai/engram/internal/app"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/version"
 )
 
@@ -43,6 +47,12 @@ func run(args []string) int {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return a.Run(ctx)
+	case "preflight":
+		return runDiagnostics(args[1:], "preflight")
+	case "status":
+		return runDiagnostics(args[1:], "status")
+	case "dry-start":
+		return runDiagnostics(args[1:], "dry-start")
 	case "version", "--version", "-v":
 		fmt.Println(version.String())
 		return 0
@@ -67,8 +77,85 @@ func run(args []string) int {
 func printHelp() {
 	fmt.Print(`Usage:
   engram run [--env ~/.engram/.env]
+  engram preflight [--env ~/.engram/.env]
+  engram status [--env ~/.engram/.env]
+  engram dry-start [--env ~/.engram/.env]
   engram commands
   engram version
   engram help
 `)
+}
+
+func runDiagnostics(args []string, mode string) int {
+	fs := flag.NewFlagSet(mode, flag.ContinueOnError)
+	envPath := fs.String("env", config.DefaultEnvPath(), "path to .env")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	cfg, err := config.Load(*envPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		return 1
+	}
+	if mode == "dry-start" {
+		if err := config.EnsureDirs(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "dirs:", err)
+			return 1
+		}
+		store, err := state.Open(cfg.StatePath(), cfg.AuditPath())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "state:", err)
+			return 1
+		}
+		_ = store
+	}
+	fmt.Print(diagnosticsText(cfg, mode))
+	return 0
+}
+
+func diagnosticsText(cfg config.Config, mode string) string {
+	tmuxPath, tmuxErr := exec.LookPath("tmux")
+	if tmuxErr != nil {
+		tmuxPath = "missing"
+	}
+	stateStatus := "missing"
+	var sessions int
+	var lastUpdate int
+	var journal int
+	if st, err := readState(cfg.StatePath()); err == nil {
+		stateStatus = "readable"
+		sessions = len(st.TerminalSessions)
+		lastUpdate = st.LastUpdateID
+		journal = len(st.UpdateJournal)
+	}
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
+		mode,
+		version.String(),
+		cfg.EnvPath,
+		cfg.StatePath(),
+		stateStatus,
+		cfg.AuditPath(),
+		cfg.AttachmentDir(),
+		cfg.Workdir,
+		tmuxPath,
+		cfg.TelegramAllowedUserID,
+		cfg.TelegramChatID,
+		cfg.AnthropicModel,
+		sessions,
+		lastUpdate,
+		journal,
+	)
+}
+
+func readState(path string) (state.State, error) {
+	var st state.State
+	b, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return st, err
+	}
+	if len(b) == 0 {
+		return st, nil
+	}
+	err = json.Unmarshal(b, &st)
+	return st, err
 }

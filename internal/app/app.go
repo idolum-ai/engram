@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/anthropic"
@@ -25,23 +26,35 @@ import (
 )
 
 type App struct {
-	Config    config.Config
-	Store     *state.Store
-	Telegram  *telegram.Client
-	Anthropic *anthropic.Client
-	Tmux      tmux.Manager
-	lock      *lockfile.Lock
-	startedAt time.Time
-	quitCode  int
-	stopCh    chan struct{}
+	Config         config.Config
+	Store          *state.Store
+	Telegram       *telegram.Client
+	Anthropic      *anthropic.Client
+	Tmux           tmux.Manager
+	lock           *lockfile.Lock
+	startedAt      time.Time
+	quitCode       int
+	stopCh         chan struct{}
+	summaryMu      sync.Mutex
+	summaryQueued  map[int]bool
+	summaryRunning map[int]bool
+	summaryForce   map[int]bool
+	sleepHook      func(time.Duration)
+	refreshHook    func(context.Context, int, bool)
 }
+
+const summaryQuietPeriod = 2 * time.Second
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
 		return nil, err
 	}
 	key := lockfile.Key(cfg.TelegramBotToken, strconv.FormatInt(cfg.TelegramAllowedUserID, 10), strconv.FormatInt(cfg.TelegramChatID, 10))
-	l, err := lockfile.Acquire(cfg.LockDir(), key)
+	l, err := lockfile.Acquire(cfg.LockDir(), key, lockfile.Metadata{Details: map[string]string{
+		"telegram_user_id": strconv.FormatInt(cfg.TelegramAllowedUserID, 10),
+		"telegram_chat_id": strconv.FormatInt(cfg.TelegramChatID, 10),
+		"version":          version.String(),
+	}})
 	if err != nil {
 		return nil, err
 	}
@@ -51,14 +64,17 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	return &App{
-		Config:    cfg,
-		Store:     store,
-		Telegram:  telegram.New(cfg.TelegramBotToken),
-		Anthropic: anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel),
-		Tmux:      tmux.New(tmux.ExecRunner{}),
-		lock:      l,
-		startedAt: time.Now().UTC(),
-		stopCh:    make(chan struct{}),
+		Config:         cfg,
+		Store:          store,
+		Telegram:       telegram.New(cfg.TelegramBotToken),
+		Anthropic:      anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel),
+		Tmux:           tmux.New(tmux.ExecRunner{}),
+		lock:           l,
+		startedAt:      time.Now().UTC(),
+		stopCh:         make(chan struct{}),
+		summaryQueued:  map[int]bool{},
+		summaryRunning: map[int]bool{},
+		summaryForce:   map[int]bool{},
 	}, nil
 }
 
@@ -71,7 +87,7 @@ func (a *App) Close() error {
 
 func (a *App) Run(ctx context.Context) int {
 	defer a.Close()
-	_ = a.Store.Audit("service.start", "ok", map[string]any{"version": version.String()})
+	_ = a.audit("service.start", "ok", map[string]any{"version": version.String()})
 	a.registerCommands(ctx)
 	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
 	defer cancelScheduler()
@@ -81,16 +97,16 @@ func (a *App) Run(ctx context.Context) int {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = a.Store.Audit("service.stop", "context", nil)
+			_ = a.audit("service.stop", "context", nil)
 			return a.quitCode
 		case <-a.stopCh:
-			_ = a.Store.Audit("service.stop", "requested", map[string]any{"code": a.quitCode})
+			_ = a.audit("service.stop", "requested", map[string]any{"code": a.quitCode})
 			return a.quitCode
 		default:
 		}
 		updates, err := a.Telegram.GetUpdates(ctx, offset, a.Config.TelegramPollTimeoutSeconds)
 		if err != nil {
-			_ = a.Store.Audit("telegram.poll", "failed", err.Error())
+			_ = a.audit("telegram.poll", "failed", err.Error())
 			time.Sleep(backoff)
 			if backoff < 30*time.Second {
 				backoff *= 2
@@ -102,8 +118,10 @@ func (a *App) Run(ctx context.Context) int {
 			if update.UpdateID >= offset {
 				offset = update.UpdateID + 1
 			}
-			_ = a.Store.MarkPoll(update.UpdateID)
-			a.handleUpdate(ctx, update)
+			kind, refs := updateJournalRefs(update)
+			_ = a.Store.MarkPoll(update.UpdateID, kind, refs)
+			status := a.handleUpdate(ctx, update)
+			_ = a.Store.RecordUpdate(update.UpdateID, kind, status, "", refs)
 			if a.quitCode != 0 || ctx.Err() != nil {
 				return a.quitCode
 			}
@@ -111,43 +129,43 @@ func (a *App) Run(ctx context.Context) int {
 	}
 }
 
-func (a *App) handleUpdate(ctx context.Context, update telegram.Update) {
+func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if update.CallbackQuery != nil {
-		a.handleCallback(ctx, *update.CallbackQuery)
-		return
+		return a.handleCallback(ctx, *update.CallbackQuery)
 	}
 	if update.Message == nil {
-		return
+		return "skipped_no_message"
 	}
 	msg := *update.Message
 	if !a.authorized(&msg) {
-		_ = a.Store.Audit("auth.reject", "rejected", map[string]any{"chat_id": msg.Chat.ID})
-		return
+		_ = a.audit("auth.reject", "rejected", map[string]any{"chat_id": msg.Chat.ID})
+		return "rejected_unauthorized"
 	}
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.MessageID)
 	if a.Store.SeenMessage(key) {
-		return
+		return "skipped_duplicate_message"
 	}
 	_ = a.Store.MarkMessage(key)
 	if doc, ok := msg.FileAttachment(); ok {
 		a.handleAttachment(ctx, msg, doc)
-		return
+		return "handled_attachment"
 	}
 	text := strings.TrimSpace(msg.Text)
 	if text == "" {
-		return
+		return "skipped_empty_message"
 	}
 	if strings.HasPrefix(text, "/") {
 		a.handleCommand(ctx, msg, text)
-		return
+		return "handled_command"
 	}
 	if msg.ReplyToMessage != nil {
 		if ts, ok := a.Store.FindByAnchor(msg.Chat.ID, msg.ReplyToMessage.MessageID); ok {
 			a.sendInput(ctx, ts.ID, text, "command", true)
-			return
+			return "handled_anchor_reply"
 		}
 	}
 	a.newSession(ctx, msg, text)
+	return "handled_new_session"
 }
 
 func (a *App) authorized(msg *telegram.Message) bool {
@@ -160,29 +178,29 @@ func (a *App) authorized(msg *telegram.Message) bool {
 	return true
 }
 
-func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) {
+func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) string {
 	if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramChatID {
-		return
+		return "rejected_unauthorized_callback"
 	}
 	parts := strings.SplitN(cb.Data, ":", 2)
 	if len(parts) != 2 {
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown action")
-		return
+		return "skipped_unknown_callback"
 	}
 	switch parts[0] {
 	case "refresh":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
 			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
-			return
+			return "failed_bad_callback_id"
 		}
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "refreshing")
-		a.refreshSession(ctx, id, true)
+		a.queueRefresh(id, true, 0)
 	case "watch":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
 			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
-			return
+			return "failed_bad_callback_id"
 		}
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "watching")
 		a.watchSession(ctx, id, cb.Message.MessageID)
@@ -190,7 +208,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) {
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
 			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
-			return
+			return "failed_bad_callback_id"
 		}
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "closing")
 		a.closeSession(ctx, id)
@@ -201,7 +219,9 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) {
 		a.attachTarget(ctx, msg, parts[1])
 	default:
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown action")
+		return "skipped_unknown_callback"
 	}
+	return "handled_callback"
 }
 
 func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text string) {
@@ -211,7 +231,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		cmd = cmd[:at]
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
-	_ = a.Store.Audit("telegram.command", "received", map[string]any{"command": cmd, "message_id": msg.MessageID})
+	_ = a.audit("telegram.command", "received", map[string]any{"command": cmd, "message_id": msg.MessageID})
 	switch cmd {
 	case "help":
 		a.reply(ctx, msg, commands.HelpText())
@@ -320,7 +340,23 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "kill":
 		a.reply(ctx, msg, "/kill is reserved; use /close <id>.")
 	case "attachment-bypass":
-		a.reply(ctx, msg, "Send the large attachment again with caption `/attachment-bypass sha256:<hash>`.")
+		hash := parseBypassHash(args)
+		if hash == "" || !validSHA256Hex(hash) {
+			a.reply(ctx, msg, "usage: /attachment-bypass sha256:<hash>")
+			return
+		}
+		expires := time.Now().UTC().Add(30 * time.Minute)
+		if err := a.Store.AddAttachmentBypass(state.AttachmentBypass{
+			ChatID:    msg.Chat.ID,
+			UserID:    msg.From.ID,
+			SHA256:    strings.ToLower(hash),
+			CreatedAt: time.Now().UTC(),
+			ExpiresAt: expires,
+		}); err != nil {
+			a.reply(ctx, msg, "state error: "+err.Error())
+			return
+		}
+		a.reply(ctx, msg, "large attachment bypass recorded until "+expires.Format(time.RFC3339))
 	default:
 		a.reply(ctx, msg, "unknown command; try /help")
 	}
@@ -336,10 +372,10 @@ func (a *App) registerCommands(ctx context.Context) {
 		})
 	}
 	if err := a.Telegram.SetMyCommands(ctx, tgCommands); err != nil {
-		_ = a.Store.Audit("telegram.commands", "failed", err.Error())
+		_ = a.audit("telegram.commands", "failed", err.Error())
 		return
 	}
-	_ = a.Store.Audit("telegram.commands", "ok", map[string]any{"count": len(tgCommands)})
+	_ = a.audit("telegram.commands", "ok", map[string]any{"count": len(tgCommands)})
 }
 
 func (a *App) newSession(ctx context.Context, msg telegram.Message, input string) {
@@ -379,7 +415,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 			s.WatchEnabled = true
 		})
 	}
-	a.refreshSession(ctx, ts.ID, true)
+	a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 }
 
 func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, error) {
@@ -426,9 +462,9 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 			s.WatchEnabled = true
 		})
 	} else {
-		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"command": "attach", "error": err.Error()})
+		_ = a.audit("telegram.send", "failed", map[string]any{"command": "attach", "error": err.Error()})
 	}
-	a.refreshSession(ctx, ts.ID, true)
+	a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 }
 
 func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bool) {
@@ -445,11 +481,11 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 		err = a.Tmux.SendText(tctx, ts.TmuxPaneID, text)
 	}
 	if err != nil {
-		_ = a.Store.Audit("tmux.send", "failed", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter, "error": err.Error()})
+		_ = a.audit("tmux.send", "failed", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "tmux send error: "+err.Error(), true)
 		return
 	}
-	_ = a.Store.Audit("tmux.send", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter})
+	_ = a.audit("tmux.send", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter})
 	a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.LastInputPreview = preview(text)
 		s.LastInputMode = mode
@@ -480,6 +516,7 @@ func (a *App) sendKeys(ctx context.Context, id int, keys []string) {
 		s.LastActivityAt = time.Now().UTC()
 		s.PendingRefresh = true
 	})
+	a.refreshSoon(id)
 }
 
 func (a *App) rename(ctx context.Context, id int, name string, msg telegram.Message) {
@@ -530,7 +567,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) {
 		return
 	}
 	a.Store.UpdateSession(id, func(s *state.TerminalSession) { s.WatchEnabled = true })
-	a.refreshSession(ctx, id, true)
+	a.queueRefresh(id, true, 0)
 }
 
 func (a *App) closeSession(ctx context.Context, id int) {
@@ -564,7 +601,7 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	b.WriteString("\n\nTmux sessions\n\n")
 	attachTargets := a.writeTmuxSessions(ctx, &b)
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids, attachTargets)); err != nil {
-		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
+		_ = a.audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
 	}
 }
 
@@ -643,14 +680,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if hash == ts.LastRawCaptureHash && !force {
 		return
 	}
-	summary, err := a.Anthropic.Summarize(ctx, anthropic.SummaryInput{
-		SessionID:       id,
-		State:           string(ts.State),
-		LastInput:       ts.LastInputPreview,
-		LastInputMode:   ts.LastInputMode,
-		PreviousSummary: ts.LastSummary,
-		VisibleCapture:  capture,
-	})
+	summary, err := a.guideSummary(ctx, ts, capture)
 	if err != nil {
 		_ = a.Store.NoteHaiku(err.Error())
 		if ts.LastSummary != "" {
@@ -670,6 +700,36 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		s.PendingRefresh = false
 	})
 	a.updateAnchorLocal(ctx, id, summary, force)
+}
+
+func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string) (string, error) {
+	input := anthropic.SummaryInput{
+		SessionID:       ts.ID,
+		State:           string(ts.State),
+		LastInput:       ts.LastInputPreview,
+		LastInputMode:   ts.LastInputMode,
+		PreviousSummary: ts.LastSummary,
+		VisibleCapture:  capture,
+	}
+	report, err := a.Anthropic.Guide(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	if !report.WantsFullBuffer() {
+		return report.TelegramText(), nil
+	}
+	tctx, cancel := tmux.TimeoutContext(ctx)
+	defer cancel()
+	full, err := a.Tmux.CaptureFull(tctx, ts.TmuxPaneID)
+	if err != nil || strings.TrimSpace(full) == "" {
+		return report.TelegramText(), nil
+	}
+	input.FullCapture = full
+	refined, err := a.Anthropic.Guide(ctx, input)
+	if err != nil {
+		return report.TelegramText(), nil
+	}
+	return refined.TelegramText(), nil
 }
 
 func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, final bool) {
@@ -705,12 +765,83 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 }
 
 func (a *App) refreshSoon(id int) {
+	a.queueRefresh(id, true, summaryQuietPeriod)
+}
+
+func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
+	a.summaryMu.Lock()
+	a.ensureSummaryQueuesLocked()
+	if a.summaryRunning[id] || a.summaryQueued[id] {
+		a.summaryQueued[id] = true
+		a.summaryForce[id] = a.summaryForce[id] || force
+		a.summaryMu.Unlock()
+		return
+	}
+	a.summaryQueued[id] = true
+	a.summaryForce[id] = force
+	a.summaryMu.Unlock()
 	go func() {
-		time.Sleep(750 * time.Millisecond)
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		a.refreshSession(ctx, id, true)
+		a.refreshWorker(id, delay)
 	}()
+}
+
+func (a *App) refreshWorker(id int, delay time.Duration) {
+	for {
+		if delay > 0 {
+			a.sleep(delay)
+		}
+		a.summaryMu.Lock()
+		a.ensureSummaryQueuesLocked()
+		force := a.summaryForce[id]
+		a.summaryQueued[id] = false
+		a.summaryForce[id] = false
+		a.summaryRunning[id] = true
+		a.summaryMu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
+		a.runRefresh(ctx, id, force)
+		cancel()
+
+		a.summaryMu.Lock()
+		a.summaryRunning[id] = false
+		if !a.summaryQueued[id] {
+			delete(a.summaryQueued, id)
+			delete(a.summaryForce, id)
+			delete(a.summaryRunning, id)
+			a.summaryMu.Unlock()
+			return
+		}
+		a.summaryMu.Unlock()
+		delay = summaryQuietPeriod
+	}
+}
+
+func (a *App) sleep(delay time.Duration) {
+	if a.sleepHook != nil {
+		a.sleepHook(delay)
+		return
+	}
+	time.Sleep(delay)
+}
+
+func (a *App) runRefresh(ctx context.Context, id int, force bool) {
+	if a.refreshHook != nil {
+		a.refreshHook(ctx, id, force)
+		return
+	}
+	a.refreshSession(ctx, id, force)
+}
+
+func (a *App) ensureSummaryQueuesLocked() {
+	if a.summaryQueued == nil {
+		a.summaryQueued = map[int]bool{}
+	}
+	if a.summaryRunning == nil {
+		a.summaryRunning = map[int]bool{}
+	}
+	if a.summaryForce == nil {
+		a.summaryForce = map[int]bool{}
+	}
 }
 
 func (a *App) sendAnchor(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
@@ -719,7 +850,7 @@ func (a *App) sendAnchor(ctx context.Context, chatID int64, text string, replyTo
 	if err == nil {
 		return msg, nil
 	}
-	_ = a.Store.Audit("telegram.anchor_html", "failed", err.Error())
+	_ = a.audit("telegram.anchor_html", "failed", err.Error())
 	return a.Telegram.SendMessage(ctx, chatID, text, replyTo, markup)
 }
 
@@ -729,7 +860,7 @@ func (a *App) editAnchor(ctx context.Context, chatID int64, messageID int, text 
 	if err == nil {
 		return msg, nil
 	}
-	_ = a.Store.Audit("telegram.anchor_html", "failed", err.Error())
+	_ = a.audit("telegram.anchor_html", "failed", err.Error())
 	return a.Telegram.EditMessage(ctx, chatID, messageID, text, markup)
 }
 
@@ -744,7 +875,7 @@ func (a *App) scheduler(ctx context.Context) {
 			st := a.Store.Snapshot()
 			for _, ts := range st.TerminalSessions {
 				if ts.WatchEnabled && ts.State != state.TerminalClosed {
-					a.refreshSession(ctx, ts.ID, false)
+					a.queueRefresh(ts.ID, false, 0)
 				}
 			}
 		}
@@ -810,9 +941,19 @@ func (a *App) commandsMetadata(ctx context.Context, msg telegram.Message) {
 func (a *App) handleAttachment(ctx context.Context, msg telegram.Message, doc telegram.Document) {
 	allowLarge := strings.Contains(msg.Caption, "/attachment-bypass")
 	expectedHash := parseBypassHash(msg.Caption)
+	if expectedHash == "" {
+		if bypass, ok := a.Store.FindAttachmentBypass(msg.Chat.ID, msg.From.ID); ok {
+			expectedHash = bypass.SHA256
+			allowLarge = true
+		}
+	}
 	if doc.FileSize > a.Config.AttachmentSoftMaxBytes && !allowLarge {
 		space := diskFree(a.Config.ArtifactDir())
 		a.reply(ctx, msg, fmt.Sprintf("attachment too large: %d bytes exceeds soft limit %d bytes\navailable /tmp/engram space: %d bytes\nresend with caption `/attachment-bypass sha256:<hash>` to bypass", doc.FileSize, a.Config.AttachmentSoftMaxBytes, space))
+		return
+	}
+	if allowLarge && !validSHA256Hex(expectedHash) {
+		a.reply(ctx, msg, "large attachment bypass requires sha256:<hash>")
 		return
 	}
 	file, err := a.Telegram.GetFile(ctx, doc.FileID)
@@ -836,6 +977,9 @@ func (a *App) handleAttachment(ctx context.Context, msg telegram.Message, doc te
 		_ = os.Remove(path)
 		a.reply(ctx, msg, fmt.Sprintf("attachment hash mismatch\nexpected: %s\nactual: %s", expectedHash, sum))
 		return
+	}
+	if allowLarge && expectedHash != "" {
+		_ = a.Store.ConsumeAttachmentBypass(msg.Chat.ID, msg.From.ID, expectedHash)
 	}
 	_ = a.Store.AddAttachment(state.Attachment{
 		TelegramFileID:       doc.FileID,
@@ -868,22 +1012,15 @@ func (a *App) attachments(ctx context.Context, msg telegram.Message) {
 
 func (a *App) download(ctx context.Context, msg telegram.Message, path string) {
 	path = strings.TrimSpace(path)
-	if !filepath.IsAbs(path) {
-		a.reply(ctx, msg, "/download requires an absolute path")
-		return
-	}
-	info, err := os.Stat(path)
+	info, err := validateDownloadPath(path)
 	if err != nil {
-		a.reply(ctx, msg, "stat error: "+err.Error())
-		return
-	}
-	if !info.Mode().IsRegular() {
-		a.reply(ctx, msg, "not a regular file")
+		a.reply(ctx, msg, err.Error())
 		return
 	}
 	if _, err := a.Telegram.SendDocument(ctx, a.Config.TelegramChatID, path, filepath.Base(path)); err != nil {
 		a.reply(ctx, msg, "upload error: "+err.Error())
 	}
+	_ = info
 }
 
 func (a *App) logs(ctx context.Context, msg telegram.Message) {
@@ -904,14 +1041,39 @@ func (a *App) logs(ctx context.Context, msg telegram.Message) {
 
 func (a *App) reply(ctx context.Context, msg telegram.Message, text string) {
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID, nil); err != nil {
-		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"reply_to": msg.MessageID, "error": err.Error()})
+		_ = a.audit("telegram.send", "failed", map[string]any{"reply_to": msg.MessageID, "error": err.Error()})
+	}
+}
+
+func (a *App) audit(eventType, status string, payload any) error {
+	return a.Store.Audit(eventType, status, a.redactAuditPayload(payload))
+}
+
+func (a *App) redactAuditPayload(payload any) any {
+	switch v := payload.(type) {
+	case string:
+		return redact.Secrets(v, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, value := range v {
+			out[key] = a.redactAuditPayload(value)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, value := range v {
+			out[i] = a.redactAuditPayload(value)
+		}
+		return out
+	default:
+		return payload
 	}
 }
 
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
 	space := diskFree(a.Config.ArtifactDir())
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast haiku: %s\nlast haiku error: %s",
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast haiku: %s\nlast haiku error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
@@ -920,6 +1082,8 @@ func (a *App) statusText() string {
 		a.Config.AttachmentDir(),
 		space,
 		st.LastPollAt.Format(time.RFC3339),
+		st.LastUpdateID,
+		len(st.UpdateJournal),
 		st.LastHaikuAt.Format(time.RFC3339),
 		firstNonEmpty(st.LastHaikuError, "-"),
 	)
@@ -930,14 +1094,19 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 	if len(title) > 40 {
 		title = title[:40]
 	}
-	return fmt.Sprintf("[%d] %s  %s\nlast input: %s\nupdated: %s\n\n%s",
+	var b strings.Builder
+	fmt.Fprintf(&b, "[%d] %s  %s\nlast input: %s\n\n[Haiku]\n%s",
 		ts.ID,
 		ts.State,
 		title,
 		firstNonEmpty(ts.LastInputPreview, "-"),
-		time.Now().UTC().Format("15:04:05 UTC"),
 		summary,
 	)
+	if paths := renderVisiblePaths(ts.LastRawCapture); paths != "" {
+		b.WriteString("\n\n")
+		b.WriteString(paths)
+	}
+	return b.String()
 }
 
 func parseID(arg string) (int, bool) {
@@ -1004,6 +1173,62 @@ func parseBypassHash(caption string) string {
 		}
 	}
 	return ""
+}
+
+func validSHA256Hex(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateDownloadPath(path string) (os.FileInfo, error) {
+	path = strings.TrimSpace(path)
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("/download requires an absolute path")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat error: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing symlink")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file")
+	}
+	return info, nil
+}
+
+func updateJournalRefs(update telegram.Update) (string, state.UpdateRefs) {
+	if update.CallbackQuery != nil {
+		refs := state.UpdateRefs{
+			UserID: update.CallbackQuery.From.ID,
+		}
+		if update.CallbackQuery.Message != nil {
+			refs.MessageID = update.CallbackQuery.Message.MessageID
+			refs.ChatID = update.CallbackQuery.Message.Chat.ID
+		}
+		return "callback_query", refs
+	}
+	if update.Message != nil {
+		refs := state.UpdateRefs{
+			ChatID:    update.Message.Chat.ID,
+			MessageID: update.Message.MessageID,
+		}
+		if update.Message.From != nil {
+			refs.UserID = update.Message.From.ID
+		}
+		return "message", refs
+	}
+	return "unknown", state.UpdateRefs{}
 }
 
 func fileSHA256(path string) (string, error) {

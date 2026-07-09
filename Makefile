@@ -8,7 +8,7 @@ LDFLAGS := -X github.com/idolum-ai/engram/internal/version.Version=$(VERSION) -X
 GOCACHE ?= /tmp/engram-go-build
 GOMODCACHE ?= /tmp/engram-go-mod
 
-.PHONY: build install uninstall install-service uninstall-service test test-race check architecture public-readiness secrets workflow-sanity smoke run
+.PHONY: build install uninstall install-service uninstall-service test test-race check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
 
 build:
 	mkdir -p bin
@@ -23,7 +23,7 @@ uninstall:
 
 install-service: install
 	mkdir -p $(HOME)/.config/systemd/user $(HOME)/.engram
-	@if [ ! -f "$(HOME)/.engram/.env" ]; then cp .env.example "$(HOME)/.engram/.env"; fi
+	@if [ ! -f "$(HOME)/.engram/.env" ]; then install -m 0600 .env.example "$(HOME)/.engram/.env"; fi
 	printf '%s\n' \
 		'[Unit]' \
 		'Description=Engram Telegram tmux client' \
@@ -52,7 +52,7 @@ test:
 test-race:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test -race ./internal/state ./internal/lockfile ./internal/telegram ./internal/tmux
 
-check: test build architecture public-readiness secrets workflow-sanity smoke
+check: test build architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke
 
 architecture:
 	bash scripts/check-architecture.sh
@@ -65,6 +65,12 @@ secrets:
 
 workflow-sanity:
 	bash scripts/check-workflows.sh
+
+stdlib-only:
+	bash scripts/check-stdlib-only.sh
+
+docs-freshness:
+	bash scripts/check-docs-freshness.sh
 
 smoke: build
 	bash scripts/smoke.sh

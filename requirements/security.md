@@ -12,6 +12,7 @@ small and explicit.
 ## Secrets
 
 - `.env` files must not be tracked.
+- Runtime env files must be regular files with no group/other permissions.
 - Bot tokens and Anthropic keys must not appear in tracked files.
 - `/logs` must redact Telegram and Anthropic credentials.
 
@@ -21,6 +22,7 @@ small and explicit.
 - Attachments are saved under `/tmp/engram/attachments`.
 - Large attachments require a hash-confirmed bypass.
 - `/download` only accepts absolute paths and uploads regular files.
+- `/download` rejects symlinks and non-regular files.
 
 ## Process Ownership
 
