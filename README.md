@@ -1,4 +1,12 @@
-# Engram
+<p align="center">
+  <img src="docs/assets/engram-mark.svg" alt="Engram: a monochrome moire aperture over a dark terminal field" width="760">
+</p>
+
+<h1 align="center">Engram</h1>
+
+<p align="center">
+  <strong>Remote tmux, rendered as a quiet signal.</strong>
+</p>
 
 Engram is a Telegram client for tmux sessions. It creates tmux-backed terminal
 sessions from Telegram messages, keeps one editable Telegram anchor per session,

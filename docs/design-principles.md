@@ -26,6 +26,7 @@ keep as it grows.
 - Slow automatic edits, instant manual refresh.
 - Recoverable local service.
 - Small Go, no third-party dependencies.
+- Quiet monochrome signal.
 
 ## Principles
 
@@ -145,6 +146,17 @@ API, Anthropic Haiku, and systemd user services when installed that way.
 Adding a Go dependency should be treated as a design failure until proven
 otherwise. The default answer is to keep the code simple enough that the
 standard library is enough.
+
+### Quiet monochrome signal
+
+Engram's visual language should feel like a terminal pane becoming readable
+through interference: black field, off-white signal, graphite texture, moire
+lines, aperture/window forms, and sparse monospace typography.
+
+Repo visuals should stay quiet and structural. Avoid colorful mascots,
+marketing gradients, decorative UI cards, and illustration that competes with
+the tool. The mark should suggest remote orientation over raw terminal noise:
+many lines, one aperture, one readable signal.
 
 ## Non-Goals
 

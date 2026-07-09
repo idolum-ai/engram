@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Engram monochrome aperture mark</title>
+  <desc id="desc">A dark field with off-white moire lines bending around a quiet terminal-shaped aperture.</desc>
+  <defs>
+    <radialGradient id="field" cx="50%" cy="38%" r="72%">
+      <stop offset="0" stop-color="#242424"/>
+      <stop offset="0.5" stop-color="#10100e"/>
+      <stop offset="1" stop-color="#050504"/>
+    </radialGradient>
+    <radialGradient id="signal" cx="50%" cy="48%" r="48%">
+      <stop offset="0" stop-color="#fffdf4"/>
+      <stop offset="0.76" stop-color="#e8e4d6"/>
+      <stop offset="1" stop-color="#96938a"/>
+    </radialGradient>
+    <filter id="grain" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="3" seed="19"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer>
+        <feFuncA type="table" tableValues="0 0.18"/>
+      </feComponentTransfer>
+    </filter>
+    <clipPath id="base-fade">
+      <path d="M180 585h840v-56c-86-35-186-53-300-53H480c-114 0-214 18-300 53v56Z"/>
+    </clipPath>
+    <mask id="aperture-cut">
+      <rect width="1200" height="720" fill="#fff"/>
+      <path fill="#000" d="M373 423c0-145 96-234 227-234s227 89 227 234c0 37-22 58-63 58H436c-41 0-63-21-63-58Z"/>
+    </mask>
+    <mask id="soft-window">
+      <rect width="1200" height="720" fill="#000"/>
+      <ellipse cx="600" cy="392" rx="432" ry="304" fill="#fff"/>
+    </mask>
+  </defs>
+
+  <rect width="1200" height="720" fill="url(#field)"/>
+  <rect width="1200" height="720" filter="url(#grain)" opacity="0.75"/>
+
+  <g mask="url(#soft-window)">
+    <g mask="url(#aperture-cut)" fill="none" stroke="url(#signal)" stroke-linecap="round">
+      <path d="M242 575C252 279 395 96 600 96s348 183 358 479" stroke-width="2.6" opacity="0.98"/>
+      <path d="M258 571C267 286 405 111 600 111s333 175 342 460" stroke-width="2.5" opacity="0.96"/>
+      <path d="M274 567C282 293 415 126 600 126s318 167 326 441" stroke-width="2.4" opacity="0.95"/>
+      <path d="M290 563C298 300 425 140 600 140s302 160 310 423" stroke-width="2.35" opacity="0.94"/>
+      <path d="M306 559C313 307 435 154 600 154s287 153 294 405" stroke-width="2.3" opacity="0.93"/>
+      <path d="M322 555C328 314 445 167 600 167s272 147 278 388" stroke-width="2.25" opacity="0.92"/>
+      <path d="M338 551C344 321 454 180 600 180s256 141 262 371" stroke-width="2.2" opacity="0.91"/>
+      <path d="M354 547C359 328 464 193 600 193s241 135 246 354" stroke-width="2.15" opacity="0.9"/>
+      <path d="M370 543C374 335 474 205 600 205s226 130 230 338" stroke-width="2.1" opacity="0.89"/>
+      <path d="M386 539C390 343 484 217 600 217s210 126 214 322" stroke-width="2.05" opacity="0.88"/>
+      <path d="M402 535C405 351 494 229 600 229s195 122 198 306" stroke-width="2" opacity="0.87"/>
+      <path d="M418 531C420 359 504 241 600 241s180 118 182 290" stroke-width="1.95" opacity="0.86"/>
+      <path d="M434 527C436 368 514 253 600 253s164 115 166 274" stroke-width="1.9" opacity="0.85"/>
+      <path d="M450 523C451 378 524 265 600 265s149 113 150 258" stroke-width="1.85" opacity="0.84"/>
+      <path d="M466 519C467 389 534 277 600 277s133 112 134 242" stroke-width="1.8" opacity="0.83"/>
+      <path d="M482 515C482 402 544 289 600 289s118 113 118 226" stroke-width="1.75" opacity="0.82"/>
+      <path d="M498 511C498 417 554 302 600 302s102 115 102 209" stroke-width="1.7" opacity="0.81"/>
+      <path d="M514 507C514 435 564 316 600 316s86 119 86 191" stroke-width="1.65" opacity="0.8"/>
+      <path d="M530 503C530 456 574 332 600 332s70 124 70 171" stroke-width="1.6" opacity="0.78"/>
+      <path d="M546 499C546 481 584 352 600 352s54 129 54 147" stroke-width="1.55" opacity="0.76"/>
+    </g>
+
+    <g clip-path="url(#base-fade)" stroke="#f6f1e5" stroke-width="2.2" opacity="0.96">
+      <path d="M306 506h588"/>
+      <path d="M318 516h564"/>
+      <path d="M330 526h540"/>
+      <path d="M342 536h516"/>
+      <path d="M354 546h492"/>
+      <path d="M366 556h468"/>
+      <path d="M378 566h444"/>
+      <path d="M390 576h420"/>
+      <path d="M402 586h396"/>
+    </g>
+  </g>
+
+  <path fill="#070705" d="M373 423c0-145 96-234 227-234s227 89 227 234c0 37-22 58-63 58H436c-41 0-63-21-63-58Z"/>
+  <g stroke="#f4efe3" stroke-width="2" opacity="0.98">
+    <path d="M415 491h370"/>
+    <path d="M421 501h358"/>
+    <path d="M430 511h340"/>
+    <path d="M444 521h312"/>
+    <path d="M466 531h268"/>
+    <path d="M501 541h198"/>
+  </g>
+
+  <rect x="245" y="581" width="710" height="2" fill="#f4efe3" opacity="0.88"/>
+  <text x="600" y="675" text-anchor="middle" fill="#77756f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="21" letter-spacing="18">ENGRAM</text>
+</svg>
