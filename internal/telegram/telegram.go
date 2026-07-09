@@ -313,6 +313,13 @@ func (m Message) FileAttachment() (Document, bool) {
 func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
 		{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}},
+		{
+			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
+			{Text: "Esc Esc", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
+			{Text: "Ctrl+C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
+			{Text: "Ctrl+D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
+			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
+		},
 	}}
 }
 

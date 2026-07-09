@@ -201,6 +201,19 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "refreshing")
 		a.clearHaikuCaptureHistory(id)
 		a.queueRefresh(id, true, 0)
+	case "key":
+		id, preset, ok := parseKeyCallback(parts[1])
+		if !ok {
+			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad key")
+			return "failed_bad_callback_key"
+		}
+		action, ok := anchorKeyAction(preset)
+		if !ok {
+			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown key")
+			return "failed_unknown_callback_key"
+		}
+		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "sent "+action.Label)
+		a.sendKeyGroups(ctx, id, action.Groups, action.Label, action.Delay)
 	case "watch":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -227,6 +240,41 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		return "skipped_unknown_callback"
 	}
 	return "handled_callback"
+}
+
+type anchorKeyPreset struct {
+	Label  string
+	Groups [][]string
+	Delay  time.Duration
+}
+
+func parseKeyCallback(value string) (int, string, bool) {
+	idText, preset, ok := strings.Cut(value, ":")
+	if !ok {
+		return 0, "", false
+	}
+	id, err := strconv.Atoi(idText)
+	if err != nil || id <= 0 || strings.TrimSpace(preset) == "" {
+		return 0, "", false
+	}
+	return id, preset, true
+}
+
+func anchorKeyAction(preset string) (anchorKeyPreset, bool) {
+	switch preset {
+	case "esc":
+		return anchorKeyPreset{Label: "Esc", Groups: [][]string{{"Escape"}}}, true
+	case "esc2":
+		return anchorKeyPreset{Label: "Esc Esc", Groups: [][]string{{"Escape"}, {"Escape"}}, Delay: 500 * time.Millisecond}, true
+	case "ctrl-c":
+		return anchorKeyPreset{Label: "Ctrl+C", Groups: [][]string{{"C-c"}}}, true
+	case "ctrl-d":
+		return anchorKeyPreset{Label: "Ctrl+D", Groups: [][]string{{"C-d"}}}, true
+	case "enter":
+		return anchorKeyPreset{Label: "Enter", Groups: [][]string{{"Enter"}}}, true
+	default:
+		return anchorKeyPreset{}, false
+	}
 }
 
 func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text string) {
@@ -501,9 +549,19 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 }
 
 func (a *App) sendKeys(ctx context.Context, id int, keys []string) {
-	if err := tmux.ValidKeys(keys); err != nil {
-		a.updateAnchorLocal(ctx, id, err.Error(), true)
+	a.sendKeyGroups(ctx, id, [][]string{keys}, strings.Join(keys, " "), 0)
+}
+
+func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, preview string, delay time.Duration) {
+	if len(groups) == 0 {
+		a.updateAnchorLocal(ctx, id, "missing keys", true)
 		return
+	}
+	for _, keys := range groups {
+		if err := tmux.ValidKeys(keys); err != nil {
+			a.updateAnchorLocal(ctx, id, err.Error(), true)
+			return
+		}
 	}
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
@@ -511,17 +569,30 @@ func (a *App) sendKeys(ctx context.Context, id int, keys []string) {
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	if err := a.Tmux.SendKeys(tctx, ts.TmuxPaneID, keys); err != nil {
-		a.updateAnchorLocal(ctx, id, "tmux key error: "+err.Error(), true)
-		return
+	for i, keys := range groups {
+		if err := a.Tmux.SendKeys(tctx, ts.TmuxPaneID, keys); err != nil {
+			a.updateAnchorLocal(ctx, id, "tmux key error: "+err.Error(), true)
+			return
+		}
+		if delay > 0 && i < len(groups)-1 {
+			a.sleep(delay)
+		}
 	}
 	a.Store.UpdateSession(id, func(s *state.TerminalSession) {
-		s.LastInputPreview = strings.Join(keys, " ")
+		s.LastInputPreview = firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))
 		s.LastInputMode = "keys"
 		s.LastActivityAt = time.Now().UTC()
 		s.PendingRefresh = true
 	})
 	a.refreshSoon(id)
+}
+
+func flattenKeyPreview(groups [][]string) string {
+	var keys []string
+	for _, group := range groups {
+		keys = append(keys, group...)
+	}
+	return strings.Join(keys, " ")
 }
 
 func (a *App) rename(ctx context.Context, id int, name string, msg telegram.Message) {

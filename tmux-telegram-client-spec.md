@@ -167,15 +167,28 @@ Clicking `Watch [1]` causes the service to edit the existing `[1]` anchor
 message if it exists in the chat. If there is no usable anchor message, the
 service sends a new anchor message and records it.
 
-Every watched anchor message should include an inline refresh button:
+Every watched anchor message should include an inline refresh button and a small
+row of common keystroke buttons:
 
 ```text
 🔄
+Esc | Esc Esc | Ctrl+C | Ctrl+D | Enter
 ```
 
 Clicking the refresh button forces one immediate capture and Haiku summary for
 that terminal session, bypassing the normal 10 second anchor cadence. It still
 must skip the Telegram edit if the rendered summary is unchanged.
+
+The key buttons send allowlisted tmux keys to the tracked pane:
+
+- `Esc` -> `Escape`
+- `Esc Esc` -> `Escape`, wait 500ms, then `Escape`
+- `Ctrl+C` -> `C-c`
+- `Ctrl+D` -> `C-d`
+- `Enter` -> `Enter`
+
+Key button callbacks must not accept arbitrary key names. Broader terminal UI
+control remains available through `/key <id> <keys...>`.
 
 ### Session Metadata Commands
 

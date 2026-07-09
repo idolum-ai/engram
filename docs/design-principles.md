@@ -57,7 +57,8 @@ user answer three questions quickly:
 
 Anchors should be compact, stable, and easy to scan. They should include the
 session handle, state, title, last input preview, Haiku status, one recommended
-action, deterministic visible paths that currently exist, and a refresh button.
+action, deterministic visible paths that currently exist, a refresh button, and
+a small allowlisted row of common terminal keys.
 
 ### Fast input path
 
@@ -65,8 +66,9 @@ Sending input to tmux must stay fast even when summaries are delayed, skipped,
 or failing. Telegram message handling should not wait for Haiku unless the
 message itself is asking for a summary.
 
-Replying to an anchor should route to the intended pane. `/send`, `/text`, and
-`/key` should remain direct, unsurprising ways to steer a session.
+Replying to an anchor should route to the intended pane. `/send`, `/text`,
+`/key`, and anchor key buttons should remain direct, unsurprising ways to steer
+a session.
 
 ### Many sessions, low dwell
 

@@ -23,6 +23,9 @@ tmux is the source of terminal truth.
 - Command input sends literal text, waits briefly, then sends tmux `Enter`.
 - `/text` sends literal text without `Enter`.
 - `/key` sends tmux key names and must reject empty/newline-containing keys.
+- Live anchors include inline key buttons for `Esc`, `Esc Esc`, `Ctrl+C`,
+  `Ctrl+D`, and `Enter`. `Esc Esc` sends one Escape key, waits 500ms, then sends
+  another Escape key.
 
 ## Capture
 

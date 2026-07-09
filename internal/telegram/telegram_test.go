@@ -35,6 +35,33 @@ func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	}
 }
 
+func TestRefreshMarkupIncludesKeyButtons(t *testing.T) {
+	t.Parallel()
+
+	got := RefreshMarkup(7)
+	if got == nil || len(got.InlineKeyboard) != 2 {
+		t.Fatalf("RefreshMarkup rows = %#v, want refresh row plus key row", got)
+	}
+	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
+		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
+	}
+	want := []InlineKeyboardButton{
+		{Text: "Esc", CallbackData: "key:7:esc"},
+		{Text: "Esc Esc", CallbackData: "key:7:esc2"},
+		{Text: "Ctrl+C", CallbackData: "key:7:ctrl-c"},
+		{Text: "Ctrl+D", CallbackData: "key:7:ctrl-d"},
+		{Text: "Enter", CallbackData: "key:7:enter"},
+	}
+	if len(got.InlineKeyboard[1]) != len(want) {
+		t.Fatalf("key button count = %d, want %d", len(got.InlineKeyboard[1]), len(want))
+	}
+	for i := range want {
+		if got.InlineKeyboard[1][i] != want[i] {
+			t.Fatalf("key button %d = %#v, want %#v", i, got.InlineKeyboard[1][i], want[i])
+		}
+	}
+}
+
 func TestMarkdownToHTML(t *testing.T) {
 	t.Parallel()
 
