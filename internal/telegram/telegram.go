@@ -3,6 +3,8 @@ package telegram
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -184,6 +187,11 @@ type File struct {
 	FilePath     string `json:"file_path,omitempty"`
 }
 
+type DownloadResult struct {
+	Size   int64
+	SHA256 string
+}
+
 type InlineKeyboardMarkup struct {
 	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
 }
@@ -283,49 +291,61 @@ func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
 }
 
 func (c *Client) DownloadFile(ctx context.Context, filePath, dest string, maxBytes int64) (int64, error) {
+	result, err := c.DownloadFileHashed(ctx, filePath, dest, maxBytes)
+	return result.Size, err
+}
+
+func (c *Client) DownloadFileHashed(ctx context.Context, filePath, dest string, maxBytes int64) (DownloadResult, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.FileBase+"/"+filePath, nil)
 	if err != nil {
-		return 0, c.requestError("downloadFile", "could not create request")
+		return DownloadResult{}, c.requestError("downloadFile", "could not create request")
 	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		if ctxErr := contextError(ctx, err); ctxErr != nil {
-			return 0, ctxErr
+			return DownloadResult{}, ctxErr
 		}
-		return 0, c.requestError("downloadFile", "transport request failed")
+		return DownloadResult{}, c.requestError("downloadFile", "transport request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, &Error{
+		return DownloadResult{}, &Error{
 			Method:      "downloadFile",
 			StatusCode:  resp.StatusCode,
 			Description: http.StatusText(resp.StatusCode),
 		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-		return 0, err
+		return DownloadResult{}, err
 	}
 	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return 0, err
+		return DownloadResult{}, err
 	}
 	defer f.Close()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(dest)
+		}
+	}()
 	var r io.Reader = resp.Body
 	if maxBytes > 0 {
 		r = io.LimitReader(resp.Body, maxBytes+1)
 	}
-	n, err := io.Copy(f, r)
+	hash := sha256.New()
+	n, err := io.Copy(io.MultiWriter(f, hash), r)
 	if err != nil {
 		if ctxErr := contextError(ctx, err); ctxErr != nil {
-			return n, ctxErr
+			return DownloadResult{Size: n}, ctxErr
 		}
-		return n, c.requestError("downloadFile", "response copy failed")
+		return DownloadResult{Size: n}, c.requestError("downloadFile", "response copy failed")
 	}
 	if maxBytes > 0 && n > maxBytes {
-		_ = os.Remove(dest)
-		return n, fmt.Errorf("download exceeded max bytes")
+		return DownloadResult{Size: n}, fmt.Errorf("download exceeded max bytes")
 	}
-	return n, nil
+	keep = true
+	return DownloadResult{Size: n, SHA256: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
 func (c *Client) SendDocument(ctx context.Context, chatID int64, path string, caption string) (Message, error) {
@@ -367,9 +387,9 @@ func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 		{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}},
 		{
 			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
-			{Text: "Esc Esc", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
-			{Text: "Ctrl+C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
-			{Text: "Ctrl+D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
+			{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
+			{Text: "^C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
+			{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
 			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
 		},
 	}}
@@ -654,7 +674,11 @@ func clampText(text string) string {
 	if len(text) <= 3900 {
 		return text
 	}
-	return text[:3800] + "\n\n[truncated]"
+	cut := 3800
+	for cut > 0 && !utf8.ValidString(text[:cut]) {
+		cut--
+	}
+	return text[:cut] + "\n\n[truncated]"
 }
 
 func MarkdownToHTML(text string) string {

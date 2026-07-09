@@ -34,17 +34,20 @@ type App struct {
 	quitCode       int
 	stopCh         chan struct{}
 	runCtx         context.Context
-	runCancel      context.CancelFunc
 	refreshWG      sync.WaitGroup
 	schedulerWG    sync.WaitGroup
+	transferWG     sync.WaitGroup
 	captureSlots   chan struct{}
 	haikuSlots     chan struct{}
+	transferSlots  chan struct{}
 	summaryMu      sync.Mutex
 	summaryQueued  map[int]bool
 	summaryRunning map[int]bool
 	summaryForce   map[int]bool
 	captureMu      sync.Mutex
 	captureHistory map[int][]map[string]bool
+	closeConfirmMu sync.Mutex
+	closeConfirms  map[string]closeConfirmation
 	sleepHook      func(time.Duration)
 	refreshHook    func(context.Context, int, bool)
 }
@@ -53,6 +56,7 @@ const summaryQuietPeriod = 2 * time.Second
 const haikuCaptureHistoryLimit = 5
 const maxConcurrentCaptures = 2
 const maxConcurrentHaikuRequests = 2
+const maxConcurrentTransfers = 2
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
@@ -83,10 +87,12 @@ func New(cfg config.Config) (*App, error) {
 		stopCh:         make(chan struct{}),
 		captureSlots:   make(chan struct{}, maxConcurrentCaptures),
 		haikuSlots:     make(chan struct{}, maxConcurrentHaikuRequests),
+		transferSlots:  make(chan struct{}, maxConcurrentTransfers),
 		summaryQueued:  map[int]bool{},
 		summaryRunning: map[int]bool{},
 		summaryForce:   map[int]bool{},
 		captureHistory: map[int][]map[string]bool{},
+		closeConfirms:  map[string]closeConfirmation{},
 	}, nil
 }
 
@@ -101,11 +107,11 @@ func (a *App) Run(ctx context.Context) int {
 	defer a.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	a.runCtx = runCtx
-	a.runCancel = cancel
 	defer func() {
 		cancel()
 		a.schedulerWG.Wait()
 		a.refreshWG.Wait()
+		a.transferWG.Wait()
 	}()
 	_ = a.audit("service.start", "ok", map[string]any{"version": version.String()})
 	a.registerCommands(runCtx)
@@ -320,6 +326,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "cd":
 		id, rest, ok := parseIDRest(args)
 		if !ok || strings.TrimSpace(rest) == "" {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /cd <id> <path>")
 			return
 		}
@@ -331,6 +338,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "watch":
 		id, ok := parseID(args)
 		if !ok {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /watch <id>")
 			return
 		}
@@ -346,6 +354,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "close":
 		id, ok := parseID(args)
 		if !ok {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /close <id>")
 			return
 		}
@@ -363,15 +372,18 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	case "stop", "unwatch":
 		id, ok := parseID(args)
 		if !ok {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /"+cmd+" <id>")
 			return
 		}
 		_, ok, err := a.Store.UpdateSession(id, func(ts *state.TerminalSession) { ts.WatchEnabled = false })
 		if err != nil {
+			status = "command_state_failed"
 			a.reply(ctx, msg, "state error: "+err.Error())
 			return
 		}
 		if !ok {
+			status = "command_user_error"
 			a.reply(ctx, msg, "session not found")
 			return
 		}

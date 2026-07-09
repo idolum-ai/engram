@@ -12,7 +12,7 @@ import (
 const (
 	DefaultModel       = "claude-haiku-4-5-20251001"
 	DefaultModelAlias  = "claude-haiku-4-5"
-	DefaultSoftMaxSize = int64(52_428_800)
+	DefaultSoftMaxSize = int64(16_777_216)
 )
 
 type Config struct {

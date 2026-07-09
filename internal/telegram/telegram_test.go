@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestSessionListMarkupNilWhenNoSessions(t *testing.T) {
@@ -55,9 +56,9 @@ func TestRefreshMarkupIncludesKeyButtons(t *testing.T) {
 	}
 	want := []InlineKeyboardButton{
 		{Text: "Esc", CallbackData: "key:7:esc"},
-		{Text: "Esc Esc", CallbackData: "key:7:esc2"},
-		{Text: "Ctrl+C", CallbackData: "key:7:ctrl-c"},
-		{Text: "Ctrl+D", CallbackData: "key:7:ctrl-d"},
+		{Text: "Escx2", CallbackData: "key:7:esc2"},
+		{Text: "^C", CallbackData: "key:7:ctrl-c"},
+		{Text: "^D", CallbackData: "key:7:ctrl-d"},
 		{Text: "Enter", CallbackData: "key:7:enter"},
 	}
 	if len(got.InlineKeyboard[1]) != len(want) {
@@ -77,6 +78,58 @@ func TestMarkdownToHTML(t *testing.T) {
 	want := "<b>Status:</b> <code>ok</code> &lt;raw&gt;"
 	if got != want {
 		t.Fatalf("MarkdownToHTML = %q, want %q", got, want)
+	}
+}
+
+func TestDownloadFileHashesWhileStreaming(t *testing.T) {
+	t.Parallel()
+	dest := filepath.Join(t.TempDir(), "download.bin")
+	client := New("TOKEN")
+	client.FileBase = "https://api.telegram.org/file/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader("abc")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	result, err := client.DownloadFileHashed(context.Background(), "docs/a.bin", dest, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Size != 3 || result.SHA256 != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
+		t.Fatalf("download result = %#v", result)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil || string(data) != "abc" {
+		t.Fatalf("downloaded data = %q, err=%v", data, err)
+	}
+}
+
+func TestDownloadFileRemovesOversizedPartial(t *testing.T) {
+	t.Parallel()
+	dest := filepath.Join(t.TempDir(), "partial.bin")
+	client := New("TOKEN")
+	client.FileBase = "https://api.telegram.org/file/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("123456")), Header: make(http.Header)}, nil
+	})}
+	result, err := client.DownloadFileHashed(context.Background(), "docs/a.bin", dest, 5)
+	if err == nil || result.Size != 6 {
+		t.Fatalf("download result = %#v, err=%v", result, err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("partial download still exists: %v", err)
+	}
+}
+
+func TestClampTextPreservesUTF8(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", 3799) + "é" + strings.Repeat("b", 200)
+	got := clampText(text)
+	if !strings.Contains(got, "[truncated]") || !utf8.ValidString(got) {
+		t.Fatalf("clampText returned invalid truncation")
 	}
 }
 

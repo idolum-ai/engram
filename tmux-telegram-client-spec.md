@@ -182,7 +182,7 @@ row of common keystroke buttons:
 
 ```text
 🔄
-Esc | Esc Esc | Ctrl+C | Ctrl+D | Enter
+Esc | Escx2 | ^C | ^D | Enter
 ```
 
 Clicking the refresh button forces one immediate capture and Haiku summary for
@@ -192,9 +192,9 @@ must skip the Telegram edit if the rendered summary is unchanged.
 The key buttons send allowlisted tmux keys to the tracked pane:
 
 - `Esc` -> `Escape`
-- `Esc Esc` -> `Escape`, wait 500ms, then `Escape`
-- `Ctrl+C` -> `C-c`
-- `Ctrl+D` -> `C-d`
+- `Escx2` -> `Escape`, wait 500ms, then `Escape`
+- `^C` -> `C-c`
+- `^D` -> `C-d`
 - `Enter` -> `Enter`
 
 Key button callbacks must not accept arbitrary key names. Broader terminal UI
@@ -305,10 +305,13 @@ User sends:
 Service behavior:
 
 1. Resolves `1` to terminal session `[1]`.
-2. Kills the backing tmux window.
-3. Marks `[1]` as `closed`.
-4. Disables watching for `[1]`.
-5. Edits the existing anchor message one final time with a local closed status.
+2. Revalidates the immutable pane/window identity.
+3. Kills the backing tmux window only when Engram created it; attached and
+   legacy sessions are untracked while tmux remains open.
+4. Marks `[1]` as `closed` only after the intended action succeeds.
+5. Disables watching for `[1]`.
+6. Edits the existing anchor message one final time with a local closed or
+   untracked status.
 
 Example final anchor:
 
@@ -321,7 +324,8 @@ summary:
 - Session closed by request.
 ```
 
-`/close` should be the normal user-facing command. `/kill` can remain reserved
+Inline close buttons require a separate confirm/cancel step. `/close` should be
+the normal user-facing command. `/kill` can remain reserved
 for a later force-close flow if the tmux target is wedged or out of sync.
 
 ### Receive Attachments
@@ -429,15 +433,18 @@ Initial command set:
   session.
 - `/new <text>`: explicitly create a new terminal session and send `<text>`.
 - `/send <id> <text>`: send input to a terminal session without replying.
+- `/run <id> <text>`: clearer alias for command input followed by Enter.
 - `/text <id> <text>`: send literal text without appending Enter.
+- `/type <id> <text>`: clearer alias for literal text without Enter.
 - `/key <id> <keys...>`: send tmux key names for terminal UI control.
 - `/rename <id> <name>`: rename the Telegram-facing session title.
 - `/cwd <id>`: show the pane's current working directory.
 - `/cd <id> <path>`: send a shell `cd` command to the terminal session.
 - `/watch <id>`: create or resume an anchor message for a terminal session.
+- `/unwatch <id>`: disable anchor updates without touching tmux.
 - `/dump <id>`: return the full available scrollback for a terminal session.
 - `/raw <id>`: upload the current visible raw pane capture as an attachment.
-- `/close <id>`: close the backing tmux window and stop watching the session.
+- `/close <id>`: close an Engram-created window or untrack an attached window.
 - `/attachments`: list files saved from Telegram attachments under `/tmp`.
 - `/download <absolute-path>`: upload the exact local file to the configured
   Telegram chat.
@@ -535,7 +542,7 @@ ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ENGRAM_HOME=~/.engram
 ENGRAM_WORKDIR=~
-ENGRAM_ATTACHMENT_SOFT_MAX_BYTES=52428800
+ENGRAM_ATTACHMENT_SOFT_MAX_BYTES=16777216
 ```
 
 `TELEGRAM_CHAT_ID` may also be set. For DMs, leave it unset and Engram defaults
@@ -949,16 +956,17 @@ Rendering rules:
 - Do not include raw terminal buffers in live anchors by default.
 - Strip unsupported ANSI before sending terminal excerpts to Haiku.
 - Include the last prompt or a short final line when it helps navigation.
-- After the Haiku report, append a local deterministic `visible paths` section
-  when absolute or home-relative paths are visible in the current pane and
+- After the Haiku report, append a local deterministic `paths` section with at
+  most four entries when absolute or home-relative paths are visible and
   currently exist as regular files or directories. Render them in a fenced code
   block so Telegram shows copyable path snippets. Haiku must not generate this
   list.
 
-The service should use `capture-pane` for the visible snapshot sent to Haiku and
-avoid sending the full scrollback by default.
+The service uses ANSI-clean semantic `capture-pane` output for Haiku and avoids
+sending full scrollback by default. A low-confidence retry is bounded to 24,000
+bytes and 800 lines.
 
-`/dump <id>` is the explicit escape hatch for full scrollback. It should capture
+`/dump <id>` is the explicit escape hatch for full scrollback. It should stream
 from the start of the tmux history through the current pane end and send the
 result as a downloadable text file when needed. The renderer should include a
 small header with session handle, tmux target, capture time, and truncation
@@ -986,7 +994,9 @@ If a tmux pane exits:
 
 If a user closes a terminal session with `/close <id>`:
 
-- Kill the backing tmux window if it still exists.
+- Kill the backing tmux window only when Engram created it and immutable pane
+  validation still matches.
+- Untrack attached and legacy sessions without killing tmux.
 - Mark the terminal session `closed`.
 - Stop all watch updates for that terminal session.
 - Leave the closed session visible in `/sessions` until pruned so old anchors
@@ -1020,14 +1030,17 @@ If an attachment exceeds the soft limit:
 4. Ask the user to resend the exact same attachment with an explicit bypass
    command or caption containing the expected hash.
 
-Suggested bypass:
+Bypass syntax:
 
 ```text
-/attachment-bypass sha256:<hash>
+/attachment_bypass sha256:<hash>
 ```
 
-For a bypass, Engram should verify the downloaded file hash before accepting it.
-If the hash does not match, delete the file and report the mismatch.
+For a bypass, Engram should hash during the download stream and verify the file
+before accepting it. The bypass never exceeds the 20 MiB cloud Bot API download
+ceiling or the current free-disk hard limit. `/download` rejects files above the
+50 MiB cloud Bot API upload ceiling before network I/O. If the hash does not
+match, delete the file and report the mismatch.
 
 ## Failure Modes And Special Cases
 
@@ -1118,8 +1131,8 @@ Minimum policy:
 - Exactly one configured Telegram chat ID.
 - Single configured chat isolation.
 - No shared global shell unless configured.
-- Treat `/close` as an explicit destructive command; chats may require an
-  inline confirmation button before closing.
+- Treat `/close` as an explicit destructive command for Engram-created windows;
+  inline buttons require confirmation, and attached windows are only untracked.
 - Treat `/download <path>` as a sensitive local file exfiltration command.
   It must require the configured user and must send only to the configured chat.
 - Incoming attachments must be written under `/tmp/engram`.
@@ -1159,7 +1172,7 @@ MVP should support:
   labels and working directory behavior.
 - `/dump <id>` returns full available pane scrollback as text or a file.
 - `/raw <id>` uploads the current visible raw capture as an attachment.
-- `/close <id>` closes the backing tmux window and marks the session closed.
+- `/close <id>` closes an Engram-created window or untracks an attached window.
 - Incoming Telegram attachments are copied under `/tmp` and replied to with an
   absolute local path.
 - `/attachments` lists the attachment folder.
@@ -1199,6 +1212,4 @@ MVP can defer:
 - Should button clicks edit the original anchor message, send a fresh anchor
   near the `/sessions` command, or both?
 - How long should exited sessions remain in `/sessions`?
-- Should large attachment bypass use caption syntax only, `/attachment-bypass`,
-  or both?
 - Should `/restart` exec in-process when not running under systemd?

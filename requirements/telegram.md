@@ -25,8 +25,13 @@ Telegram is Engram's only user interface.
 - Telegram send/edit failures must be audited.
 - `/sessions` must reply even when no Engram sessions exist.
 - Empty inline keyboards must not be sent.
-- Anchor messages may use Telegram HTML, but must fall back to plain text when
-  Telegram rejects formatting.
+- Anchor messages may use Telegram HTML, but fall back to plain text only for
+  formatting parse errors. Rate limits and deleted messages must not amplify
+  into an immediate second edit.
+- Bot API errors are typed and sanitized at the client boundary; request URLs,
+  paths, and bot tokens must never appear in returned errors.
+- Telegram `retry_after` is honored with bounded, context-aware retry. A
+  `message is not modified` edit response counts as success.
 
 ## Formatting
 
@@ -40,3 +45,7 @@ Telegram is Engram's only user interface.
 - Refresh, watch, close, and attach callbacks must be bounded to the configured
   user and chat.
 - Callback failures must not stop polling.
+- Every callback query is answered, including unauthorized, malformed, and
+  stale callbacks. Positive text is sent only after validating the target.
+- Close buttons open a second confirm/cancel prompt using a random, single-use
+  token that expires after two minutes and is invalidated by restart.

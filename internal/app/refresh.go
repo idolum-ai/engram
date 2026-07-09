@@ -2,14 +2,18 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+const maxStoredVisibleCaptureBytes = 16 * 1024
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	ts, ok := a.Store.FindSession(id)
@@ -27,7 +31,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}
-	capture, err := a.Tmux.CaptureVisible(tctx, ts.TmuxPaneID)
+	capture, err := a.Tmux.CaptureVisibleSemantic(tctx, ts.TmuxPaneID)
 	releaseSlot(a.captureSlots)
 	if err != nil {
 		if _, _, stateErr := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
@@ -59,7 +63,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 	}
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
-		s.LastRawCapture = capture
+		s.LastRawCapture = tailUTF8(capture, maxStoredVisibleCaptureBytes)
 		s.LastRawCaptureHash = hash
 		s.LastSummary = summary
 		s.LastSummaryHash = sha(summary)
@@ -71,6 +75,20 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	a.updateAnchorLocal(ctx, id, summary, force)
+}
+
+func tailUTF8(text string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	start := len(text) - maxBytes
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return text[start:]
 }
 
 func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string) (string, error) {
@@ -99,7 +117,7 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 	if !acquireSlot(tctx, a.captureSlots) {
 		return report.TelegramText(), nil
 	}
-	full, err := a.Tmux.CaptureFull(tctx, ts.TmuxPaneID)
+	full, err := a.Tmux.CaptureScrollbackTail(tctx, ts.TmuxPaneID, 24_000, 800)
 	releaseSlot(a.captureSlots)
 	if err != nil || strings.TrimSpace(full) == "" {
 		return report.TelegramText(), nil
@@ -182,6 +200,10 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 	}
 	_, err := a.editAnchor(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, telegram.RefreshMarkup(id))
 	if err != nil {
+		if telegram.IsRateLimited(err) {
+			_ = a.audit("telegram.anchor_edit", "rate_limited", map[string]any{"session_id": id, "error": err.Error()})
+			return
+		}
 		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, telegram.RefreshMarkup(id))
 		if sendErr == nil {
 			if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
@@ -352,6 +374,9 @@ func (a *App) sendAnchor(ctx context.Context, chatID int64, text string, replyTo
 		return msg, nil
 	}
 	_ = a.audit("telegram.anchor_html", "failed", err.Error())
+	if telegram.IsRateLimited(err) || !isTelegramFormattingError(err) {
+		return telegram.Message{}, err
+	}
 	return a.Telegram.SendMessage(ctx, chatID, text, replyTo, markup)
 }
 
@@ -361,8 +386,27 @@ func (a *App) editAnchor(ctx context.Context, chatID int64, messageID int, text 
 	if err == nil {
 		return msg, nil
 	}
+	if telegram.IsMessageNotModified(err) {
+		return telegram.Message{MessageID: messageID, Chat: telegram.Chat{ID: chatID}}, nil
+	}
 	_ = a.audit("telegram.anchor_html", "failed", err.Error())
-	return a.Telegram.EditMessage(ctx, chatID, messageID, text, markup)
+	if telegram.IsRateLimited(err) || !isTelegramFormattingError(err) {
+		return telegram.Message{}, err
+	}
+	msg, err = a.Telegram.EditMessage(ctx, chatID, messageID, text, markup)
+	if telegram.IsMessageNotModified(err) {
+		return telegram.Message{MessageID: messageID, Chat: telegram.Chat{ID: chatID}}, nil
+	}
+	return msg, err
+}
+
+func isTelegramFormattingError(err error) bool {
+	var telegramErr *telegram.Error
+	if !errors.As(err, &telegramErr) {
+		return false
+	}
+	description := strings.ToLower(telegramErr.Description)
+	return strings.Contains(description, "parse entities") || strings.Contains(description, "can't parse") || strings.Contains(description, "unsupported start tag")
 }
 
 func (a *App) scheduler(ctx context.Context) {

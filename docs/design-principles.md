@@ -58,7 +58,7 @@ user answer three questions quickly:
 
 Anchors should be compact, stable, and easy to scan. They should include the
 session handle, state, title, last input preview, Haiku status, one recommended
-action, deterministic visible paths that currently exist, a refresh button, and
+action, deterministic paths that currently exist, a refresh button, and
 a small allowlisted row of common terminal keys.
 
 ### Fast input path

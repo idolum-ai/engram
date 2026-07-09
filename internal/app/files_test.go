@@ -79,8 +79,9 @@ func TestHandleAttachmentEnforcesSoftLimitDuringDownload(t *testing.T) {
 		FileName: "file.bin",
 		FileSize: 0,
 	})
+	app.transferWG.Wait()
 
-	if len(replies) != 1 || !strings.Contains(replies[0], "attachment too large") {
+	if len(replies) != 2 || replies[0] != "receiving attachment..." || !strings.Contains(replies[1], "attachment too large") {
 		t.Fatalf("replies = %#v, want too-large reply", replies)
 	}
 	if got := store.Snapshot().Attachments; len(got) != 0 {
@@ -117,6 +118,78 @@ func TestTailFileMissingIsEmpty(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("tailFile missing = %q, want empty", got)
 	}
+}
+
+func TestDownloadRejectsFileAboveTelegramCloudLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.bin")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(telegramCloudUploadMax + 1); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var replies []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		replies = append(replies, payload["text"].(string))
+		return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	app := &App{Config: config.Config{TelegramChatID: 100}, Telegram: client}
+	app.download(context.Background(), telegram.Message{MessageID: 1, Chat: telegram.Chat{ID: 100}}, path)
+	if len(replies) != 1 || !strings.Contains(replies[0], "exceeds Telegram's") {
+		t.Fatalf("replies = %#v", replies)
+	}
+}
+
+func TestAttachmentBypassStillHonorsHardLimit(t *testing.T) {
+	var replies []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendMessage" {
+			t.Fatalf("unexpected request %s", req.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		replies = append(replies, payload["text"].(string))
+		return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	app := &App{
+		Config:   config.Config{Home: t.TempDir(), TelegramChatID: 100, AttachmentSoftMaxBytes: 1 * 1024 * 1024},
+		Store:    mustOpenTestStore(t),
+		Telegram: client,
+	}
+	app.handleAttachment(context.Background(), telegram.Message{
+		MessageID: 1,
+		Chat:      telegram.Chat{ID: 100},
+		From:      &telegram.User{ID: 42},
+		Caption:   "/attachment_bypass sha256:" + strings.Repeat("a", 64),
+	}, telegram.Document{FileID: "large", FileSize: 5 * 1024 * 1024})
+	if len(replies) != 1 || !strings.Contains(replies[0], "hard limit") {
+		t.Fatalf("replies = %#v", replies)
+	}
+}
+
+func mustOpenTestStore(t *testing.T) *state.Store {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
 }
 
 type fileRoundTripFunc func(*http.Request) (*http.Response, error)

@@ -268,15 +268,18 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	st := a.Store.Snapshot()
 	var ids []int
 	var b strings.Builder
-	b.WriteString("Engram sessions\n\n")
+	b.WriteString("sessions\n")
 	for _, ts := range st.TerminalSessions {
+		if ts.State == state.TerminalClosed {
+			continue
+		}
 		ids = append(ids, ts.ID)
-		fmt.Fprintf(&b, "[%d] %s  %s  last: %s\n", ts.ID, ts.State, firstNonEmpty(ts.Title, "-"), firstNonEmpty(ts.LastInputPreview, "-"))
+		fmt.Fprintf(&b, "\n[%d] %s  %s\n  last: %s\n", ts.ID, ts.State, firstNonEmpty(ts.Title, "-"), firstNonEmpty(ts.LastInputPreview, "-"))
 	}
 	if len(ids) == 0 {
-		b.WriteString("No sessions.")
+		b.WriteString("\nNo tracked sessions.\n")
 	}
-	b.WriteString("\n\nTmux sessions\n\n")
+	b.WriteString("\ntmux\n")
 	attachTargets := a.writeTmuxSessions(ctx, &b)
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids, attachTargets)); err != nil {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
@@ -304,33 +307,33 @@ func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []teleg
 		if session.Name == selected {
 			marker = "*"
 		}
-		fmt.Fprintf(b, "%s %s  id:%s  windows:%s  attached:%s\n", marker, session.Name, firstNonEmpty(session.ID, "-"), firstNonEmpty(session.Windows, "?"), firstNonEmpty(session.Attached, "?"))
+		fmt.Fprintf(b, "\n%s %s  %s windows  %s clients", marker, session.Name, firstNonEmpty(session.Windows, "?"), firstNonEmpty(session.Attached, "?"))
 	}
-	windows, err := a.Tmux.ListWindows(tctx)
+	panes, err := a.Tmux.ListPanes(tctx)
 	if err != nil {
-		fmt.Fprintf(b, "\nWindows unavailable: %s", err)
+		fmt.Fprintf(b, "\n\nPanes unavailable: %s", err)
 		return nil
 	}
-	if len(windows) == 0 {
+	if len(panes) == 0 {
 		return nil
 	}
 	var attachTargets []telegram.AttachTarget
-	b.WriteString("\nWindows\n")
-	for _, window := range windows {
-		target := window.SessionName + ":" + window.Index
+	b.WriteString("\n\navailable panes\n")
+	for _, pane := range panes {
+		target := fmt.Sprintf("%s:%s.%s", pane.SessionName, pane.WindowIndex, pane.Index)
 		tracked := ""
-		if ts, ok := a.Store.FindByPane(window.PaneID); ok {
+		if ts, ok := a.Store.FindByPane(pane.ID); ok {
 			tracked = fmt.Sprintf(" tracked:[%d]", ts.ID)
 		}
 		active := ""
-		if window.Active == "1" {
+		if pane.Active {
 			active = " active"
 		}
-		fmt.Fprintf(b, "%s  id:%s  %s  cmd:%s%s%s\n", target, firstNonEmpty(window.ID, "-"), firstNonEmpty(window.Name, "-"), firstNonEmpty(window.CurrentCmd, "-"), active, tracked)
+		fmt.Fprintf(b, "%s  %s%s%s\n", target, firstNonEmpty(pane.CurrentCmd, "-"), active, tracked)
 		if tracked == "" {
-			attachTargets = append(attachTargets, telegram.AttachTarget{Label: target, Target: window.PaneID})
+			attachTargets = append(attachTargets, telegram.AttachTarget{Label: target, Target: pane.ID})
 		}
 	}
-	b.WriteString("\nUse /attach <target>, for example /attach " + windows[0].SessionName + ":" + windows[0].Index)
+	b.WriteString("\nUse /attach <pane>, for example /attach " + panes[0].ID)
 	return attachTargets
 }

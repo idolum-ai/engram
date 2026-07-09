@@ -2,13 +2,22 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"crypto/rand"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/telegram"
 )
+
+const closeConfirmationTTL = 2 * time.Minute
+const maxCloseConfirmations = 32
+
+type closeConfirmation struct {
+	SessionID int
+	ExpiresAt time.Time
+}
 
 func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) string {
 	if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramChatID {
@@ -68,22 +77,29 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "session not found")
 			return "callback_user_error"
 		}
-		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(id)); err != nil {
+		token, err := a.issueCloseConfirmation(id)
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "could not create confirmation")
+			return "callback_state_failed"
+		}
+		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(token)); err != nil {
+			a.consumeCloseConfirmation(token)
 			a.answerCallback(ctx, cb.ID, "could not open confirmation")
 			return "callback_telegram_failed"
 		}
 		a.answerCallback(ctx, cb.ID, "confirm below")
 		return "callback_ok"
 	case "close-confirm":
-		id, err := strconv.Atoi(parts[1])
-		if err != nil {
-			a.answerCallback(ctx, cb.ID, "bad session id")
-			return "failed_bad_callback_id"
+		confirmation, ok := a.consumeCloseConfirmation(parts[1])
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "confirmation expired")
+			return "callback_user_error"
 		}
-		result := a.closeSession(ctx, id)
+		result := a.closeSession(ctx, confirmation.SessionID)
 		a.answerCallback(ctx, cb.ID, result.Message)
 		return result.status("callback")
 	case "close-cancel":
+		a.consumeCloseConfirmation(parts[1])
 		a.answerCallback(ctx, cb.ID, "canceled")
 		return "callback_ok"
 	case "attach":
@@ -110,11 +126,54 @@ func (a *App) answerCallback(ctx context.Context, id, text string) bool {
 	return true
 }
 
-func closeConfirmationMarkup(id int) *telegram.InlineKeyboardMarkup {
+func closeConfirmationMarkup(token string) *telegram.InlineKeyboardMarkup {
 	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-		{Text: "Confirm", CallbackData: fmt.Sprintf("close-confirm:%d", id)},
-		{Text: "Cancel", CallbackData: fmt.Sprintf("close-cancel:%d", id)},
+		{Text: "Confirm", CallbackData: "close-confirm:" + token},
+		{Text: "Cancel", CallbackData: "close-cancel:" + token},
 	}}}
+}
+
+func (a *App) issueCloseConfirmation(sessionID int) (string, error) {
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		return "", err
+	}
+	now := time.Now()
+	token := hex.EncodeToString(random)
+	a.closeConfirmMu.Lock()
+	defer a.closeConfirmMu.Unlock()
+	if a.closeConfirms == nil {
+		a.closeConfirms = map[string]closeConfirmation{}
+	}
+	for key, confirmation := range a.closeConfirms {
+		if !confirmation.ExpiresAt.After(now) {
+			delete(a.closeConfirms, key)
+		}
+	}
+	if len(a.closeConfirms) >= maxCloseConfirmations {
+		var oldestKey string
+		var oldestExpiry time.Time
+		for key, confirmation := range a.closeConfirms {
+			if oldestKey == "" || confirmation.ExpiresAt.Before(oldestExpiry) {
+				oldestKey = key
+				oldestExpiry = confirmation.ExpiresAt
+			}
+		}
+		delete(a.closeConfirms, oldestKey)
+	}
+	a.closeConfirms[token] = closeConfirmation{SessionID: sessionID, ExpiresAt: now.Add(closeConfirmationTTL)}
+	return token, nil
+}
+
+func (a *App) consumeCloseConfirmation(token string) (closeConfirmation, bool) {
+	a.closeConfirmMu.Lock()
+	defer a.closeConfirmMu.Unlock()
+	confirmation, ok := a.closeConfirms[token]
+	delete(a.closeConfirms, token)
+	if !ok || !confirmation.ExpiresAt.After(time.Now()) {
+		return closeConfirmation{}, false
+	}
+	return confirmation, true
 }
 
 type anchorKeyPreset struct {
@@ -140,11 +199,11 @@ func anchorKeyAction(preset string) (anchorKeyPreset, bool) {
 	case "esc":
 		return anchorKeyPreset{Label: "Esc", Groups: [][]string{{"Escape"}}}, true
 	case "esc2":
-		return anchorKeyPreset{Label: "Esc Esc", Groups: [][]string{{"Escape"}, {"Escape"}}, Delay: 500 * time.Millisecond}, true
+		return anchorKeyPreset{Label: "Escx2", Groups: [][]string{{"Escape"}, {"Escape"}}, Delay: 500 * time.Millisecond}, true
 	case "ctrl-c":
-		return anchorKeyPreset{Label: "Ctrl+C", Groups: [][]string{{"C-c"}}}, true
+		return anchorKeyPreset{Label: "^C", Groups: [][]string{{"C-c"}}}, true
 	case "ctrl-d":
-		return anchorKeyPreset{Label: "Ctrl+D", Groups: [][]string{{"C-d"}}}, true
+		return anchorKeyPreset{Label: "^D", Groups: [][]string{{"C-d"}}}, true
 	case "enter":
 		return anchorKeyPreset{Label: "Enter", Groups: [][]string{{"Enter"}}}, true
 	default:

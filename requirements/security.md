@@ -35,7 +35,8 @@ filesystem. The security and privacy model must stay small and explicit.
 ## Local Sensitive Data
 
 - `state.json` may contain Telegram identifiers, input previews, summaries,
-  attachment metadata, and the last raw visible terminal capture.
+  hashes, and attachment metadata. Raw terminal captures are retained only in
+  process memory and are omitted from persisted state.
 - `audit.jsonl`, lock metadata, tmux history, and `/tmp/engram` artifacts must
   be treated as sensitive.
 - Uninstall must not silently destroy local state or tmux sessions.
@@ -44,11 +45,19 @@ filesystem. The security and privacy model must stay small and explicit.
 
 - Telegram messages can cause shell input in tmux.
 - Attachments are saved under `/tmp/engram/attachments`.
-- Large attachments require a hash-confirmed bypass.
+- Large attachments require a hash-confirmed bypass and remain subject to a
+  hard limit derived from the configured soft limit, free disk, and Telegram's
+  20 MiB cloud Bot API download ceiling.
+- `/attachment_bypass` is the registered command. The older
+  `/attachment-bypass` spelling remains an unregistered compatibility alias.
 - Attachment soft limits must be enforced during the download stream, not only
   from Telegram-provided file metadata.
 - `/download` only accepts absolute paths and uploads regular files.
 - `/download` rejects symlinks and non-regular files.
+- `/download` rejects files above Telegram's 50 MiB cloud Bot API multipart
+  upload ceiling before opening a network request.
+- Attachment downloads hash while streaming, and long file transfers run in
+  bounded background workers so polling remains responsive.
 
 ## Process Ownership
 

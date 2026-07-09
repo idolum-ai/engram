@@ -139,7 +139,7 @@ privacy boundaries below before running commands that may print secrets.
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one tmux session name and creates it when absent. |
-| `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `52428800` | no | Incoming attachment soft limit; larger files require an exact SHA-256 bypass. |
+| `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `16777216` | no | Incoming attachment soft limit. An exact SHA-256 bypass may authorize up to the 20 MiB cloud Bot API hard limit and available disk. |
 
 `make run` uses `~/.engram/.env` by default. For a protected local config at a
 different path, override it explicitly:
@@ -173,9 +173,10 @@ the bot channel and must be revoked immediately.
   redacted before they are sent.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   and lock files. State includes Telegram identifiers, session metadata, last
-  input previews, the last raw visible capture, and Haiku summaries. Files are
-  created with private permissions, but anyone with access to the host account
-  can read them.
+  input previews, capture hashes, and Haiku summaries. Raw terminal captures
+  remain in process memory for rendering but are omitted from persisted state.
+  Files are created with private permissions, but anyone with access to the
+  host account can read them.
 - **Attachments and generated files:** Incoming Telegram documents are saved
   under `/tmp/engram/attachments`. `/raw`, `/dump`, `/logs`, and command metadata
   create files under `/tmp/engram`. These files are not automatically removed
@@ -274,16 +275,28 @@ machine-readable metadata, or `engram commands` locally. Common commands are:
 - `/attach <tmux-target>`
 - `/new <text>`
 - `/send <id> <text>`
+- `/run <id> <text>`
+- `/type <id> <text>`
 - `/key <id> <keys...>`
 - `/raw <id>`
 - `/dump <id>`
 - `/download <absolute-path>`
+- `/attachment_bypass sha256:<hash>`
 - `/logs`
 - `/status`
 
 Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
+
+Engram-created windows and attached tmux panes have different close semantics.
+`/close <id>` kills a window created by Engram, but only untracks an attached or
+legacy session and leaves its tmux window running. Inline close buttons always
+ask for confirmation. `/raw` preserves the visible pane as a physical terminal
+capture; `/dump` streams the pane's scrollback to an attachment. Cloud Bot API
+downloads are hard-limited to 20 MiB and `/download` uploads to 50 MiB.
+Those ceilings follow the hosted [Telegram Bot API file limits](https://core.telegram.org/bots/api#sending-files);
+a local Bot API server is not currently configurable.
 
 Local diagnostics use the same protected env file:
 

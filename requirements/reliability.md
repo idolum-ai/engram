@@ -72,7 +72,10 @@ exports a bounded recent tail, not an unbounded full audit file.
 ## Degradation
 
 - If Haiku fails, reuse the last summary when possible and mark it stale.
-- If Telegram edit fails, send a replacement anchor and update state.
-- If HTML formatting fails, fall back to plain text.
+- If Telegram reports an anchor missing or uneditable, send a replacement and
+  update state. Rate limits do not trigger replacement amplification, and
+  unchanged edits count as success.
+- If Telegram rejects HTML entity parsing, fall back once to plain text. Other
+  API failures retain their typed outcome.
 - If tmux target capture fails, mark the session lost and stop pretending it is
   current.
