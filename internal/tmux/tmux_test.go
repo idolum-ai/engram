@@ -25,7 +25,7 @@ func TestSendCommandSendsLiteralThenEnter(t *testing.T) {
 	}
 	want := [][]string{
 		{"send-keys", "-t", "%1", "-l", "--", "ls -la"},
-		{"send-keys", "-t", "%1", "Enter"},
+		{"send-keys", "-t", "%1", "C-m"},
 	}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Fatalf("calls = %#v", f.calls)

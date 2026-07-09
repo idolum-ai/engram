@@ -128,7 +128,7 @@ func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {
 	if _, err := m.Runner.Run(ctx, "send-keys", "-t", paneID, "-l", "--", text); err != nil {
 		return err
 	}
-	_, err := m.Runner.Run(ctx, "send-keys", "-t", paneID, "Enter")
+	_, err := m.Runner.Run(ctx, "send-keys", "-t", paneID, "C-m")
 	return err
 }
 

@@ -27,3 +27,23 @@ func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 		t.Fatalf("SessionListMarkup attach = %#v", got)
 	}
 }
+
+func TestMarkdownToHTML(t *testing.T) {
+	t.Parallel()
+
+	got := MarkdownToHTML("**Status:** `ok` <raw>")
+	want := "<b>Status:</b> <code>ok</code> &lt;raw&gt;"
+	if got != want {
+		t.Fatalf("MarkdownToHTML = %q, want %q", got, want)
+	}
+}
+
+func TestMarkdownToHTMLCodeFence(t *testing.T) {
+	t.Parallel()
+
+	got := MarkdownToHTML("before\n```\n<a>\n```\nafter")
+	want := "before\n<pre>&lt;a&gt;</pre>\nafter"
+	if got != want {
+		t.Fatalf("MarkdownToHTML code fence = %q, want %q", got, want)
+	}
+}

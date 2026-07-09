@@ -371,7 +371,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		a.reply(ctx, msg, "tmux send error: "+err.Error())
 		return
 	}
-	resp, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
 	if err == nil {
 		a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 			s.AnchorChatID = resp.Chat.ID
@@ -418,7 +418,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		s.LastInputPreview = "attached " + strings.TrimSpace(target)
 		s.LastInputMode = "attach"
 	})
-	resp, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
 	if err == nil {
 		a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 			s.AnchorChatID = resp.Chat.ID
@@ -445,15 +445,18 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 		err = a.Tmux.SendText(tctx, ts.TmuxPaneID, text)
 	}
 	if err != nil {
+		_ = a.Store.Audit("tmux.send", "failed", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "tmux send error: "+err.Error(), true)
 		return
 	}
+	_ = a.Store.Audit("tmux.send", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter})
 	a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.LastInputPreview = preview(text)
 		s.LastInputMode = mode
 		s.LastActivityAt = time.Now().UTC()
 		s.PendingRefresh = true
 	})
+	a.refreshSoon(id)
 }
 
 func (a *App) sendKeys(ctx context.Context, id int, keys []string) {
@@ -516,7 +519,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) {
 		return
 	}
 	if ts.AnchorMessageID == 0 {
-		msg, err := a.Telegram.SendMessage(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
+		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
 		if err == nil {
 			a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
@@ -682,9 +685,9 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 	if !final && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
 		return
 	}
-	_, err := a.Telegram.EditMessage(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, telegram.RefreshMarkup(id))
+	_, err := a.editAnchor(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, telegram.RefreshMarkup(id))
 	if err != nil {
-		msg, sendErr := a.Telegram.SendMessage(ctx, a.Config.TelegramChatID, rendered, 0, telegram.RefreshMarkup(id))
+		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, telegram.RefreshMarkup(id))
 		if sendErr == nil {
 			a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
@@ -699,6 +702,35 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 		s.LastRenderHash = renderHash
 		s.LastAnchorEditAt = time.Now().UTC()
 	})
+}
+
+func (a *App) refreshSoon(id int) {
+	go func() {
+		time.Sleep(750 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		a.refreshSession(ctx, id, true)
+	}()
+}
+
+func (a *App) sendAnchor(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	html := telegram.MarkdownToHTML(text)
+	msg, err := a.Telegram.SendHTMLMessage(ctx, chatID, html, replyTo, markup)
+	if err == nil {
+		return msg, nil
+	}
+	_ = a.Store.Audit("telegram.anchor_html", "failed", err.Error())
+	return a.Telegram.SendMessage(ctx, chatID, text, replyTo, markup)
+}
+
+func (a *App) editAnchor(ctx context.Context, chatID int64, messageID int, text string, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	html := telegram.MarkdownToHTML(text)
+	msg, err := a.Telegram.EditHTMLMessage(ctx, chatID, messageID, html, markup)
+	if err == nil {
+		return msg, nil
+	}
+	_ = a.Store.Audit("telegram.anchor_html", "failed", err.Error())
+	return a.Telegram.EditMessage(ctx, chatID, messageID, text, markup)
 }
 
 func (a *App) scheduler(ctx context.Context) {

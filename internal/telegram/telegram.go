@@ -148,6 +148,14 @@ func (c *Client) GetUpdates(ctx context.Context, offset int, timeout int) ([]Upd
 }
 
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "")
+}
+
+func (c *Client) SendHTMLMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML")
+}
+
+func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
 	body := map[string]any{"chat_id": chatID, "text": clampText(text), "disable_web_page_preview": true}
 	if replyTo != 0 {
 		body["reply_to_message_id"] = replyTo
@@ -155,14 +163,28 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, rep
 	if markup != nil {
 		body["reply_markup"] = markup
 	}
+	if parseMode != "" {
+		body["parse_mode"] = parseMode
+	}
 	var out Message
 	return out, c.postJSON(ctx, "sendMessage", body, &out)
 }
 
 func (c *Client) EditMessage(ctx context.Context, chatID int64, messageID int, text string, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.editMessage(ctx, chatID, messageID, text, markup, "")
+}
+
+func (c *Client) EditHTMLMessage(ctx context.Context, chatID int64, messageID int, text string, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.editMessage(ctx, chatID, messageID, text, markup, "HTML")
+}
+
+func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int, text string, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
 	body := map[string]any{"chat_id": chatID, "message_id": messageID, "text": clampText(text), "disable_web_page_preview": true}
 	if markup != nil {
 		body["reply_markup"] = markup
+	}
+	if parseMode != "" {
+		body["parse_mode"] = parseMode
 	}
 	var out Message
 	return out, c.postJSON(ctx, "editMessageText", body, &out)
@@ -366,4 +388,60 @@ func clampText(text string) string {
 		return text
 	}
 	return text[:3800] + "\n\n[truncated]"
+}
+
+func MarkdownToHTML(text string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		if strings.HasPrefix(text[i:], "```") {
+			end := strings.Index(text[i+3:], "```")
+			if end < 0 {
+				b.WriteString(escapeHTML(text[i:]))
+				break
+			}
+			code := text[i+3 : i+3+end]
+			code = strings.TrimPrefix(code, "\n")
+			code = strings.TrimSuffix(code, "\n")
+			b.WriteString("<pre>")
+			b.WriteString(escapeHTML(code))
+			b.WriteString("</pre>")
+			i += 3 + end + 3
+			continue
+		}
+		if strings.HasPrefix(text[i:], "**") {
+			if end := strings.Index(text[i+2:], "**"); end >= 0 {
+				b.WriteString("<b>")
+				b.WriteString(escapeHTML(text[i+2 : i+2+end]))
+				b.WriteString("</b>")
+				i += 2 + end + 2
+				continue
+			}
+		}
+		if text[i] == '`' {
+			if end := strings.IndexByte(text[i+1:], '`'); end >= 0 {
+				b.WriteString("<code>")
+				b.WriteString(escapeHTML(text[i+1 : i+1+end]))
+				b.WriteString("</code>")
+				i += 1 + end + 1
+				continue
+			}
+		}
+		if text[i] == '*' {
+			if end := strings.IndexByte(text[i+1:], '*'); end >= 0 && end > 0 {
+				b.WriteString("<i>")
+				b.WriteString(escapeHTML(text[i+1 : i+1+end]))
+				b.WriteString("</i>")
+				i += 1 + end + 1
+				continue
+			}
+		}
+		b.WriteString(escapeHTML(text[i : i+1]))
+		i++
+	}
+	return b.String()
+}
+
+func escapeHTML(text string) string {
+	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
+	return replacer.Replace(text)
 }
