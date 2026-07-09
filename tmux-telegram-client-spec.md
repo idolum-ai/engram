@@ -98,6 +98,13 @@ Plain replies are optimized for shell command entry. For terminal UI programs,
 the user should use explicit key commands when they need navigation or control
 keys.
 
+Engram reserves a single leading slash for its own commands. To send
+slash-prefixed input to the terminal, the user replies to the session anchor
+with a second leading slash. Engram removes exactly one slash, so `//clear`
+sends `/clear` followed by Enter. This escape is only valid on replies to a
+tracked anchor; it does not create a new session or bypass command routing in a
+top-level message.
+
 ### Terminal UI Programs
 
 If a command opens a terminal UI, such as `vim`, `less`, `top`, `htop`, `tig`,
@@ -126,6 +133,9 @@ keys:
 Input rules:
 
 - Replying with plain text still sends that text followed by Enter.
+- Replying with `//text` sends `/text` followed by Enter, allowing downstream
+  terminal applications to receive slash commands that Engram would otherwise
+  interpret locally.
 - `/key <id> <keys...>` sends tmux key names through `send-keys`, for example
   `/key 1 q`, `/key 1 C-c`, `/key 1 Escape`, `/key 1 Down Enter`.
 - `/text <id> <text>` sends literal text without appending Enter.

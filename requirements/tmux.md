@@ -20,6 +20,10 @@ tmux is the source of terminal truth.
 ## Input
 
 - Replying to an Engram anchor sends text to the tracked pane and submits it.
+- A reply beginning with `//` escapes Engram command routing: Engram removes
+  exactly one leading slash, sends the remaining text to the tracked pane, and
+  submits it. For example, `//clear` sends `/clear` followed by Enter.
+- Double-slash input is only valid as a reply to a tracked session anchor.
 - Command input sends literal text, waits briefly, then sends tmux `Enter`.
 - `/text` sends literal text without `Enter`.
 - `/key` sends tmux key names and must reject empty/newline-containing keys.

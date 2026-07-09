@@ -165,6 +165,16 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if text == "" {
 		return "skipped_empty_message"
 	}
+	if input, ok := escapedSlashInput(text); ok {
+		if msg.ReplyToMessage != nil {
+			if ts, found := a.Store.FindByAnchor(msg.Chat.ID, msg.ReplyToMessage.MessageID); found {
+				a.sendInput(ctx, ts.ID, input, "command", true)
+				return "handled_anchor_reply"
+			}
+		}
+		a.reply(ctx, msg, "reply to a session anchor to send slash input; for example, //clear sends /clear")
+		return "handled_unroutable_slash_input"
+	}
 	if strings.HasPrefix(text, "/") {
 		a.handleCommand(ctx, msg, text)
 		return "handled_command"
@@ -177,6 +187,13 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	a.newSession(ctx, msg, text)
 	return "handled_new_session"
+}
+
+func escapedSlashInput(text string) (string, bool) {
+	if !strings.HasPrefix(text, "//") {
+		return "", false
+	}
+	return text[1:], true
 }
 
 func (a *App) authorized(msg *telegram.Message) bool {

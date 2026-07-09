@@ -16,6 +16,9 @@ Telegram is Engram's only user interface.
   from the same registry.
 - Every slash command handled by the app must have metadata.
 - Telegram-invalid command names must not be registered with Telegram.
+- Replies beginning with `//` are session input, not Engram commands. Engram
+  removes exactly one leading slash before forwarding them to the replied-to
+  tracked pane.
 
 ## Delivery
 

@@ -124,6 +124,12 @@ Use `/attach <target>` with a target shown under `/sessions`, such as
 `/attach 0:1`, to track an existing tmux window as an Engram session.
 The `/sessions` response also includes attach buttons for untracked windows.
 
+When replying to a session anchor, add a second leading slash to send input
+that would otherwise look like an Engram command. Engram removes exactly one
+slash: `//clear` sends `/clear` to that tmux pane and presses Enter. The escape
+only applies to replies to tracked session anchors; single-slash messages remain
+Engram commands.
+
 ## License
 
 Engram is open source under the MIT License. See [`LICENSE`](LICENSE).

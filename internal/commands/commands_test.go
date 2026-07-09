@@ -56,7 +56,7 @@ func TestHelpTextIncludesPublicCommands(t *testing.T) {
 	t.Parallel()
 
 	text := HelpText()
-	for _, want := range []string{"/help", "/commands", "/status", "/sessions", "/attach <tmux-target>", "/download <absolute-path>"} {
+	for _, want := range []string{"/help", "/commands", "/status", "/sessions", "/attach <tmux-target>", "/download <absolute-path>", "//clear sends /clear"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("HelpText() missing %q:\n%s", want, text)
 		}

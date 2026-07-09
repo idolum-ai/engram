@@ -107,5 +107,7 @@ func HelpText() string {
 		}
 		fmt.Fprintf(&b, "%s - %s\n", meta.Usage, meta.Description)
 	}
+	b.WriteString("\nSession input\n")
+	b.WriteString("Reply with //text to send /text to that session; for example, //clear sends /clear.")
 	return strings.TrimRight(b.String(), "\n")
 }
