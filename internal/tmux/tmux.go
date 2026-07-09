@@ -33,6 +33,11 @@ type Manager struct {
 	Runner Runner
 }
 
+type Session struct {
+	Name string
+	ID   string
+}
+
 func New(r Runner) Manager {
 	return Manager{Runner: r}
 }
@@ -56,6 +61,26 @@ func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) 
 		return "", "", "", fmt.Errorf("unexpected tmux new-window output %q", out)
 	}
 	return parts[0], parts[1], parts[2], nil
+}
+
+func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
+	out, err := m.Runner.Run(ctx, "list-sessions", "-F", "#{session_name}\t#{session_id}")
+	if err != nil {
+		return nil, err
+	}
+	var sessions []Session
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		session := Session{Name: parts[0]}
+		if len(parts) > 1 {
+			session.ID = parts[1]
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, nil
 }
 
 func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {

@@ -15,6 +15,7 @@ TELEGRAM_ALLOWED_USER_ID=123
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=anthropic-key
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+ENGRAM_TMUX_SESSION=main
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +28,9 @@ ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 	}
 	if cfg.Home == "" || cfg.Workdir == "" || cfg.AttachmentSoftMaxBytes != DefaultSoftMaxSize {
 		t.Fatalf("defaults not applied: %#v", cfg)
+	}
+	if cfg.TmuxSession != "main" {
+		t.Fatalf("TmuxSession = %q, want main", cfg.TmuxSession)
 	}
 }
 

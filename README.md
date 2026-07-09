@@ -83,3 +83,6 @@ Common commands:
 - `/logs`
 - `/status`
 - `/version`
+
+By default, new Engram windows are created in an existing tmux session when one
+is available. Set `ENGRAM_TMUX_SESSION` to force a specific session name.

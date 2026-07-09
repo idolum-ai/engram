@@ -428,6 +428,12 @@ session.
 
 Reply input should be the primary ergonomic path for continuing a session.
 
+Engram should default to using an existing tmux session when one is available.
+If `ENGRAM_TMUX_SESSION` is configured, Engram uses that session name and creates
+it if needed. If it is unset, Engram uses the first existing tmux session. If no
+tmux server/session exists, Engram creates its own fallback session named from
+the Telegram chat.
+
 ## Implementation Constraints
 
 This should be a small Go system.
@@ -1107,8 +1113,8 @@ MVP can defer:
 
 ## Open Questions
 
-- Should `/sessions` show only Engram terminal sessions, or also expose native
-  tmux sessions through a separate `/tmux` command?
+- Should `/sessions` show only Engram terminal sessions, or also include native
+  tmux windows from the selected tmux session?
 - Should button clicks edit the original anchor message, send a fresh anchor
   near the `/sessions` command, or both?
 - How long should exited sessions remain in `/sessions`?

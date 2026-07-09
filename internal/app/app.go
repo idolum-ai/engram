@@ -323,8 +323,8 @@ func (a *App) registerCommands(ctx context.Context) {
 func (a *App) newSession(ctx context.Context, msg telegram.Message, input string) {
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	sessionName := tmux.SessionName(msg.Chat.ID)
-	if err := a.Tmux.EnsureSession(tmuxCtx, sessionName, a.Config.Workdir); err != nil {
+	sessionName, err := a.targetTmuxSession(tmuxCtx, msg.Chat.ID)
+	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return
 	}
@@ -358,6 +358,19 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		})
 	}
 	a.refreshSession(ctx, ts.ID, true)
+}
+
+func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, error) {
+	if strings.TrimSpace(a.Config.TmuxSession) != "" {
+		name := strings.TrimSpace(a.Config.TmuxSession)
+		return name, a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
+	}
+	sessions, err := a.Tmux.ListSessions(ctx)
+	if err == nil && len(sessions) > 0 {
+		return sessions[0].Name, nil
+	}
+	name := tmux.SessionName(chatID)
+	return name, a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
 }
 
 func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bool) {

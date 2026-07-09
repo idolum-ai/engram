@@ -28,6 +28,7 @@ type Config struct {
 	AnthropicModel             string
 	Home                       string
 	Workdir                    string
+	TmuxSession                string
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
 }
@@ -55,6 +56,7 @@ func Load(path string) (Config, error) {
 		AnthropicModel:             firstNonEmpty(values["ANTHROPIC_MODEL"], DefaultModel),
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
+		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
 		AttachmentSoftMaxBytes:     parseInt64Default(values["ENGRAM_ATTACHMENT_SOFT_MAX_BYTES"], DefaultSoftMaxSize),
 		TelegramPollTimeoutSeconds: int(parseInt64Default(values["TELEGRAM_POLL_TIMEOUT_SECONDS"], 50)),
 	}
