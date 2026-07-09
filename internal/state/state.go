@@ -2,10 +2,16 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -106,11 +112,20 @@ type UpdateEvent struct {
 }
 
 type Store struct {
-	mu        sync.Mutex
-	path      string
-	auditPath string
-	state     State
+	mu                    sync.Mutex
+	path                  string
+	auditPath             string
+	state                 State
+	processedMessageOrder []string
 }
+
+const (
+	maxTerminalSessions   = 200
+	maxAttachments        = 200
+	maxAttachmentBypasses = 100
+	maxUpdateJournal      = 200
+	maxProcessedMessages  = 2_000
+)
 
 func Open(path, auditPath string) (*Store, error) {
 	s := &Store{path: path, auditPath: auditPath}
@@ -123,21 +138,21 @@ func Open(path, auditPath string) (*Store, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.state = State{Version: 1, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
+			s.state = newState()
 			return s, s.Save()
 		}
 		return nil, err
 	}
 	if len(b) == 0 {
-		s.state = State{Version: 1, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
-		return s, nil
+		s.state = newState()
+		return s, s.Save()
 	}
 	if err := json.Unmarshal(b, &s.state); err != nil {
-		backup := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405Z")
+		backup := path + ".corrupt-" + time.Now().UTC().Format("20060102T150405.000000000Z")
 		if renameErr := os.Rename(path, backup); renameErr != nil {
 			return nil, fmt.Errorf("parse state: %w; backup failed: %v", err, renameErr)
 		}
-		s.state = State{Version: 1, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
+		s.state = newState()
 		if saveErr := s.Save(); saveErr != nil {
 			return nil, fmt.Errorf("parse state: %w; backup at %s; initialize replacement: %v", err, backup, saveErr)
 		}
@@ -153,7 +168,13 @@ func Open(path, auditPath string) (*Store, error) {
 	if s.state.ProcessedMessages == nil {
 		s.state.ProcessedMessages = map[string]bool{}
 	}
+	s.initializeProcessedMessageOrderLocked()
+	s.pruneStateLocked(time.Now().UTC())
 	return s, nil
+}
+
+func newState() State {
+	return State{Version: 1, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
 }
 
 func (s *Store) Snapshot() State {
@@ -169,15 +190,73 @@ func (s *Store) Save() error {
 }
 
 func (s *Store) saveLocked() error {
-	b, err := json.MarshalIndent(s.state, "", "  ")
+	s.pruneStateLocked(time.Now().UTC())
+	persisted := cloneState(s.state)
+	for i := range persisted.TerminalSessions {
+		persisted.TerminalSessions[i].LastRawCapture = ""
+	}
+	b, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	return writeFileAtomic(s.path, b)
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create state temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := tmp.Chmod(0o600); err != nil {
+		closeErr := tmp.Close()
+		return fmt.Errorf("set state temp permissions: %w", errors.Join(err, closeErr))
+	}
+	if _, err := tmp.Write(data); err != nil {
+		closeErr := tmp.Close()
+		return fmt.Errorf("write state temp: %w", errors.Join(err, closeErr))
+	}
+	if err := tmp.Sync(); err != nil {
+		closeErr := tmp.Close()
+		return fmt.Errorf("sync state temp: %w", errors.Join(err, closeErr))
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close state temp: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace state: %w", err)
+	}
+	renamed = true
+	if err := syncParentDir(path); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	return nil
+}
+
+func syncParentDir(path string) error {
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open state directory for sync: %w", err)
+	}
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	// Darwin filesystems may reject Sync on a directory descriptor even though
+	// the regular state file was fully synced before rename.
+	if runtime.GOOS == "darwin" && (errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP)) {
+		syncErr = nil
+	}
+	if err := errors.Join(syncErr, closeErr); err != nil {
+		return fmt.Errorf("sync state directory: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Audit(eventType, status string, payload any) error {
@@ -320,14 +399,17 @@ func (s *Store) SeenMessage(key string) bool {
 func (s *Store) MarkMessage(key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.state.ProcessedMessages[key] = true
+	if !s.state.ProcessedMessages[key] {
+		s.state.ProcessedMessages[key] = true
+		s.processedMessageOrder = append(s.processedMessageOrder, key)
+	}
 	return s.saveLocked()
 }
 
 func (s *Store) AddAttachment(a Attachment) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	a.ID = len(s.state.Attachments) + 1
+	a.ID = maxAttachmentID(s.state.Attachments) + 1
 	s.state.Attachments = append(s.state.Attachments, a)
 	return s.saveLocked()
 }
@@ -389,7 +471,6 @@ func (s *Store) appendUpdateLocked(event UpdateEvent) {
 		event.At = time.Now().UTC()
 	}
 	s.state.UpdateJournal = append(s.state.UpdateJournal, event)
-	const maxUpdateJournal = 200
 	if len(s.state.UpdateJournal) > maxUpdateJournal {
 		s.state.UpdateJournal = append([]UpdateEvent(nil), s.state.UpdateJournal[len(s.state.UpdateJournal)-maxUpdateJournal:]...)
 	}
@@ -398,12 +479,143 @@ func (s *Store) appendUpdateLocked(event UpdateEvent) {
 func (s *Store) pruneAttachmentBypassesLocked(now time.Time) {
 	out := s.state.AttachmentBypasses[:0]
 	for _, bypass := range s.state.AttachmentBypasses {
-		if !bypass.UsedAt.IsZero() || bypass.ExpiresAt.Before(now) {
+		if !bypass.UsedAt.IsZero() || !bypass.ExpiresAt.After(now) {
 			continue
 		}
 		out = append(out, bypass)
 	}
 	s.state.AttachmentBypasses = out
+	if len(s.state.AttachmentBypasses) > maxAttachmentBypasses {
+		sort.SliceStable(s.state.AttachmentBypasses, func(i, j int) bool {
+			return s.state.AttachmentBypasses[i].CreatedAt.Before(s.state.AttachmentBypasses[j].CreatedAt)
+		})
+		s.state.AttachmentBypasses = append([]AttachmentBypass(nil), s.state.AttachmentBypasses[len(s.state.AttachmentBypasses)-maxAttachmentBypasses:]...)
+	}
+}
+
+func (s *Store) pruneStateLocked(now time.Time) {
+	if s.state.ProcessedMessages == nil {
+		s.state.ProcessedMessages = map[string]bool{}
+	}
+	if len(s.processedMessageOrder) == 0 && len(s.state.ProcessedMessages) != 0 {
+		s.initializeProcessedMessageOrderLocked()
+	}
+	s.pruneProcessedMessagesLocked()
+	s.pruneAttachmentBypassesLocked(now)
+
+	if len(s.state.UpdateJournal) > maxUpdateJournal {
+		s.state.UpdateJournal = append([]UpdateEvent(nil), s.state.UpdateJournal[len(s.state.UpdateJournal)-maxUpdateJournal:]...)
+	}
+	if len(s.state.Attachments) > maxAttachments {
+		sort.SliceStable(s.state.Attachments, func(i, j int) bool {
+			a, b := s.state.Attachments[i], s.state.Attachments[j]
+			if a.ReceivedAt.Equal(b.ReceivedAt) {
+				return a.ID < b.ID
+			}
+			return a.ReceivedAt.Before(b.ReceivedAt)
+		})
+		s.state.Attachments = append([]Attachment(nil), s.state.Attachments[len(s.state.Attachments)-maxAttachments:]...)
+	}
+	if len(s.state.TerminalSessions) > maxTerminalSessions {
+		s.state.TerminalSessions = pruneTerminalSessions(s.state.TerminalSessions)
+	}
+}
+
+func (s *Store) initializeProcessedMessageOrderLocked() {
+	s.processedMessageOrder = s.processedMessageOrder[:0]
+	for key, processed := range s.state.ProcessedMessages {
+		if !processed {
+			delete(s.state.ProcessedMessages, key)
+			continue
+		}
+		s.processedMessageOrder = append(s.processedMessageOrder, key)
+	}
+	sort.Slice(s.processedMessageOrder, func(i, j int) bool {
+		return processedMessageLess(s.processedMessageOrder[i], s.processedMessageOrder[j])
+	})
+}
+
+func (s *Store) pruneProcessedMessagesLocked() {
+	if len(s.processedMessageOrder) <= maxProcessedMessages {
+		return
+	}
+	remove := len(s.processedMessageOrder) - maxProcessedMessages
+	for _, key := range s.processedMessageOrder[:remove] {
+		delete(s.state.ProcessedMessages, key)
+	}
+	s.processedMessageOrder = append([]string(nil), s.processedMessageOrder[remove:]...)
+}
+
+func processedMessageLess(a, b string) bool {
+	aID, aOK := messageIDFromKey(a)
+	bID, bOK := messageIDFromKey(b)
+	if aOK && bOK && aID != bID {
+		return aID < bID
+	}
+	if aOK != bOK {
+		return !aOK
+	}
+	return a < b
+}
+
+func messageIDFromKey(key string) (int64, bool) {
+	separator := strings.LastIndexByte(key, ':')
+	if separator < 0 || separator == len(key)-1 {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(key[separator+1:], 10, 64)
+	return id, err == nil
+}
+
+func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
+	indices := make([]int, len(sessions))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		a, b := sessions[indices[i]], sessions[indices[j]]
+		aActive := a.State == TerminalRunning || a.State == TerminalIdle
+		bActive := b.State == TerminalRunning || b.State == TerminalIdle
+		if aActive != bActive {
+			return aActive
+		}
+		aTime, bTime := sessionRecency(a), sessionRecency(b)
+		if !aTime.Equal(bTime) {
+			return aTime.After(bTime)
+		}
+		return a.ID > b.ID
+	})
+	keep := make([]bool, len(sessions))
+	for _, index := range indices[:maxTerminalSessions] {
+		keep[index] = true
+	}
+	out := make([]TerminalSession, 0, maxTerminalSessions)
+	for i, session := range sessions {
+		if keep[i] {
+			out = append(out, session)
+		}
+	}
+	return out
+}
+
+func sessionRecency(session TerminalSession) time.Time {
+	if !session.UpdatedAt.IsZero() {
+		return session.UpdatedAt
+	}
+	if !session.LastActivityAt.IsZero() {
+		return session.LastActivityAt
+	}
+	return session.CreatedAt
+}
+
+func maxAttachmentID(attachments []Attachment) int {
+	max := 0
+	for _, attachment := range attachments {
+		if attachment.ID > max {
+			max = attachment.ID
+		}
+	}
+	return max
 }
 
 func cloneState(in State) State {
