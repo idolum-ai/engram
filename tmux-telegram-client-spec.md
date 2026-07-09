@@ -300,6 +300,8 @@ The service skips Telegram edits when:
 - The session is not watched.
 - The pane has no new output and no status transition.
 - The update would exceed configured rate limits.
+- Fewer than 10 seconds have passed since the last anchor edit for that session,
+  unless this is a final state change such as `closed`, `exited`, or `lost`.
 
 ## Telegram Commands
 
@@ -622,12 +624,15 @@ For each watched terminal session:
 Recommended defaults:
 
 - Debounce: 500 ms to 1 s.
-- Minimum edit interval per anchor: 1 s.
-- Maximum forced refresh interval while dirty: 5 s.
+- Minimum edit interval per anchor: 10 s.
+- Maximum forced refresh interval while dirty: 10 s, and only when the rendered
+  summary hash changed.
 - No edit when unchanged.
 
-The exact values should be configurable because Telegram rate limits and terminal
-output patterns vary.
+Anchor edits should be intentionally slow. Fast terminal output should collapse
+into at most one meaningful Telegram edit per watched terminal session every 10
+seconds. The exact values should be configurable because Telegram rate limits and
+terminal output patterns vary, but 10 seconds is the MVP default.
 
 ## Data Model
 
