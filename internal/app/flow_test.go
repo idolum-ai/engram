@@ -38,6 +38,44 @@ func TestQueueRefreshCoalescesWhileRunning(t *testing.T) {
 	}
 }
 
+func TestQueuedRefreshStopsWhenServiceContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &App{
+		runCtx:         ctx,
+		summaryQueued:  map[int]bool{},
+		summaryRunning: map[int]bool{},
+		summaryForce:   map[int]bool{},
+	}
+	called := make(chan struct{}, 1)
+	app.refreshHook = func(context.Context, int, bool) {
+		called <- struct{}{}
+	}
+
+	app.queueRefresh(7, true, time.Hour)
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		app.refreshWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("refresh worker did not stop after cancellation")
+	}
+	select {
+	case <-called:
+		t.Fatal("refresh ran after service cancellation")
+	default:
+	}
+
+	app.summaryMu.Lock()
+	defer app.summaryMu.Unlock()
+	if len(app.summaryQueued) != 0 || len(app.summaryRunning) != 0 || len(app.summaryForce) != 0 {
+		t.Fatalf("queues not cleared after cancellation: queued=%#v running=%#v force=%#v", app.summaryQueued, app.summaryRunning, app.summaryForce)
+	}
+}
+
 func TestValidateDownloadPathRejectsSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := dir + "/file.txt"

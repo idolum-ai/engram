@@ -58,8 +58,8 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 			Chat:      telegram.Chat{ID: 100},
 		},
 	}})
-	if status != "handled_anchor_reply" {
-		t.Fatalf("handleUpdate status = %q, want handled_anchor_reply", status)
+	if status != "anchor_reply_ok" {
+		t.Fatalf("handleUpdate status = %q, want anchor_reply_ok", status)
 	}
 	want := [][]string{
 		{"send-keys", "-t", "%1", "-l", "--", "/clear"},

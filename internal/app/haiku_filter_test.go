@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,14 @@ func TestClearHaikuCaptureHistoryRestoresRepeatedLines(t *testing.T) {
 
 func TestRefreshCallbackClearsHaikuCaptureHistory(t *testing.T) {
 	done := make(chan struct{})
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AllocateSession(100, 42, "main", "@1", "%1", "shell"); err != nil {
+		t.Fatal(err)
+	}
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: appRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -79,6 +88,7 @@ func TestRefreshCallbackClearsHaikuCaptureHistory(t *testing.T) {
 			TelegramAllowedUserID: 42,
 			TelegramChatID:        100,
 		},
+		Store:          store,
 		Telegram:       client,
 		captureHistory: map[int][]map[string]bool{},
 		summaryQueued:  map[int]bool{},

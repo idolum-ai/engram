@@ -29,7 +29,7 @@ func TestKeyCallbackSendsCtrlC(t *testing.T) {
 		},
 		Data: "key:1:ctrl-c",
 	})
-	if status != "handled_callback" {
+	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
 	want := [][]string{{"send-keys", "-t", "%1", "C-c"}}
@@ -66,7 +66,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 		},
 		Data: "key:1:esc2",
 	})
-	if status != "handled_callback" {
+	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
 	want := [][]string{

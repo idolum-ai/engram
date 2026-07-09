@@ -61,8 +61,8 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 
 	got := renderLocal(session, "status:\nready")
 	for _, want := range []string{
-		"[Haiku]",
-		"\n\nvisible paths:\n```",
+		"\n\nstatus:\nready",
+		"\n\npaths:\n```",
 		pdf + "\n",
 		pdf2 + "\n",
 		"~/code/github.com/idolum-ai/engram\n",
@@ -70,6 +70,9 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("renderLocal missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "[Haiku]") {
+		t.Fatalf("renderLocal exposed model implementation detail:\n%s", got)
 	}
 	if strings.Contains(got, "example.test/path") {
 		t.Fatalf("renderLocal included URL path:\n%s", got)

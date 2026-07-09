@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -11,62 +12,108 @@ import (
 
 func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) string {
 	if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramChatID {
+		a.answerCallback(ctx, cb.ID, "not authorized")
 		return "rejected_unauthorized_callback"
 	}
 	parts := strings.SplitN(cb.Data, ":", 2)
 	if len(parts) != 2 {
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown action")
+		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
 	switch parts[0] {
 	case "refresh":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
-			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
+			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "refreshing")
+		if _, ok := a.Store.FindSession(id); !ok {
+			a.answerCallback(ctx, cb.ID, "session not found")
+			return "callback_user_error"
+		}
+		a.answerCallback(ctx, cb.ID, "refreshing")
 		a.clearHaikuCaptureHistory(id)
 		a.queueRefresh(id, true, 0)
 	case "key":
 		id, preset, ok := parseKeyCallback(parts[1])
 		if !ok {
-			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad key")
+			a.answerCallback(ctx, cb.ID, "bad key")
 			return "failed_bad_callback_key"
 		}
 		action, ok := anchorKeyAction(preset)
 		if !ok {
-			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown key")
+			a.answerCallback(ctx, cb.ID, "unknown key")
 			return "failed_unknown_callback_key"
 		}
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "sent "+action.Label)
-		a.sendKeyGroups(ctx, id, action.Groups, action.Label, action.Delay)
+		result := a.sendKeyGroups(ctx, id, action.Groups, action.Label, action.Delay)
+		a.answerCallback(ctx, cb.ID, result.Message)
+		return result.status("callback")
 	case "watch":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
-			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
+			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "watching")
-		a.watchSession(ctx, id, cb.Message.MessageID)
+		result := a.watchSession(ctx, id, cb.Message.MessageID)
+		a.answerCallback(ctx, cb.ID, result.Message)
+		return result.status("callback")
 	case "close":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
-			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
+			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "closing")
-		a.closeSession(ctx, id)
+		if _, ok := a.Store.FindSession(id); !ok {
+			a.answerCallback(ctx, cb.ID, "session not found")
+			return "callback_user_error"
+		}
+		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, fmt.Sprintf("Close [%d]? Engram-created windows will be closed; attached windows will only be untracked.", id), cb.Message.MessageID, closeConfirmationMarkup(id)); err != nil {
+			a.answerCallback(ctx, cb.ID, "could not open confirmation")
+			return "callback_telegram_failed"
+		}
+		a.answerCallback(ctx, cb.ID, "confirm below")
+		return "callback_ok"
+	case "close-confirm":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		result := a.closeSession(ctx, id)
+		a.answerCallback(ctx, cb.ID, result.Message)
+		return result.status("callback")
+	case "close-cancel":
+		a.answerCallback(ctx, cb.ID, "canceled")
+		return "callback_ok"
 	case "attach":
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "attaching")
 		msg := *cb.Message
 		msg.From = &cb.From
-		a.attachTarget(ctx, msg, parts[1])
+		result := a.attachTarget(ctx, msg, parts[1])
+		a.answerCallback(ctx, cb.ID, result.Message)
+		return result.status("callback")
 	default:
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown action")
+		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
 	return "handled_callback"
+}
+
+func (a *App) answerCallback(ctx context.Context, id, text string) bool {
+	if strings.TrimSpace(id) == "" || a.Telegram == nil {
+		return false
+	}
+	if err := a.Telegram.AnswerCallback(ctx, id, text); err != nil {
+		_ = a.audit("telegram.callback_answer", "failed", map[string]any{"error": err.Error()})
+		return false
+	}
+	return true
+}
+
+func closeConfirmationMarkup(id int) *telegram.InlineKeyboardMarkup {
+	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
+		{Text: "Confirm", CallbackData: fmt.Sprintf("close-confirm:%d", id)},
+		{Text: "Cancel", CallbackData: fmt.Sprintf("close-cancel:%d", id)},
+	}}}
 }
 
 type anchorKeyPreset struct {

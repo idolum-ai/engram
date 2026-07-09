@@ -73,23 +73,23 @@ func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, erro
 	return name, a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
 }
 
-func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target string) {
+func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target string) actionResult {
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	window, err := a.Tmux.ResolveTarget(tmuxCtx, strings.TrimSpace(target))
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
-		return
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux target not found"}
 	}
 	if existing, ok := a.Store.FindByPane(window.PaneID); ok {
 		a.reply(ctx, msg, fmt.Sprintf("%s is already tracked as [%d]", window.PaneID, existing.ID))
-		return
+		return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("already tracked as [%d]", existing.ID)}
 	}
 	title := tmux.AttachedTitle(window)
 	ts, err := a.Store.AllocateSession(msg.Chat.ID, msg.From.ID, window.SessionName, window.ID, window.PaneID, title)
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "state error"}
 	}
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.LastKnownCWD = window.CurrentPath
@@ -98,7 +98,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 	})
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "state error"}
 	}
 	ts = updated
 	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
@@ -112,8 +112,10 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		}
 	} else {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "attach", "error": err.Error()})
+		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	a.queueRefresh(ts.ID, true, summaryQuietPeriod)
+	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("attached [%d]", ts.ID)}
 }
 
 func (a *App) rename(ctx context.Context, id int, name string, msg telegram.Message) {
@@ -149,15 +151,15 @@ func (a *App) cwd(ctx context.Context, id int, msg telegram.Message) {
 	a.reply(ctx, msg, fmt.Sprintf("[%d] cwd\n%s", id, cwd))
 }
 
-func (a *App) cd(ctx context.Context, id int, path string) {
+func (a *App) cd(ctx context.Context, id int, path string) actionResult {
 	cmd := "cd " + tmux.ShellQuote(config.ExpandPath(strings.TrimSpace(path)))
-	a.sendInput(ctx, id, cmd, "command", true)
+	return a.sendInput(ctx, id, cmd, "command", true)
 }
 
-func (a *App) watchSession(ctx context.Context, id int, replyTo int) {
+func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResult {
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
-		return
+		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
 	if ts.AnchorMessageID == 0 {
 		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
@@ -168,34 +170,42 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) {
 				s.WatchEnabled = true
 			}); err != nil {
 				_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
+				return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 			}
+			return actionResult{Outcome: actionOK, Message: "watching"}
 		}
-		return
+		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) { s.WatchEnabled = true }); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 	}
 	a.queueRefresh(id, true, 0)
+	return actionResult{Outcome: actionOK, Message: "watching"}
 }
 
-func (a *App) closeSession(ctx context.Context, id int) {
+func (a *App) closeSession(ctx context.Context, id int) actionResult {
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
-		return
+		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	_ = a.Tmux.KillWindow(tctx, ts.TmuxWindowID)
+	if err := a.Tmux.KillWindow(tctx, ts.TmuxWindowID); err != nil {
+		_ = a.audit("tmux.close", "failed", map[string]any{"session_id": id, "window_id": ts.TmuxWindowID, "error": err.Error()})
+		a.updateAnchorLocal(ctx, id, "status:\nClose failed; the tmux window remains open.\n\nrecommendation:\nCheck the session with /sessions and retry when tmux is available.", true)
+		return actionResult{Outcome: actionTmuxFailed, Message: "close failed: " + err.Error()}
+	}
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
 		s.LastSummary = "summary:\n- Session closed by request."
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
-		return
+		return actionResult{Outcome: actionStateFailed, Message: "state update failed after close"}
 	}
 	a.updateAnchorLocal(ctx, id, "summary:\n- Session closed by request.", true)
+	return actionResult{Outcome: actionOK, Message: "closed"}
 }
 
 func (a *App) sessions(ctx context.Context, msg telegram.Message) {
@@ -262,7 +272,7 @@ func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []teleg
 		}
 		fmt.Fprintf(b, "%s  id:%s  %s  cmd:%s%s%s\n", target, firstNonEmpty(window.ID, "-"), firstNonEmpty(window.Name, "-"), firstNonEmpty(window.CurrentCmd, "-"), active, tracked)
 		if tracked == "" {
-			attachTargets = append(attachTargets, telegram.AttachTarget{Label: target, Target: target})
+			attachTargets = append(attachTargets, telegram.AttachTarget{Label: target, Target: window.PaneID})
 		}
 	}
 	b.WriteString("\nUse /attach <target>, for example /attach " + windows[0].SessionName + ":" + windows[0].Index)

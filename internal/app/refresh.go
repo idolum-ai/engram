@@ -21,7 +21,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if !acquireSlot(tctx, a.captureSlots) {
+		return
+	}
 	capture, err := a.Tmux.CaptureVisible(tctx, ts.TmuxPaneID)
+	releaseSlot(a.captureSlots)
 	if err != nil {
 		if _, _, stateErr := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 			s.State = state.TerminalLost
@@ -76,7 +80,11 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 		PreviousSummary: ts.LastSummary,
 		VisibleCapture:  visibleForHaiku,
 	}
+	if !acquireSlot(ctx, a.haikuSlots) {
+		return "", ctx.Err()
+	}
 	report, err := a.Anthropic.Guide(ctx, input)
+	releaseSlot(a.haikuSlots)
 	if err != nil {
 		return "", err
 	}
@@ -85,12 +93,20 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	if !acquireSlot(tctx, a.captureSlots) {
+		return report.TelegramText(), nil
+	}
 	full, err := a.Tmux.CaptureFull(tctx, ts.TmuxPaneID)
+	releaseSlot(a.captureSlots)
 	if err != nil || strings.TrimSpace(full) == "" {
 		return report.TelegramText(), nil
 	}
 	input.FullCapture = filterCaptureLines(full, repeatedLines)
+	if !acquireSlot(ctx, a.haikuSlots) {
+		return report.TelegramText(), nil
+	}
 	refined, err := a.Anthropic.Guide(ctx, input)
+	releaseSlot(a.haikuSlots)
 	if err != nil {
 		return report.TelegramText(), nil
 	}
@@ -191,6 +207,12 @@ func (a *App) refreshSoon(id int) {
 }
 
 func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
+	ctx := a.workerContext()
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
 	a.summaryMu.Lock()
 	a.ensureSummaryQueuesLocked()
 	if a.summaryRunning[id] || a.summaryQueued[id] {
@@ -202,15 +224,18 @@ func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
 	a.summaryQueued[id] = true
 	a.summaryForce[id] = force
 	a.summaryMu.Unlock()
+	a.refreshWG.Add(1)
 	go func() {
-		a.refreshWorker(id, delay)
+		defer a.refreshWG.Done()
+		a.refreshWorker(ctx, id, delay)
 	}()
 }
 
-func (a *App) refreshWorker(id int, delay time.Duration) {
+func (a *App) refreshWorker(ctx context.Context, id int, delay time.Duration) {
 	for {
-		if delay > 0 {
-			a.sleep(delay)
+		if delay > 0 && !a.sleepContext(ctx, delay) {
+			a.clearRefreshQueue(id)
+			return
 		}
 		a.summaryMu.Lock()
 		a.ensureSummaryQueuesLocked()
@@ -220,8 +245,8 @@ func (a *App) refreshWorker(id int, delay time.Duration) {
 		a.summaryRunning[id] = true
 		a.summaryMu.Unlock()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
-		a.runRefresh(ctx, id, force)
+		refreshCtx, cancel := context.WithTimeout(ctx, 110*time.Second)
+		a.runRefresh(refreshCtx, id, force)
 		cancel()
 
 		a.summaryMu.Lock()
@@ -238,12 +263,63 @@ func (a *App) refreshWorker(id int, delay time.Duration) {
 	}
 }
 
+func (a *App) clearRefreshQueue(id int) {
+	a.summaryMu.Lock()
+	defer a.summaryMu.Unlock()
+	delete(a.summaryQueued, id)
+	delete(a.summaryForce, id)
+	delete(a.summaryRunning, id)
+}
+
 func (a *App) sleep(delay time.Duration) {
 	if a.sleepHook != nil {
 		a.sleepHook(delay)
 		return
 	}
 	time.Sleep(delay)
+}
+
+func (a *App) sleepContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return true
+	}
+	if a.sleepHook != nil {
+		a.sleepHook(delay)
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (a *App) workerContext() context.Context {
+	if a.runCtx != nil {
+		return a.runCtx
+	}
+	return context.Background()
+}
+
+func acquireSlot(ctx context.Context, slots chan struct{}) bool {
+	if slots == nil {
+		return true
+	}
+	select {
+	case slots <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func releaseSlot(slots chan struct{}) {
+	if slots != nil {
+		<-slots
+	}
 }
 
 func (a *App) runRefresh(ctx context.Context, id int, force bool) {
@@ -287,18 +363,30 @@ func (a *App) editAnchor(ctx context.Context, chatID int64, messageID int, text 
 }
 
 func (a *App) scheduler(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	nextCapture := map[int]time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			st := a.Store.Snapshot()
+			now := time.Now()
 			for _, ts := range st.TerminalSessions {
-				if ts.WatchEnabled && ts.State != state.TerminalClosed {
-					a.queueRefresh(ts.ID, false, 0)
+				if !ts.WatchEnabled || ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
+					delete(nextCapture, ts.ID)
+					continue
 				}
+				if now.Before(nextCapture[ts.ID]) {
+					continue
+				}
+				interval := 10 * time.Second
+				if !ts.LastActivityAt.IsZero() && now.Sub(ts.LastActivityAt) > 5*time.Minute {
+					interval = 30 * time.Second
+				}
+				nextCapture[ts.ID] = now.Add(interval)
+				a.queueRefresh(ts.ID, false, 0)
 			}
 		}
 	}

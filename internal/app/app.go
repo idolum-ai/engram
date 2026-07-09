@@ -33,6 +33,12 @@ type App struct {
 	startedAt      time.Time
 	quitCode       int
 	stopCh         chan struct{}
+	runCtx         context.Context
+	runCancel      context.CancelFunc
+	refreshWG      sync.WaitGroup
+	schedulerWG    sync.WaitGroup
+	captureSlots   chan struct{}
+	haikuSlots     chan struct{}
 	summaryMu      sync.Mutex
 	summaryQueued  map[int]bool
 	summaryRunning map[int]bool
@@ -45,6 +51,8 @@ type App struct {
 
 const summaryQuietPeriod = 2 * time.Second
 const haikuCaptureHistoryLimit = 5
+const maxConcurrentCaptures = 2
+const maxConcurrentHaikuRequests = 2
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
@@ -73,6 +81,8 @@ func New(cfg config.Config) (*App, error) {
 		lock:           l,
 		startedAt:      time.Now().UTC(),
 		stopCh:         make(chan struct{}),
+		captureSlots:   make(chan struct{}, maxConcurrentCaptures),
+		haikuSlots:     make(chan struct{}, maxConcurrentHaikuRequests),
 		summaryQueued:  map[int]bool{},
 		summaryRunning: map[int]bool{},
 		summaryForce:   map[int]bool{},
@@ -89,16 +99,26 @@ func (a *App) Close() error {
 
 func (a *App) Run(ctx context.Context) int {
 	defer a.Close()
+	runCtx, cancel := context.WithCancel(ctx)
+	a.runCtx = runCtx
+	a.runCancel = cancel
+	defer func() {
+		cancel()
+		a.schedulerWG.Wait()
+		a.refreshWG.Wait()
+	}()
 	_ = a.audit("service.start", "ok", map[string]any{"version": version.String()})
-	a.registerCommands(ctx)
-	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
-	defer cancelScheduler()
-	go a.scheduler(schedulerCtx)
+	a.registerCommands(runCtx)
+	a.schedulerWG.Add(1)
+	go func() {
+		defer a.schedulerWG.Done()
+		a.scheduler(runCtx)
+	}()
 	offset := a.Store.Snapshot().LastUpdateID + 1
 	backoff := time.Second
 	for {
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			_ = a.audit("service.stop", "context", nil)
 			return a.quitCode
 		case <-a.stopCh:
@@ -106,10 +126,12 @@ func (a *App) Run(ctx context.Context) int {
 			return a.quitCode
 		default:
 		}
-		updates, err := a.Telegram.GetUpdates(ctx, offset, a.Config.TelegramPollTimeoutSeconds)
+		updates, err := a.Telegram.GetUpdates(runCtx, offset, a.Config.TelegramPollTimeoutSeconds)
 		if err != nil {
 			_ = a.audit("telegram.poll", "failed", err.Error())
-			time.Sleep(backoff)
+			if !a.sleepContext(runCtx, backoff) {
+				return a.quitCode
+			}
 			if backoff < 30*time.Second {
 				backoff *= 2
 			}
@@ -125,12 +147,12 @@ func (a *App) Run(ctx context.Context) int {
 			if update.UpdateID >= offset {
 				offset = update.UpdateID + 1
 			}
-			status := a.handleUpdate(ctx, update)
+			status := a.handleUpdate(runCtx, update)
 			if err := a.Store.RecordUpdate(update.UpdateID, kind, status, "", refs); err != nil {
 				fmt.Fprintln(os.Stderr, "state record update:", err)
 				return 1
 			}
-			if a.quitCode != 0 || ctx.Err() != nil {
+			if a.quitCode != 0 || runCtx.Err() != nil {
 				return a.quitCode
 			}
 		}
@@ -168,22 +190,29 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if input, ok := escapedSlashInput(text); ok {
 		if msg.ReplyToMessage != nil {
 			if ts, found := a.Store.FindByAnchor(msg.Chat.ID, msg.ReplyToMessage.MessageID); found {
-				a.sendInput(ctx, ts.ID, input, "command", true)
-				return "handled_anchor_reply"
+				result := a.sendInput(ctx, ts.ID, input, "command", true)
+				if !result.OK() {
+					a.reply(ctx, msg, result.Message)
+				}
+				return result.status("anchor_reply")
 			}
 		}
 		a.reply(ctx, msg, "reply to a session anchor to send slash input; for example, //clear sends /clear")
 		return "handled_unroutable_slash_input"
 	}
 	if strings.HasPrefix(text, "/") {
-		a.handleCommand(ctx, msg, text)
-		return "handled_command"
+		return a.handleCommand(ctx, msg, text)
 	}
 	if msg.ReplyToMessage != nil {
 		if ts, ok := a.Store.FindByAnchor(msg.Chat.ID, msg.ReplyToMessage.MessageID); ok {
-			a.sendInput(ctx, ts.ID, text, "command", true)
-			return "handled_anchor_reply"
+			result := a.sendInput(ctx, ts.ID, text, "command", true)
+			if !result.OK() {
+				a.reply(ctx, msg, result.Message)
+			}
+			return result.status("anchor_reply")
 		}
+		a.reply(ctx, msg, "session not found for this reply; use /sessions to find an active anchor")
+		return "anchor_reply_user_error"
 	}
 	a.newSession(ctx, msg, text)
 	return "handled_new_session"
@@ -206,7 +235,8 @@ func (a *App) authorized(msg *telegram.Message) bool {
 	return true
 }
 
-func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text string) {
+func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text string) (status string) {
+	status = "command_ok"
 	fields := strings.Fields(text)
 	cmd := strings.TrimPrefix(fields[0], "/")
 	if at := strings.IndexByte(cmd, '@'); at >= 0 {
@@ -230,34 +260,49 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /attach <tmux-target>")
 			return
 		}
-		a.attachTarget(ctx, msg, args)
+		status = a.attachTarget(ctx, msg, args).status("command")
 	case "new":
 		if args == "" {
 			a.reply(ctx, msg, "usage: /new <text>")
 			return
 		}
 		a.newSession(ctx, msg, args)
-	case "send":
+	case "send", "run":
 		id, rest, ok := parseIDRest(args)
 		if !ok {
-			a.reply(ctx, msg, "usage: /send <id> <text>")
+			status = "command_user_error"
+			a.reply(ctx, msg, "usage: /"+cmd+" <id> <text>")
 			return
 		}
-		a.sendInput(ctx, id, rest, "command", true)
-	case "text":
+		result := a.sendInput(ctx, id, rest, "command", true)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
+	case "text", "type":
 		id, rest, ok := parseIDRest(args)
 		if !ok {
-			a.reply(ctx, msg, "usage: /text <id> <text>")
+			status = "command_user_error"
+			a.reply(ctx, msg, "usage: /"+cmd+" <id> <text>")
 			return
 		}
-		a.sendInput(ctx, id, rest, "text", false)
+		result := a.sendInput(ctx, id, rest, "text", false)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "key":
 		id, rest, ok := parseIDRest(args)
 		if !ok {
+			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /key <id> <keys...>")
 			return
 		}
-		a.sendKeys(ctx, id, strings.Fields(rest))
+		result := a.sendKeys(ctx, id, strings.Fields(rest))
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "rename":
 		id, rest, ok := parseIDRest(args)
 		if !ok || strings.TrimSpace(rest) == "" {
@@ -278,14 +323,22 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /cd <id> <path>")
 			return
 		}
-		a.cd(ctx, id, rest)
+		result := a.cd(ctx, id, rest)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "watch":
 		id, ok := parseID(args)
 		if !ok {
 			a.reply(ctx, msg, "usage: /watch <id>")
 			return
 		}
-		a.watchSession(ctx, id, 0)
+		result := a.watchSession(ctx, id, 0)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "dump":
 		a.captureFile(ctx, msg, args, true)
 	case "raw":
@@ -296,17 +349,21 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /close <id>")
 			return
 		}
-		a.closeSession(ctx, id)
+		result := a.closeSession(ctx, id)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "attachments":
 		a.attachments(ctx, msg)
 	case "download":
 		a.download(ctx, msg, args)
 	case "logs":
 		a.logs(ctx, msg)
-	case "stop":
+	case "stop", "unwatch":
 		id, ok := parseID(args)
 		if !ok {
-			a.reply(ctx, msg, "usage: /stop <id>")
+			a.reply(ctx, msg, "usage: /"+cmd+" <id>")
 			return
 		}
 		_, ok, err := a.Store.UpdateSession(id, func(ts *state.TerminalSession) { ts.WatchEnabled = false })
@@ -329,10 +386,10 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		a.stop()
 	case "kill":
 		a.reply(ctx, msg, "/kill is reserved; use /close <id>.")
-	case "attachment-bypass":
+	case "attachment-bypass", "attachment_bypass":
 		hash := parseBypassHash(args)
 		if hash == "" || !validSHA256Hex(hash) {
-			a.reply(ctx, msg, "usage: /attachment-bypass sha256:<hash>")
+			a.reply(ctx, msg, "usage: /attachment_bypass sha256:<hash>")
 			return
 		}
 		expires := time.Now().UTC().Add(30 * time.Minute)
@@ -348,8 +405,10 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		}
 		a.reply(ctx, msg, "large attachment bypass recorded until "+expires.Format(time.RFC3339))
 	default:
+		status = "command_user_error"
 		a.reply(ctx, msg, "unknown command; try /help")
 	}
+	return status
 }
 
 func (a *App) registerCommands(ctx context.Context) {
@@ -424,7 +483,7 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 		title = title[:40]
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "[%d] %s  %s\nlast input: %s\n\n[Haiku]\n%s",
+	fmt.Fprintf(&b, "[%d] %s  %s\nlast: %s\n\n%s",
 		ts.ID,
 		ts.State,
 		title,

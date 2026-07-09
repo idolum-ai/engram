@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const maxVisiblePaths = 12
+const maxVisiblePaths = 4
 
 func renderVisiblePaths(capture string) string {
 	paths := extractVisiblePaths(capture, maxVisiblePaths)
@@ -14,7 +14,7 @@ func renderVisiblePaths(capture string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("visible paths:\n```")
+	b.WriteString("paths:\n```")
 	b.WriteByte('\n')
 	for _, path := range paths {
 		b.WriteString(path)

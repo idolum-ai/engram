@@ -148,7 +148,7 @@ func buildPrompt(in SummaryInput) string {
 {
   "status_report": "one or two short plain-English paragraphs explaining what the session appears to be doing and any blocker/prompt/error",
   "recommended_action": "one clear sentence recommending the user's next action",
-  "citations": ["zero to three short reconstructed excerpts from the terminal text that support the status or recommendation"],
+  "citations": ["zero to two short reconstructed excerpts from the terminal text that support the status or recommendation"],
   "confidence": "high|medium|low",
   "needs_full_buffer": false,
   "reason": "hidden one-sentence reason for confidence and whether full scrollback is needed"
@@ -247,7 +247,7 @@ func limit(s string, n int) string {
 }
 
 func normalizeCitations(values []string) []string {
-	out := make([]string, 0, min(len(values), 3))
+	out := make([]string, 0, min(len(values), 2))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
 		if value == "" {
@@ -256,7 +256,7 @@ func normalizeCitations(values []string) []string {
 		value = strings.Join(strings.Fields(value), " ")
 		value = limitHead(value, 280)
 		out = append(out, value)
-		if len(out) == 3 {
+		if len(out) == 2 {
 			break
 		}
 	}
