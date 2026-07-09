@@ -31,4 +31,8 @@ func TestStorePersistsSession(t *testing.T) {
 	if !ok || got.LastSummary != "ok" {
 		t.Fatalf("reopened session = %#v ok=%v", got, ok)
 	}
+	byPane, ok := reopened.FindByPane("%1")
+	if !ok || byPane.ID != 1 {
+		t.Fatalf("FindByPane = %#v ok=%v", byPane, ok)
+	}
 }

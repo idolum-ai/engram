@@ -226,6 +226,17 @@ func (s *Store) FindByAnchor(chatID int64, messageID int) (TerminalSession, bool
 	return TerminalSession{}, false
 }
 
+func (s *Store) FindByPane(paneID string) (TerminalSession, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ts := range s.state.TerminalSessions {
+		if ts.TmuxPaneID == paneID && ts.State != TerminalClosed {
+			return ts, true
+		}
+	}
+	return TerminalSession{}, false
+}
+
 func (s *Store) MarkPoll(updateID int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

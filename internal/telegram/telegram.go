@@ -117,6 +117,11 @@ type InlineKeyboardButton struct {
 	CallbackData string `json:"callback_data"`
 }
 
+type AttachTarget struct {
+	Label  string
+	Target string
+}
+
 type BotCommand struct {
 	Command     string `json:"command"`
 	Description string `json:"description"`
@@ -292,16 +297,22 @@ func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 	}}
 }
 
-func SessionListMarkup(ids []int) *InlineKeyboardMarkup {
-	if len(ids) == 0 {
+func SessionListMarkup(ids []int, attachTargets []AttachTarget) *InlineKeyboardMarkup {
+	if len(ids) == 0 && len(attachTargets) == 0 {
 		return nil
 	}
-	rows := make([][]InlineKeyboardButton, 0, len(ids))
+	rows := make([][]InlineKeyboardButton, 0, len(ids)+len(attachTargets))
 	for _, id := range ids {
 		rows = append(rows, []InlineKeyboardButton{
 			{Text: fmt.Sprintf("Watch [%d]", id), CallbackData: fmt.Sprintf("watch:%d", id)},
 			{Text: fmt.Sprintf("Close [%d]", id), CallbackData: fmt.Sprintf("close:%d", id)},
 		})
+	}
+	for _, target := range attachTargets {
+		rows = append(rows, []InlineKeyboardButton{{
+			Text:         "Attach " + target.Label,
+			CallbackData: "attach:" + target.Target,
+		}})
 	}
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
 }

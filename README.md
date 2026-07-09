@@ -72,6 +72,7 @@ machine-readable command metadata as JSON, or run `engram commands` locally.
 Common commands:
 
 - `/sessions`
+- `/attach <tmux-target>`
 - `/new <text>`
 - `/send <id> <text>`
 - `/key <id> <keys...>`
@@ -87,3 +88,6 @@ Common commands:
 `/sessions` shows both Engram-tracked terminal sessions and native tmux sessions.
 By default, new Engram windows are created in an existing tmux session when one
 is available. Set `ENGRAM_TMUX_SESSION` to force a specific session name.
+Use `/attach <target>` with a target shown under `/sessions`, such as
+`/attach 0:1`, to track an existing tmux window as an Engram session.
+The `/sessions` response also includes attach buttons for untracked windows.

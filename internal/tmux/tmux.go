@@ -40,6 +40,17 @@ type Session struct {
 	Attached string
 }
 
+type Window struct {
+	SessionName string
+	Index       string
+	ID          string
+	Name        string
+	Active      string
+	PaneID      string
+	CurrentPath string
+	CurrentCmd  string
+}
+
 func New(r Runner) Manager {
 	return Manager{Runner: r}
 }
@@ -89,6 +100,28 @@ func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
 		sessions = append(sessions, session)
 	}
 	return sessions, nil
+}
+
+func (m Manager) ListWindows(ctx context.Context) ([]Window, error) {
+	format := "#{session_name}\t#{window_index}\t#{window_id}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}"
+	out, err := m.Runner.Run(ctx, "list-windows", "-a", "-F", format)
+	if err != nil {
+		return nil, err
+	}
+	return parseWindows(out), nil
+}
+
+func (m Manager) ResolveTarget(ctx context.Context, target string) (Window, error) {
+	format := "#{session_name}\t#{window_index}\t#{window_id}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}"
+	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", target, format)
+	if err != nil {
+		return Window{}, err
+	}
+	windows := parseWindows(out)
+	if len(windows) != 1 {
+		return Window{}, fmt.Errorf("unexpected tmux target output %q", out)
+	}
+	return windows[0], nil
 }
 
 func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {
@@ -144,6 +177,42 @@ func WindowTitle(id int, input string) string {
 		title = title[:32]
 	}
 	return title
+}
+
+func AttachedTitle(w Window) string {
+	title := strings.TrimSpace(w.SessionName + ":" + w.Index + " " + w.Name)
+	title = strings.ReplaceAll(title, "\n", " ")
+	if title == ":" {
+		title = w.ID
+	}
+	if len(title) > 40 {
+		title = title[:40]
+	}
+	return title
+}
+
+func parseWindows(out string) []Window {
+	var windows []Window
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		for len(parts) < 8 {
+			parts = append(parts, "")
+		}
+		windows = append(windows, Window{
+			SessionName: parts[0],
+			Index:       parts[1],
+			ID:          parts[2],
+			Name:        parts[3],
+			Active:      parts[4],
+			PaneID:      parts[5],
+			CurrentPath: parts[6],
+			CurrentCmd:  parts[7],
+		})
+	}
+	return windows
 }
 
 func ValidKeys(keys []string) error {

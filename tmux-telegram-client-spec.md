@@ -401,6 +401,8 @@ Initial command set:
 - `/status`: show operational health and paths.
 - `/commands`: send machine-readable command metadata as JSON.
 - `/sessions`: list active terminal sessions with buttons.
+- `/attach <tmux-target>`: track an existing tmux window or pane as a terminal
+  session.
 - `/new <text>`: explicitly create a new terminal session and send `<text>`.
 - `/send <id> <text>`: send input to a terminal session without replying.
 - `/text <id> <text>`: send literal text without appending Enter.
@@ -436,7 +438,11 @@ the Telegram chat.
 
 `/sessions` should show both Engram-tracked terminal sessions and a read-only
 summary of native tmux sessions, marking the tmux session that new Engram windows
-will use.
+will use. It should also show attachable tmux window targets such as `0:1`.
+`/attach <target>` resolves that tmux target, records its active pane as a
+normal Engram terminal session, and creates a watched anchor for it. The
+`/sessions` message should include inline attach buttons for untracked tmux
+windows.
 
 ## Implementation Constraints
 

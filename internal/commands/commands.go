@@ -28,6 +28,7 @@ var registry = []Metadata{
 	{Command: "quit", Usage: "/quit", Description: "Stop Engram without closing tmux sessions", Category: "service"},
 	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions", Category: "service"},
 	{Command: "sessions", Usage: "/sessions", Description: "List active terminal sessions with controls", Category: "session"},
+	{Command: "attach", Usage: "/attach <tmux-target>", Description: "Track an existing tmux window or pane", Category: "session"},
 	{Command: "new", Usage: "/new <text>", Description: "Create a tmux window and send text as a shell command", Category: "session"},
 	{Command: "send", Usage: "/send <id> <text>", Description: "Send text as a shell command to a session", Category: "session"},
 	{Command: "text", Usage: "/text <id> <text>", Description: "Send literal text without pressing Enter", Category: "session"},

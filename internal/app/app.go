@@ -169,21 +169,36 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) {
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown action")
 		return
 	}
-	id, err := strconv.Atoi(parts[1])
-	if err != nil {
-		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
-		return
-	}
 	switch parts[0] {
 	case "refresh":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
+			return
+		}
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "refreshing")
 		a.refreshSession(ctx, id, true)
 	case "watch":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
+			return
+		}
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "watching")
 		a.watchSession(ctx, id, cb.Message.MessageID)
 	case "close":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			_ = a.Telegram.AnswerCallback(ctx, cb.ID, "bad session id")
+			return
+		}
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "closing")
 		a.closeSession(ctx, id)
+	case "attach":
+		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "attaching")
+		msg := *cb.Message
+		msg.From = &cb.From
+		a.attachTarget(ctx, msg, parts[1])
 	default:
 		_ = a.Telegram.AnswerCallback(ctx, cb.ID, "unknown action")
 	}
@@ -208,6 +223,12 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		a.reply(ctx, msg, version.String())
 	case "sessions":
 		a.sessions(ctx, msg)
+	case "attach":
+		if args == "" {
+			a.reply(ctx, msg, "usage: /attach <tmux-target>")
+			return
+		}
+		a.attachTarget(ctx, msg, args)
 	case "new":
 		if args == "" {
 			a.reply(ctx, msg, "usage: /new <text>")
@@ -374,6 +395,42 @@ func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, erro
 	return name, a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
 }
 
+func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target string) {
+	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
+	defer cancel()
+	window, err := a.Tmux.ResolveTarget(tmuxCtx, strings.TrimSpace(target))
+	if err != nil {
+		a.reply(ctx, msg, "tmux error: "+err.Error())
+		return
+	}
+	if existing, ok := a.Store.FindByPane(window.PaneID); ok {
+		a.reply(ctx, msg, fmt.Sprintf("%s is already tracked as [%d]", window.PaneID, existing.ID))
+		return
+	}
+	title := tmux.AttachedTitle(window)
+	ts, err := a.Store.AllocateSession(msg.Chat.ID, msg.From.ID, window.SessionName, window.ID, window.PaneID, title)
+	if err != nil {
+		a.reply(ctx, msg, "state error: "+err.Error())
+		return
+	}
+	a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+		s.LastKnownCWD = window.CurrentPath
+		s.LastInputPreview = "attached " + strings.TrimSpace(target)
+		s.LastInputMode = "attach"
+	})
+	resp, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	if err == nil {
+		a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+			s.AnchorChatID = resp.Chat.ID
+			s.AnchorMessageID = resp.MessageID
+			s.WatchEnabled = true
+		})
+	} else {
+		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"command": "attach", "error": err.Error()})
+	}
+	a.refreshSession(ctx, ts.ID, true)
+}
+
 func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bool) {
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
@@ -502,23 +559,23 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 		b.WriteString("No sessions.")
 	}
 	b.WriteString("\n\nTmux sessions\n\n")
-	a.writeTmuxSessions(ctx, &b)
-	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids)); err != nil {
+	attachTargets := a.writeTmuxSessions(ctx, &b)
+	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids, attachTargets)); err != nil {
 		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
 	}
 }
 
-func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) {
+func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []telegram.AttachTarget {
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	sessions, err := a.Tmux.ListSessions(tctx)
 	if err != nil {
 		fmt.Fprintf(b, "Unavailable: %s", err)
-		return
+		return nil
 	}
 	if len(sessions) == 0 {
 		b.WriteString("No tmux sessions.")
-		return
+		return nil
 	}
 	selected := strings.TrimSpace(a.Config.TmuxSession)
 	if selected == "" {
@@ -531,6 +588,33 @@ func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) {
 		}
 		fmt.Fprintf(b, "%s %s  id:%s  windows:%s  attached:%s\n", marker, session.Name, firstNonEmpty(session.ID, "-"), firstNonEmpty(session.Windows, "?"), firstNonEmpty(session.Attached, "?"))
 	}
+	windows, err := a.Tmux.ListWindows(tctx)
+	if err != nil {
+		fmt.Fprintf(b, "\nWindows unavailable: %s", err)
+		return nil
+	}
+	if len(windows) == 0 {
+		return nil
+	}
+	var attachTargets []telegram.AttachTarget
+	b.WriteString("\nWindows\n")
+	for _, window := range windows {
+		target := window.SessionName + ":" + window.Index
+		tracked := ""
+		if ts, ok := a.Store.FindByPane(window.PaneID); ok {
+			tracked = fmt.Sprintf(" tracked:[%d]", ts.ID)
+		}
+		active := ""
+		if window.Active == "1" {
+			active = " active"
+		}
+		fmt.Fprintf(b, "%s  id:%s  %s  cmd:%s%s%s\n", target, firstNonEmpty(window.ID, "-"), firstNonEmpty(window.Name, "-"), firstNonEmpty(window.CurrentCmd, "-"), active, tracked)
+		if tracked == "" {
+			attachTargets = append(attachTargets, telegram.AttachTarget{Label: target, Target: target})
+		}
+	}
+	b.WriteString("\nUse /attach <target>, for example /attach " + windows[0].SessionName + ":" + windows[0].Index)
+	return attachTargets
 }
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {

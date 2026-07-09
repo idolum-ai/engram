@@ -50,6 +50,47 @@ func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	}
 }
 
+func TestListWindowsParsesTmuxOutput(t *testing.T) {
+	f := &fakeRunner{
+		out: "main\t0\t@1\tcode\t1\t%2\t/home/me\tbash\n",
+	}
+	m := New(f)
+	got, err := m.ListWindows(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Window{{
+		SessionName: "main",
+		Index:       "0",
+		ID:          "@1",
+		Name:        "code",
+		Active:      "1",
+		PaneID:      "%2",
+		CurrentPath: "/home/me",
+		CurrentCmd:  "bash",
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListWindows = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveTargetUsesTmuxTarget(t *testing.T) {
+	f := &fakeRunner{
+		out: "main\t0\t@1\tcode\t1\t%2\t/home/me\tbash\n",
+	}
+	m := New(f)
+	got, err := m.ResolveTarget(context.Background(), "main:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "@1" || got.PaneID != "%2" {
+		t.Fatalf("ResolveTarget = %#v", got)
+	}
+	if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0][0:4], []string{"display-message", "-p", "-t", "main:0"}) {
+		t.Fatalf("calls = %#v", f.calls)
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	got := ShellQuote("/tmp/it's here")
 	want := "'/tmp/it'\"'\"'s here'"
