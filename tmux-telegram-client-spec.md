@@ -167,6 +167,37 @@ Clicking `Watch [1]` causes the service to edit the existing `[1]` anchor
 message if it exists in the chat. If there is no usable anchor message, the
 service sends a new anchor message and records it.
 
+Every watched anchor message should include an inline refresh button:
+
+```text
+🔄
+```
+
+Clicking the refresh button forces one immediate capture and Haiku summary for
+that terminal session, bypassing the normal 10 second anchor cadence. It still
+must skip the Telegram edit if the rendered summary is unchanged.
+
+### Session Metadata Commands
+
+User sends:
+
+```text
+/rename 1 build
+/cwd 1
+/cd 1 ~/src/engram
+```
+
+Service behavior:
+
+- `/rename <id> <name>` changes the Telegram-facing title for `[id]`.
+- `/cwd <id>` replies with the pane's current working directory when tmux can
+  determine it.
+- `/cd <id> <path>` sends a shell `cd` command to `[id]` and updates the session
+  after output changes.
+
+`/cd` is command input, not a local filesystem mutation by Engram. It should
+quote paths safely for the shell and should reject empty paths.
+
 ### Dump Full Scrollback
 
 User sends:
@@ -190,6 +221,54 @@ Suggested artifact name:
 ```text
 tmux-session-1-2026-07-09T024103Z.txt
 ```
+
+### Raw Visible Capture
+
+User sends:
+
+```text
+/raw 1
+```
+
+Service behavior:
+
+1. Resolves `1` to terminal session `[1]`.
+2. Captures the current visible pane without Haiku simplification.
+3. Sends the raw capture as a text attachment to the configured Telegram group.
+
+`/raw` is for inspecting what Haiku saw. It should not edit the anchor message.
+
+### Logs
+
+User sends:
+
+```text
+/logs
+```
+
+Service behavior:
+
+1. Reads the recent Engram audit log and service log if available.
+2. Writes a bounded log bundle under `/tmp/engram`.
+3. Uploads the bundle as an attachment to the configured Telegram group.
+
+The log bundle must redact Telegram and Anthropic credentials.
+
+### Status And Version
+
+User sends:
+
+```text
+/status
+/version
+```
+
+`/status` replies with operational health: service mode, lock ownership, tmux
+availability, active session count, last Telegram poll time, last Haiku success
+or failure, state path, audit path, and attachment directory disk space.
+
+`/version` replies with the binary version, Git commit if embedded at build
+time, Go version, and build time if available.
 
 ### Close A Session
 
@@ -307,17 +386,24 @@ The service skips Telegram edits when:
 
 Initial command set:
 
+- `/status`: show operational health and paths.
 - `/sessions`: list active terminal sessions with buttons.
 - `/new <text>`: explicitly create a new terminal session and send `<text>`.
 - `/send <id> <text>`: send input to a terminal session without replying.
 - `/text <id> <text>`: send literal text without appending Enter.
 - `/key <id> <keys...>`: send tmux key names for terminal UI control.
+- `/rename <id> <name>`: rename the Telegram-facing session title.
+- `/cwd <id>`: show the pane's current working directory.
+- `/cd <id> <path>`: send a shell `cd` command to the terminal session.
 - `/watch <id>`: create or resume an anchor message for a terminal session.
 - `/dump <id>`: return the full available scrollback for a terminal session.
+- `/raw <id>`: upload the current visible raw pane capture as an attachment.
 - `/close <id>`: close the backing tmux window and stop watching the session.
 - `/attachments`: list files saved from Telegram attachments under `/tmp`.
 - `/download <absolute-path>`: upload the exact local file to the configured
   Telegram group chat.
+- `/logs`: upload recent Engram logs as a redacted attachment.
+- `/version`: show binary version and build metadata.
 - `/stop <id>`: stop watching without killing the tmux target.
 - `/quit`: stop Engram cleanly without closing tmux sessions.
 - `/restart`: request a clean service restart.
@@ -680,6 +766,7 @@ copies of the same service.
 - `tmux_window_id`: tmux window ID.
 - `tmux_pane_id`: tmux pane ID.
 - `title`: display title, derived from first input, cwd, or user rename.
+- `last_known_cwd`: last working directory reported by tmux, if known.
 - `state`: `running`, `idle`, `exited`, `lost`, `closed`, `killed`.
 - `created_at`, `updated_at`, `last_activity_at`.
 - `last_input_preview`: short preview of the last user input.
@@ -888,7 +975,12 @@ MVP should support:
 - Replies to anchor messages send input to the correct pane.
 - `/key <id> <keys...>` and `/text <id> <text>` support terminal UI programs.
 - `/sessions` lists active sessions with inline watch buttons.
+- Anchor messages include a 🔄 button for on-demand refresh.
+- `/status` shows operational health.
+- `/rename <id> <name>`, `/cwd <id>`, and `/cd <id> <path>` manage session
+  labels and working directory behavior.
 - `/dump <id>` returns full available pane scrollback as text or a file.
+- `/raw <id>` uploads the current visible raw capture as an attachment.
 - `/close <id>` closes the backing tmux window and marks the session closed.
 - Incoming Telegram attachments are copied under `/tmp` and replied to with an
   absolute local path.
@@ -896,6 +988,8 @@ MVP should support:
 - `/download <absolute-path>` uploads the exact local file to the configured
   Telegram group chat.
 - `/help` shows concise command help.
+- `/logs` uploads recent redacted logs as an attachment.
+- `/version` shows binary version and build metadata.
 - `/quit` stops Engram cleanly without closing tmux sessions.
 - `/restart` restarts Engram through the service path without closing tmux
   sessions.
