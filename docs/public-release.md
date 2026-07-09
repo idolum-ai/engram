@@ -3,6 +3,7 @@
 Engram is public-ready when:
 
 - `make check` passes.
+- `LICENSE` grants an OSI-style open source license.
 - No live credentials, `.env` files, state files, logs, PEM files, or downloaded
   attachments are tracked.
 - `README.md`, `SECURITY.md`, `CONTRIBUTING.md`, and `THIRD_PARTY_NOTICES.md`

@@ -8,7 +8,7 @@ LDFLAGS := -X github.com/idolum-ai/engram/internal/version.Version=$(VERSION) -X
 GOCACHE ?= /tmp/engram-go-build
 GOMODCACHE ?= /tmp/engram-go-mod
 
-.PHONY: build install uninstall install-service uninstall-service test test-race check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
+.PHONY: build install uninstall install-service uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
 
 build:
 	mkdir -p bin
@@ -52,7 +52,14 @@ test:
 test-race:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test -race ./internal/state ./internal/lockfile ./internal/telegram ./internal/tmux
 
-check: test build architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke
+vet:
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go vet ./...
+
+darwin-compile:
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOOS=darwin GOARCH=amd64 go test -exec=/bin/true ./...
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOOS=darwin GOARCH=arm64 go test -exec=/bin/true ./...
+
+check: test vet darwin-compile build architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke
 
 architecture:
 	bash scripts/check-architecture.sh

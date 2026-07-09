@@ -15,9 +15,10 @@ recommended next action plus short source-evidence quote blocks when useful.
 
 ## Requirements
 
-- Go
+- Go 1.22+
 - tmux
-- systemd user services for `make install-service`
+- Linux or macOS
+- systemd user services for `make install-service` on Linux
 - A Telegram bot token
 - An Anthropic API key
 
@@ -31,9 +32,9 @@ Run the local quality gate before pushing:
 make check
 ```
 
-The gate runs build/tests, package-boundary checks, public-readiness checks,
-workflow sanity checks, a stdlib-only check, docs freshness checks, and a
-tracked-file secret scan.
+The gate runs build/tests, `go vet`, Darwin compile checks, package-boundary
+checks, public-readiness checks, workflow sanity checks, a stdlib-only check,
+docs freshness checks, and a tracked-file secret scan.
 
 For a feature-by-feature readiness view, see
 [`docs/feature-matrix.md`](docs/feature-matrix.md).
@@ -78,7 +79,7 @@ go run ./cmd/engram run --env ~/.engram/.env
 make install PREFIX="$HOME/.local"
 ```
 
-Install and start the systemd user service:
+Install and start the systemd user service on Linux:
 
 ```sh
 make install-service PREFIX="$HOME/.local"
@@ -122,3 +123,7 @@ is available. Set `ENGRAM_TMUX_SESSION` to force a specific session name.
 Use `/attach <target>` with a target shown under `/sessions`, such as
 `/attach 0:1`, to track an existing tmux window as an Engram session.
 The `/sessions` response also includes attach buttons for untracked windows.
+
+## License
+
+Engram is open source under the MIT License. See [`LICENSE`](LICENSE).

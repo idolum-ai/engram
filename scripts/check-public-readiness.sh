@@ -25,6 +25,11 @@ for file in "${required_files[@]}"; do
   fi
 done
 
+if ! head -n 1 LICENSE | rg -q '^MIT License$'; then
+  echo "LICENSE must be an explicit open source license before public release" >&2
+  exit 1
+fi
+
 for forbidden in .env bin/engram; do
   if git ls-files --error-unmatch "$forbidden" >/dev/null 2>&1; then
     echo "forbidden tracked file: $forbidden" >&2
