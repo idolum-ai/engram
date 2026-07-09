@@ -234,7 +234,7 @@ Service behavior:
 
 1. Resolves `1` to terminal session `[1]`.
 2. Captures the current visible pane without Haiku simplification.
-3. Sends the raw capture as a text attachment to the configured Telegram group.
+3. Sends the raw capture as a text attachment to the configured Telegram chat.
 
 `/raw` is for inspecting what Haiku saw. It should not edit the anchor message.
 
@@ -250,7 +250,7 @@ Service behavior:
 
 1. Reads the recent Engram audit log and service log if available.
 2. Writes a bounded log bundle under `/tmp/engram`.
-3. Uploads the bundle as an attachment to the configured Telegram group.
+3. Uploads the bundle as an attachment to the configured Telegram chat.
 
 The log bundle must redact Telegram and Anthropic credentials.
 
@@ -302,7 +302,7 @@ for a later force-close flow if the tmux target is wedged or out of sync.
 
 ### Receive Attachments
 
-When the allowed Telegram user sends an attachment in the configured group chat,
+When the allowed Telegram user sends an attachment in the configured chat,
 the service downloads it through the Telegram Bot API and stores it under `/tmp`.
 
 Suggested storage path:
@@ -313,7 +313,7 @@ Suggested storage path:
 
 Service behavior:
 
-1. Verifies the update came from the configured user and group chat.
+1. Verifies the update came from the configured user and chat.
 2. Downloads the Telegram file.
 3. Writes the file under the attachment directory in `/tmp`.
 4. Records the attachment metadata in local state.
@@ -360,7 +360,7 @@ Service behavior:
 1. Requires an absolute path.
 2. Does not expand shell syntax, environment variables, globs, or `~`.
 3. Verifies the path points to a regular readable file.
-4. Uploads that exact file to the configured Telegram group chat.
+4. Uploads that exact file to the configured Telegram chat.
 5. Replies with success or a precise local error.
 
 `/download <path>` is intentionally powerful: it can upload any readable local
@@ -401,7 +401,7 @@ Initial command set:
 - `/close <id>`: close the backing tmux window and stop watching the session.
 - `/attachments`: list files saved from Telegram attachments under `/tmp`.
 - `/download <absolute-path>`: upload the exact local file to the configured
-  Telegram group chat.
+  Telegram chat.
 - `/logs`: upload recent Engram logs as a redacted attachment.
 - `/version`: show binary version and build metadata.
 - `/stop <id>`: stop watching without killing the tmux target.
@@ -472,12 +472,11 @@ make install PREFIX="$HOME/.local"
 
 `.env` is local operator state and must not be committed.
 
-Required variables:
+Required and defaulted variables:
 
 ```sh
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_USER_ID=
-TELEGRAM_GROUP_CHAT_ID=
 TELEGRAM_API_ID=
 TELEGRAM_API_HASH=
 LLM_PROVIDER=anthropic
@@ -487,6 +486,9 @@ ENGRAM_HOME=~/.engram
 ENGRAM_WORKDIR=~
 ENGRAM_ATTACHMENT_SOFT_MAX_BYTES=52428800
 ```
+
+`TELEGRAM_CHAT_ID` may also be set. For DMs, leave it unset and Engram defaults
+it to `TELEGRAM_ALLOWED_USER_ID`.
 
 `TELEGRAM_BOT_TOKEN` is the MVP credential for Bot API operation. Telegram app
 credentials are usually called API ID and API hash rather than client ID and
@@ -498,10 +500,11 @@ Startup validation:
 
 - `TELEGRAM_BOT_TOKEN` is required for MVP Bot API mode.
 - `TELEGRAM_ALLOWED_USER_ID` must contain exactly one Telegram user ID.
-- `TELEGRAM_GROUP_CHAT_ID` must contain exactly one Telegram group or supergroup
-  chat ID.
+- `TELEGRAM_CHAT_ID` is optional for DMs. If empty, it defaults to
+  `TELEGRAM_ALLOWED_USER_ID`, which is the private chat ID for normal bot DMs.
+  It may be set explicitly for a group or supergroup.
 - The service must reject every update not sent by `TELEGRAM_ALLOWED_USER_ID`.
-- The service must reject group messages outside `TELEGRAM_GROUP_CHAT_ID`.
+- The service must reject messages outside `TELEGRAM_CHAT_ID`.
 - `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` are optional in MVP Bot API mode.
 - `LLM_PROVIDER` must be exactly `anthropic`.
 - `ANTHROPIC_MODEL` must be exactly the configured Haiku model ID or an allowed
@@ -562,7 +565,7 @@ Engram should document this rather than run it automatically.
 - **Attachment store**: downloads Telegram attachments into `/tmp`, lists them,
   and records metadata.
 - **Download sender**: uploads an exact local absolute path to the configured
-  Telegram group chat.
+  Telegram chat.
 - **LLM simplifier**: sends compact terminal snapshots and deltas to Anthropic
   Haiku and receives Telegram-sized summaries.
 - **Renderer**: converts Haiku summaries plus small local metadata into
@@ -572,7 +575,7 @@ Engram should document this rather than run it automatically.
 - **Authorization policy**: restricts which Telegram users/chats may create,
   read, and kill terminal sessions.
 - **Instance lock**: prevents two Engram processes with the same Telegram bot
-  token/user/group settings from polling at the same time.
+  token/user/chat settings from polling at the same time.
 
 ### Tmux Integration
 
@@ -743,7 +746,7 @@ it should derive a lock key from:
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_ALLOWED_USER_ID`
-- `TELEGRAM_GROUP_CHAT_ID`
+- `TELEGRAM_CHAT_ID`
 
 The lock key must be hashed before being used in a filename. The process should
 hold an exclusive lock file such as:
@@ -1012,14 +1015,13 @@ not optional.
 Minimum policy:
 
 - Exactly one configured Telegram user ID.
-- Exactly one configured Telegram group chat ID.
-- Single configured group chat isolation.
+- Exactly one configured Telegram chat ID.
+- Single configured chat isolation.
 - No shared global shell unless configured.
-- Treat `/close` as an explicit destructive command; group chats may require an
+- Treat `/close` as an explicit destructive command; chats may require an
   inline confirmation button before closing.
 - Treat `/download <path>` as a sensitive local file exfiltration command.
-  It must require the configured user and must send only to the configured group
-  chat.
+  It must require the configured user and must send only to the configured chat.
 - Incoming attachments must be written under `/tmp/engram`.
   Filenames must be sanitized; paths in replies must be absolute.
 - Large attachment bypass must require an exact SHA-256 match.
@@ -1040,11 +1042,11 @@ Optional later policies:
 MVP should support:
 
 - Telegram long polling.
-- Exactly one configured Telegram user and one configured group chat.
-- One managed tmux session for the configured group chat.
+- Exactly one configured Telegram user and one configured chat.
+- One managed tmux session for the configured chat.
 - Systemd user service install and startup recovery.
 - `~/.engram` config, state, audit, and lock files.
-- Instance locking by Telegram bot/user/group settings.
+- Instance locking by Telegram bot/user/chat settings.
 - New tmux windows default to `~`, configurable by `ENGRAM_WORKDIR`.
 - Plain text creates a new terminal session/window.
 - Bot sends one Haiku-summarized anchor message per terminal session.
@@ -1062,7 +1064,7 @@ MVP should support:
   absolute local path.
 - `/attachments` lists the attachment folder.
 - `/download <absolute-path>` uploads the exact local file to the configured
-  Telegram group chat.
+  Telegram chat.
 - `/help` shows concise command help.
 - `/logs` uploads recent redacted logs as an attachment.
 - `/version` shows binary version and build metadata.
@@ -1084,7 +1086,7 @@ MVP can defer:
 - Rich terminal color rendering.
 - Interactive full scrollback browsing beyond `/dump`.
 - Multiple anchors per same terminal session.
-- Collaborative permissions beyond the one-user, one-group model.
+- Collaborative permissions beyond the one-user, one-chat model.
 - Generic LLM provider support.
 - Database-backed state.
 - Third-party Go dependencies.

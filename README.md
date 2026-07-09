@@ -29,11 +29,11 @@ Fill in:
 ```sh
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_ALLOWED_USER_ID=
-TELEGRAM_GROUP_CHAT_ID=
 ANTHROPIC_API_KEY=
 ```
 
-Engram accepts exactly one Telegram user and one group chat.
+Engram accepts exactly one Telegram user. For DMs, leave `TELEGRAM_CHAT_ID`
+blank and Engram will use `TELEGRAM_ALLOWED_USER_ID` as the private chat ID.
 
 ## Run
 

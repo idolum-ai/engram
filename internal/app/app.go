@@ -39,7 +39,7 @@ func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
 		return nil, err
 	}
-	key := lockfile.Key(cfg.TelegramBotToken, strconv.FormatInt(cfg.TelegramAllowedUserID, 10), strconv.FormatInt(cfg.TelegramGroupChatID, 10))
+	key := lockfile.Key(cfg.TelegramBotToken, strconv.FormatInt(cfg.TelegramAllowedUserID, 10), strconv.FormatInt(cfg.TelegramChatID, 10))
 	l, err := lockfile.Acquire(cfg.LockDir(), key)
 	if err != nil {
 		return nil, err
@@ -149,7 +149,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) {
 }
 
 func (a *App) authorized(msg *telegram.Message) bool {
-	if msg.Chat.ID != a.Config.TelegramGroupChatID {
+	if msg.Chat.ID != a.Config.TelegramChatID {
 		return false
 	}
 	if msg.From == nil || msg.From.ID != a.Config.TelegramAllowedUserID {
@@ -159,7 +159,7 @@ func (a *App) authorized(msg *telegram.Message) bool {
 }
 
 func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) {
-	if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramGroupChatID {
+	if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramChatID {
 		return
 	}
 	parts := strings.SplitN(cb.Data, ":", 2)
@@ -425,7 +425,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) {
 		return
 	}
 	if ts.AnchorMessageID == 0 {
-		msg, err := a.Telegram.SendMessage(ctx, a.Config.TelegramGroupChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
+		msg, err := a.Telegram.SendMessage(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
 		if err == nil {
 			a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
@@ -537,7 +537,7 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 	}
 	_, err := a.Telegram.EditMessage(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, telegram.RefreshMarkup(id))
 	if err != nil {
-		msg, sendErr := a.Telegram.SendMessage(ctx, a.Config.TelegramGroupChatID, rendered, 0, telegram.RefreshMarkup(id))
+		msg, sendErr := a.Telegram.SendMessage(ctx, a.Config.TelegramChatID, rendered, 0, telegram.RefreshMarkup(id))
 		if sendErr == nil {
 			a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
@@ -686,7 +686,7 @@ func (a *App) download(ctx context.Context, msg telegram.Message, path string) {
 		a.reply(ctx, msg, "not a regular file")
 		return
 	}
-	if _, err := a.Telegram.SendDocument(ctx, a.Config.TelegramGroupChatID, path, filepath.Base(path)); err != nil {
+	if _, err := a.Telegram.SendDocument(ctx, a.Config.TelegramChatID, path, filepath.Base(path)); err != nil {
 		a.reply(ctx, msg, "upload error: "+err.Error())
 	}
 }

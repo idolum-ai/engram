@@ -20,7 +20,7 @@ type Config struct {
 	EnvPath                    string
 	TelegramBotToken           string
 	TelegramAllowedUserID      int64
-	TelegramGroupChatID        int64
+	TelegramChatID             int64
 	TelegramAPIID              string
 	TelegramAPIHash            string
 	LLMProvider                string
@@ -61,8 +61,11 @@ func Load(path string) (Config, error) {
 	if cfg.TelegramAllowedUserID, err = parseRequiredInt64(values, "TELEGRAM_ALLOWED_USER_ID"); err != nil {
 		return Config{}, err
 	}
-	if cfg.TelegramGroupChatID, err = parseRequiredInt64(values, "TELEGRAM_GROUP_CHAT_ID"); err != nil {
+	if cfg.TelegramChatID, err = parseOptionalInt64(firstNonEmpty(values["TELEGRAM_CHAT_ID"], values["TELEGRAM_GROUP_CHAT_ID"]), "TELEGRAM_CHAT_ID"); err != nil {
 		return Config{}, err
+	}
+	if cfg.TelegramChatID == 0 {
+		cfg.TelegramChatID = cfg.TelegramAllowedUserID
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -78,9 +81,6 @@ func (c Config) Validate() error {
 	if c.TelegramAllowedUserID == 0 {
 		missing = append(missing, "TELEGRAM_ALLOWED_USER_ID")
 	}
-	if c.TelegramGroupChatID == 0 {
-		missing = append(missing, "TELEGRAM_GROUP_CHAT_ID")
-	}
 	if strings.TrimSpace(c.AnthropicAPIKey) == "" {
 		missing = append(missing, "ANTHROPIC_API_KEY")
 	}
@@ -89,6 +89,9 @@ func (c Config) Validate() error {
 	}
 	if c.LLMProvider != "anthropic" {
 		return fmt.Errorf("LLM_PROVIDER must be anthropic")
+	}
+	if c.TelegramChatID == 0 {
+		return fmt.Errorf("TELEGRAM_CHAT_ID resolved to zero")
 	}
 	if c.AnthropicModel != DefaultModel && c.AnthropicModel != DefaultModelAlias {
 		return fmt.Errorf("ANTHROPIC_MODEL must be %s or %s", DefaultModel, DefaultModelAlias)
@@ -165,6 +168,18 @@ func unquote(value string) string {
 
 func parseRequiredInt64(values map[string]string, key string) (int64, error) {
 	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return n, nil
+}
+
+func parseOptionalInt64(raw string, key string) (int64, error) {
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return 0, nil
 	}
