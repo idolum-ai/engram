@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/idolum-ai/engram/internal/app"
+	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/version"
 )
@@ -45,6 +46,14 @@ func run(args []string) int {
 	case "version", "--version", "-v":
 		fmt.Println(version.String())
 		return 0
+	case "commands":
+		data, err := commands.JSON()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "commands:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
 	case "help", "--help", "-h":
 		printHelp()
 		return 0
@@ -58,6 +67,7 @@ func run(args []string) int {
 func printHelp() {
 	fmt.Print(`Usage:
   engram run [--env ~/.engram/.env]
+  engram commands
   engram version
   engram help
 `)

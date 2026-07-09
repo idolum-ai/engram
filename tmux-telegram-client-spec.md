@@ -384,9 +384,22 @@ The service skips Telegram edits when:
 
 ## Telegram Commands
 
+The service must expose command metadata from one central registry so command
+help, Telegram bot command registration, and machine-readable exports cannot
+drift apart. The registry should include each command name, usage string,
+description, and category.
+
+- On startup, the service registers public commands with Telegram's bot command
+  list.
+- `/help` renders concise human-facing help from the same registry.
+- `/commands` uploads the full registry as a JSON attachment.
+- `engram commands` prints the same JSON registry locally for scripts and
+  inspection.
+
 Initial command set:
 
 - `/status`: show operational health and paths.
+- `/commands`: send machine-readable command metadata as JSON.
 - `/sessions`: list active terminal sessions with buttons.
 - `/new <text>`: explicitly create a new terminal session and send `<text>`.
 - `/send <id> <text>`: send input to a terminal session without replying.
@@ -1066,6 +1079,7 @@ MVP should support:
 - `/download <absolute-path>` uploads the exact local file to the configured
   Telegram chat.
 - `/help` shows concise command help.
+- `/commands` sends the command metadata registry as JSON.
 - `/logs` uploads recent redacted logs as an attachment.
 - `/version` shows binary version and build metadata.
 - `/quit` stops Engram cleanly without closing tmux sessions.

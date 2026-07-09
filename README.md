@@ -67,7 +67,9 @@ loginctl enable-linger "$USER"
 
 ## Telegram Commands
 
-Use `/help` in Telegram for the command list. Common commands:
+Use `/help` in Telegram for the command list. Use `/commands` to receive the
+machine-readable command metadata as JSON, or run `engram commands` locally.
+Common commands:
 
 - `/sessions`
 - `/new <text>`

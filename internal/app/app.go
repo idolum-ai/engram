@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/anthropic"
+	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/lockfile"
 	"github.com/idolum-ai/engram/internal/redact"
@@ -71,6 +72,7 @@ func (a *App) Close() error {
 func (a *App) Run(ctx context.Context) int {
 	defer a.Close()
 	_ = a.Store.Audit("service.start", "ok", map[string]any{"version": version.String()})
+	a.registerCommands(ctx)
 	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
 	defer cancelScheduler()
 	go a.scheduler(schedulerCtx)
@@ -196,7 +198,9 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	args := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
 	switch cmd {
 	case "help":
-		a.reply(ctx, msg, helpText())
+		a.reply(ctx, msg, commands.HelpText())
+	case "commands":
+		a.commandsMetadata(ctx, msg)
 	case "status":
 		a.reply(ctx, msg, a.statusText())
 	case "version":
@@ -298,6 +302,22 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	default:
 		a.reply(ctx, msg, "unknown command; try /help")
 	}
+}
+
+func (a *App) registerCommands(ctx context.Context) {
+	meta := commands.BotCommands()
+	tgCommands := make([]telegram.BotCommand, 0, len(meta))
+	for _, cmd := range meta {
+		tgCommands = append(tgCommands, telegram.BotCommand{
+			Command:     cmd.Command,
+			Description: cmd.Description,
+		})
+	}
+	if err := a.Telegram.SetMyCommands(ctx, tgCommands); err != nil {
+		_ = a.Store.Audit("telegram.commands", "failed", err.Error())
+		return
+	}
+	_ = a.Store.Audit("telegram.commands", "ok", map[string]any{"count": len(tgCommands)})
 }
 
 func (a *App) newSession(ctx context.Context, msg telegram.Message, input string) {
@@ -612,6 +632,22 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 	}
 }
 
+func (a *App) commandsMetadata(ctx context.Context, msg telegram.Message) {
+	data, err := commands.JSON()
+	if err != nil {
+		a.reply(ctx, msg, "commands error: "+err.Error())
+		return
+	}
+	path := filepath.Join(a.Config.ArtifactDir(), "engram-commands-"+time.Now().UTC().Format("20060102T150405Z")+".json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		a.reply(ctx, msg, "write error: "+err.Error())
+		return
+	}
+	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, "Engram command metadata"); err != nil {
+		a.reply(ctx, msg, "upload error: "+err.Error())
+	}
+}
+
 func (a *App) handleAttachment(ctx context.Context, msg telegram.Message, doc telegram.Document) {
 	allowLarge := strings.Contains(msg.Caption, "/attachment-bypass")
 	expectedHash := parseBypassHash(msg.Caption)
@@ -741,30 +777,6 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 		time.Now().UTC().Format("15:04:05 UTC"),
 		summary,
 	)
-}
-
-func helpText() string {
-	return `/help
-/status
-/sessions
-/new <text>
-/send <id> <text>
-/text <id> <text>
-/key <id> <keys...>
-/rename <id> <name>
-/cwd <id>
-/cd <id> <path>
-/watch <id>
-/dump <id>
-/raw <id>
-/close <id>
-/attachments
-/download <absolute-path>
-/logs
-/version
-/stop <id>
-/quit
-/restart`
 }
 
 func parseID(arg string) (int, bool) {

@@ -117,6 +117,17 @@ type InlineKeyboardButton struct {
 	CallbackData string `json:"callback_data"`
 }
 
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error {
+	body := map[string]any{"commands": commands}
+	var out bool
+	return c.postJSON(ctx, "setMyCommands", body, &out)
+}
+
 func (c *Client) GetUpdates(ctx context.Context, offset int, timeout int) ([]Update, error) {
 	v := url.Values{}
 	if offset > 0 {
