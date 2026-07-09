@@ -21,6 +21,8 @@ small and explicit.
 - Telegram messages can cause shell input in tmux.
 - Attachments are saved under `/tmp/engram/attachments`.
 - Large attachments require a hash-confirmed bypass.
+- Attachment soft limits must be enforced during the download stream, not only
+  from Telegram-provided file metadata.
 - `/download` only accepts absolute paths and uploads regular files.
 - `/download` rejects symlinks and non-regular files.
 

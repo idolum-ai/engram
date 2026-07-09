@@ -19,16 +19,19 @@ The audit JSONL must record important machine facts:
 - Telegram send/edit failures
 - tmux send success and failure
 - Haiku failures
+- state persistence failures that would otherwise hide lost progress
 - command registration success and failure
 
-Secrets must be redacted before logs are uploaded through `/logs`.
+Secrets must be redacted before logs are uploaded through `/logs`. `/logs`
+exports a bounded recent tail, not an unbounded full audit file.
 
 ## State
 
 - State lives under `~/.engram` by default.
 - State writes must be atomic.
-- Telegram update offsets are advanced before message handling. This gives tmux
-  input at-most-once delivery after a crash, avoiding surprise replayed shell
+- Telegram update offsets are durably accepted before message handling and then
+  recorded again with the final handler status. This gives tmux input
+  at-most-once delivery after a crash, avoiding surprise replayed shell
   commands at the cost of possibly dropping the in-flight Telegram update.
 - A bounded update journal records accepted and handled/skipped update states so
   recent polling behavior remains inspectable after restart.

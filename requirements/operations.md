@@ -13,7 +13,7 @@ Engram should be simple to install, inspect, and recover.
 
 - `/status` shows version, uptime, session count, state path, audit path,
   attachment path, free `/tmp` space, poll time, and Haiku status.
-- `/logs` uploads redacted audit logs as an attachment.
+- `/logs` uploads a bounded recent redacted audit log tail as an attachment.
 - `/version` reports binary version, commit, date, and Go version.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the
   local service surface without calling Telegram, Anthropic, or starting
