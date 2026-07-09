@@ -34,7 +34,7 @@ func TestSendCommandSendsLiteralThenEnter(t *testing.T) {
 
 func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
-		out: "main\t$1\nother\t$2\n",
+		out: "main\t$1\t3\t1\nother\t$2\t1\t0\n",
 	}
 	m := New(f)
 	got, err := m.ListSessions(context.Background())
@@ -42,8 +42,8 @@ func TestListSessionsParsesTmuxOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Session{
-		{Name: "main", ID: "$1"},
-		{Name: "other", ID: "$2"},
+		{Name: "main", ID: "$1", Windows: "3", Attached: "1"},
+		{Name: "other", ID: "$2", Windows: "1", Attached: "0"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ListSessions = %#v, want %#v", got, want)

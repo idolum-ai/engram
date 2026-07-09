@@ -34,8 +34,10 @@ type Manager struct {
 }
 
 type Session struct {
-	Name string
-	ID   string
+	Name     string
+	ID       string
+	Windows  string
+	Attached string
 }
 
 func New(r Runner) Manager {
@@ -64,7 +66,7 @@ func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) 
 }
 
 func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
-	out, err := m.Runner.Run(ctx, "list-sessions", "-F", "#{session_name}\t#{session_id}")
+	out, err := m.Runner.Run(ctx, "list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_windows}\t#{session_attached}")
 	if err != nil {
 		return nil, err
 	}
@@ -73,10 +75,16 @@ func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 2)
+		parts := strings.Split(line, "\t")
 		session := Session{Name: parts[0]}
 		if len(parts) > 1 {
 			session.ID = parts[1]
+		}
+		if len(parts) > 2 {
+			session.Windows = parts[2]
+		}
+		if len(parts) > 3 {
+			session.Attached = parts[3]
 		}
 		sessions = append(sessions, session)
 	}

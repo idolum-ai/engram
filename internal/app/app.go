@@ -493,7 +493,7 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	st := a.Store.Snapshot()
 	var ids []int
 	var b strings.Builder
-	b.WriteString("Active sessions\n\n")
+	b.WriteString("Engram sessions\n\n")
 	for _, ts := range st.TerminalSessions {
 		ids = append(ids, ts.ID)
 		fmt.Fprintf(&b, "[%d] %s  %s  last: %s\n", ts.ID, ts.State, firstNonEmpty(ts.Title, "-"), firstNonEmpty(ts.LastInputPreview, "-"))
@@ -501,8 +501,35 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	if len(ids) == 0 {
 		b.WriteString("No sessions.")
 	}
+	b.WriteString("\n\nTmux sessions\n\n")
+	a.writeTmuxSessions(ctx, &b)
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids)); err != nil {
 		_ = a.Store.Audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
+	}
+}
+
+func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) {
+	tctx, cancel := tmux.TimeoutContext(ctx)
+	defer cancel()
+	sessions, err := a.Tmux.ListSessions(tctx)
+	if err != nil {
+		fmt.Fprintf(b, "Unavailable: %s", err)
+		return
+	}
+	if len(sessions) == 0 {
+		b.WriteString("No tmux sessions.")
+		return
+	}
+	selected := strings.TrimSpace(a.Config.TmuxSession)
+	if selected == "" {
+		selected = sessions[0].Name
+	}
+	for _, session := range sessions {
+		marker := " "
+		if session.Name == selected {
+			marker = "*"
+		}
+		fmt.Fprintf(b, "%s %s  id:%s  windows:%s  attached:%s\n", marker, session.Name, firstNonEmpty(session.ID, "-"), firstNonEmpty(session.Windows, "?"), firstNonEmpty(session.Attached, "?"))
 	}
 }
 

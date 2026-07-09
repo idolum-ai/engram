@@ -434,6 +434,10 @@ it if needed. If it is unset, Engram uses the first existing tmux session. If no
 tmux server/session exists, Engram creates its own fallback session named from
 the Telegram chat.
 
+`/sessions` should show both Engram-tracked terminal sessions and a read-only
+summary of native tmux sessions, marking the tmux session that new Engram windows
+will use.
+
 ## Implementation Constraints
 
 This should be a small Go system.
@@ -1113,8 +1117,8 @@ MVP can defer:
 
 ## Open Questions
 
-- Should `/sessions` show only Engram terminal sessions, or also include native
-  tmux windows from the selected tmux session?
+- Should `/sessions` also include native tmux windows from the selected tmux
+  session, or is the native tmux session summary enough?
 - Should button clicks edit the original anchor message, send a fresh anchor
   near the `/sessions` command, or both?
 - How long should exited sessions remain in `/sessions`?

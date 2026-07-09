@@ -84,5 +84,6 @@ Common commands:
 - `/status`
 - `/version`
 
+`/sessions` shows both Engram-tracked terminal sessions and native tmux sessions.
 By default, new Engram windows are created in an existing tmux session when one
 is available. Set `ENGRAM_TMUX_SESSION` to force a specific session name.
