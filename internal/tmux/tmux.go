@@ -33,6 +33,8 @@ type Manager struct {
 	Runner Runner
 }
 
+var commandSubmitDelay = 150 * time.Millisecond
+
 type Session struct {
 	Name     string
 	ID       string
@@ -128,7 +130,16 @@ func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {
 	if _, err := m.Runner.Run(ctx, "send-keys", "-t", paneID, "-l", "--", text); err != nil {
 		return err
 	}
-	_, err := m.Runner.Run(ctx, "send-keys", "-t", paneID, "C-m")
+	if commandSubmitDelay > 0 {
+		timer := time.NewTimer(commandSubmitDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	_, err := m.Runner.Run(ctx, "send-keys", "-t", paneID, "Enter")
 	return err
 }
 

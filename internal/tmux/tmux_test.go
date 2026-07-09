@@ -18,6 +18,10 @@ func (f *fakeRunner) Run(ctx context.Context, args ...string) (string, error) {
 }
 
 func TestSendCommandSendsLiteralThenEnter(t *testing.T) {
+	oldDelay := commandSubmitDelay
+	commandSubmitDelay = 0
+	t.Cleanup(func() { commandSubmitDelay = oldDelay })
+
 	f := &fakeRunner{}
 	m := New(f)
 	if err := m.SendCommand(context.Background(), "%1", "ls -la"); err != nil {
@@ -25,7 +29,7 @@ func TestSendCommandSendsLiteralThenEnter(t *testing.T) {
 	}
 	want := [][]string{
 		{"send-keys", "-t", "%1", "-l", "--", "ls -la"},
-		{"send-keys", "-t", "%1", "C-m"},
+		{"send-keys", "-t", "%1", "Enter"},
 	}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Fatalf("calls = %#v", f.calls)
