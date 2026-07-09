@@ -317,6 +317,8 @@ Initial command set:
 - `/download <absolute-path>`: upload the exact local file to the configured
   Telegram group chat.
 - `/stop <id>`: stop watching without killing the tmux target.
+- `/quit`: stop Engram cleanly without closing tmux sessions.
+- `/restart`: request a clean service restart.
 - `/kill <id>`: reserved for future force-close behavior after confirmation.
 - `/help`: show concise usage.
 
@@ -332,11 +334,15 @@ This should be a small Go system.
 - Language: Go.
 - Shape: one installable command-line binary.
 - Install path: clone the repo, then run `make install`.
+- Service install: `make install-service` installs and enables a systemd user
+  service so Engram recovers after machine restart and user login.
 - Runtime config: local `.env` file, ignored by git.
 - LLM provider: Anthropic only.
 - LLM model family: Haiku only.
 - Default model ID: `claude-haiku-4-5-20251001`.
 - Provider abstraction: do not build a generic multi-provider layer for MVP.
+- Dependencies: Go standard library only. Do not add third-party Go modules for
+  Telegram, Anthropic, dotenv, locking, logging, JSON, or systemd helpers.
 
 The implementation should use the Go standard library where practical:
 
@@ -345,9 +351,10 @@ The implementation should use the Go standard library where practical:
   response mode.
 - Configuration can be loaded from `.env` with a tiny local parser.
 - State can be persisted with atomic JSON files for MVP.
+- Locking should use standard library file and syscall primitives available on
+  Linux.
 
-Avoid a database and large framework dependencies unless the implementation
-proves the JSON registry is not enough.
+Avoid a database and all third-party dependencies for MVP.
 
 ### Makefile Contract
 
@@ -362,6 +369,8 @@ Suggested targets:
 - `make build`: build the binary into `bin/`.
 - `make install`: build and copy the binary to `$(PREFIX)/bin`.
 - `make uninstall`: remove the installed binary.
+- `make install-service`: install and enable the systemd user service.
+- `make uninstall-service`: disable and remove the systemd user service.
 - `make test`: run Go tests.
 - `make run`: run locally with `.env`.
 
@@ -386,6 +395,9 @@ TELEGRAM_API_HASH=
 LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
+ENGRAM_HOME=~/.engram
+ENGRAM_WORKDIR=~
+ENGRAM_ATTACHMENT_SOFT_MAX_BYTES=52428800
 ```
 
 `TELEGRAM_BOT_TOKEN` is the MVP credential for Bot API operation. Telegram app
@@ -410,13 +422,49 @@ Startup validation:
 - The service must reject Sonnet, Opus, Fable, Mythos, or any non-Anthropic
   provider.
 - Missing `ANTHROPIC_API_KEY` disables startup, not just summarization.
+- `ENGRAM_HOME` defaults to `~/.engram`.
+- `ENGRAM_WORKDIR` defaults to `~` and is used as the cwd for new tmux windows.
+- `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` is a soft inbound attachment limit.
+
+### Service Contract
+
+Engram should install as a systemd user service for crash and reboot recovery.
+
+Suggested unit name:
+
+```text
+engram.service
+```
+
+Suggested unit behavior:
+
+- `ExecStart=%h/.local/bin/engram run --env %h/.engram/.env`
+- `Restart=on-failure`
+- `RestartSec=5`
+- starts after the user manager is available
+- uses the operator's normal login environment as little as practical
+
+`make install-service` should:
+
+1. Install the binary.
+2. Create `~/.config/systemd/user/engram.service`.
+3. Run `systemctl --user daemon-reload`.
+4. Enable and start the service.
+
+The operator may also run:
+
+```sh
+loginctl enable-linger "$USER"
+```
+
+if they want the user service to start at boot before an interactive login.
+Engram should document this rather than run it automatically.
 
 ## Architecture
 
 ### Components
 
-- **Telegram ingress**: webhook or long polling receiver for messages and
-  callback queries.
+- **Telegram ingress**: long polling receiver for messages and callback queries.
 - **Router**: classifies updates as command, new session request, reply input,
   attachment, or button callback.
 - **Session registry**: durable mapping between Telegram chats/messages and tmux
@@ -435,18 +483,22 @@ Startup validation:
   at a configured refresh rate.
 - **Authorization policy**: restricts which Telegram users/chats may create,
   read, and kill terminal sessions.
+- **Instance lock**: prevents two Engram processes with the same Telegram bot
+  token/user/group settings from polling at the same time.
 
 ### Tmux Integration
 
 Use a long-lived tmux control-mode client as the change detector and tmux
 commands for lifecycle operations.
 
+New tmux windows should start in `ENGRAM_WORKDIR`, which defaults to `~`.
+
 Useful tmux operations:
 
 - Create managed chat session:
   `new-session -d -s <chat-session-name>`
 - Create terminal session window:
-  `new-window -P -F "#{session_id} #{window_id} #{pane_id}" -t <chat-session>`
+  `new-window -P -F "#{session_id} #{window_id} #{pane_id}" -c <workdir> -t <chat-session>`
 - Send literal input:
   `send-keys -t <pane-id> -l -- <text>`
 - Send Enter:
@@ -584,11 +636,34 @@ directory. This keeps the Go binary small and avoids database dependencies.
 
 Suggested paths:
 
-- State: `$XDG_STATE_HOME/engram/state.json`
-- Audit log: `$XDG_STATE_HOME/engram/audit.jsonl`
+- Home: `~/.engram`
+- Config: `~/.engram/.env`
+- State: `~/.engram/state.json`
+- Audit log: `~/.engram/audit.jsonl`
+- Locks: `~/.engram/locks/`
 
-SQLite can be reconsidered later if concurrent writers or query complexity make
-the JSON registry painful.
+Database-backed state can be reconsidered later if concurrent writers or query
+complexity make the JSON registry painful.
+
+### Instance Locking
+
+Engram must prevent duplicate pollers for the same Telegram settings. On startup
+it should derive a lock key from:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOWED_USER_ID`
+- `TELEGRAM_GROUP_CHAT_ID`
+
+The lock key must be hashed before being used in a filename. The process should
+hold an exclusive lock file such as:
+
+```text
+~/.engram/locks/<sha256>.lock
+```
+
+If another live process already holds the lock, startup must fail with a clear
+message. This protects Telegram polling, state writes, and anchor edits from two
+copies of the same service.
 
 ### terminal_sessions
 
@@ -644,8 +719,10 @@ the JSON registry painful.
 - `original_name`
 - `content_type`
 - `size_bytes`
+- `sha256`
 - `stored_path`
 - `received_at`
+- `bypass_requested`: boolean
 
 ### download_events
 
@@ -722,6 +799,43 @@ If a user closes a terminal session with `/close <id>`:
 - Leave the closed session visible in `/sessions` until pruned so old anchors
   remain understandable.
 
+If a user sends `/quit`:
+
+- Stop accepting new Telegram updates.
+- Flush state and audit logs.
+- Exit the process with status 0.
+- Do not close tmux sessions.
+- The systemd service should not restart after a clean exit.
+
+If a user sends `/restart`:
+
+- Flush state and audit logs.
+- Exit with a restart-specific nonzero status or exec a fresh process.
+- The systemd service should bring Engram back up.
+- Do not close tmux sessions.
+
+### Attachment Limits
+
+Inbound attachments have a soft size limit from
+`ENGRAM_ATTACHMENT_SOFT_MAX_BYTES`.
+
+If an attachment exceeds the soft limit:
+
+1. Do not download or store it by default.
+2. Reply with the configured soft limit.
+3. Reply with available disk space for `/tmp/engram`.
+4. Ask the user to resend the exact same attachment with an explicit bypass
+   command or caption containing the expected hash.
+
+Suggested bypass:
+
+```text
+/attachment-bypass sha256:<hash>
+```
+
+For a bypass, Engram should verify the downloaded file hash before accepting it.
+If the hash does not match, delete the file and report the mismatch.
+
 ## Security
 
 This service gives Telegram users shell access through tmux, so authorization is
@@ -740,6 +854,7 @@ Minimum policy:
   chat.
 - Incoming attachments must be written under `/tmp/engram`.
   Filenames must be sanitized; paths in replies must be absolute.
+- Large attachment bypass must require an exact SHA-256 match.
 - Confirmation for future force-close commands such as `/kill`.
 - Redaction policy for environment variables and secrets in diagnostic output.
 - Audit log for session creation, input sent, attachment saves, downloads, close
@@ -756,9 +871,13 @@ Optional later policies:
 
 MVP should support:
 
-- Telegram long polling or webhook.
+- Telegram long polling.
 - Exactly one configured Telegram user and one configured group chat.
 - One managed tmux session for the configured group chat.
+- Systemd user service install and startup recovery.
+- `~/.engram` config, state, audit, and lock files.
+- Instance locking by Telegram bot/user/group settings.
+- New tmux windows default to `~`, configurable by `ENGRAM_WORKDIR`.
 - Plain text creates a new terminal session/window.
 - Bot sends one Haiku-summarized anchor message per terminal session.
 - Replies to anchor messages send input to the correct pane.
@@ -771,6 +890,12 @@ MVP should support:
 - `/attachments` lists the attachment folder.
 - `/download <absolute-path>` uploads the exact local file to the configured
   Telegram group chat.
+- `/help` shows concise command help.
+- `/quit` stops Engram cleanly without closing tmux sessions.
+- `/restart` restarts Engram through the service path without closing tmux
+  sessions.
+- Large attachments are blocked by a soft limit unless resent with exact hash
+  bypass.
 - Dirty-driven anchor edits using tmux control-mode output plus `capture-pane`.
 - Durable JSON registry.
 - `make install` installation path.
@@ -787,18 +912,15 @@ MVP can defer:
 - Collaborative permissions beyond the one-user, one-group model.
 - Generic LLM provider support.
 - Database-backed state.
+- Third-party Go dependencies.
 
 ## Open Questions
 
-- Should a top-level message like `hi` always execute as shell input, or should
-  it only create a session and set the title unless sent through `/new`?
-- Should `/sessions` show only Telegram terminal sessions, or also expose native
+- Should `/sessions` show only Engram terminal sessions, or also expose native
   tmux sessions through a separate `/tmux` command?
-- Should each Telegram chat get one tmux session, or should each Telegram
-  terminal session be a native tmux session instead of a tmux window?
 - Should button clicks edit the original anchor message, send a fresh anchor
   near the `/sessions` command, or both?
-- What should the default shell command be for new windows?
 - How long should exited sessions remain in `/sessions`?
-- Should the service support non-command text only in private chats, requiring
-  `/new` in groups to avoid accidental shell execution?
+- Should large attachment bypass use caption syntax only, `/attachment-bypass`,
+  or both?
+- Should `/restart` exec in-process when not running under systemd?
