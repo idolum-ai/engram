@@ -1,87 +1,121 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
-  <title id="title">Engram monochrome aperture mark</title>
-  <desc id="desc">A dark field with off-white moire lines bending around a quiet terminal-shaped aperture.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc">
+  <title id="title">Engram</title>
+  <desc id="desc">A field of fine signals bends around a dark terminal aperture and resolves into a luminous readable plane.</desc>
   <defs>
-    <radialGradient id="field" cx="50%" cy="38%" r="72%">
-      <stop offset="0" stop-color="#242424"/>
-      <stop offset="0.5" stop-color="#10100e"/>
+    <radialGradient id="field" cx="50%" cy="39%" r="76%">
+      <stop offset="0" stop-color="#252521"/>
+      <stop offset="0.48" stop-color="#121210"/>
       <stop offset="1" stop-color="#050504"/>
     </radialGradient>
-    <radialGradient id="signal" cx="50%" cy="48%" r="48%">
-      <stop offset="0" stop-color="#fffdf4"/>
-      <stop offset="0.76" stop-color="#e8e4d6"/>
-      <stop offset="1" stop-color="#96938a"/>
+    <linearGradient id="signal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#817f77"/>
+      <stop offset="0.52" stop-color="#d9d5ca"/>
+      <stop offset="1" stop-color="#fffdf5"/>
+    </linearGradient>
+    <linearGradient id="plane-signal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#77756f" stop-opacity="0"/>
+      <stop offset="0.18" stop-color="#ddd9ce" stop-opacity="0.72"/>
+      <stop offset="0.5" stop-color="#fffdf5"/>
+      <stop offset="0.82" stop-color="#ddd9ce" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#77756f" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="aperture" cx="50%" cy="82%" r="88%">
+      <stop offset="0" stop-color="#0c0c0a"/>
+      <stop offset="0.58" stop-color="#070706"/>
+      <stop offset="1" stop-color="#020202"/>
     </radialGradient>
-    <filter id="grain" x="-10%" y="-10%" width="120%" height="120%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.82" numOctaves="3" seed="19"/>
+    <radialGradient id="edge-fade" cx="50%" cy="44%" r="68%">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="0.72" stop-color="#fff"/>
+      <stop offset="1" stop-color="#000"/>
+    </radialGradient>
+    <filter id="grain" x="-8%" y="-8%" width="116%" height="116%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.74" numOctaves="3" seed="31"/>
       <feColorMatrix type="saturate" values="0"/>
       <feComponentTransfer>
-        <feFuncA type="table" tableValues="0 0.18"/>
+        <feFuncA type="table" tableValues="0 0.12"/>
       </feComponentTransfer>
     </filter>
-    <clipPath id="base-fade">
-      <path d="M180 585h840v-56c-86-35-186-53-300-53H480c-114 0-214 18-300 53v56Z"/>
-    </clipPath>
+    <filter id="fray" x="-4%" y="-5%" width="108%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.009 0.055" numOctaves="2" seed="13" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="3.5" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <mask id="fade-mask">
+      <rect width="1200" height="680" fill="url(#edge-fade)"/>
+    </mask>
     <mask id="aperture-cut">
-      <rect width="1200" height="720" fill="#fff"/>
-      <path fill="#000" d="M373 423c0-145 96-234 227-234s227 89 227 234c0 37-22 58-63 58H436c-41 0-63-21-63-58Z"/>
+      <rect width="1200" height="680" fill="#fff"/>
+      <path fill="#000" d="M359 393c0-145 97-232 241-232s241 87 241 232c0 43-24 66-69 66H428c-45 0-69-23-69-66Z"/>
     </mask>
-    <mask id="soft-window">
-      <rect width="1200" height="720" fill="#000"/>
-      <ellipse cx="600" cy="392" rx="432" ry="304" fill="#fff"/>
-    </mask>
+    <clipPath id="plane-clip">
+      <path d="M34 448h1132v164H34z"/>
+    </clipPath>
+
+    <!-- Unit-height streamline. matrix(1 0 0 lift 0 baseline) places each contour. -->
+    <path id="stream" pathLength="1" vector-effect="non-scaling-stroke" d="M-70 0H242c72 0 94-.06 111-.28C390-.75 481-1 600-1s210 .25 247 .72c17 .22 39 .28 111 .28h312"/>
+    <path id="plane-line" pathLength="1" vector-effect="non-scaling-stroke" d="M0 0C180-3 340 2 600 0s420-2 600 0"/>
   </defs>
 
-  <rect width="1200" height="720" fill="url(#field)"/>
-  <rect width="1200" height="720" filter="url(#grain)" opacity="0.75"/>
+  <rect width="1200" height="680" fill="url(#field)"/>
+  <rect width="1200" height="680" filter="url(#grain)" opacity="0.78"/>
 
-  <g mask="url(#soft-window)">
-    <g mask="url(#aperture-cut)" fill="none" stroke="url(#signal)" stroke-linecap="round">
-      <path d="M242 575C252 279 395 96 600 96s348 183 358 479" stroke-width="2.6" opacity="0.98"/>
-      <path d="M258 571C267 286 405 111 600 111s333 175 342 460" stroke-width="2.5" opacity="0.96"/>
-      <path d="M274 567C282 293 415 126 600 126s318 167 326 441" stroke-width="2.4" opacity="0.95"/>
-      <path d="M290 563C298 300 425 140 600 140s302 160 310 423" stroke-width="2.35" opacity="0.94"/>
-      <path d="M306 559C313 307 435 154 600 154s287 153 294 405" stroke-width="2.3" opacity="0.93"/>
-      <path d="M322 555C328 314 445 167 600 167s272 147 278 388" stroke-width="2.25" opacity="0.92"/>
-      <path d="M338 551C344 321 454 180 600 180s256 141 262 371" stroke-width="2.2" opacity="0.91"/>
-      <path d="M354 547C359 328 464 193 600 193s241 135 246 354" stroke-width="2.15" opacity="0.9"/>
-      <path d="M370 543C374 335 474 205 600 205s226 130 230 338" stroke-width="2.1" opacity="0.89"/>
-      <path d="M386 539C390 343 484 217 600 217s210 126 214 322" stroke-width="2.05" opacity="0.88"/>
-      <path d="M402 535C405 351 494 229 600 229s195 122 198 306" stroke-width="2" opacity="0.87"/>
-      <path d="M418 531C420 359 504 241 600 241s180 118 182 290" stroke-width="1.95" opacity="0.86"/>
-      <path d="M434 527C436 368 514 253 600 253s164 115 166 274" stroke-width="1.9" opacity="0.85"/>
-      <path d="M450 523C451 378 524 265 600 265s149 113 150 258" stroke-width="1.85" opacity="0.84"/>
-      <path d="M466 519C467 389 534 277 600 277s133 112 134 242" stroke-width="1.8" opacity="0.83"/>
-      <path d="M482 515C482 402 544 289 600 289s118 113 118 226" stroke-width="1.75" opacity="0.82"/>
-      <path d="M498 511C498 417 554 302 600 302s102 115 102 209" stroke-width="1.7" opacity="0.81"/>
-      <path d="M514 507C514 435 564 316 600 316s86 119 86 191" stroke-width="1.65" opacity="0.8"/>
-      <path d="M530 503C530 456 574 332 600 332s70 124 70 171" stroke-width="1.6" opacity="0.78"/>
-      <path d="M546 499C546 481 584 352 600 352s54 129 54 147" stroke-width="1.55" opacity="0.76"/>
+  <g mask="url(#fade-mask)">
+    <g mask="url(#aperture-cut)" fill="none" stroke="url(#signal)" stroke-linecap="round" vector-effect="non-scaling-stroke" filter="url(#fray)">
+      <use href="#stream" transform="matrix(1 0 0 8 0 76)" stroke-width="1.1" opacity="0.42"/>
+      <use href="#stream" transform="matrix(1 0 0 10 0 87)" stroke-width="1.1" opacity="0.45"/>
+      <use href="#stream" transform="matrix(1 0 0 12 0 98)" stroke-width="1.1" opacity="0.48"/>
+      <use href="#stream" transform="matrix(1 0 0 14 0 109)" stroke-width="1.15" opacity="0.51"/>
+      <use href="#stream" transform="matrix(1 0 0 16 0 120)" stroke-width="1.15" opacity="0.54"/>
+      <use href="#stream" transform="matrix(1 0 0 18 0 131)" stroke-width="1.15" opacity="0.57"/>
+      <use href="#stream" transform="matrix(1 0 0 20 0 142)" stroke-width="1.2" opacity="0.6"/>
+      <use href="#stream" transform="matrix(1 0 0 22 0 153)" stroke-width="1.2" opacity="0.63"/>
+      <use href="#stream" transform="matrix(1 0 0 24 0 164)" stroke-width="1.2" opacity="0.66"/>
+      <use href="#stream" transform="matrix(1 0 0 28 0 175)" stroke-width="1.25" opacity="0.69"/>
+      <use href="#stream" transform="matrix(1 0 0 37 0 186)" stroke-width="1.25" opacity="0.72"/>
+      <use href="#stream" transform="matrix(1 0 0 46 0 197)" stroke-width="1.25" opacity="0.75"/>
+      <use href="#stream" transform="matrix(1 0 0 55 0 208)" stroke-width="1.3" opacity="0.78"/>
+      <use href="#stream" transform="matrix(1 0 0 64 0 219)" stroke-width="1.3" opacity="0.81"/>
+      <use href="#stream" transform="matrix(1 0 0 73 0 230)" stroke-width="1.3" opacity="0.84"/>
+      <use href="#stream" transform="matrix(1 0 0 82 0 241)" stroke-width="1.35" opacity="0.87"/>
+      <use href="#stream" transform="matrix(1 0 0 91 0 252)" stroke-width="1.35" opacity="0.89"/>
+      <use href="#stream" transform="matrix(1 0 0 100 0 263)" stroke-width="1.4" opacity="0.91"/>
+      <use href="#stream" transform="matrix(1 0 0 109 0 274)" stroke-width="1.4" opacity="0.93"/>
+      <use href="#stream" transform="matrix(1 0 0 118 0 285)" stroke-width="1.45" opacity="0.95"/>
+      <use href="#stream" transform="matrix(1 0 0 127 0 296)" stroke-width="1.45" opacity="0.96"/>
+      <use href="#stream" transform="matrix(1 0 0 136 0 307)" stroke-width="1.5" opacity="0.97"/>
+      <use href="#stream" transform="matrix(1 0 0 145 0 318)" stroke-width="1.5" opacity="0.98"/>
+      <use href="#stream" transform="matrix(1 0 0 154 0 329)" stroke-width="1.55" opacity="0.99"/>
+      <use href="#stream" transform="matrix(1 0 0 163 0 340)" stroke-width="1.55"/>
+      <use href="#stream" transform="matrix(1 0 0 172 0 351)" stroke-width="1.6"/>
+      <use href="#stream" transform="matrix(1 0 0 181 0 362)" stroke-width="1.65"/>
+      <use href="#stream" transform="matrix(1 0 0 190 0 373)" stroke-width="1.7"/>
+      <use href="#stream" transform="matrix(1 0 0 199 0 384)" stroke-width="1.75"/>
+      <use href="#stream" transform="matrix(1 0 0 208 0 395)" stroke-width="1.8"/>
+      <use href="#stream" transform="matrix(1 0 0 217 0 406)" stroke-width="1.85"/>
+      <use href="#stream" transform="matrix(1 0 0 226 0 417)" stroke-width="1.9"/>
+      <use href="#stream" transform="matrix(1 0 0 235 0 428)" stroke-width="1.95"/>
+      <use href="#stream" transform="matrix(1 0 0 244 0 439)" stroke-width="2"/>
+      <use href="#stream" transform="matrix(1 0 0 253 0 450)" stroke-width="2.05"/>
+      <use href="#stream" transform="matrix(1 0 0 262 0 461)" stroke-width="2.1"/>
     </g>
 
-    <g clip-path="url(#base-fade)" stroke="#f6f1e5" stroke-width="2.2" opacity="0.96">
-      <path d="M306 506h588"/>
-      <path d="M318 516h564"/>
-      <path d="M330 526h540"/>
-      <path d="M342 536h516"/>
-      <path d="M354 546h492"/>
-      <path d="M366 556h468"/>
-      <path d="M378 566h444"/>
-      <path d="M390 576h420"/>
-      <path d="M402 586h396"/>
+    <g clip-path="url(#plane-clip)" fill="none" stroke="url(#plane-signal)" stroke-linecap="round" vector-effect="non-scaling-stroke" filter="url(#fray)">
+      <use href="#plane-line" transform="matrix(.39 0 0 1 366 463)" stroke-width="5.2"/>
+      <use href="#plane-line" transform="matrix(.44 0 0 1 336 474)" stroke-width="4.7"/>
+      <use href="#plane-line" transform="matrix(.49 0 0 1 306 486)" stroke-width="4.2"/>
+      <use href="#plane-line" transform="matrix(.54 0 0 1 276 499)" stroke-width="3.8"/>
+      <use href="#plane-line" transform="matrix(.59 0 0 1 246 513)" stroke-width="3.4"/>
+      <use href="#plane-line" transform="matrix(.64 0 0 1 216 528)" stroke-width="3.1"/>
+      <use href="#plane-line" transform="matrix(.69 0 0 1 186 544)" stroke-width="2.8"/>
+      <use href="#plane-line" transform="matrix(.74 0 0 1 156 561)" stroke-width="2.5"/>
+      <use href="#plane-line" transform="matrix(.79 0 0 1 126 579)" stroke-width="2.2"/>
+      <use href="#plane-line" transform="matrix(.84 0 0 1 96 598)" stroke-width="1.9"/>
     </g>
   </g>
 
-  <path fill="#070705" d="M373 423c0-145 96-234 227-234s227 89 227 234c0 37-22 58-63 58H436c-41 0-63-21-63-58Z"/>
-  <g stroke="#f4efe3" stroke-width="2" opacity="0.98">
-    <path d="M415 491h370"/>
-    <path d="M421 501h358"/>
-    <path d="M430 511h340"/>
-    <path d="M444 521h312"/>
-    <path d="M466 531h268"/>
-    <path d="M501 541h198"/>
-  </g>
+  <path fill="url(#aperture)" d="M359 393c0-145 97-232 241-232s241 87 241 232c0 43-24 66-69 66H428c-45 0-69-23-69-66Z"/>
+  <path d="M391 459c119 11 299 11 418 0" fill="none" stroke="#fffdf5" stroke-width="2" opacity="0.9"/>
+  <rect x="215" y="616" width="770" height="1.25" fill="url(#plane-signal)" opacity="0.62"/>
 
-  <rect x="245" y="581" width="710" height="2" fill="#f4efe3" opacity="0.88"/>
-  <text x="600" y="675" text-anchor="middle" fill="#77756f" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="21" letter-spacing="18">ENGRAM</text>
+  <text x="600" y="658" text-anchor="middle" fill="#85827b" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="19" letter-spacing="17">ENGRAM</text>
 </svg>
