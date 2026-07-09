@@ -1,0 +1,208 @@
+package config
+
+import (
+	"bufio"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+const (
+	DefaultModel       = "claude-haiku-4-5-20251001"
+	DefaultModelAlias  = "claude-haiku-4-5"
+	DefaultSoftMaxSize = int64(52_428_800)
+)
+
+type Config struct {
+	EnvPath                    string
+	TelegramBotToken           string
+	TelegramAllowedUserID      int64
+	TelegramGroupChatID        int64
+	TelegramAPIID              string
+	TelegramAPIHash            string
+	LLMProvider                string
+	AnthropicAPIKey            string
+	AnthropicModel             string
+	Home                       string
+	Workdir                    string
+	AttachmentSoftMaxBytes     int64
+	TelegramPollTimeoutSeconds int
+}
+
+func DefaultEnvPath() string {
+	return ExpandPath("~/.engram/.env")
+}
+
+func Load(path string) (Config, error) {
+	if strings.TrimSpace(path) == "" {
+		path = DefaultEnvPath()
+	}
+	path = ExpandPath(path)
+	values, err := parseEnvFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg := Config{
+		EnvPath:                    path,
+		TelegramBotToken:           values["TELEGRAM_BOT_TOKEN"],
+		TelegramAPIID:              values["TELEGRAM_API_ID"],
+		TelegramAPIHash:            values["TELEGRAM_API_HASH"],
+		LLMProvider:                firstNonEmpty(values["LLM_PROVIDER"], "anthropic"),
+		AnthropicAPIKey:            values["ANTHROPIC_API_KEY"],
+		AnthropicModel:             firstNonEmpty(values["ANTHROPIC_MODEL"], DefaultModel),
+		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
+		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
+		AttachmentSoftMaxBytes:     parseInt64Default(values["ENGRAM_ATTACHMENT_SOFT_MAX_BYTES"], DefaultSoftMaxSize),
+		TelegramPollTimeoutSeconds: int(parseInt64Default(values["TELEGRAM_POLL_TIMEOUT_SECONDS"], 50)),
+	}
+	if cfg.TelegramAllowedUserID, err = parseRequiredInt64(values, "TELEGRAM_ALLOWED_USER_ID"); err != nil {
+		return Config{}, err
+	}
+	if cfg.TelegramGroupChatID, err = parseRequiredInt64(values, "TELEGRAM_GROUP_CHAT_ID"); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (c Config) Validate() error {
+	var missing []string
+	if strings.TrimSpace(c.TelegramBotToken) == "" {
+		missing = append(missing, "TELEGRAM_BOT_TOKEN")
+	}
+	if c.TelegramAllowedUserID == 0 {
+		missing = append(missing, "TELEGRAM_ALLOWED_USER_ID")
+	}
+	if c.TelegramGroupChatID == 0 {
+		missing = append(missing, "TELEGRAM_GROUP_CHAT_ID")
+	}
+	if strings.TrimSpace(c.AnthropicAPIKey) == "" {
+		missing = append(missing, "ANTHROPIC_API_KEY")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
+	}
+	if c.LLMProvider != "anthropic" {
+		return fmt.Errorf("LLM_PROVIDER must be anthropic")
+	}
+	if c.AnthropicModel != DefaultModel && c.AnthropicModel != DefaultModelAlias {
+		return fmt.Errorf("ANTHROPIC_MODEL must be %s or %s", DefaultModel, DefaultModelAlias)
+	}
+	if c.AttachmentSoftMaxBytes <= 0 {
+		return fmt.Errorf("ENGRAM_ATTACHMENT_SOFT_MAX_BYTES must be positive")
+	}
+	if c.TelegramPollTimeoutSeconds <= 0 {
+		return fmt.Errorf("TELEGRAM_POLL_TIMEOUT_SECONDS must be positive")
+	}
+	return nil
+}
+
+func (c Config) StatePath() string       { return filepath.Join(c.Home, "state.json") }
+func (c Config) AuditPath() string       { return filepath.Join(c.Home, "audit.jsonl") }
+func (c Config) LockDir() string         { return filepath.Join(c.Home, "locks") }
+func (c Config) AttachmentDir() string   { return filepath.Join(os.TempDir(), "engram", "attachments") }
+func (c Config) ArtifactDir() string     { return filepath.Join(os.TempDir(), "engram") }
+func (c Config) TelegramAPIBase() string { return "https://api.telegram.org/bot" + c.TelegramBotToken }
+
+func ExpandPath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, path[2:])
+		}
+	}
+	return path
+}
+
+func parseEnvFile(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open env file %s: %w", path, err)
+	}
+	defer f.Close()
+	out := make(map[string]string)
+	scanner := bufio.NewScanner(f)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return nil, fmt.Errorf("%s:%d: expected KEY=VALUE", path, lineNo)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return nil, fmt.Errorf("%s:%d: empty key", path, lineNo)
+		}
+		out[key] = unquote(strings.TrimSpace(value))
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func unquote(value string) string {
+	if len(value) >= 2 {
+		if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+			return value[1 : len(value)-1]
+		}
+	}
+	return value
+}
+
+func parseRequiredInt64(values map[string]string, key string) (int64, error) {
+	raw := strings.TrimSpace(values[key])
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return n, nil
+}
+
+func parseInt64Default(raw string, def int64) int64 {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func EnsureDirs(cfg Config) error {
+	for _, dir := range []string{cfg.Home, cfg.LockDir(), cfg.AttachmentDir(), cfg.ArtifactDir()} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var ErrUnauthorized = errors.New("unauthorized")
