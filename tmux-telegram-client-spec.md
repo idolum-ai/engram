@@ -928,6 +928,45 @@ Suggested bypass:
 For a bypass, Engram should verify the downloaded file hash before accepting it.
 If the hash does not match, delete the file and report the mismatch.
 
+## Failure Modes And Special Cases
+
+Engram should treat terminal work as durable and Telegram messages as replaceable.
+
+- If editing an anchor message fails because the message was deleted, is too old,
+  or is otherwise not editable, send a new anchor message and update
+  `anchor_message_id`.
+- If a command is still running but produces no output, keep the session
+  `running` and render a conservative stale/no-new-output status on the next
+  refresh.
+- If a command exits before the first Haiku summary, capture once, summarize the
+  final visible state, and mark the terminal session `exited` only if the backing
+  shell/window actually ended.
+- Do not claim a command is complete solely because output paused. Prompt
+  detection is advisory; summaries should be worded conservatively.
+- Telegram polling updates must be idempotent. Track processed update IDs and
+  input message IDs so retries do not duplicate shell input.
+- If Haiku times out, rate limits, or returns an invalid response, keep the last
+  successful summary, mark it stale, and back off. Tmux input delivery should not
+  depend on summarization success.
+- If the tmux server is missing or restarted, recreate the managed tmux session
+  when possible and mark missing pane/window-backed terminal sessions as `lost`.
+- Reject invalid `/key` input with a precise error. Do not pass arbitrary shell
+  syntax through the key path.
+- If `/cd` is requested while the visible pane appears to be in a TUI, warn or
+  require confirmation because sending `cd ... Enter` may affect the TUI instead
+  of a shell.
+- Huge `/dump` and `/raw` outputs should be written under `/tmp/engram` and sent
+  as files. Enforce a hard maximum to avoid disk exhaustion.
+- `/raw`, `/dump`, and `/download` are intentionally exact and may expose
+  secrets. Logs should redact known credential patterns; exact file and raw pane
+  exports should be treated as operator-authorized disclosure.
+- If the bot token or Telegram settings change, the instance lock key changes.
+  Old lock files are harmless if no live process holds them.
+- If systemd restarts Engram repeatedly, logs and `/status` should make the last
+  startup error obvious once the service is healthy enough to respond.
+- During network outages, keep tmux sessions alive and retry Telegram and
+  Anthropic independently with backoff.
+
 ## Security
 
 This service gives Telegram users shell access through tmux, so authorization is
