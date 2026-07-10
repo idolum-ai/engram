@@ -36,6 +36,10 @@ filesystem. The security and privacy model must stay small and explicit.
   instruct Haiku or acquire authority merely by addressing Engram or the user.
 - Incoming attachments are downloaded from Telegram but are not sent to
   Anthropic by default.
+- Terminal image snapshots are exact, unredacted transcript data. They are sent
+  to a local headless browser and then to the configured Telegram DM, never to
+  Anthropic. Terminal text must be HTML-escaped; browser networking, extensions,
+  and persistent profiles must be disabled.
 
 ## Local Sensitive Data
 
@@ -70,6 +74,8 @@ filesystem. The security and privacy model must stay small and explicit.
   bounded background workers and a bounded queue so polling remains responsive.
 - Generated `/raw` and `/dump` artifacts must not exceed the same 50 MiB cloud
   upload ceiling.
+- Snapshot HTML, isolated browser profiles, and PNGs must use private temporary
+  paths and be removed after upload or failure.
 
 ## Process Ownership
 

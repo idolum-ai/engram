@@ -15,6 +15,7 @@ import (
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
+	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/version"
 )
 
@@ -118,6 +119,12 @@ func diagnosticsText(cfg config.Config, mode string) string {
 	if tmuxErr != nil {
 		tmuxPath = "missing"
 	}
+	snapshotPath, snapshotErr := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Available()
+	if snapshotErr != nil {
+		snapshotPath = "unavailable"
+	} else {
+		snapshotPath += " (" + cfg.SnapshotTheme + ")"
+	}
 	stateStatus := "missing"
 	var sessions int
 	var lastUpdate int
@@ -128,7 +135,7 @@ func diagnosticsText(cfg config.Config, mode string) string {
 		lastUpdate = st.LastUpdateID
 		journal = len(st.UpdateJournal)
 	}
-	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
 		mode,
 		version.String(),
 		cfg.EnvPath,
@@ -138,6 +145,7 @@ func diagnosticsText(cfg config.Config, mode string) string {
 		cfg.AttachmentDir(),
 		cfg.Workdir,
 		tmuxPath,
+		snapshotPath,
 		cfg.TelegramAllowedUserID,
 		cfg.TelegramChatID,
 		cfg.AnthropicModel,

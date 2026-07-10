@@ -28,6 +28,21 @@ type fakeStreamRunner struct {
 	err    error
 }
 
+type sequenceRunner struct {
+	calls   [][]string
+	outputs []string
+}
+
+func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(r.outputs) == 0 {
+		return "", nil
+	}
+	out := r.outputs[0]
+	r.outputs = r.outputs[1:]
+	return out, nil
+}
+
 func (f *fakeStreamRunner) Run(ctx context.Context, args ...string) (string, error) {
 	f.calls = append(f.calls, append([]string(nil), args...))
 	return strings.Join(f.chunks, ""), f.err
@@ -135,6 +150,28 @@ func TestCaptureVisibleRawPreservesTmuxOutput(t *testing.T) {
 	wantCalls := [][]string{{"capture-pane", "-p", "-e", "-N", "-t", "%7"}}
 	if !reflect.DeepEqual(f.calls, wantCalls) {
 		t.Fatalf("calls = %#v, want %#v", f.calls, wantCalls)
+	}
+}
+
+func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
+	t.Parallel()
+	runner := &sequenceRunner{outputs: []string{
+		"71\t37\tbuild\t/home/me\n",
+		strings.Repeat("\x1b[31mhistory and visible\x1b[0m\n", 64),
+	}}
+	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Columns != 71 || got.VisibleRows != 37 || got.BufferRows != 64 || got.Title != "build" || got.CurrentPath != "/home/me" {
+		t.Fatalf("styled capture metadata = %#v", got)
+	}
+	if strings.Count(got.ANSI, "history and visible") != 64 {
+		t.Fatalf("styled capture ANSI rows = %d", strings.Count(got.ANSI, "history and visible"))
+	}
+	wantCapture := []string{"capture-pane", "-p", "-e", "-N", "-S", "-27", "-E", "36", "-t", "%7"}
+	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1], wantCapture) {
+		t.Fatalf("styled capture calls = %#v", runner.calls)
 	}
 }
 

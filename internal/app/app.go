@@ -19,6 +19,7 @@ import (
 	"github.com/idolum-ai/engram/internal/redact"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
+	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 	"github.com/idolum-ai/engram/internal/version"
 )
@@ -29,6 +30,7 @@ type App struct {
 	Telegram       *telegram.Client
 	Anthropic      *anthropic.Client
 	Tmux           tmux.Manager
+	Snapshots      snapshotRenderer
 	lock           *lockfile.Lock
 	startedAt      time.Time
 	quitCode       int
@@ -87,6 +89,7 @@ func New(cfg config.Config) (*App, error) {
 		Telegram:       telegram.New(cfg.TelegramBotToken),
 		Anthropic:      anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel),
 		Tmux:           tmux.New(tmux.ExecRunner{}),
+		Snapshots:      terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme),
 		lock:           l,
 		startedAt:      time.Now().UTC(),
 		stopCh:         make(chan struct{}),
@@ -509,10 +512,11 @@ func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
 	space := diskFree(a.Config.ArtifactDir())
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast haiku: %s\nlast haiku error: %s",
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast haiku: %s\nlast haiku error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
+		a.snapshotStatus(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),
 		a.Config.AttachmentDir(),

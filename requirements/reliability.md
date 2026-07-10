@@ -8,6 +8,7 @@ Engram is a long-running service. Failure must be visible and recoverable.
 - Preserve state coherently before attempting cosmetic updates.
 - Keep polling alive after transient Telegram errors.
 - Keep tmux sessions alive when Haiku or Telegram delivery fails.
+- Keep polling and tmux input responsive while terminal images render and upload.
 - Prefer truthful degraded summaries over missing anchors.
 
 ## Audit
@@ -93,6 +94,9 @@ exports a bounded recent tail, not an unbounded full audit file.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.
+- A missing or failed snapshot browser disables only image delivery. The
+  callback must report that condition truthfully, audit render/upload failures,
+  and leave the canonical anchor and tmux session unchanged.
 - If Telegram rejects HTML entity parsing, fall back once to plain text. Other
   API failures retain their typed outcome.
 - Cancellation, timeout, or a generic tmux capture failure does not prove that

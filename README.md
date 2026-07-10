@@ -22,6 +22,8 @@ You need:
 - Linux or macOS
 - Go 1.22 or newer
 - tmux, Git, Make, and curl
+- Chromium, Chrome, or another Chromium-compatible executable for terminal
+  image snapshots (optional; all other Engram features work without it)
 - A Telegram account
 - An Anthropic API key with access to Claude Haiku 4.5
 
@@ -140,6 +142,8 @@ privacy boundaries below before running commands that may print secrets.
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one tmux session name and creates it when absent. |
+| `ENGRAM_SNAPSHOT_BROWSER` | auto-detected Chromium or Chrome | no | Executable name or absolute path used only for on-demand terminal image snapshots. |
+| `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `16777216` | no | Incoming attachment soft limit. An exact SHA-256 bypass may authorize up to the 20 MiB cloud Bot API hard limit and available disk. |
 
 `make run` uses `~/.engram/.env` by default. For a protected local config at a
@@ -162,12 +166,19 @@ the bot channel and must be revoked immediately.
 
 - **Telegram:** Engram long-polls the Bot API for messages and attachments, then
   sends messages, rotates and pins live anchors, edits retired anchors, and
-  sends requested files back to the configured DM.
-  Telegram receives command text, summaries, `/raw`, `/dump`, `/logs`, and
-  `/download` results sent through the bot.
+  sends requested files and terminal snapshot photos back to the configured DM.
+  Telegram receives command text, summaries, terminal image snapshots, `/raw`,
+  `/dump`, `/logs`, and `/download` results sent through the bot.
 - **tmux and local processes:** Authorized messages can create windows and send
   literal shell input or key presses. tmux owns terminal history and continues
   running when Engram stops unless a window is explicitly closed.
+- **Local snapshot browser:** Tapping `🖼️` sends a bounded ANSI-preserving tmux
+  capture to a local headless Chromium process. Engram renders 64 rows into a
+  full-bleed `1290×2796` PNG, replies to the canonical anchor with the photo,
+  and removes the private HTML, browser profile, and PNG after delivery. No
+  snapshot content is sent to Anthropic. The two contrast themes use a
+  color-vision-safe ANSI palette, remove opacity-based dim text, and correct
+  low-contrast terminal colors to at least a 4.5:1 contrast ratio.
 - **Anthropic Haiku:** For an anchor refresh, Engram sends session metadata, a
   shortened last-input preview, the previous summary, and a bounded visible
   pane capture. Repeated lines may be omitted. If the first result is uncertain,
@@ -186,6 +197,8 @@ the bot channel and must be revoked immediately.
   under `/tmp/engram/attachments`. `/raw`, `/dump`, `/logs`, and command metadata
   create files under `/tmp/engram`. These files are not automatically removed
   by uninstall and may remain until manual or operating-system cleanup.
+  On-demand snapshot intermediates are the exception: they are removed after
+  delivery or failure.
 - **Downloads:** `/download <absolute-path>` opens a local regular file, copies
   that opened file into a private bounded snapshot, and uploads the snapshot to
   Telegram. It rejects symlinks, but it is still an intentional
@@ -301,7 +314,9 @@ Each watched session has exactly one live anchor, and Engram silently pins those
 anchors for navigation. When a pane reaches a stable boundary that needs human
 judgment, Engram sends a new full anchor as a reply to the current one, pins the
 new anchor, makes it canonical, then compacts and unpins its predecessor. Only
-the canonical anchor accepts replies, refreshes, and key buttons. Input
+the canonical anchor accepts replies, refreshes, image requests, and key
+buttons. The `🖼️` button replies to that anchor with an iPhone-sized image of
+the visible terminal plus bounded recent scrollback. Input
 acknowledges the handoff but does not erase it; the same new anchor keeps
 receiving updates while Engram resolves, replaces, or reopens the handoff from
 later evidence. `/sessions` keeps unacknowledged handoffs ahead of quiet

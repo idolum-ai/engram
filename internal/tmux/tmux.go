@@ -80,6 +80,15 @@ type Pane struct {
 	CurrentCmd  string
 }
 
+type StyledCapture struct {
+	ANSI        string
+	Columns     int
+	VisibleRows int
+	BufferRows  int
+	Title       string
+	CurrentPath string
+}
+
 const paneFormat = "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"
 
 const (
@@ -249,6 +258,49 @@ func (m Manager) SendKeys(ctx context.Context, paneID string, keys []string) err
 // spaces, and tmux's final newline.
 func (m Manager) CaptureVisibleRaw(ctx context.Context, paneID string) (string, error) {
 	return m.Runner.Run(ctx, "capture-pane", "-p", "-e", "-N", "-t", paneID)
+}
+
+func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows int) (StyledCapture, error) {
+	if targetRows <= 0 || targetRows > 400 {
+		return StyledCapture{}, fmt.Errorf("target rows must be between 1 and 400")
+	}
+	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_width}\t#{pane_height}\t#{pane_title}\t#{pane_current_path}")
+	if err != nil {
+		return StyledCapture{}, err
+	}
+	parts := strings.SplitN(strings.TrimSuffix(meta, "\n"), "\t", 4)
+	if len(parts) != 4 {
+		return StyledCapture{}, fmt.Errorf("unexpected tmux snapshot metadata")
+	}
+	columns, err := strconv.Atoi(parts[0])
+	if err != nil || columns <= 0 || columns > 400 {
+		return StyledCapture{}, fmt.Errorf("invalid tmux pane width %q", parts[0])
+	}
+	visibleRows, err := strconv.Atoi(parts[1])
+	if err != nil || visibleRows <= 0 || visibleRows > 400 {
+		return StyledCapture{}, fmt.Errorf("invalid tmux pane height %q", parts[1])
+	}
+	start := visibleRows - targetRows
+	end := visibleRows - 1
+	ansi, err := m.Runner.Run(ctx, "capture-pane", "-p", "-e", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID)
+	if err != nil {
+		return StyledCapture{}, err
+	}
+	bufferRows := strings.Count(ansi, "\n")
+	if ansi != "" && !strings.HasSuffix(ansi, "\n") {
+		bufferRows++
+	}
+	if bufferRows == 0 {
+		bufferRows = 1
+	}
+	return StyledCapture{
+		ANSI:        ansi,
+		Columns:     columns,
+		VisibleRows: visibleRows,
+		BufferRows:  bufferRows,
+		Title:       parts[2],
+		CurrentPath: parts[3],
+	}, nil
 }
 
 // CaptureVisibleSemantic returns model-facing text with wrapped lines joined

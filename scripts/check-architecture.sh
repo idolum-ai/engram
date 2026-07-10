@@ -47,12 +47,12 @@ for phrase in "make check" "Command metadata" "tmux is the source" "Audit" "Exac
   fi
 done
 
-if contains_pattern 'github.com/idolum-ai/engram/internal/app' internal/telegram internal/tmux internal/anthropic internal/commands >/dev/null; then
+if contains_pattern 'github.com/idolum-ai/engram/internal/app' internal/telegram internal/tmux internal/anthropic internal/commands internal/terminalshot >/dev/null; then
   echo "leaf packages must not import internal/app" >&2
   exit 1
 fi
 
-if contains_pattern 'github.com/idolum-ai/engram/internal/telegram' internal/tmux internal/anthropic internal/config internal/state >/dev/null; then
+if contains_pattern 'github.com/idolum-ai/engram/internal/telegram' internal/tmux internal/anthropic internal/config internal/state internal/terminalshot >/dev/null; then
   echo "non-app core packages must not import telegram" >&2
   exit 1
 fi

@@ -40,6 +40,8 @@ tmux is the source of terminal truth.
 - Live anchors include inline key buttons for `Esc`, `Escx2`, `^C`, `^D`, and
   `Enter`. `Escx2` sends one Escape key, waits 500ms, then sends
   another Escape key.
+- Live anchors include an `🖼️` button beside refresh. It captures the immutable
+  pane as ANSI-preserving physical rows without invoking Haiku.
 
 ## Capture
 
@@ -65,6 +67,9 @@ tmux is the source of terminal truth.
   includes paths that currently exist as regular files or directories.
 - `/raw` preserves physical wrapped lines and terminal attributes in the
   visible pane capture.
+- An on-demand image captures 64 rows ending at the bottom of the visible pane,
+  using recent scrollback above it when the pane is shorter. It renders all
+  visible columns into a full-bleed 430×932 logical-pixel canvas at 3× density.
 - `/dump` streams physical full scrollback directly to an attachment file.
 - `/raw` and `/dump` stop before exceeding Telegram's 50 MiB cloud upload
   ceiling rather than creating an artifact that cannot be delivered.

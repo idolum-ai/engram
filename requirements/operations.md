@@ -10,6 +10,9 @@ runtime state.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
+- `ENGRAM_SNAPSHOT_BROWSER` may name or point to a Chromium-compatible
+  executable. When unset, Engram searches common Chromium and Chrome names and
+  standard macOS application paths.
 
 ## Linux Installation And Service
 
@@ -38,8 +41,9 @@ runtime state.
 
 ## Diagnostics
 
-- `/status` shows version, uptime, session count, state path, audit path,
-  attachment path, free `/tmp` space, poll time, and Haiku status.
+- `/status` shows version, uptime, session count, snapshot renderer capability,
+  state path, audit path, attachment path, free `/tmp` space, poll time, and
+  Haiku status.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment.
 - `engram version` reports binary version, commit, date, and Go version locally.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the local

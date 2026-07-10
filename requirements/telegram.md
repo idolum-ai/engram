@@ -53,12 +53,12 @@ Telegram is Engram's only user interface.
 
 ## Callbacks
 
-- Refresh, reattach, watch, close, and attach callbacks must be bounded to the
+- Refresh, snapshot, reattach, watch, close, and attach callbacks must be bounded to the
   configured user and chat.
 - Callback failures must not stop polling.
 - Every callback query is answered, including unauthorized, malformed, and
   stale callbacks. Positive text is sent only after validating the target.
-- Refresh, key, and reattach callbacks must come from the session's current
+- Refresh, snapshot, key, and reattach callbacks must come from the session's current
   canonical anchor. Controls on a retired or superseded message are inert even
   when Telegram has not yet removed their visible keyboard.
 - Close buttons open a second confirm/cancel prompt using a random, single-use
@@ -67,6 +67,9 @@ Telegram is Engram's only user interface.
 - A lost anchor exposes only `🧭 Reattach`. It restores the session when its
   original immutable pane/window identity is live and otherwise directs the
   user to `/sessions`.
+- A successful snapshot callback must answer immediately, queue bounded
+  background work, and send a Telegram photo as a reply to the canonical live
+  anchor. Rendering and upload must not block polling or tmux input.
 
 ## Handoffs
 
