@@ -121,6 +121,23 @@ func TestTailFileMissingIsEmpty(t *testing.T) {
 	}
 }
 
+func TestTailAuditLogSpansRotatedAndCurrentFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	if err := os.WriteFile(path+".1", []byte("previous-"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("current"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tailAuditLog(path, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "ious-current" {
+		t.Fatalf("tailAuditLog = %q, want ious-current", got)
+	}
+}
+
 func TestDownloadRejectsFileAboveTelegramCloudLimit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "large.bin")
 	file, err := os.Create(path)

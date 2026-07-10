@@ -51,6 +51,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   commands at the cost of possibly dropping the in-flight Telegram update.
 - The update journal retains the newest 200 accepted and handled/skipped update
   states so recent polling behavior remains inspectable after restart.
+- Audit records are capped at 64 KiB. `audit.jsonl` rotates before exceeding
+  4 MiB and retains one predecessor capped at the same size. Rotation preserves
+  complete recent JSONL records, including when adopting an oversized legacy
+  log.
 - Processed Telegram messages must still be tracked to avoid duplicate handling
   when Telegram or the process retries before the offset is durably advanced.
   The newest 2,000 message keys are retained. The existing schema stores boolean

@@ -21,7 +21,8 @@ type closeConfirmation struct {
 }
 
 func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) string {
-	if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramChatID {
+	if !a.callbackAuthorized(cb) {
+		_ = a.audit("auth.reject", "rejected", map[string]any{"kind": "callback_query"})
 		if !a.answerCallback(ctx, cb.ID, "not authorized") {
 			return "rejected_unauthorized_callback_answer_failed"
 		}
@@ -172,6 +173,10 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
+}
+
+func (a *App) callbackAuthorized(cb telegram.CallbackQuery) bool {
+	return cb.From.ID == a.Config.TelegramAllowedUserID && cb.Message != nil && cb.Message.Chat.ID == a.Config.TelegramChatID
 }
 
 func (a *App) validateAnchorCallback(ctx context.Context, cb telegram.CallbackQuery, id int) (state.TerminalSession, string) {

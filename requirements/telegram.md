@@ -7,7 +7,9 @@ Telegram is Engram's only user interface.
 - Engram accepts exactly one configured Telegram user.
 - For direct messages, `TELEGRAM_CHAT_ID` may be omitted and defaults to
   `TELEGRAM_ALLOWED_USER_ID`.
-- Unauthorized messages must not mutate tmux or state.
+- Unauthorized messages must not reach tmux, session, attachment, command, or
+  processed-message handlers. Admission bookkeeping may advance without
+  retaining the rejected sender's identifiers.
 
 ## Commands
 

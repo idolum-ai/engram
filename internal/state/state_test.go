@@ -1,6 +1,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,131 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAuditRotationBoundsCurrentAndPreviousFiles(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(filepath.Join(dir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedLine := []byte(`{"at":"old","type":"seed","status":"ok","data":null}` + "\n")
+	seed := bytes.Repeat(seedLine, int(2*maxAuditFileBytes/int64(len(seedLine)))+1)
+	seed = append(seed, []byte(`{"type":"torn"}`)...)
+	if err := os.WriteFile(auditPath, seed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.Audit("new.event", "ok", map[string]any{"value": "kept"}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.ReadFile(auditPath + ".1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(current)) > maxAuditFileBytes || int64(len(previous)) > maxAuditFileBytes {
+		t.Fatalf("audit sizes current=%d previous=%d", len(current), len(previous))
+	}
+	if !bytes.Contains(current, []byte(`"type":"new.event"`)) || !bytes.Contains(previous, []byte(`"type":"seed"`)) || bytes.Contains(previous, []byte(`"type":"torn"`)) {
+		t.Fatalf("rotation content current=%q previous prefix=%q", current, previous[:min(len(previous), 80)])
+	}
+	if len(previous) > 0 && (previous[0] != '{' || previous[len(previous)-1] != '\n') {
+		t.Fatalf("rotated audit is not complete JSONL: prefix=%q suffix=%q", previous[:min(len(previous), 20)], previous[max(0, len(previous)-20):])
+	}
+	for _, path := range []string{auditPath, auditPath + ".1"} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %o, want 600", path, info.Mode().Perm())
+		}
+	}
+}
+
+func TestAuditRejectsSymlinkPath(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, auditPath); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(filepath.Join(dir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Audit("event", "ok", nil); err == nil {
+		t.Fatal("Audit followed a symlink path")
+	}
+	b, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "unchanged" {
+		t.Fatalf("symlink target changed: %q", b)
+	}
+}
+
+func TestAuditOmitsOversizedPayload(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(filepath.Join(dir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := strings.Repeat("sensitive-volume", maxAuditRecordBytes)
+	if err := store.Audit("large.event", "failed", payload); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) > maxAuditRecordBytes || bytes.Contains(b, []byte(payload[:1024])) || !bytes.Contains(b, []byte("audit payload exceeded record limit")) {
+		t.Fatalf("oversized audit record was not bounded: bytes=%d content=%q", len(b), b)
+	}
+}
+
+func TestAuditRotationKeepsOnlyOnePredecessor(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(filepath.Join(dir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(auditPath+".1", []byte(`{"type":"obsolete"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	line := []byte(`{"at":"recent","type":"recent","status":"ok","data":null}` + "\n")
+	seed := bytes.Repeat(line, int(maxAuditFileBytes/int64(len(line))))
+	if err := os.WriteFile(auditPath, seed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Audit("latest", "ok", strings.Repeat("x", 1024)); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.ReadFile(auditPath + ".1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(previous, []byte("obsolete")) || !bytes.Contains(previous, []byte(`"type":"recent"`)) {
+		t.Fatalf("rotation did not replace predecessor: prefix=%q", previous[:min(len(previous), 80)])
+	}
+	current, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(current, []byte(`"type":"latest"`)) {
+		t.Fatalf("latest audit event missing: %q", current)
+	}
+}
 
 func TestStorePersistsSession(t *testing.T) {
 	dir := t.TempDir()

@@ -155,7 +155,7 @@ func (a *App) Run(ctx context.Context) int {
 		}
 		backoff = time.Second
 		for _, update := range updates {
-			kind, refs := updateJournalRefs(update)
+			kind, refs := a.updateJournalRefs(update)
 			if err := a.Store.MarkPoll(update.UpdateID, kind, refs); err != nil {
 				fmt.Fprintln(os.Stderr, "state mark poll:", err)
 				return 1
@@ -184,7 +184,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	msg := *update.Message
 	if !a.authorized(&msg) {
-		_ = a.audit("auth.reject", "rejected", map[string]any{"chat_id": msg.Chat.ID})
+		_ = a.audit("auth.reject", "rejected", map[string]any{"kind": "message"})
 		return "rejected_unauthorized"
 	}
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.MessageID)
@@ -624,8 +624,11 @@ func validSHA256Hex(value string) bool {
 	return true
 }
 
-func updateJournalRefs(update telegram.Update) (string, state.UpdateRefs) {
+func (a *App) updateJournalRefs(update telegram.Update) (string, state.UpdateRefs) {
 	if update.CallbackQuery != nil {
+		if !a.callbackAuthorized(*update.CallbackQuery) {
+			return "callback_query", state.UpdateRefs{}
+		}
 		refs := state.UpdateRefs{
 			UserID: update.CallbackQuery.From.ID,
 		}
@@ -636,6 +639,9 @@ func updateJournalRefs(update telegram.Update) (string, state.UpdateRefs) {
 		return "callback_query", refs
 	}
 	if update.Message != nil {
+		if !a.authorized(update.Message) {
+			return "message", state.UpdateRefs{}
+		}
 		refs := state.UpdateRefs{
 			ChatID:    update.Message.Chat.ID,
 			MessageID: update.Message.MessageID,
