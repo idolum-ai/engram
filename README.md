@@ -10,7 +10,8 @@
 
 Engram is a single-user Telegram control surface for local tmux sessions. It
 creates or attaches to tmux windows, routes Telegram messages into panes, and
-uses Anthropic Haiku to turn terminal captures into compact status anchors.
+uses Anthropic Haiku to turn terminal captures into compact status anchors and
+settled, evidence-backed handoffs when a session genuinely needs the user.
 
 ## First Run
 
@@ -160,7 +161,8 @@ access for the configured local user. A stolen bot token can expose or disrupt
 the bot channel and must be revoked immediately.
 
 - **Telegram:** Engram long-polls the Bot API for messages and attachments, then
-  sends messages, anchor edits, and requested files back to the configured DM.
+  sends messages, anchor edits, settled handoff notices, and requested files
+  back to the configured DM.
   Telegram receives command text, summaries, `/raw`, `/dump`, `/logs`, and
   `/download` results sent through the bot.
 - **tmux and local processes:** Authorized messages can create windows and send
@@ -170,14 +172,14 @@ the bot channel and must be revoked immediately.
   shortened last-input preview, the previous summary, and a bounded visible
   pane capture. Repeated lines may be omitted. If the first result is uncertain,
   Haiku may receive one bounded full-scrollback capture. Captures are not
-  redacted before they are sent. Haiku also assesses whether the session needs
-  no attention, review, or action; this remains model interpretation rather
-  than terminal state.
+  redacted before they are sent. Haiku may propose a specific handoff when the
+  apparent work cannot advance without the user. Engram requires cited evidence
+  and compatible settled observations before surfacing that interpretation.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   and lock files. State includes Telegram identifiers, session metadata, last
-  input previews, capture hashes, Haiku summaries, and the latest attention
-  assessment. Raw terminal captures remain in process memory for rendering but
-  are omitted from persisted state.
+  input previews, capture hashes, Haiku summaries, and active or pending
+  handoffs with their cited evidence. Raw terminal captures remain in process
+  memory for rendering but are omitted from persisted state.
   Files are created with private permissions, but anyone with access to the
   host account can read them.
 - **Attachments and generated files:** Incoming Telegram documents are saved
@@ -292,6 +294,13 @@ Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
 
+When a pane reaches a stable boundary that needs human judgment, Engram sends
+one handoff notice as a reply to its anchor. Replying to either message routes
+input to the same pane. Input acknowledges the handoff but does not erase it;
+Engram observes the pane again and then resolves, replaces, or reopens the
+handoff from later evidence. `/sessions` keeps unacknowledged handoffs ahead of
+quiet sessions, with the oldest waiting handoff first.
+
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or
 legacy session and leaves its tmux window running. Inline close buttons always
@@ -324,6 +333,15 @@ The gate runs tests, `go vet`, Darwin compile checks, architecture and public
 release checks, workflow checks, documentation checks, a tracked-file secret
 scan, and a smoke build. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change
 guidance and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
+
+The handoff eval is intentionally opt-in because it makes live Anthropic calls
+and is non-deterministic. With `ANTHROPIC_API_KEY` and optionally
+`ANTHROPIC_MODEL` exported, run:
+
+```sh
+ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
+  -run TestLiveHaikuSequentialHandoffEvaluation -count=2
+```
 
 ## License
 

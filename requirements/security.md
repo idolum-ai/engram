@@ -35,8 +35,9 @@ filesystem. The security and privacy model must stay small and explicit.
 ## Local Sensitive Data
 
 - `state.json` may contain Telegram identifiers, input previews, summaries,
-  hashes, and attachment metadata. Raw terminal captures are retained only in
-  process memory and are omitted from persisted state.
+  hashes, attachment metadata, and pending or active handoff text and evidence.
+  Raw terminal captures are retained only in process memory and are omitted from
+  persisted state.
 - `audit.jsonl`, lock metadata, tmux history, and `/tmp/engram` artifacts must
   be treated as sensitive.
 - Uninstall must not silently destroy local state or tmux sessions.

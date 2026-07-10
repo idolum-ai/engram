@@ -24,6 +24,7 @@ intervenes only when judgment is needed.
 - Phone-first anchors.
 - Fast input path.
 - Many sessions, low dwell.
+- Durable handoffs, not labels.
 - Deterministic facts beat guesses.
 - Haiku guides; Engram renders.
 - Existing tmux first.
@@ -75,6 +76,10 @@ After an intervention, Engram should observe the pane again. When it cannot
 establish an effect, it should preserve that uncertainty rather than imply that
 the requested outcome occurred.
 
+Input acknowledges a handoff; it does not erase one. Resolution belongs to the
+next settled observation, not to the optimistic assumption that sending a key
+must have worked.
+
 Replying to an anchor should route to the intended pane. `/send`, `/text`,
 `/key`, and anchor key buttons should remain direct, unsurprising ways to steer
 a session.
@@ -90,8 +95,26 @@ itself a reason to demand attention.
 Automatic anchor edits should be intentionally slow and only happen when there
 is useful new information. Manual refresh should be immediate. `/sessions`
 should act as an attention-ordered map of active and attachable work, not as a
-verbose report. Assessment changes should not create notification messages
-until their interruption quality has been demonstrated.
+verbose report.
+
+### Durable handoffs, not labels
+
+Engram should not classify every screenshot into a terminal phase or ask the
+user to review whatever the model finds ambiguous. A handoff is narrower: a
+specific, cited boundary where the apparent work cannot usefully advance until
+the user supplies judgment, input, approval, correction, credentials, or the
+next choice.
+
+A model suggestion is not yet a handoff. Engram should wait for compatible
+settled observations, bind the handoff to exact capture evidence, deliver it
+once, and keep it across restarts. User input acknowledges it. Later evidence
+resolves it, replaces it with a materially different need, or reopens it when
+the intervention had no established effect.
+
+This lifecycle is the attention interface. `/sessions` should present waiting
+handoffs before quiet sessions, and Engram should send one quiet notice when a
+handoff opens. Changing output, uncertain interpretation, and bare idleness are
+not reasons to interrupt.
 
 ### Deterministic facts beat guesses
 
@@ -108,6 +131,10 @@ Haiku's job is to explain the visible terminal state in plain English, offer one
 concrete next action for the content inside the tmux pane, and include short
 source-evidence citations when terminal text grounds the recommendation.
 
+Haiku may propose whether the pane has reached a handoff and give that specific
+need a stable key. Engram owns the lifecycle around that proposal: grounding,
+settlement, persistence, delivery, acknowledgment, and resolution.
+
 Haiku should not explain Engram features unless the terminal itself is showing
 Engram-related output. It should not produce raw terminal mirrors, long
 analysis, markdown-heavy prose, or broad coaching. Citations should be
@@ -120,7 +147,9 @@ the same line appears in recent visible captures for the same session, Engram
 should omit that exact line from the next Haiku visible prompt and any bounded
 full-scrollback retry prompt while preserving the raw capture for `/raw`,
 `/dump`, and local deterministic rendering. The refresh button is the user's
-reset lever for this filter.
+reset lever for this filter. Lines supporting pending or active handoff evidence
+must remain available to the guide; filtering cannot erase the basis of the
+decision it is trying to settle.
 
 ### Existing tmux first
 

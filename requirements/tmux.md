@@ -45,15 +45,18 @@ tmux is the source of terminal truth.
 - Live anchors explain visible pane capture through Haiku as a plain-English
   status report plus one recommended next action, with short source-evidence
   quote blocks when useful for grounding the recommendation.
-- Haiku also returns one assessment: `none`, `review`, or `act`. This is model
-  interpretation, not terminal state. `act` is reserved for visible progress
-  that appears to depend on human intervention; uncertainty defaults to
-  `review`.
+- Haiku may propose a handoff only when the apparent work cannot usefully
+  advance without human judgment, input, approval, correction, credentials, or
+  the next choice. A proposal includes a stable key and at least one citation
+  that directly supports the boundary. Low-confidence or uncited proposals do
+  not enter the handoff lifecycle.
 - Before sending capture text to Haiku, Engram drops exact lines that appeared
   in any of the previous five visible captures for the same session. This
   applies to both the visible prompt and the optional full-scrollback retry
   prompt. The per-session cache is in memory and clears when the user taps the
-  anchor refresh button.
+  anchor refresh button. Repeated lines that support an active or pending
+  handoff's cited evidence remain visible to Haiku so settlement cannot erase
+  its own basis.
 - Live anchors append a deterministic local `paths` code block with at most
   four entries when the
   current visible pane contains absolute or home-relative file/directory paths.
@@ -66,8 +69,19 @@ tmux is the source of terminal truth.
   ceiling rather than creating an artifact that cannot be delivered.
 - Haiku receives ANSI-clean semantic visible capture. Its optional confidence
   retry receives at most 24,000 bytes and 800 lines of scrollback.
-- Engram records only the latest attention value and transition time. It does
-  not infer additional terminal phase states or retain assessment history.
+- A handoff proposal remains a candidate until two compatible observations at
+  least five seconds apart support opening, replacing, reopening, or resolving
+  it. An unchanged exact capture may provide the second observation without a
+  second Haiku request.
+- Engram persists only the current candidate and active handoff, including
+  observation hashes, cited evidence, lifecycle timestamps, acknowledgment,
+  and Telegram delivery identity. It does not infer terminal phase states or
+  retain an assessment history.
+- Successful pane input acknowledges an active handoff and records the
+  pre-input capture hash without clearing the handoff. Later settled evidence
+  resolves it. A materially different need replaces it. If the exact display
+  remains unchanged after input, Engram settles and reopens the handoff with a
+  truthful no-visible-effect status.
 
 ## Closing
 

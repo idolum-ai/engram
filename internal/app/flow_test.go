@@ -38,6 +38,27 @@ func TestQueueRefreshCoalescesWhileRunning(t *testing.T) {
 	}
 }
 
+func TestQueueRefreshMovesQuietDeadlineAfterEachInput(t *testing.T) {
+	app := &App{
+		summaryQueued:  map[int]bool{7: true},
+		summaryRunning: map[int]bool{},
+		summaryForce:   map[int]bool{},
+		summaryDue:     map[int]time.Time{7: time.Now()},
+	}
+	app.queueRefresh(7, true, summaryQuietPeriod)
+	first := app.summaryDue[7]
+	time.Sleep(time.Millisecond)
+	app.queueRefresh(7, true, summaryQuietPeriod)
+	second := app.summaryDue[7]
+	if !second.After(first) {
+		t.Fatalf("quiet deadline did not move: first=%s second=%s", first, second)
+	}
+	app.queueRefresh(7, true, 0)
+	if !app.summaryDue[7].Before(second) {
+		t.Fatalf("manual refresh did not bypass quiet deadline: due=%s previous=%s", app.summaryDue[7], second)
+	}
+}
+
 func TestQueuedRefreshStopsWhenServiceContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	app := &App{

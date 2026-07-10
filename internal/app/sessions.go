@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
@@ -333,18 +334,15 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 	}
 	sort.SliceStable(active, func(i, j int) bool {
 		a, b := active[i], active[j]
-		aRank, bRank := sessionAttentionRank(a), sessionAttentionRank(b)
+		aRank, bRank := sessionHandoffRank(a), sessionHandoffRank(b)
 		if aRank != bRank {
 			return aRank < bRank
 		}
-		aTime, bTime := a.LastAttentionAt, b.LastAttentionAt
-		if a.State == state.TerminalLost {
-			aTime = a.UpdatedAt
-		}
-		if b.State == state.TerminalLost {
-			bTime = b.UpdatedAt
-		}
+		aTime, bTime := sessionQueueTime(a), sessionQueueTime(b)
 		if !aTime.Equal(bTime) {
+			if aRank == 1 {
+				return aTime.Before(bTime)
+			}
 			return aTime.After(bTime)
 		}
 		return a.ID < b.ID
@@ -352,35 +350,54 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 	labels := map[int]string{
 		0: "lost",
 		1: "needs you",
-		2: "worth reviewing",
-		3: "working quietly",
+		2: "quiet",
 	}
 	lastRank := -1
 	ids := make([]int, 0, len(active))
 	for _, session := range active {
-		rank := sessionAttentionRank(session)
+		rank := sessionHandoffRank(session)
 		if rank != lastRank {
 			fmt.Fprintf(b, "\n%s\n", labels[rank])
 			lastRank = rank
 		}
-		fmt.Fprintf(b, "[%d] %s\n", session.ID, firstNonEmpty(session.Title, "-"))
+		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
+		if rank == 1 {
+			fmt.Fprintf(b, " — %s", compactSessionAction(session.Handoff.RecommendedAction))
+		} else if session.Handoff != nil && !session.Handoff.AcknowledgedAt.IsZero() {
+			b.WriteString(" — observing")
+		}
+		b.WriteString("\n")
 		ids = append(ids, session.ID)
 	}
 	return ids
 }
 
-func sessionAttentionRank(session state.TerminalSession) int {
+func sessionHandoffRank(session state.TerminalSession) int {
 	if session.State == state.TerminalLost {
 		return 0
 	}
-	switch session.LastAttention {
-	case "act":
+	if session.Handoff != nil && session.Handoff.AcknowledgedAt.IsZero() {
 		return 1
-	case "none":
-		return 3
-	default:
-		return 2
 	}
+	return 2
+}
+
+func sessionQueueTime(session state.TerminalSession) time.Time {
+	if session.State == state.TerminalLost {
+		return session.UpdatedAt
+	}
+	if session.Handoff != nil && session.Handoff.AcknowledgedAt.IsZero() {
+		return session.Handoff.OpenedAt
+	}
+	return session.LastActivityAt
+}
+
+func compactSessionAction(action string) string {
+	action = strings.Join(strings.Fields(action), " ")
+	if len(action) <= 72 {
+		return firstNonEmpty(action, "open the session anchor")
+	}
+	return strings.TrimSpace(action[:69]) + "..."
 }
 
 func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []telegram.AttachTarget {

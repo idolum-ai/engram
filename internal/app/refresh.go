@@ -62,13 +62,29 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	hash := sha(capture)
-	if hash == ts.LastRawCaptureHash && !force {
-		return
+	if hash == ts.LastRawCaptureHash {
+		transition := handoffUnchanged
+		if ts.HandoffCandidate != nil || ts.Handoff != nil && !ts.Handoff.AcknowledgedAt.IsZero() {
+			if _, _, stateErr := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+				transition = settleHandoffCandidate(s, hash, time.Now().UTC())
+			}); stateErr != nil {
+				_ = a.audit("state.handoff", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
+				return
+			}
+		}
+		a.auditHandoffTransition(id, transition, hash)
+		if transition != handoffUnchanged {
+			a.updateAnchorLocal(ctx, id, "", true)
+			a.ensureHandoffDelivery(ctx, id)
+			return
+		}
+		a.ensureHandoffDelivery(ctx, id)
+		if !force {
+			return
+		}
 	}
 	report, guideErr := a.guideSummary(ctx, ts, capture, ts.LastRawCaptureHash != "", hash != ts.LastRawCaptureHash)
 	summary := ""
-	attention := ts.LastAttention
-	attentionChanged := false
 	if guideErr != nil {
 		if stateErr := a.Store.NoteHaiku(guideErr.Error()); stateErr != nil {
 			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
@@ -80,8 +96,6 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 	} else {
 		summary = report.TelegramText()
-		attention = report.Attention
-		attentionChanged = attention != ts.LastAttention
 		if stateErr := a.Store.NoteHaiku(""); stateErr != nil {
 			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
@@ -93,15 +107,13 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		lock.Unlock()
 		return
 	}
+	transition := handoffUnchanged
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.LastRawCapture = tailUTF8(capture, maxStoredVisibleCaptureBytes)
 		s.LastRawCaptureHash = hash
 		s.LastSummary = summary
 		if guideErr == nil {
-			s.LastAttention = attention
-			if attentionChanged || s.LastAttentionAt.IsZero() {
-				s.LastAttentionAt = time.Now().UTC()
-			}
+			transition = observeHandoff(s, report, hash, time.Now().UTC())
 		}
 	}); err != nil {
 		lock.Unlock()
@@ -110,10 +122,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	lock.Unlock()
-	if attentionChanged {
-		_ = a.audit("haiku.attention", "changed", map[string]any{"session_id": id, "from": ts.LastAttention, "to": attention})
-	}
+	a.auditHandoffTransition(id, transition, hash)
 	a.updateAnchorLocal(ctx, id, summary, force)
+	a.ensureHandoffDelivery(ctx, id)
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -131,17 +142,31 @@ func tailUTF8(text string, maxBytes int) string {
 }
 
 func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string, hasPreviousCapture, captureChanged bool) (anthropic.GuideReport, error) {
-	visibleForHaiku, repeatedLines := a.prepareHaikuVisibleCapture(ts.ID, capture)
+	var handoffEvidence []string
+	if ts.Handoff != nil {
+		handoffEvidence = append(handoffEvidence, ts.Handoff.Evidence...)
+	}
+	if ts.HandoffCandidate != nil {
+		handoffEvidence = append(handoffEvidence, ts.HandoffCandidate.Evidence...)
+	}
+	visibleForHaiku, repeatedLines := a.prepareHaikuVisibleCapturePreserving(ts.ID, capture, handoffEvidence)
 	input := anthropic.SummaryInput{
 		SessionID:          ts.ID,
 		State:              string(ts.State),
 		LastInput:          ts.LastInputPreview,
 		LastInputMode:      ts.LastInputMode,
 		PreviousSummary:    ts.LastSummary,
-		PreviousAttention:  ts.LastAttention,
 		HasPreviousCapture: hasPreviousCapture,
 		CaptureChanged:     captureChanged,
 		VisibleCapture:     visibleForHaiku,
+	}
+	if ts.Handoff != nil {
+		input.OpenHandoff = true
+		input.HandoffKey = ts.Handoff.Key
+		input.HandoffStatus = ts.Handoff.StatusReport
+		input.HandoffAction = ts.Handoff.RecommendedAction
+		input.HandoffEvidence = append([]string(nil), ts.Handoff.Evidence...)
+		input.HandoffAcknowledged = !ts.Handoff.AcknowledgedAt.IsZero()
 	}
 	if !acquireSlot(ctx, a.haikuSlots) {
 		return anthropic.GuideReport{}, ctx.Err()
@@ -164,7 +189,7 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 	if err != nil || strings.TrimSpace(full) == "" {
 		return report, nil
 	}
-	input.FullCapture = filterCaptureLines(full, repeatedLines)
+	input.FullCapture = filterCaptureLinesPreserving(full, repeatedLines, handoffEvidence)
 	if !acquireSlot(ctx, a.haikuSlots) {
 		return report, nil
 	}
@@ -182,6 +207,10 @@ func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {
 }
 
 func (a *App) prepareHaikuVisibleCapture(sessionID int, capture string) (string, map[string]bool) {
+	return a.prepareHaikuVisibleCapturePreserving(sessionID, capture, nil)
+}
+
+func (a *App) prepareHaikuVisibleCapturePreserving(sessionID int, capture string, evidence []string) (string, map[string]bool) {
 	a.captureMu.Lock()
 	defer a.captureMu.Unlock()
 	if a.captureHistory == nil {
@@ -203,22 +232,57 @@ func (a *App) prepareHaikuVisibleCapture(sessionID int, capture string) (string,
 		history = history[len(history)-haikuCaptureHistoryLimit:]
 	}
 	a.captureHistory[sessionID] = history
-	return filterCaptureLines(capture, repeated), repeated
+	return filterCaptureLinesPreserving(capture, repeated, evidence), repeated
 }
 
 func filterCaptureLines(capture string, repeated map[string]bool) string {
+	return filterCaptureLinesPreserving(capture, repeated, nil)
+}
+
+func filterCaptureLinesPreserving(capture string, repeated map[string]bool, evidence []string) string {
 	if len(repeated) == 0 {
 		return capture
 	}
 	lines := strings.Split(capture, "\n")
 	filtered := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if repeated[line] {
+		if repeated[line] && !lineSupportsHandoffEvidence(line, evidence) {
 			continue
 		}
 		filtered = append(filtered, line)
 	}
 	return strings.Join(filtered, "\n")
+}
+
+func lineSupportsHandoffEvidence(line string, evidence []string) bool {
+	line = strings.ToLower(strings.Join(strings.Fields(line), " "))
+	if line == "" {
+		return false
+	}
+	for _, excerpt := range evidence {
+		excerpt = strings.ToLower(strings.Join(strings.Fields(excerpt), " "))
+		if excerpt == "" {
+			continue
+		}
+		if strings.Contains(excerpt, line) || strings.Contains(line, excerpt) {
+			return true
+		}
+		significant, matched := 0, 0
+		for _, word := range strings.Fields(excerpt) {
+			word = strings.Trim(word, "[]():;,.!?`'\"")
+			if len(word) < 3 {
+				continue
+			}
+			significant++
+			if strings.Contains(line, word) {
+				matched++
+			}
+		}
+		if matched >= 2 || significant == 1 && matched == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) clearHaikuCaptureHistory(sessionID int) {
@@ -291,30 +355,43 @@ func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
 	}
 	a.summaryMu.Lock()
 	a.ensureSummaryQueuesLocked()
+	due := time.Now().Add(delay)
 	if a.summaryRunning[id] || a.summaryQueued[id] {
 		a.summaryQueued[id] = true
 		a.summaryForce[id] = a.summaryForce[id] || force
+		if force && delay == 0 || delay > 0 && due.After(a.summaryDue[id]) {
+			a.summaryDue[id] = due
+		}
 		a.summaryMu.Unlock()
 		return
 	}
 	a.summaryQueued[id] = true
 	a.summaryForce[id] = force
+	a.summaryDue[id] = due
 	a.summaryMu.Unlock()
 	a.refreshWG.Add(1)
 	go func() {
 		defer a.refreshWG.Done()
-		a.refreshWorker(ctx, id, delay)
+		a.refreshWorker(ctx, id)
 	}()
 }
 
-func (a *App) refreshWorker(ctx context.Context, id int, delay time.Duration) {
+func (a *App) refreshWorker(ctx context.Context, id int) {
 	for {
+		a.summaryMu.Lock()
+		a.ensureSummaryQueuesLocked()
+		delay := time.Until(a.summaryDue[id])
+		a.summaryMu.Unlock()
 		if delay > 0 && !a.sleepContext(ctx, delay) {
 			a.clearRefreshQueue(id)
 			return
 		}
 		a.summaryMu.Lock()
 		a.ensureSummaryQueuesLocked()
+		if remaining := time.Until(a.summaryDue[id]); remaining > 0 && a.sleepHook == nil {
+			a.summaryMu.Unlock()
+			continue
+		}
 		force := a.summaryForce[id]
 		a.summaryQueued[id] = false
 		a.summaryForce[id] = false
@@ -331,11 +408,11 @@ func (a *App) refreshWorker(ctx context.Context, id int, delay time.Duration) {
 			delete(a.summaryQueued, id)
 			delete(a.summaryForce, id)
 			delete(a.summaryRunning, id)
+			delete(a.summaryDue, id)
 			a.summaryMu.Unlock()
 			return
 		}
 		a.summaryMu.Unlock()
-		delay = summaryQuietPeriod
 	}
 }
 
@@ -345,6 +422,7 @@ func (a *App) clearRefreshQueue(id int) {
 	delete(a.summaryQueued, id)
 	delete(a.summaryForce, id)
 	delete(a.summaryRunning, id)
+	delete(a.summaryDue, id)
 }
 
 func (a *App) sleep(delay time.Duration) {
@@ -415,6 +493,9 @@ func (a *App) ensureSummaryQueuesLocked() {
 	}
 	if a.summaryForce == nil {
 		a.summaryForce = map[int]bool{}
+	}
+	if a.summaryDue == nil {
+		a.summaryDue = map[int]time.Time{}
 	}
 }
 

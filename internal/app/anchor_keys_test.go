@@ -87,7 +87,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 	}
 	sleepMu.Lock()
 	defer sleepMu.Unlock()
-	if !reflect.DeepEqual(sleeps, []time.Duration{500 * time.Millisecond, summaryQuietPeriod}) {
+	if len(sleeps) != 2 || sleeps[0] != 500*time.Millisecond || sleeps[1] <= summaryQuietPeriod-50*time.Millisecond || sleeps[1] > summaryQuietPeriod {
 		t.Fatalf("sleeps = %#v, want Esc delay then refresh delay", sleeps)
 	}
 }

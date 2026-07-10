@@ -67,8 +67,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   Legacy write-only fields are ignored and disappear on the next save. Legacy
   terminal states other than `running`, `lost`, and `closed` normalize to
   `lost`, where immutable-identity reattachment can recover them safely.
-- The latest Haiku attention assessment and its transition time are persisted;
-  assessment history is not.
+- Pending and active handoffs are persisted with bounded derived text, evidence,
+  capture hashes, lifecycle timestamps, acknowledgment, and delivery identity;
+  raw captures and handoff history are not.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
@@ -78,6 +79,9 @@ exports a bounded recent tail, not an unbounded full audit file.
 ## Degradation
 
 - If Haiku fails, reuse the last summary when possible and mark it stale.
+- A failed or low-confidence Haiku observation cannot resolve an active handoff.
+- A failed handoff notice remains eligible for delivery retry without reopening
+  the handoff lifecycle.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.

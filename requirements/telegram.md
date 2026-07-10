@@ -27,10 +27,10 @@ Telegram is Engram's only user interface.
 
 - Telegram send/edit failures must be audited.
 - `/sessions` must reply even when no Engram sessions exist.
-- `/sessions` groups tracked work as lost, needs attention, worth reviewing,
-  and working quietly. Attention groups use Haiku's latest assessment; lost is
-  deterministic and takes precedence. Sessions within a group use the newest
-  assessment transition first.
+- `/sessions` groups tracked work as lost, needs you, and quiet. Lost is
+  deterministic and takes precedence. Unacknowledged handoffs appear oldest
+  first with a compact recommended action; acknowledged handoffs remain quiet
+  with an observing marker.
 - Empty inline keyboards must not be sent.
 - Anchor messages may use Telegram HTML, but fall back to plain text only for
   formatting parse errors. Rate limits and deleted messages must not amplify
@@ -64,10 +64,16 @@ Telegram is Engram's only user interface.
   original immutable pane/window identity is live and otherwise directs the
   user to `/sessions`.
 
-## Attention
+## Handoffs
 
-- Attention assessment initially changes anchor text and `/sessions` ordering
-  only. Output changes and attention transitions must not create new Telegram
-  notification messages.
-- An `act` anchor may show a quiet `needs you` line. The assessment remains
-  subordinate to deterministic state and cited terminal evidence.
+- Opening or reopening a settled handoff sends one notice as a reply to the
+  session anchor. Repeated captures of the same open handoff do not send more
+  notices. Failed delivery remains retryable; a process crash between Telegram
+  acceptance and state persistence can duplicate the notice.
+- The notice contains the session identity, status, recommendation, and cited
+  evidence. It has no model-generated command controls.
+- Replies to either the anchor or the current handoff notice route to the same
+  immutable tracked pane.
+- An unacknowledged handoff adds `needs you` to the anchor. After input, the
+  anchor says Engram is observing while preserving the handoff until later
+  evidence resolves or reopens it.

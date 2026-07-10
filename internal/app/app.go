@@ -45,6 +45,7 @@ type App struct {
 	summaryQueued  map[int]bool
 	summaryRunning map[int]bool
 	summaryForce   map[int]bool
+	summaryDue     map[int]time.Time
 	captureMu      sync.Mutex
 	captureHistory map[int][]map[string]bool
 	closeConfirmMu sync.Mutex
@@ -95,6 +96,7 @@ func New(cfg config.Config) (*App, error) {
 		summaryQueued:  map[int]bool{},
 		summaryRunning: map[int]bool{},
 		summaryForce:   map[int]bool{},
+		summaryDue:     map[int]time.Time{},
 		captureHistory: map[int][]map[string]bool{},
 		closeConfirms:  map[string]closeConfirmation{},
 	}, nil
@@ -493,6 +495,14 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%d] %s  %s\n", ts.ID, ts.State, title)
+	if ts.Handoff != nil {
+		if ts.Handoff.AcknowledgedAt.IsZero() {
+			b.WriteString("needs you\n")
+		} else {
+			b.WriteString("observing after your input\n")
+		}
+		summary = handoffSummary(ts.Handoff)
+	}
 	if ts.LastKnownCWD != "" {
 		fmt.Fprintf(&b, "cwd: %s\n", ts.LastKnownCWD)
 	}

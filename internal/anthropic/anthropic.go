@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const SystemPrompt = `You are Engram's terminal guide for a technical user reading Telegram on a phone. Explain the terminal state in plain English, point out likely blockers or prompts, recommend one concrete next action, and assess whether the session deserves human attention. Include short source citations reconstructed from the terminal text when they clarify the next step. Do not pretend to be the process, do not invent success or citation text, and mark uncertainty clearly. Return JSON only.`
+const SystemPrompt = `You are Engram's terminal guide for a technical user reading Telegram on a phone. Explain the terminal state in plain English and recommend one concrete next action. Decide whether the pane has reached a handoff: a boundary in an apparent recent or pending task where work cannot usefully advance until the user supplies judgment, input, approval, correction, credentials, or chooses what happens next. A completed requested command is such a boundary; a bare shell with no apparent task is not. Ground every handoff in captured terminal evidence. Do not explain Engram, pretend to be the process, invent success or citation text, or page the user merely because output changed. Return JSON only.`
 
 type Client struct {
 	APIKey     string
@@ -20,23 +20,29 @@ type Client struct {
 }
 
 type SummaryInput struct {
-	SessionID          int
-	State              string
-	LastInput          string
-	LastInputMode      string
-	PreviousSummary    string
-	PreviousAttention  string
-	HasPreviousCapture bool
-	CaptureChanged     bool
-	VisibleCapture     string
-	FullCapture        string
+	SessionID           int
+	State               string
+	LastInput           string
+	LastInputMode       string
+	PreviousSummary     string
+	HasPreviousCapture  bool
+	CaptureChanged      bool
+	OpenHandoff         bool
+	HandoffKey          string
+	HandoffStatus       string
+	HandoffAction       string
+	HandoffEvidence     []string
+	HandoffAcknowledged bool
+	VisibleCapture      string
+	FullCapture         string
 }
 
 type GuideReport struct {
 	StatusReport      string   `json:"status_report"`
 	RecommendedAction string   `json:"recommended_action"`
 	Citations         []string `json:"citations"`
-	Attention         string   `json:"attention"`
+	HumanNeeded       bool     `json:"human_needed"`
+	HandoffKey        string   `json:"handoff_key"`
 	Confidence        string   `json:"confidence"`
 	NeedsFullBuffer   bool     `json:"needs_full_buffer"`
 	Reason            string   `json:"reason"`
@@ -133,10 +139,20 @@ func buildPrompt(in SummaryInput) string {
 	fmt.Fprintf(&b, "state: %s\n", in.State)
 	fmt.Fprintf(&b, "last_input_mode: %s\n", in.LastInputMode)
 	fmt.Fprintf(&b, "last_input_preview: %s\n", in.LastInput)
-	fmt.Fprintf(&b, "previous_attention: %s\n", normalizeAttention(in.PreviousAttention))
 	if in.HasPreviousCapture {
 		fmt.Fprintf(&b, "visible_capture_changed_since_previous_observation: %t\n", in.CaptureChanged)
 		b.WriteString("observation_change_note: if the capture did not change after input, say that no visible effect was established; do not claim the requested outcome occurred.\n")
+	}
+	if in.OpenHandoff {
+		b.WriteString("\nopen_handoff:\n")
+		fmt.Fprintf(&b, "key: %s\n", in.HandoffKey)
+		fmt.Fprintf(&b, "status: %s\n", limit(in.HandoffStatus, 600))
+		fmt.Fprintf(&b, "recommended_action: %s\n", limit(in.HandoffAction, 300))
+		fmt.Fprintf(&b, "acknowledged_by_later_user_input: %t\n", in.HandoffAcknowledged)
+		if len(in.HandoffEvidence) > 0 {
+			fmt.Fprintf(&b, "evidence: %s\n", strings.Join(in.HandoffEvidence, " | "))
+		}
+		b.WriteString("open_handoff_note: this is a durable earlier observation, not proof that the current pane still needs the user. Judge it against current evidence.\n")
 	}
 	b.WriteString("last_input_preview_note: this is a shortened metadata preview; do not treat truncation here as user-visible truncation.\n\n")
 	b.WriteString("capture_filter_note: repeated lines identical to lines in recent visible captures for this same session may have been omitted before this prompt, including from the optional full-scrollback retry; treat missing repeated boilerplate as intentional, not as terminal corruption.\n\n")
@@ -158,7 +174,8 @@ func buildPrompt(in SummaryInput) string {
   "status_report": "one or two short plain-English paragraphs explaining what the session appears to be doing and any blocker/prompt/error",
   "recommended_action": "one clear sentence recommending the user's next action",
   "citations": ["zero to two short reconstructed excerpts from the terminal text that support the status or recommendation"],
-  "attention": "none|review|act",
+	  "human_needed": false,
+	  "handoff_key": "empty unless human_needed is true; otherwise a short stable snake_case name for the specific decision or intervention",
   "confidence": "high|medium|low",
   "needs_full_buffer": false,
   "reason": "hidden one-sentence reason for confidence and whether full scrollback is needed"
@@ -170,12 +187,15 @@ Citation rules:
 - Keep each citation under 280 characters. Use plain text, not Markdown.
 - Leave citations empty when no reliable excerpt is available.
 
-Attention rules:
-- Use none when work appears able to continue without human judgment. Ordinary progress and an idle shell with no pending task are none.
-- Use review when something meaningful changed or remains ambiguous, but immediate input is not clearly required.
-- Use act only when visible progress appears to depend on a human choice, answer, correction, credential, approval, or other intervention.
-- Attention is an assessment from incomplete terminal evidence, not machine state. Prefer review over act when uncertain.
-- Reassess attention from current evidence. Do not preserve previous_attention unless the current capture supports it.
+Handoff rules:
+- Set human_needed=true only when the apparent work cannot usefully advance until the user intervenes or chooses what happens next.
+- Explicit prompts, failed commands awaiting correction, completed requested work awaiting the next choice, and blocked credential or approval requests can be handoffs.
+- Ordinary progress, transient output, an ambiguous partial screen, and a bare idle shell with no apparent pending work are not handoffs.
+- When last_input_preview and the capture establish that a requested command completed, hand the result back even if it succeeded and no blocker exists. Absence of an error is not absence of a handoff.
+- Do not turn a bare prompt into a handoff merely because a shell always permits the user to choose another command. There must be evidence of a recent or pending task boundary.
+- A handoff requires at least one citation that directly establishes the boundary. If reliable evidence is missing, set human_needed=false and request the full buffer when it could resolve the uncertainty.
+- handoff_key identifies the intervention, not the session phase. Keep the same key when the same specific handoff remains; use a different key only when current evidence requires a materially different intervention.
+- Reassess the open handoff from current evidence. It may remain needed, be replaced by a different handoff, or no longer be needed. Do not preserve it from inertia.
 
 Use needs_full_buffer=true when the visible pane is ambiguous, mid-scroll, or missing earlier context needed for a useful recommendation. Treat last_input_preview as a shortened metadata preview, not proof that the user's message was cut off. If a prompt appears at the bottom, describe it as the current visible prompt only; do not merge it into unrelated work.`)
 	return b.String()
@@ -191,7 +211,6 @@ func parseGuideReport(text string) (GuideReport, error) {
 		return GuideReport{
 			StatusReport:      strings.TrimSpace(text),
 			RecommendedAction: "Review the raw terminal output before acting.",
-			Attention:         "review",
 			Confidence:        "low",
 			NeedsFullBuffer:   true,
 			Reason:            "model returned non-JSON text",
@@ -200,7 +219,7 @@ func parseGuideReport(text string) (GuideReport, error) {
 	report.StatusReport = strings.TrimSpace(report.StatusReport)
 	report.RecommendedAction = strings.TrimSpace(report.RecommendedAction)
 	report.Citations = normalizeCitations(report.Citations)
-	report.Attention = normalizeAttention(report.Attention)
+	report.HandoffKey = normalizeHandoffKey(report.HandoffKey)
 	report.Confidence = normalizeConfidence(report.Confidence)
 	report.Reason = strings.TrimSpace(report.Reason)
 	if report.StatusReport == "" {
@@ -211,16 +230,36 @@ func parseGuideReport(text string) (GuideReport, error) {
 	if report.RecommendedAction == "" {
 		report.RecommendedAction = "Review the raw terminal output before acting."
 	}
+	if report.HumanNeeded && (report.HandoffKey == "" || len(report.Citations) == 0) {
+		report.HumanNeeded = false
+		report.HandoffKey = ""
+		report.Confidence = "low"
+		report.NeedsFullBuffer = true
+	}
+	if !report.HumanNeeded {
+		report.HandoffKey = ""
+	}
 	return report, nil
 }
 
-func normalizeAttention(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "none", "review", "act":
-		return strings.ToLower(strings.TrimSpace(value))
-	default:
-		return "review"
+func normalizeHandoffKey(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	underscore := false
+	for _, r := range value {
+		if b.Len() >= 80 {
+			break
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			underscore = false
+		case b.Len() > 0 && !underscore:
+			b.WriteByte('_')
+			underscore = true
+		}
 	}
+	return strings.Trim(b.String(), "_")
 }
 
 func extractJSONObject(text string) string {
@@ -261,9 +300,6 @@ func (r GuideReport) TelegramText() string {
 		action = "Review the raw terminal output before acting."
 	}
 	text := "status:\n" + status + "\n\nrecommendation:\n" + action
-	if normalizeAttention(r.Attention) == "act" {
-		text = "needs you\n\n" + text
-	}
 	if citations := normalizeCitations(r.Citations); len(citations) > 0 {
 		text += "\n\nevidence:\n" + renderCitationBlocks(citations)
 	}

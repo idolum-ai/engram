@@ -61,6 +61,22 @@ func TestClearHaikuCaptureHistoryRestoresRepeatedLines(t *testing.T) {
 	}
 }
 
+func TestHandoffEvidenceSurvivesRepeatedLineFilter(t *testing.T) {
+	app := &App{captureHistory: map[int][]map[string]bool{}}
+	first := "Run /review on my current changes\nDeploy release? Confirm [y/N]:\n61%"
+	if got, _ := app.prepareHaikuVisibleCapturePreserving(1, first, nil); got != first {
+		t.Fatalf("first filter = %q", got)
+	}
+	evidence := []string{"Deploy release? Confirm [y/N]:"}
+	got, _ := app.prepareHaikuVisibleCapturePreserving(1, "Run /review on my current changes\nDeploy release? Confirm [y/N]:\n62%", evidence)
+	if strings.Contains(got, "Run /review") {
+		t.Fatalf("filter retained unrelated boilerplate:\n%s", got)
+	}
+	if !strings.Contains(got, "Deploy release? Confirm [y/N]:") || !strings.Contains(got, "62%") {
+		t.Fatalf("filter removed handoff evidence or fresh output:\n%s", got)
+	}
+}
+
 func TestRefreshCallbackClearsHaikuCaptureHistory(t *testing.T) {
 	done := make(chan struct{})
 	dir := t.TempDir()
@@ -226,7 +242,7 @@ func TestGuideSummaryFiltersFullScrollbackRetry(t *testing.T) {
 	}
 }
 
-func TestRefreshPersistsAttentionTransition(t *testing.T) {
+func TestRefreshPersistsGroundedHandoffCandidate(t *testing.T) {
 	dir := t.TempDir()
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	store, err := state.Open(filepath.Join(dir, "state.json"), auditPath)
@@ -239,7 +255,6 @@ func TestRefreshPersistsAttentionTransition(t *testing.T) {
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.WatchEnabled = true
-		s.LastAttention = "review"
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +263,9 @@ func TestRefreshPersistsAttentionTransition(t *testing.T) {
 		return appJSONGuideResponse(t, anthropic.GuideReport{
 			StatusReport:      "The process is waiting for approval.",
 			RecommendedAction: "Approve or reject the change.",
-			Attention:         "act",
+			Citations:         []string{"Apply these changes? [y/N]"},
+			HumanNeeded:       true,
+			HandoffKey:        "approve_changes",
 			Confidence:        "high",
 		}), nil
 	})}
@@ -256,20 +273,20 @@ func TestRefreshPersistsAttentionTransition(t *testing.T) {
 		Config:         config.Config{AnthropicModel: "claude-haiku-4-5-20251001"},
 		Store:          store,
 		Anthropic:      client,
-		Tmux:           tmux.New(attentionRefreshRunner{}),
+		Tmux:           tmux.New(handoffRefreshRunner{}),
 		captureHistory: map[int][]map[string]bool{},
 	}
 	app.refreshSession(context.Background(), session.ID, true)
 	got, ok := store.FindSession(session.ID)
-	if !ok || got.LastAttention != "act" || got.LastAttentionAt.IsZero() {
-		t.Fatalf("session attention = %#v ok=%v", got, ok)
+	if !ok || got.Handoff != nil || got.HandoffCandidate == nil || got.HandoffCandidate.Kind != "open" || got.HandoffCandidate.Observations != 1 {
+		t.Fatalf("session handoff candidate = %#v ok=%v", got, ok)
 	}
 	audit, err := os.ReadFile(auditPath)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(audit), `"type":"haiku.attention"`) || !strings.Contains(string(audit), `"to":"act"`) {
-		t.Fatalf("attention transition missing from audit: %s", audit)
+	if strings.Contains(string(audit), `"type":"telegram.handoff"`) {
+		t.Fatalf("unsettled candidate triggered delivery: %s", audit)
 	}
 }
 
@@ -306,9 +323,9 @@ type fakeCaptureRunner struct {
 	full string
 }
 
-type attentionRefreshRunner struct{}
+type handoffRefreshRunner struct{}
 
-func (attentionRefreshRunner) Run(_ context.Context, args ...string) (string, error) {
+func (handoffRefreshRunner) Run(_ context.Context, args ...string) (string, error) {
 	if len(args) == 0 {
 		return "", nil
 	}

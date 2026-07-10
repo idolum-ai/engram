@@ -119,7 +119,7 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := store.Snapshot()
-	if st.Version != 2 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
+	if st.Version != 3 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
 		t.Fatalf("normalized legacy state = %#v", st)
 	}
 	if got := st.TerminalSessions[0].LastRawCapture; got != "sensitive terminal output" {
@@ -178,11 +178,11 @@ func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, ok := store.FindSession(1)
-	if !ok || session.State != TerminalLost || session.WatchEnabled || session.LastAttention != "review" {
+	if !ok || session.State != TerminalLost || session.WatchEnabled || session.Handoff != nil {
 		t.Fatalf("normalized legacy session = %#v ok=%v", session, ok)
 	}
-	if store.Snapshot().Version != 2 {
-		t.Fatalf("state version = %d, want 2", store.Snapshot().Version)
+	if store.Snapshot().Version != 3 {
+		t.Fatalf("state version = %d, want 3", store.Snapshot().Version)
 	}
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
@@ -195,6 +195,35 @@ func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
 		if strings.Contains(string(persisted), `"`+removed+`"`) {
 			t.Fatalf("removed field %q remained in state: %s", removed, persisted)
 		}
+	}
+}
+
+func TestHandoffNotificationRoutesToOwningSessionAndSnapshotsAreIsolated(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 10
+		s.Handoff = &Handoff{Key: "approval", ObservationHash: "hash", Evidence: []string{"Confirm [y/N]"}, NotificationMessageID: 11}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := store.FindByAnchor(100, 11)
+	if !ok || got.ID != session.ID {
+		t.Fatalf("handoff notification route = %#v ok=%v", got, ok)
+	}
+	snapshot := store.Snapshot()
+	snapshot.TerminalSessions[0].Handoff.Evidence[0] = "mutated"
+	stored, _ := store.FindSession(session.ID)
+	if stored.Handoff.Evidence[0] != "Confirm [y/N]" {
+		t.Fatalf("snapshot mutation leaked into store: %#v", stored.Handoff)
 	}
 }
 
