@@ -13,6 +13,10 @@ anchors, copyable paths, and simple recovery.
 These principles are not feature marketing. They are the shape Engram should
 keep as it grows.
 
+Engram turns persistent machine state into an attention-aware interface. The
+environment holds the memory; Haiku interprets its visible trace; the human
+intervenes only when judgment is needed.
+
 ## Short Form
 
 - Phase change, not platform.
@@ -20,6 +24,7 @@ keep as it grows.
 - Phone-first anchors.
 - Fast input path.
 - Many sessions, low dwell.
+- The environment holds continuity.
 - Deterministic facts beat guesses.
 - Haiku guides; Engram renders.
 - Existing tmux first.
@@ -67,6 +72,10 @@ Sending input to tmux must stay fast even when summaries are delayed, skipped,
 or failing. Telegram message handling should not wait for Haiku unless the
 message itself is asking for a summary.
 
+After an intervention, Engram should observe the pane again. When it cannot
+establish an effect, it should preserve that uncertainty rather than imply that
+the requested outcome occurred.
+
 Replying to an anchor should route to the intended pane. `/send`, `/text`,
 `/key`, and anchor key buttons should remain direct, unsurprising ways to steer
 a session.
@@ -75,6 +84,9 @@ a session.
 
 Engram is for multitasking. The user should be able to scan several sessions,
 tap into the one that needs attention, send one command, and move on.
+
+Progress that needs no judgment should remain quiet. Output changing is not by
+itself a reason to demand attention.
 
 Automatic anchor edits should be intentionally slow and only happen when there
 is useful new information. Manual refresh should be immediate. `/sessions`
@@ -181,6 +193,10 @@ When changing Engram, ask:
 - Does the anchor stay compact on a phone?
 - Does this help many-session multitasking, or does it pull attention into one
   window for too long?
+- Does this interrupt because human judgment is needed, or merely because output
+  changed?
+- After an intervention, can Engram establish what observably changed without
+  presenting inference as fact?
 - What happens if the service restarts halfway through?
 - Can the user recover using `/status`, `/sessions`, `/logs`, `/raw`, or
   `/dump`?
