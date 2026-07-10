@@ -98,6 +98,12 @@ func runDiagnostics(args []string, mode string) int {
 		fmt.Fprintln(os.Stderr, "config:", err)
 		return 1
 	}
+	if cfg.SnapshotAnchors() {
+		if _, err := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Probe(context.Background()); err != nil {
+			fmt.Fprintln(os.Stderr, "snapshot anchor mode:", err)
+			return 1
+		}
+	}
 	if mode == "dry-start" {
 		if err := config.EnsureDirs(cfg); err != nil {
 			fmt.Fprintln(os.Stderr, "dirs:", err)
@@ -135,7 +141,11 @@ func diagnosticsText(cfg config.Config, mode string) string {
 		lastUpdate = st.LastUpdateID
 		journal = len(st.UpdateJournal)
 	}
-	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
+	model := cfg.AnthropicModel
+	if cfg.SnapshotAnchors() {
+		model = "disabled"
+	}
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
 		mode,
 		version.String(),
 		cfg.EnvPath,
@@ -145,10 +155,11 @@ func diagnosticsText(cfg config.Config, mode string) string {
 		cfg.AttachmentDir(),
 		cfg.Workdir,
 		tmuxPath,
+		cfg.EffectiveAnchorMode(),
 		snapshotPath,
 		cfg.TelegramAllowedUserID,
 		cfg.TelegramChatID,
-		cfg.AnthropicModel,
+		model,
 		sessions,
 		lastUpdate,
 		journal,

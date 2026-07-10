@@ -169,6 +169,9 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	if strings.Count(got.ANSI, "history and visible") != 64 {
 		t.Fatalf("styled capture ANSI rows = %d", strings.Count(got.ANSI, "history and visible"))
 	}
+	if strings.Contains(got.Text, "\x1b") || strings.Count(got.Text, "history and visible") != 64 {
+		t.Fatalf("styled capture text was not derived from ANSI capture: %q", got.Text)
+	}
 	wantCapture := []string{"capture-pane", "-p", "-e", "-N", "-S", "-27", "-E", "36", "-t", "%7"}
 	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1], wantCapture) {
 		t.Fatalf("styled capture calls = %#v", runner.calls)

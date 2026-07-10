@@ -7,7 +7,7 @@ Engram is a long-running service. Failure must be visible and recoverable.
 - Never silently pretend a Telegram or tmux action succeeded.
 - Preserve state coherently before attempting cosmetic updates.
 - Keep polling alive after transient Telegram errors.
-- Keep tmux sessions alive when Haiku or Telegram delivery fails.
+- Keep tmux sessions alive when Haiku, Chromium, or Telegram delivery fails.
 - Keep polling and tmux input responsive while terminal images render and upload.
 - Prefer truthful degraded summaries over missing anchors.
 
@@ -77,8 +77,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   raw captures and handoff history are not. Derived status, action, and evidence
   text is best-effort credential-redacted before persistence.
 - Session state persists the canonical anchor, at most one predecessor awaiting
-  retirement, and known/unknown Telegram pin state. Restart resets pin knowledge
-  and reconciles it without discarding canonical ownership.
+  retirement, each anchor's text or snapshot format, and known/unknown Telegram
+  pin state. Restart resets pin knowledge and reconciles presentation without
+  discarding canonical ownership.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
@@ -98,9 +99,23 @@ exports a bounded recent tail, not an unbounded full audit file.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.
-- A missing or failed snapshot browser disables only image delivery. The
-  callback must report that condition truthfully, audit render/upload failures,
-  and leave the canonical anchor and tmux session unchanged.
+- In `guide` mode, a missing or failed snapshot browser disables only on-demand
+  image delivery. The callback reports the condition truthfully and leaves the
+  canonical anchor and tmux session unchanged.
+- In `snapshot` mode, a missing browser fails startup. A later capture, render,
+  or upload failure is audited and leaves the canonical anchor and tmux session
+  unchanged for retry.
+- Snapshot refreshes hash styled capture and metadata before invoking Chromium,
+  coalesce per session, use bounded capture/render concurrency, and edit
+  automatically no more than once every ten seconds when content changed. A
+  manual refresh may render the same capture immediately.
+- Entering `snapshot` mode converts a text anchor to photo media in place so its
+  message identity, pin, reply routing, and controls remain canonical. Returning
+  to `guide` mode uses one persisted send-before-retire rotation because Telegram
+  cannot convert a media message back to text in place.
+- A session may persist at most one retiring predecessor. Engram must finish or
+  durably retain that retirement before mode migration, media replacement, or
+  any other operation can create another predecessor.
 - If Telegram rejects HTML entity parsing, fall back once to plain text. Other
   API failures retain their typed outcome.
 - Cancellation, timeout, or a generic tmux capture failure does not prove that

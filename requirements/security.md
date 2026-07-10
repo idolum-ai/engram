@@ -1,7 +1,8 @@
 # Security Requirements
 
-Engram intentionally bridges Telegram, Anthropic, local tmux, and the local
-filesystem. The security and privacy model must stay small and explicit.
+Engram intentionally bridges Telegram, local tmux, the local filesystem, and
+one selected presentation dependency: Anthropic or Chromium. The security and
+privacy model must stay small and explicit.
 
 ## Identity
 
@@ -30,9 +31,9 @@ filesystem. The security and privacy model must stay small and explicit.
 
 - Documentation must explain that Telegram receives commands, replies,
   summaries, captures, logs, and files sent through bot commands.
-- Documentation must explain that Anthropic receives session metadata, input
-  previews, prior summaries, visible pane captures, and an optional bounded
-  full-scrollback retry.
+- Documentation must explain that Anthropic is used only in `guide` mode and
+  receives session metadata, input previews, prior summaries, visible pane
+  captures, and an optional bounded full-scrollback retry.
 - Terminal captures sent to Anthropic are not credential-redacted.
 - Terminal captures are untrusted data for the guide. Pane-authored text cannot
   instruct Haiku or acquire authority merely by addressing Engram or the user.
@@ -42,6 +43,15 @@ filesystem. The security and privacy model must stay small and explicit.
   to a local headless browser and then to the configured Telegram DM, never to
   Anthropic. Terminal text must be HTML-escaped; browser networking, extensions,
   and persistent profiles must be disabled.
+- In `snapshot` mode, exact terminal images are sent automatically whenever a
+  changed live anchor is rendered, not only after an explicit image request.
+- `snapshot` mode must not initialize or call an Anthropic client even when an
+  Anthropic credential remains in the env file.
+- Extracted HTTP(S) URLs are untrusted terminal text. Engram may display them in
+  anchor references but must never fetch, validate remotely, or treat them as
+  recommendations. Extracted reference text receives best-effort credential
+  redaction before Telegram delivery. URLs containing userinfo are omitted;
+  recognized credential-bearing query parameters are structurally redacted.
 
 ## Local Sensitive Data
 

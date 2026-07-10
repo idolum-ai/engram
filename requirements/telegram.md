@@ -29,10 +29,11 @@ Telegram is Engram's only user interface.
 
 - Telegram send/edit failures must be audited.
 - `/sessions` must reply even when no Engram sessions exist.
-- `/sessions` groups tracked work as lost, needs you, and quiet. Lost is
-  deterministic and takes precedence. Unacknowledged handoffs appear oldest
-  first with a compact recommended action; acknowledged handoffs remain quiet
-  with an observing marker.
+- In `guide` mode, `/sessions` groups tracked work as lost, needs you, and quiet.
+  Lost is deterministic and takes precedence. Unacknowledged handoffs appear
+  oldest first with a compact recommended action; acknowledged handoffs remain
+  quiet with an observing marker. In `snapshot` mode, historical handoffs do not
+  affect ordering or labels; the view groups deterministic lost and quiet work.
 - Empty inline keyboards must not be attached to newly sent messages. An edit
   may include an explicitly empty keyboard to retire an anchor's controls.
 - Anchor messages may use Telegram HTML, but fall back to plain text only for
@@ -69,11 +70,19 @@ Telegram is Engram's only user interface.
 - A lost anchor exposes only `🧭 Reattach`. It restores the session when its
   original immutable pane/window identity is live and otherwise directs the
   user to `/sessions`.
-- A successful snapshot callback must answer immediately, queue bounded
-  background work, and send a Telegram photo as a reply to the canonical live
-  anchor. Rendering and upload must not block polling or tmux input.
+- In `guide` mode, a successful snapshot callback must answer immediately,
+  queue bounded background work, and send a Telegram photo as a reply to the
+  canonical live anchor. In `snapshot` mode, the same legacy callback refreshes
+  the canonical photo instead. Rendering and upload must not block polling or
+  tmux input.
+- Running `snapshot` anchors expose refresh and the allowlisted key buttons but
+  no redundant image button. Their media is edited in place for changed frames.
 
 ## Handoffs
+
+This lifecycle is active only in `guide` mode. Persisted handoffs remain intact
+but do not rotate anchors, change `/sessions` ordering, or acknowledge input in
+`snapshot` mode.
 
 - Opening, replacing, or reopening a settled handoff rotates the session's live
   anchor. Engram sends the full new anchor as a reply to its predecessor, makes

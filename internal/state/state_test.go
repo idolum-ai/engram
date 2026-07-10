@@ -275,6 +275,32 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 	}
 }
 
+func TestStoreNormalizesLegacyAnchorFormats(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "version": 4,
+  "next_session_id": 2,
+  "terminal_sessions": [{
+    "id": 1,
+    "state": "running",
+    "anchor_message_id": 10,
+    "retiring_anchor_message_id": 9
+  }],
+  "attachments": []
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, ok := store.FindSession(1)
+	if !ok || session.AnchorFormat != "text" || session.RetiringAnchorFormat != "text" {
+		t.Fatalf("normalized anchor formats = %#v ok=%v", session, ok)
+	}
+}
+
 func TestStoreRejectsNewerSchemaWithoutRewritingIt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")

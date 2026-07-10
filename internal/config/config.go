@@ -13,6 +13,8 @@ const (
 	DefaultModel       = "claude-haiku-4-5-20251001"
 	DefaultModelAlias  = "claude-haiku-4-5"
 	DefaultSoftMaxSize = int64(16_777_216)
+	AnchorModeGuide    = "guide"
+	AnchorModeSnapshot = "snapshot"
 )
 
 type Config struct {
@@ -26,6 +28,7 @@ type Config struct {
 	Home                       string
 	Workdir                    string
 	TmuxSession                string
+	AnchorMode                 string
 	SnapshotBrowser            string
 	SnapshotTheme              string
 	AttachmentSoftMaxBytes     int64
@@ -65,6 +68,7 @@ func Load(path string) (Config, error) {
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
+		AnchorMode:                 firstNonEmpty(values["ENGRAM_ANCHOR_MODE"], AnchorModeGuide),
 		SnapshotBrowser:            ExpandPath(values["ENGRAM_SNAPSHOT_BROWSER"]),
 		SnapshotTheme:              firstNonEmpty(values["ENGRAM_SNAPSHOT_THEME"], "terminal"),
 		AttachmentSoftMaxBytes:     softMax,
@@ -93,20 +97,26 @@ func (c Config) Validate() error {
 	if c.TelegramAllowedUserID == 0 {
 		missing = append(missing, "TELEGRAM_ALLOWED_USER_ID")
 	}
-	if strings.TrimSpace(c.AnthropicAPIKey) == "" {
+	if c.EffectiveAnchorMode() == AnchorModeGuide && strings.TrimSpace(c.AnthropicAPIKey) == "" {
 		missing = append(missing, "ANTHROPIC_API_KEY")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
 	}
-	if c.LLMProvider != "anthropic" {
-		return fmt.Errorf("LLM_PROVIDER must be anthropic")
+	switch c.EffectiveAnchorMode() {
+	case AnchorModeGuide:
+		if c.LLMProvider != "anthropic" {
+			return fmt.Errorf("LLM_PROVIDER must be anthropic")
+		}
+		if c.AnthropicModel != DefaultModel && c.AnthropicModel != DefaultModelAlias {
+			return fmt.Errorf("ANTHROPIC_MODEL must be %s or %s", DefaultModel, DefaultModelAlias)
+		}
+	case AnchorModeSnapshot:
+	default:
+		return fmt.Errorf("ENGRAM_ANCHOR_MODE must be guide or snapshot")
 	}
 	if c.TelegramChatID == 0 {
 		return fmt.Errorf("TELEGRAM_CHAT_ID resolved to zero")
-	}
-	if c.AnthropicModel != DefaultModel && c.AnthropicModel != DefaultModelAlias {
-		return fmt.Errorf("ANTHROPIC_MODEL must be %s or %s", DefaultModel, DefaultModelAlias)
 	}
 	if c.AttachmentSoftMaxBytes <= 0 {
 		return fmt.Errorf("ENGRAM_ATTACHMENT_SOFT_MAX_BYTES must be positive")
@@ -121,6 +131,15 @@ func (c Config) Validate() error {
 	}
 	return nil
 }
+
+func (c Config) EffectiveAnchorMode() string {
+	if strings.TrimSpace(c.AnchorMode) == "" {
+		return AnchorModeGuide
+	}
+	return strings.TrimSpace(c.AnchorMode)
+}
+
+func (c Config) SnapshotAnchors() bool { return c.EffectiveAnchorMode() == AnchorModeSnapshot }
 
 func (c Config) StatePath() string       { return filepath.Join(c.Home, "state.json") }
 func (c Config) AuditPath() string       { return filepath.Join(c.Home, "audit.jsonl") }
