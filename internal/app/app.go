@@ -45,11 +45,13 @@ type App struct {
 	summaryQueued  map[int]bool
 	summaryRunning map[int]bool
 	summaryForce   map[int]bool
+	summaryDue     map[int]time.Time
 	captureMu      sync.Mutex
 	captureHistory map[int][]map[string]bool
 	closeConfirmMu sync.Mutex
 	closeConfirms  map[string]closeConfirmation
 	sessionLocks   sync.Map
+	anchorLocks    sync.Map
 	sleepHook      func(time.Duration)
 	refreshHook    func(context.Context, int, bool)
 }
@@ -95,6 +97,7 @@ func New(cfg config.Config) (*App, error) {
 		summaryQueued:  map[int]bool{},
 		summaryRunning: map[int]bool{},
 		summaryForce:   map[int]bool{},
+		summaryDue:     map[int]time.Time{},
 		captureHistory: map[int][]map[string]bool{},
 		closeConfirms:  map[string]closeConfirmation{},
 	}, nil
@@ -255,12 +258,8 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	switch cmd {
 	case "help":
 		a.reply(ctx, msg, commands.HelpText())
-	case "commands":
-		a.commandsMetadata(ctx, msg)
 	case "status":
 		a.reply(ctx, msg, a.statusText())
-	case "version":
-		a.reply(ctx, msg, version.String())
 	case "sessions":
 		a.sessions(ctx, msg)
 	case "attach":
@@ -392,17 +391,12 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "session not found")
 			return
 		}
+		a.reconcileAnchorPresentation(ctx, id)
 		a.reply(ctx, msg, fmt.Sprintf("[%d] watch stopped", id))
-	case "quit":
-		a.reply(ctx, msg, "Engram stopping. tmux sessions remain open.")
-		a.quitCode = 0
-		a.stop()
 	case "restart":
 		a.reply(ctx, msg, "Engram restarting. tmux sessions remain open.")
 		a.quitCode = 2
 		a.stop()
-	case "kill":
-		a.reply(ctx, msg, "/kill is reserved; use /close <id>.")
 	case "attachment-bypass", "attachment_bypass":
 		hash := parseBypassHash(args)
 		if hash == "" || !validSHA256Hex(hash) {
@@ -477,6 +471,41 @@ func (a *App) redactAuditPayload(payload any) any {
 	}
 }
 
+func (a *App) redactText(text string) string {
+	return redact.Secrets(text, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
+}
+
+func (a *App) redactGuideReport(report anthropic.GuideReport) anthropic.GuideReport {
+	report.StatusReport = a.redactText(report.StatusReport)
+	report.RecommendedAction = a.redactText(report.RecommendedAction)
+	for i := range report.Citations {
+		report.Citations[i] = a.redactText(report.Citations[i])
+	}
+	return report
+}
+
+func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
+	ts.Title = a.redactText(ts.Title)
+	ts.LastInputPreview = a.redactText(ts.LastInputPreview)
+	ts.LastSummary = a.redactText(ts.LastSummary)
+	ts.LastKnownCWD = a.redactText(ts.LastKnownCWD)
+	if ts.Handoff != nil {
+		handoff := *ts.Handoff
+		handoff.Evidence = append([]string(nil), ts.Handoff.Evidence...)
+		handoff.StatusReport = a.redactText(handoff.StatusReport)
+		handoff.RecommendedAction = a.redactText(handoff.RecommendedAction)
+		for i := range handoff.Evidence {
+			handoff.Evidence[i] = a.redactText(handoff.Evidence[i])
+		}
+		ts.Handoff = &handoff
+	}
+}
+
+func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
+	a.redactSessionPresentation(&ts)
+	return renderLocal(ts, a.redactText(summary))
+}
+
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
 	space := diskFree(a.Config.ArtifactDir())
@@ -499,13 +528,22 @@ func (a *App) statusText() string {
 func renderLocal(ts state.TerminalSession, summary string) string {
 	title := firstNonEmpty(ts.Title, "-")
 	if len(title) > 40 {
-		title = title[:40]
+		title = headUTF8(title, 40)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "[%d] %s  %s\nlast: %s\n\n%s",
-		ts.ID,
-		ts.State,
-		title,
+	fmt.Fprintf(&b, "[%d] %s  %s\n", ts.ID, ts.State, title)
+	if ts.Handoff != nil {
+		if ts.Handoff.AcknowledgedAt.IsZero() {
+			b.WriteString("needs you\n")
+		} else {
+			b.WriteString("observing after your input\n")
+		}
+		summary = handoffSummary(ts.Handoff)
+	}
+	if ts.LastKnownCWD != "" {
+		fmt.Fprintf(&b, "cwd: %s\n", ts.LastKnownCWD)
+	}
+	fmt.Fprintf(&b, "last: %s\n\n%s",
 		firstNonEmpty(ts.LastInputPreview, "-"),
 		summary,
 	)
@@ -540,7 +578,7 @@ func parseIDRest(arg string) (int, string, bool) {
 func preview(s string) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
 	if len(s) > 80 {
-		return s[:80]
+		return headUTF8(s, 80)
 	}
 	return s
 }

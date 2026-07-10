@@ -27,6 +27,7 @@ func TestQueueRefreshCoalescesWhileRunning(t *testing.T) {
 	app.queueRefresh(7, true, 0)
 	<-done
 	<-done
+	app.refreshWG.Wait()
 
 	app.summaryMu.Lock()
 	defer app.summaryMu.Unlock()
@@ -35,6 +36,27 @@ func TestQueueRefreshCoalescesWhileRunning(t *testing.T) {
 	}
 	if len(app.summaryQueued) != 0 || len(app.summaryRunning) != 0 || len(app.summaryForce) != 0 {
 		t.Fatalf("queues not drained: queued=%#v running=%#v force=%#v", app.summaryQueued, app.summaryRunning, app.summaryForce)
+	}
+}
+
+func TestQueueRefreshMovesQuietDeadlineAfterEachInput(t *testing.T) {
+	app := &App{
+		summaryQueued:  map[int]bool{7: true},
+		summaryRunning: map[int]bool{},
+		summaryForce:   map[int]bool{},
+		summaryDue:     map[int]time.Time{7: time.Now()},
+	}
+	app.queueRefresh(7, true, summaryQuietPeriod)
+	first := app.summaryDue[7]
+	time.Sleep(time.Millisecond)
+	app.queueRefresh(7, true, summaryQuietPeriod)
+	second := app.summaryDue[7]
+	if !second.After(first) {
+		t.Fatalf("quiet deadline did not move: first=%s second=%s", first, second)
+	}
+	app.queueRefresh(7, true, 0)
+	if !app.summaryDue[7].Before(second) {
+		t.Fatalf("manual refresh did not bypass quiet deadline: due=%s previous=%s", app.summaryDue[7], second)
 	}
 }
 

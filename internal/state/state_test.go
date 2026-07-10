@@ -18,7 +18,7 @@ func TestStorePersistsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts, err := store.AllocateSession(1, 2, "engram-1", "@1", "%1", "title")
+	ts, err := store.AllocateSession("engram-1", "@1", "%1", "title")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := store.Snapshot()
-	if st.Version != 1 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
+	if st.Version != 4 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
 		t.Fatalf("normalized legacy state = %#v", st)
 	}
 	if got := st.TerminalSessions[0].LastRawCapture; got != "sensitive terminal output" {
@@ -146,6 +146,149 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 	got, ok := reopened.FindSession(7)
 	if !ok || got.LastRawCapture != "" || got.LastRawCaptureHash != "capture-hash" {
 		t.Fatalf("reopened legacy session = %#v ok=%v", got, ok)
+	}
+}
+
+func TestStoreRejectsNewerSchemaWithoutRewritingIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	future := []byte(`{"version":5,"next_session_id":99,"future_field":"keep-me"}`)
+	if err := os.WriteFile(path, future, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, audit); err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("Open future schema error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(future) {
+		t.Fatalf("future schema was rewritten:\n%s", got)
+	}
+}
+
+func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	legacy := `{
+  "version": 1,
+  "next_session_id": 2,
+  "terminal_sessions": [{
+    "id": 1,
+    "state": "idle",
+    "watch_enabled": true,
+    "chat_id": 100,
+    "created_by_user_id": 42,
+    "tmux_session_id": "$1",
+    "last_summary_hash": "unused",
+    "last_summary_model": "unused",
+    "pending_refresh": true,
+    "last_telegram_error": "stale"
+  }],
+  "attachments": []
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, ok := store.FindSession(1)
+	if !ok || session.State != TerminalLost || session.WatchEnabled || session.Handoff != nil {
+		t.Fatalf("normalized legacy session = %#v ok=%v", session, ok)
+	}
+	if store.Snapshot().Version != 4 {
+		t.Fatalf("state version = %d, want 4", store.Snapshot().Version)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{"chat_id", "created_by_user_id", "tmux_session_id", "last_summary_hash", "last_summary_model", "pending_refresh", "last_telegram_error"} {
+		if strings.Contains(string(persisted), `"`+removed+`"`) {
+			t.Fatalf("removed field %q remained in state: %s", removed, persisted)
+		}
+	}
+}
+
+func TestStoreMigratesSchemaThreeHandoffNoticeForAnchorRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	legacy := `{
+  "version": 3,
+  "next_session_id": 2,
+  "terminal_sessions": [{
+    "id": 1,
+    "state": "running",
+    "watch_enabled": true,
+    "anchor_chat_id": 100,
+    "anchor_message_id": 10,
+    "anchor_pinned": true,
+    "handoff": {
+      "key": "approval",
+      "status_report": "Waiting for approval.",
+      "recommended_action": "Approve or reject.",
+      "evidence": ["Confirm [y/N]"],
+      "observation_hash": "hash",
+      "opened_at": "2026-07-10T03:00:00Z",
+      "last_confirmed_at": "2026-07-10T03:00:00Z",
+      "notification_message_id": 11
+    }
+  }]
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, ok := store.FindSession(1)
+	if !ok || session.Handoff == nil || session.Handoff.AnchorMessageID != 11 || session.Handoff.NotificationMessageID != 0 || session.AnchorPinKnown {
+		t.Fatalf("schema 3 handoff migration = %#v ok=%v", session, ok)
+	}
+	if store.Snapshot().Version != 4 {
+		t.Fatalf("state version = %d, want 4", store.Snapshot().Version)
+	}
+}
+
+func TestOnlyCanonicalAnchorRoutesAndSnapshotsAreIsolated(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 10
+		s.Handoff = &Handoff{Key: "approval", ObservationHash: "hash", Evidence: []string{"Confirm [y/N]"}, NotificationMessageID: 11}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := store.FindByAnchor(100, 11)
+	if ok {
+		t.Fatalf("noncanonical handoff message routed = %#v", got)
+	}
+	got, ok = store.FindByAnchor(100, 10)
+	if !ok || got.ID != session.ID {
+		t.Fatalf("canonical anchor route = %#v ok=%v", got, ok)
+	}
+	snapshot := store.Snapshot()
+	snapshot.TerminalSessions[0].Handoff.Evidence[0] = "mutated"
+	stored, _ := store.FindSession(session.ID)
+	if stored.Handoff.Evidence[0] != "Confirm [y/N]" {
+		t.Fatalf("snapshot mutation leaked into store: %#v", stored.Handoff)
 	}
 }
 

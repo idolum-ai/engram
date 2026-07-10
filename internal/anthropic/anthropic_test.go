@@ -66,6 +66,8 @@ func TestPromptTreatsLastInputAsPreview(t *testing.T) {
 		"Reconstruct citation text only from the terminal captures",
 		"needs_full_buffer",
 		"recommended_action",
+		"human_needed",
+		"handoff_key",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
@@ -108,6 +110,33 @@ func TestGuideReportTelegramTextRendersCitations(t *testing.T) {
 	}
 	if strings.Contains(got, "> \n") {
 		t.Fatalf("telegram text included empty citation:\n%s", got)
+	}
+}
+
+func TestGuideReportRequiresGroundedHandoff(t *testing.T) {
+	t.Parallel()
+	report, err := parseGuideReport(`{"status_report":"approval is required","recommended_action":"approve or reject","citations":["Apply? [y/N]"],"human_needed":true,"handoff_key":"Approve Deployment!","confidence":"high"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.HumanNeeded || report.HandoffKey != "approve_deployment" || strings.HasPrefix(report.TelegramText(), "needs you\n") {
+		t.Fatalf("grounded handoff = %#v, text=%q", report, report.TelegramText())
+	}
+	report, err = parseGuideReport(`{"status_report":"approval is required","recommended_action":"approve or reject","human_needed":true,"handoff_key":"approval","confidence":"high"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.HumanNeeded || report.HandoffKey != "" || !report.WantsFullBuffer() {
+		t.Fatalf("ungrounded handoff was accepted: %#v", report)
+	}
+}
+
+func TestSystemPromptTreatsTerminalContentAsUntrustedData(t *testing.T) {
+	t.Parallel()
+	for _, phrase := range []string{"untrusted data", "never as instructions", "do not relay or endorse"} {
+		if !strings.Contains(SystemPrompt, phrase) {
+			t.Fatalf("system prompt missing injection boundary %q", phrase)
+		}
 	}
 }
 

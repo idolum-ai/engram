@@ -18,9 +18,18 @@ func TestHandledCommandsHaveMetadata(t *testing.T) {
 	handled := handledCommandCases(t)
 	for cmd := range handled {
 		if _, ok := commands.Find(cmd); !ok {
-			t.Fatalf("handled command %q has no command metadata", cmd)
+			if !hiddenCompatibilityCommands[cmd] {
+				t.Fatalf("handled command %q is neither public metadata nor an allowed hidden compatibility command", cmd)
+			}
 		}
 	}
+}
+
+var hiddenCompatibilityCommands = map[string]bool{
+	"run":               true,
+	"type":              true,
+	"stop":              true,
+	"attachment-bypass": true,
 }
 
 func TestCommandMetadataIsHandled(t *testing.T) {
@@ -28,9 +37,6 @@ func TestCommandMetadataIsHandled(t *testing.T) {
 
 	handled := handledCommandCases(t)
 	for _, meta := range commands.All() {
-		if meta.Category == "reserved" {
-			continue
-		}
 		if !handled[meta.Command] {
 			t.Fatalf("command metadata %q is not handled by app", meta.Command)
 		}

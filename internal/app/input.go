@@ -64,15 +64,19 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux send failed: " + err.Error()}
 	}
 	_ = a.audit("tmux.send", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter})
+	handoffAcknowledged := false
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.LastInputPreview = preview(text)
 		s.LastInputMode = mode
 		s.LastActivityAt = time.Now().UTC()
-		s.PendingRefresh = true
+		handoffAcknowledged = acknowledgeHandoff(s, time.Now().UTC(), ts.LastRawCaptureHash)
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": mode, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "state update error after tmux input: "+err.Error(), true)
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux input: " + err.Error()}
+	}
+	if handoffAcknowledged {
+		_ = a.audit("handoff.lifecycle", "acknowledged", map[string]any{"session_id": id, "input_mode": mode})
 	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent"}
@@ -117,15 +121,19 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 			return actionResult{Outcome: actionTmuxFailed, Message: "key sequence canceled"}
 		}
 	}
+	handoffAcknowledged := false
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.LastInputPreview = firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))
 		s.LastInputMode = "keys"
 		s.LastActivityAt = time.Now().UTC()
-		s.PendingRefresh = true
+		handoffAcknowledged = acknowledgeHandoff(s, time.Now().UTC(), ts.LastRawCaptureHash)
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": "keys", "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "state update error after tmux keys: "+err.Error(), true)
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux keys: " + err.Error()}
+	}
+	if handoffAcknowledged {
+		_ = a.audit("handoff.lifecycle", "acknowledged", map[string]any{"session_id": id, "input_mode": "keys"})
 	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))}

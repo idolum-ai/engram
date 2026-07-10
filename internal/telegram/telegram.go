@@ -122,6 +122,16 @@ func IsMessageNotModified(err error) bool {
 	return errors.As(err, &telegramErr) && telegramErr.IsMessageNotModified()
 }
 
+func IsMessageAlreadyPinned(err error) bool {
+	var telegramErr *Error
+	return errors.As(err, &telegramErr) && strings.Contains(strings.ToLower(telegramErr.Description), "already pinned")
+}
+
+func IsMessageNotPinned(err error) bool {
+	var telegramErr *Error
+	return errors.As(err, &telegramErr) && strings.Contains(strings.ToLower(telegramErr.Description), "not pinned")
+}
+
 type Update struct {
 	UpdateID      int            `json:"update_id"`
 	Message       *Message       `json:"message,omitempty"`
@@ -283,6 +293,22 @@ func (c *Client) AnswerCallback(ctx context.Context, id string, text string) err
 	return c.postJSON(ctx, "answerCallbackQuery", body, &out)
 }
 
+func (c *Client) PinChatMessage(ctx context.Context, chatID int64, messageID int) error {
+	body := map[string]any{
+		"chat_id":              chatID,
+		"message_id":           messageID,
+		"disable_notification": true,
+	}
+	var out bool
+	return c.postJSON(ctx, "pinChatMessage", body, &out)
+}
+
+func (c *Client) UnpinChatMessage(ctx context.Context, chatID int64, messageID int) error {
+	body := map[string]any{"chat_id": chatID, "message_id": messageID}
+	var out bool
+	return c.postJSON(ctx, "unpinChatMessage", body, &out)
+}
+
 func (c *Client) GetFile(ctx context.Context, fileID string) (File, error) {
 	v := url.Values{}
 	v.Set("file_id", fileID)
@@ -398,6 +424,10 @@ func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
 		},
 	}}
+}
+
+func ClearMarkup() *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
 }
 
 func RecoverMarkup(sessionID int) *InlineKeyboardMarkup {
@@ -593,7 +623,7 @@ func safeDocumentFilename(filename string) string {
 
 func isOutboundMethod(method string) bool {
 	switch method {
-	case "sendMessage", "editMessageText", "sendDocument":
+	case "sendMessage", "editMessageText", "sendDocument", "pinChatMessage", "unpinChatMessage":
 		return true
 	default:
 		return false

@@ -18,13 +18,36 @@ import (
 type TerminalState string
 type TerminalOrigin string
 
+type Handoff struct {
+	Key                     string    `json:"key"`
+	StatusReport            string    `json:"status_report"`
+	RecommendedAction       string    `json:"recommended_action"`
+	Evidence                []string  `json:"evidence,omitempty"`
+	ObservationHash         string    `json:"observation_hash"`
+	OpenedAt                time.Time `json:"opened_at"`
+	LastConfirmedAt         time.Time `json:"last_confirmed_at"`
+	AcknowledgedAt          time.Time `json:"acknowledged_at,omitempty"`
+	AcknowledgedCaptureHash string    `json:"acknowledged_capture_hash,omitempty"`
+	AnchorMessageID         int       `json:"anchor_message_id,omitempty"`
+	NotificationMessageID   int       `json:"notification_message_id,omitempty"` // Legacy schema 3 field.
+}
+
+type HandoffCandidate struct {
+	Kind              string    `json:"kind"`
+	Key               string    `json:"key,omitempty"`
+	StatusReport      string    `json:"status_report,omitempty"`
+	RecommendedAction string    `json:"recommended_action,omitempty"`
+	Evidence          []string  `json:"evidence,omitempty"`
+	ObservationHash   string    `json:"observation_hash"`
+	FirstObservedAt   time.Time `json:"first_observed_at"`
+	LastObservedAt    time.Time `json:"last_observed_at"`
+	Observations      int       `json:"observations"`
+}
+
 const (
 	TerminalRunning TerminalState = "running"
-	TerminalIdle    TerminalState = "idle"
-	TerminalExited  TerminalState = "exited"
 	TerminalLost    TerminalState = "lost"
 	TerminalClosed  TerminalState = "closed"
-	TerminalKilled  TerminalState = "killed"
 )
 
 const (
@@ -47,34 +70,32 @@ type State struct {
 }
 
 type TerminalSession struct {
-	ID                 int            `json:"id"`
-	ChatID             int64          `json:"chat_id"`
-	CreatedByUserID    int64          `json:"created_by_user_id"`
-	TmuxSessionName    string         `json:"tmux_session_name"`
-	TmuxSessionID      string         `json:"tmux_session_id,omitempty"`
-	TmuxWindowID       string         `json:"tmux_window_id"`
-	TmuxPaneID         string         `json:"tmux_pane_id"`
-	Origin             TerminalOrigin `json:"origin,omitempty"`
-	Title              string         `json:"title"`
-	LastKnownCWD       string         `json:"last_known_cwd,omitempty"`
-	State              TerminalState  `json:"state"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	LastActivityAt     time.Time      `json:"last_activity_at"`
-	LastInputPreview   string         `json:"last_input_preview,omitempty"`
-	LastInputMode      string         `json:"last_input_mode,omitempty"`
-	LastRawCaptureHash string         `json:"last_raw_capture_hash,omitempty"`
-	LastSummaryHash    string         `json:"last_summary_hash,omitempty"`
-	LastRenderHash     string         `json:"last_render_hash,omitempty"`
-	LastSummary        string         `json:"last_summary,omitempty"`
-	LastSummaryModel   string         `json:"last_summary_model,omitempty"`
-	AnchorChatID       int64          `json:"anchor_chat_id,omitempty"`
-	AnchorMessageID    int            `json:"anchor_message_id,omitempty"`
-	WatchEnabled       bool           `json:"watch_enabled"`
-	LastAnchorEditAt   time.Time      `json:"last_anchor_edit_at,omitempty"`
-	PendingRefresh     bool           `json:"pending_refresh,omitempty"`
-	LastTelegramError  string         `json:"last_telegram_error,omitempty"`
-	LastRawCapture     string         `json:"last_raw_capture,omitempty"`
+	ID                      int               `json:"id"`
+	TmuxSessionName         string            `json:"tmux_session_name"`
+	TmuxWindowID            string            `json:"tmux_window_id"`
+	TmuxPaneID              string            `json:"tmux_pane_id"`
+	Origin                  TerminalOrigin    `json:"origin,omitempty"`
+	Title                   string            `json:"title"`
+	LastKnownCWD            string            `json:"last_known_cwd,omitempty"`
+	State                   TerminalState     `json:"state"`
+	CreatedAt               time.Time         `json:"created_at"`
+	UpdatedAt               time.Time         `json:"updated_at"`
+	LastActivityAt          time.Time         `json:"last_activity_at"`
+	LastInputPreview        string            `json:"last_input_preview,omitempty"`
+	LastInputMode           string            `json:"last_input_mode,omitempty"`
+	LastRawCaptureHash      string            `json:"last_raw_capture_hash,omitempty"`
+	LastRenderHash          string            `json:"last_render_hash,omitempty"`
+	LastSummary             string            `json:"last_summary,omitempty"`
+	Handoff                 *Handoff          `json:"handoff,omitempty"`
+	HandoffCandidate        *HandoffCandidate `json:"handoff_candidate,omitempty"`
+	AnchorChatID            int64             `json:"anchor_chat_id,omitempty"`
+	AnchorMessageID         int               `json:"anchor_message_id,omitempty"`
+	RetiringAnchorMessageID int               `json:"retiring_anchor_message_id,omitempty"`
+	AnchorPinned            bool              `json:"anchor_pinned,omitempty"`
+	AnchorPinKnown          bool              `json:"anchor_pin_known,omitempty"`
+	WatchEnabled            bool              `json:"watch_enabled"`
+	LastAnchorEditAt        time.Time         `json:"last_anchor_edit_at,omitempty"`
+	LastRawCapture          string            `json:"last_raw_capture,omitempty"`
 }
 
 type Attachment struct {
@@ -127,6 +148,7 @@ type Store struct {
 }
 
 const (
+	currentStateVersion   = 4
 	maxTerminalSessions   = 200
 	maxAttachments        = 200
 	maxAttachmentBypasses = 100
@@ -166,9 +188,11 @@ func Open(path, auditPath string) (*Store, error) {
 		_ = s.Audit("state.recover", "corrupt_replaced", map[string]any{"backup": backup})
 		return s, nil
 	}
-	if s.state.Version == 0 {
-		s.state.Version = 1
+	if s.state.Version > currentStateVersion {
+		return nil, fmt.Errorf("state schema version %d is newer than supported version %d", s.state.Version, currentStateVersion)
 	}
+	s.state.Version = currentStateVersion
+	normalizeTerminalSessions(s.state.TerminalSessions)
 	if s.state.NextSessionID == 0 {
 		s.state.NextSessionID = maxSessionID(s.state.TerminalSessions) + 1
 	}
@@ -181,7 +205,7 @@ func Open(path, auditPath string) (*Store, error) {
 }
 
 func newState() State {
-	return State{Version: 1, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
+	return State{Version: currentStateVersion, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
 }
 
 func (s *Store) Snapshot() State {
@@ -288,7 +312,7 @@ func (s *Store) Audit(eventType, status string, payload any) error {
 	return err
 }
 
-func (s *Store) AllocateSession(chatID, userID int64, tmuxSessionName, windowID, paneID, title string) (TerminalSession, error) {
+func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string) (TerminalSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
@@ -296,8 +320,6 @@ func (s *Store) AllocateSession(chatID, userID int64, tmuxSessionName, windowID,
 	s.state.NextSessionID++
 	ts := TerminalSession{
 		ID:              id,
-		ChatID:          chatID,
-		CreatedByUserID: userID,
 		TmuxSessionName: tmuxSessionName,
 		TmuxWindowID:    windowID,
 		TmuxPaneID:      paneID,
@@ -319,7 +341,7 @@ func (s *Store) UpdateSession(id int, fn func(*TerminalSession)) (TerminalSessio
 		if s.state.TerminalSessions[i].ID == id {
 			fn(&s.state.TerminalSessions[i])
 			s.state.TerminalSessions[i].UpdatedAt = time.Now().UTC()
-			ts := s.state.TerminalSessions[i]
+			ts := cloneTerminalSession(s.state.TerminalSessions[i])
 			return ts, true, s.saveLocked()
 		}
 	}
@@ -331,7 +353,7 @@ func (s *Store) FindSession(id int) (TerminalSession, bool) {
 	defer s.mu.Unlock()
 	for _, ts := range s.state.TerminalSessions {
 		if ts.ID == id {
-			return ts, true
+			return cloneTerminalSession(ts), true
 		}
 	}
 	return TerminalSession{}, false
@@ -342,7 +364,7 @@ func (s *Store) FindByAnchor(chatID int64, messageID int) (TerminalSession, bool
 	defer s.mu.Unlock()
 	for _, ts := range s.state.TerminalSessions {
 		if ts.AnchorChatID == chatID && ts.AnchorMessageID == messageID {
-			return ts, true
+			return cloneTerminalSession(ts), true
 		}
 	}
 	return TerminalSession{}, false
@@ -353,7 +375,7 @@ func (s *Store) FindByPane(paneID string) (TerminalSession, bool) {
 	defer s.mu.Unlock()
 	for _, ts := range s.state.TerminalSessions {
 		if ts.TmuxPaneID == paneID && ts.State != TerminalClosed {
-			return ts, true
+			return cloneTerminalSession(ts), true
 		}
 	}
 	return TerminalSession{}, false
@@ -581,8 +603,8 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 	}
 	sort.SliceStable(indices, func(i, j int) bool {
 		a, b := sessions[indices[i]], sessions[indices[j]]
-		aActive := a.State == TerminalRunning || a.State == TerminalIdle
-		bActive := b.State == TerminalRunning || b.State == TerminalIdle
+		aActive := a.State == TerminalRunning
+		bActive := b.State == TerminalRunning
 		if aActive != bActive {
 			return aActive
 		}
@@ -603,6 +625,40 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 		}
 	}
 	return out
+}
+
+func normalizeTerminalSessions(sessions []TerminalSession) {
+	for i := range sessions {
+		session := &sessions[i]
+		// Pin state is reconciled with Telegram after every process start.
+		session.AnchorPinKnown = false
+		if session.AnchorMessageID == 0 || session.RetiringAnchorMessageID == session.AnchorMessageID {
+			session.RetiringAnchorMessageID = 0
+		}
+		switch session.State {
+		case TerminalRunning, TerminalLost, TerminalClosed:
+		default:
+			session.State = TerminalLost
+			session.WatchEnabled = false
+		}
+		if session.Handoff != nil && (session.Handoff.Key == "" || session.Handoff.ObservationHash == "" || session.Handoff.OpenedAt.IsZero() || len(session.Handoff.Evidence) == 0) {
+			session.Handoff = nil
+		}
+		if session.Handoff != nil && session.Handoff.AnchorMessageID == 0 && session.Handoff.NotificationMessageID != 0 {
+			session.Handoff.AnchorMessageID = session.Handoff.NotificationMessageID
+			session.Handoff.NotificationMessageID = 0
+		}
+		if session.HandoffCandidate != nil {
+			switch session.HandoffCandidate.Kind {
+			case "open", "replace", "resolve", "reopen":
+			default:
+				session.HandoffCandidate = nil
+			}
+			if candidate := session.HandoffCandidate; candidate != nil && (candidate.ObservationHash == "" || candidate.FirstObservedAt.IsZero() || candidate.Observations < 1 || candidate.Kind != "resolve" && (candidate.Key == "" || len(candidate.Evidence) == 0)) {
+				session.HandoffCandidate = nil
+			}
+		}
+	}
 }
 
 func sessionRecency(session TerminalSession) time.Time {
@@ -628,12 +684,30 @@ func maxAttachmentID(attachments []Attachment) int {
 func cloneState(in State) State {
 	out := in
 	out.TerminalSessions = append([]TerminalSession(nil), in.TerminalSessions...)
+	for i := range out.TerminalSessions {
+		out.TerminalSessions[i] = cloneTerminalSession(out.TerminalSessions[i])
+	}
 	out.Attachments = append([]Attachment(nil), in.Attachments...)
 	out.AttachmentBypasses = append([]AttachmentBypass(nil), in.AttachmentBypasses...)
 	out.UpdateJournal = append([]UpdateEvent(nil), in.UpdateJournal...)
 	out.ProcessedMessages = make(map[string]bool, len(in.ProcessedMessages))
 	for k, v := range in.ProcessedMessages {
 		out.ProcessedMessages[k] = v
+	}
+	return out
+}
+
+func cloneTerminalSession(in TerminalSession) TerminalSession {
+	out := in
+	if in.Handoff != nil {
+		handoff := *in.Handoff
+		handoff.Evidence = append([]string(nil), in.Handoff.Evidence...)
+		out.Handoff = &handoff
+	}
+	if in.HandoffCandidate != nil {
+		candidate := *in.HandoffCandidate
+		candidate.Evidence = append([]string(nil), in.HandoffCandidate.Evidence...)
+		out.HandoffCandidate = &candidate
 	}
 	return out
 }

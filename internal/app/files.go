@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/redact"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
@@ -131,22 +130,6 @@ func firstError(errs ...error) error {
 		}
 	}
 	return nil
-}
-
-func (a *App) commandsMetadata(ctx context.Context, msg telegram.Message) {
-	data, err := commands.JSON()
-	if err != nil {
-		a.reply(ctx, msg, "commands error: "+err.Error())
-		return
-	}
-	path := filepath.Join(a.Config.ArtifactDir(), "engram-commands-"+time.Now().UTC().Format("20060102T150405Z")+".json")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		a.reply(ctx, msg, "write error: "+err.Error())
-		return
-	}
-	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, "Engram command metadata"); err != nil {
-		a.reply(ctx, msg, "upload error: "+err.Error())
-	}
 }
 
 func (a *App) handleAttachment(ctx context.Context, msg telegram.Message, doc telegram.Document) actionResult {

@@ -21,25 +21,19 @@ type BotCommand struct {
 
 var registry = []Metadata{
 	{Command: "help", Usage: "/help", Description: "Show available commands", Category: "service"},
-	{Command: "commands", Usage: "/commands", Description: "Send command metadata as JSON", Category: "service"},
 	{Command: "status", Usage: "/status", Description: "Show service, state, and tmux status", Category: "service"},
-	{Command: "version", Usage: "/version", Description: "Show Engram version", Category: "service"},
 	{Command: "logs", Usage: "/logs", Description: "Send service audit logs as an attachment", Category: "service"},
-	{Command: "quit", Usage: "/quit", Description: "Stop Engram without closing tmux sessions", Category: "service"},
 	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions", Category: "service"},
 	{Command: "sessions", Usage: "/sessions", Description: "List active terminal sessions with controls", Category: "session"},
 	{Command: "attach", Usage: "/attach <tmux-target>", Description: "Track an existing tmux window or pane", Category: "session"},
 	{Command: "new", Usage: "/new <text>", Description: "Create a tmux window and send text as a shell command", Category: "session"},
 	{Command: "send", Usage: "/send <id> <text>", Description: "Send text as a shell command to a session", Category: "session"},
-	{Command: "run", Usage: "/run <id> <text>", Description: "Run a command in a session", Category: "session"},
 	{Command: "text", Usage: "/text <id> <text>", Description: "Send literal text without pressing Enter", Category: "session"},
-	{Command: "type", Usage: "/type <id> <text>", Description: "Type literal text without pressing Enter", Category: "session"},
 	{Command: "key", Usage: "/key <id> <keys...>", Description: "Send tmux key names to a session", Category: "session"},
 	{Command: "rename", Usage: "/rename <id> <name>", Description: "Rename a tracked session", Category: "session"},
 	{Command: "cwd", Usage: "/cwd <id>", Description: "Show a session pane's working directory", Category: "session"},
 	{Command: "cd", Usage: "/cd <id> <path>", Description: "Change a session pane's working directory", Category: "session"},
 	{Command: "watch", Usage: "/watch <id>", Description: "Enable anchor updates for a session", Category: "session"},
-	{Command: "stop", Usage: "/stop <id>", Description: "Disable anchor updates for a session", Category: "session"},
 	{Command: "unwatch", Usage: "/unwatch <id>", Description: "Disable anchor updates for a session", Category: "session"},
 	{Command: "close", Usage: "/close <id>", Description: "Close a tracked tmux window", Category: "session"},
 	{Command: "dump", Usage: "/dump <id>", Description: "Send the full tmux scrollback as an attachment", Category: "capture"},
@@ -47,8 +41,6 @@ var registry = []Metadata{
 	{Command: "attachments", Usage: "/attachments", Description: "List files received from Telegram", Category: "files"},
 	{Command: "download", Usage: "/download <absolute-path>", Description: "Upload an absolute local path to Telegram", Category: "files"},
 	{Command: "attachment_bypass", Usage: "/attachment_bypass sha256:<hash>", Description: "Authorize one large attachment by SHA-256", Category: "files"},
-	{Command: "attachment-bypass", Usage: "/attachment-bypass sha256:<hash>", Description: "Compatibility alias for /attachment_bypass", Category: "reserved"},
-	{Command: "kill", Usage: "/kill", Description: "Reserved command; use /close <id>", Category: "reserved"},
 }
 
 func All() []Metadata {
@@ -70,7 +62,7 @@ func Find(command string) (Metadata, bool) {
 func BotCommands() []BotCommand {
 	out := make([]BotCommand, 0, len(registry))
 	for _, meta := range registry {
-		if meta.Category == "reserved" || !validTelegramCommand(meta.Command) {
+		if !validTelegramCommand(meta.Command) {
 			continue
 		}
 		out = append(out, BotCommand{Command: meta.Command, Description: meta.Description})
@@ -106,9 +98,6 @@ func HelpText() string {
 	var b strings.Builder
 	b.WriteString("Commands\n\n")
 	for _, meta := range registry {
-		if meta.Category == "reserved" {
-			continue
-		}
 		fmt.Fprintf(&b, "%s - %s\n", meta.Usage, meta.Description)
 	}
 	b.WriteString("\nSession input\n")

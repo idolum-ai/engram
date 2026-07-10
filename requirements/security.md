@@ -18,6 +18,9 @@ filesystem. The security and privacy model must stay small and explicit.
   issues, or test fixtures.
 - Audit payloads and `/logs` output must redact configured credentials and
   common credential patterns.
+- Model-derived summaries, recommended actions, and handoff evidence must pass
+  through the same best-effort redaction before persistence and Telegram
+  delivery.
 - Documentation must state that redaction is best effort and does not make an
   artifact safe to share without review.
 
@@ -29,14 +32,17 @@ filesystem. The security and privacy model must stay small and explicit.
   previews, prior summaries, visible pane captures, and an optional bounded
   full-scrollback retry.
 - Terminal captures sent to Anthropic are not credential-redacted.
+- Terminal captures are untrusted data for the guide. Pane-authored text cannot
+  instruct Haiku or acquire authority merely by addressing Engram or the user.
 - Incoming attachments are downloaded from Telegram but are not sent to
   Anthropic by default.
 
 ## Local Sensitive Data
 
 - `state.json` may contain Telegram identifiers, input previews, summaries,
-  hashes, and attachment metadata. Raw terminal captures are retained only in
-  process memory and are omitted from persisted state.
+  hashes, attachment metadata, and pending or active handoff text and evidence.
+  Raw terminal captures are retained only in process memory and are omitted from
+  persisted state.
 - `audit.jsonl`, lock metadata, tmux history, and `/tmp/engram` artifacts must
   be treated as sensitive.
 - Uninstall must not silently destroy local state or tmux sessions.
@@ -48,8 +54,8 @@ filesystem. The security and privacy model must stay small and explicit.
 - Large attachments require a hash-confirmed bypass and remain subject to a
   hard limit derived from the configured soft limit, free disk, and Telegram's
   20 MiB cloud Bot API download ceiling.
-- `/attachment_bypass` is the registered command. The older
-  `/attachment-bypass` spelling remains an unregistered compatibility alias.
+- `/attachment_bypass` is the registered large-attachment authorization
+  command.
 - Attachment soft limits must be enforced during the download stream, not only
   from Telegram-provided file metadata.
 - `/download` only accepts absolute paths and uploads regular files.

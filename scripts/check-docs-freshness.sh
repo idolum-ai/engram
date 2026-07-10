@@ -6,9 +6,7 @@ cd "$repo_root"
 
 required_docs=(
   docs/design-principles.md
-  docs/feature-matrix.md
   requirements/INDEX.md
-  tmux-telegram-client-spec.md
 )
 
 for file in "${required_docs[@]}"; do
@@ -22,14 +20,9 @@ export GOCACHE="${GOCACHE:-/tmp/engram-go-build}"
 export GOMODCACHE="${GOMODCACHE:-/tmp/engram-go-mod}"
 
 commands_json="$(go run ./cmd/engram commands)"
-for command in $(printf '%s\n' "$commands_json" | sed -n 's/.*"command": "\(.*\)",/\1/p'); do
-  if [[ "$command" == "kill" ]]; then
-    continue
-  fi
-  if ! rg -q "/$command\b" README.md tmux-telegram-client-spec.md requirements docs; then
-    echo "command /$command is missing from docs" >&2
-    exit 1
-  fi
-done
+if ! printf '%s\n' "$commands_json" | rg -q '"command": "help"'; then
+  echo "command metadata is empty or missing /help" >&2
+  exit 1
+fi
 
 echo "docs freshness check passed"

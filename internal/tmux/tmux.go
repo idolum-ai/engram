@@ -99,17 +99,17 @@ func (m Manager) EnsureSession(ctx context.Context, name, workdir string) error 
 	return err
 }
 
-func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) (sessionID, windowID, paneID string, err error) {
-	format := "#{session_id}\t#{window_id}\t#{pane_id}"
+func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) (windowID, paneID string, err error) {
+	format := "#{window_id}\t#{pane_id}"
 	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", session)
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	parts := strings.Split(strings.TrimSpace(out), "\t")
-	if len(parts) != 3 {
-		return "", "", "", fmt.Errorf("unexpected tmux new-window output %q", out)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("unexpected tmux new-window output %q", out)
 	}
-	return parts[0], parts[1], parts[2], nil
+	return parts[0], parts[1], nil
 }
 
 func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
@@ -310,11 +310,6 @@ func (m Manager) CaptureFull(ctx context.Context, paneID string) (string, error)
 func (m Manager) KillWindow(ctx context.Context, windowID string) error {
 	_, err := m.Runner.Run(ctx, "kill-window", "-t", windowID)
 	return err
-}
-
-func (m Manager) PaneCWD(ctx context.Context, paneID string) (string, error) {
-	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_current_path}")
-	return strings.TrimSpace(out), err
 }
 
 func SessionName(chatID int64) string {

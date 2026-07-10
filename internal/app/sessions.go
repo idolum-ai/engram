@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
@@ -20,20 +22,18 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux session unavailable"}
 	}
 	title := tmux.WindowTitle(0, input)
-	sessionID, windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionName, a.Config.Workdir, title)
+	windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionName, a.Config.Workdir, title)
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux window creation failed"}
 	}
-	ts, err := a.Store.AllocateSession(msg.Chat.ID, msg.From.ID, sessionName, windowID, paneID, title)
+	ts, err := a.Store.AllocateSession(sessionName, windowID, paneID, title)
 	if err != nil {
 		_ = a.Tmux.KillWindow(tmuxCtx, windowID)
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "session state allocation failed"}
 	}
-	ts.TmuxSessionID = sessionID
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
-		s.TmuxSessionID = sessionID
 		s.Origin = state.TerminalOriginCreated
 		s.LastInputPreview = preview(input)
 		s.LastInputMode = "command"
@@ -47,7 +47,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		a.reply(ctx, msg, "tmux send error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "initial tmux input failed"}
 	}
-	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	resp, err := a.sendAnchor(ctx, msg.Chat.ID, a.renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
 	anchorReady := false
 	if err == nil {
 		if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
@@ -65,6 +65,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	if anchorReady {
+		a.reconcileAnchorPresentation(ctx, ts.ID)
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("created [%d]", ts.ID)}
@@ -96,7 +97,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("already tracked as [%d]", existing.ID)}
 	}
 	title := tmux.AttachedTitle(window)
-	ts, err := a.Store.AllocateSession(msg.Chat.ID, msg.From.ID, window.SessionName, window.ID, window.PaneID, title)
+	ts, err := a.Store.AllocateSession(window.SessionName, window.ID, window.PaneID, title)
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "state error"}
@@ -112,7 +113,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionStateFailed, Message: "state error"}
 	}
 	ts = updated
-	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	resp, err := a.sendAnchor(ctx, msg.Chat.ID, a.renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
 	anchorReady := false
 	if err == nil {
 		if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
@@ -129,6 +130,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	if anchorReady {
+		a.reconcileAnchorPresentation(ctx, ts.ID)
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("attached [%d]", ts.ID)}
@@ -160,16 +162,13 @@ func (a *App) cwd(ctx context.Context, id int, msg telegram.Message) actionResul
 		a.reply(ctx, msg, "session lost; use /sessions to attach the intended pane again")
 		return actionResult{Outcome: actionTmuxFailed, Message: "session identity lost"}
 	}
-	cwd, err := a.Tmux.PaneCWD(tctx, ts.TmuxPaneID)
-	if err != nil {
-		a.reply(ctx, msg, "cwd error: "+err.Error())
-		return actionResult{Outcome: actionTmuxFailed, Message: "cwd lookup failed"}
+	ts, ok = a.Store.FindSession(id)
+	if !ok {
+		a.reply(ctx, msg, "session no longer tracked")
+		return actionResult{Outcome: actionUserError, Message: "session no longer tracked"}
 	}
-	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) { s.LastKnownCWD = cwd }); err != nil {
-		a.reply(ctx, msg, "state error: "+err.Error())
-		return actionResult{Outcome: actionStateFailed, Message: "cwd state update failed"}
-	}
-	a.reply(ctx, msg, fmt.Sprintf("[%d] cwd\n%s", id, cwd))
+	cwd := firstNonEmpty(ts.LastKnownCWD, "unknown")
+	a.reply(ctx, msg, fmt.Sprintf("[%d] cwd (last observed)\n%s", id, cwd))
 	return actionResult{Outcome: actionOK, Message: cwd}
 }
 
@@ -195,10 +194,13 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 		if err := a.validateSessionPane(tctx, ts); err != nil {
 			return actionResult{Outcome: actionTmuxFailed, Message: "session is still lost; use /sessions to locate the intended pane"}
 		}
-		ts, _ = a.Store.FindSession(id)
+		ts, ok = a.Store.FindSession(id)
+		if !ok {
+			return actionResult{Outcome: actionUserError, Message: "session no longer tracked"}
+		}
 	}
 	if ts.AnchorMessageID == 0 {
-		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
+		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, a.renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
 		if err == nil {
 			if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
@@ -208,6 +210,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 				_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 				return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 			}
+			a.reconcileAnchorPresentation(ctx, id)
 			return actionResult{Outcome: actionOK, Message: "watching"}
 		}
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
@@ -216,6 +219,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 	}
+	a.reconcileAnchorPresentation(ctx, id)
 	a.queueRefresh(id, true, 0)
 	return actionResult{Outcome: actionOK, Message: "watching"}
 }
@@ -238,6 +242,7 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 			return actionResult{Outcome: actionStateFailed, Message: "state update failed while untracking"}
 		}
 		a.updateAnchorLocal(ctx, id, "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed.", true)
+		a.reconcileAnchorPresentation(ctx, id)
 		_ = a.audit("tmux.untrack", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "origin": ts.Origin})
 		return actionResult{Outcome: actionOK, Message: "untracked; tmux remains open"}
 	}
@@ -261,6 +266,7 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after close"}
 	}
 	a.updateAnchorLocal(ctx, id, "status:\nThe Engram-created tmux window was closed.", true)
+	a.reconcileAnchorPresentation(ctx, id)
 	return actionResult{Outcome: actionOK, Message: "closed"}
 }
 
@@ -279,18 +285,17 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 	if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.State = state.TerminalLost
 		s.WatchEnabled = false
-		s.PendingRefresh = false
-		s.LastTelegramError = message
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return
 	}
 	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
 	a.updateAnchorLocal(ctx, ts.ID, "status:\nThe tracked tmux pane no longer matches this session. Engram stopped watching it.\n\nrecommendation:\nUse /sessions and attach the intended pane again.", true)
+	a.reconcileAnchorPresentation(ctx, ts.ID)
 }
 
 func (a *App) validateSessionPane(ctx context.Context, ts state.TerminalSession) error {
-	_, err := a.Tmux.ValidatePane(ctx, ts.TmuxPaneID, ts.TmuxWindowID)
+	pane, err := a.Tmux.ValidatePane(ctx, ts.TmuxPaneID, ts.TmuxWindowID)
 	if err != nil {
 		if tmux.IsIdentityLoss(err) {
 			a.markSessionLost(ctx, ts, err)
@@ -303,29 +308,30 @@ func (a *App) validateSessionPane(ctx context.Context, ts state.TerminalSession)
 		if _, _, stateErr := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 			s.State = state.TerminalRunning
 			s.WatchEnabled = true
-			s.PendingRefresh = true
-			s.LastTelegramError = ""
+			s.LastKnownCWD = pane.CurrentPath
 		}); stateErr != nil {
 			_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
 			return fmt.Errorf("recover session state: %w", stateErr)
 		}
 		_ = a.audit("tmux.identity", "recovered", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID})
+	} else if pane.CurrentPath != "" && pane.CurrentPath != ts.LastKnownCWD {
+		if _, _, stateErr := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+			s.LastKnownCWD = pane.CurrentPath
+		}); stateErr != nil {
+			_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
+		}
 	}
 	return nil
 }
 
 func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	st := a.Store.Snapshot()
-	var ids []int
+	for i := range st.TerminalSessions {
+		a.redactSessionPresentation(&st.TerminalSessions[i])
+	}
 	var b strings.Builder
 	b.WriteString("sessions\n")
-	for _, ts := range st.TerminalSessions {
-		if ts.State == state.TerminalClosed {
-			continue
-		}
-		ids = append(ids, ts.ID)
-		fmt.Fprintf(&b, "\n[%d] %s  %s\n  last: %s\n", ts.ID, ts.State, firstNonEmpty(ts.Title, "-"), firstNonEmpty(ts.LastInputPreview, "-"))
-	}
+	ids := writeTrackedSessions(&b, st.TerminalSessions)
 	if len(ids) == 0 {
 		b.WriteString("\nNo tracked sessions.\n")
 	}
@@ -334,6 +340,81 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids, attachTargets)); err != nil {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
 	}
+}
+
+func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) []int {
+	active := make([]state.TerminalSession, 0, len(sessions))
+	for _, session := range sessions {
+		if session.State != state.TerminalClosed {
+			active = append(active, session)
+		}
+	}
+	sort.SliceStable(active, func(i, j int) bool {
+		left, right := active[i], active[j]
+		leftRank, rightRank := sessionHandoffRank(left), sessionHandoffRank(right)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		leftTime, rightTime := sessionQueueTime(left), sessionQueueTime(right)
+		if !leftTime.Equal(rightTime) {
+			if leftRank == 1 {
+				return leftTime.Before(rightTime)
+			}
+			return leftTime.After(rightTime)
+		}
+		return left.ID < right.ID
+	})
+	labels := map[int]string{
+		0: "lost",
+		1: "needs you",
+		2: "quiet",
+	}
+	lastRank := -1
+	ids := make([]int, 0, len(active))
+	for _, session := range active {
+		rank := sessionHandoffRank(session)
+		if rank != lastRank {
+			fmt.Fprintf(b, "\n%s\n", labels[rank])
+			lastRank = rank
+		}
+		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
+		if rank == 1 {
+			fmt.Fprintf(b, " — %s", compactSessionAction(session.Handoff.RecommendedAction))
+		} else if session.Handoff != nil && !session.Handoff.AcknowledgedAt.IsZero() {
+			b.WriteString(" — observing")
+		}
+		b.WriteString("\n")
+		ids = append(ids, session.ID)
+	}
+	return ids
+}
+
+func sessionHandoffRank(session state.TerminalSession) int {
+	if session.State == state.TerminalLost {
+		return 0
+	}
+	if session.Handoff != nil && session.Handoff.AcknowledgedAt.IsZero() {
+		return 1
+	}
+	return 2
+}
+
+func sessionQueueTime(session state.TerminalSession) time.Time {
+	if session.State == state.TerminalLost {
+		return session.UpdatedAt
+	}
+	if session.Handoff != nil && session.Handoff.AcknowledgedAt.IsZero() {
+		return session.Handoff.OpenedAt
+	}
+	return session.LastActivityAt
+}
+
+func compactSessionAction(action string) string {
+	action = strings.Join(strings.Fields(action), " ")
+	if len(action) <= 72 {
+		return firstNonEmpty(action, "open the session anchor")
+	}
+	return strings.TrimSpace(headUTF8(action, 69)) + "..."
 }
 
 func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []telegram.AttachTarget {

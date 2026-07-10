@@ -57,21 +57,39 @@ exports a bounded recent tail, not an unbounded full audit file.
   each key rather than adding an age field or changing the schema.
 - Attachment metadata retains the newest 200 records. Attachment bypasses drop
   expired and consumed records and retain the newest 100 active records. The
-  terminal registry retains at most 200 records, preferring running and idle
-  sessions and then the most recently updated terminal records. These limits
+  terminal registry retains at most 200 records, preferring running sessions
+  and then the most recently updated terminal records. These limits
   bound state growth; they do not delete attachment files or tmux sessions.
 - Raw terminal captures are not written to state. Their hashes and derived
   summaries remain persisted, and the current raw capture may remain in process
   memory until restart or pruning.
+- Session state persists only runtime facts used for recovery or rendering.
+  Legacy write-only fields are ignored and disappear on the next save. Legacy
+  terminal states other than `running`, `lost`, and `closed` normalize to
+  `lost`, where immutable-identity reattachment can recover them safely.
+- Pending and active handoffs are persisted with bounded derived text, evidence,
+  capture hashes, lifecycle timestamps, acknowledgment, and delivery identity;
+  raw captures and handoff history are not. Derived status, action, and evidence
+  text is best-effort credential-redacted before persistence.
+- Session state persists the canonical anchor, at most one predecessor awaiting
+  retirement, and known/unknown Telegram pin state. Restart resets pin knowledge
+  and reconciles it without discarding canonical ownership.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
   next saved file.
+- A state schema newer than the running binary supports must fail open without
+  rewriting or down-stamping the file.
 - A lock keyed by Telegram settings prevents duplicate pollers.
 
 ## Degradation
 
 - If Haiku fails, reuse the last summary when possible and mark it stale.
+- A failed or low-confidence Haiku observation cannot resolve an active handoff
+  or erase settlement progress for a pending candidate.
+- A failed handoff anchor send leaves the old anchor canonical. A failed
+  predecessor retirement or pin transition remains eligible for retry without
+  reopening the handoff lifecycle.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.

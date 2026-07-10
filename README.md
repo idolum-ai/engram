@@ -10,7 +10,8 @@
 
 Engram is a single-user Telegram control surface for local tmux sessions. It
 creates or attaches to tmux windows, routes Telegram messages into panes, and
-uses Anthropic Haiku to turn terminal captures into compact status anchors.
+uses Anthropic Haiku to turn terminal captures into compact status anchors and
+settled, evidence-backed handoffs when a session genuinely needs the user.
 
 ## First Run
 
@@ -160,7 +161,8 @@ access for the configured local user. A stolen bot token can expose or disrupt
 the bot channel and must be revoked immediately.
 
 - **Telegram:** Engram long-polls the Bot API for messages and attachments, then
-  sends messages, anchor edits, and requested files back to the configured DM.
+  sends messages, rotates and pins live anchors, edits retired anchors, and
+  sends requested files back to the configured DM.
   Telegram receives command text, summaries, `/raw`, `/dump`, `/logs`, and
   `/download` results sent through the bot.
 - **tmux and local processes:** Authorized messages can create windows and send
@@ -170,11 +172,14 @@ the bot channel and must be revoked immediately.
   shortened last-input preview, the previous summary, and a bounded visible
   pane capture. Repeated lines may be omitted. If the first result is uncertain,
   Haiku may receive one bounded full-scrollback capture. Captures are not
-  redacted before they are sent.
+  redacted before they are sent. Haiku may propose a specific handoff when the
+  apparent work cannot advance without the user. Engram requires cited evidence
+  and compatible settled observations before surfacing that interpretation.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   and lock files. State includes Telegram identifiers, session metadata, last
-  input previews, capture hashes, and Haiku summaries. Raw terminal captures
-  remain in process memory for rendering but are omitted from persisted state.
+  input previews, capture hashes, Haiku summaries, and active or pending
+  handoffs with their cited evidence. Raw terminal captures remain in process
+  memory for rendering but are omitted from persisted state.
   Files are created with private permissions, but anyone with access to the
   host account can read them.
 - **Attachments and generated files:** Incoming Telegram documents are saved
@@ -188,9 +193,12 @@ the bot channel and must be revoked immediately.
 
 Audit events redact configured credentials and common token, key, password, and
 private-key patterns. `/logs` applies the same pattern-based redaction to a
-bounded audit tail. Redaction can miss unfamiliar secrets or sensitive prose.
-It does not sanitize terminal captures, `state.json`, `/raw`, `/dump`,
-`/download`, incoming attachments, Telegram history, or Anthropic requests.
+bounded audit tail. Haiku-derived summaries, recommendations, and handoff
+evidence receive the same best-effort redaction before persistence or Telegram
+delivery. Redaction can miss unfamiliar secrets or sensitive prose. It does not
+sanitize raw terminal captures, `/raw`, `/dump`, `/download`, incoming
+attachments, existing Telegram history, or captures sent to Anthropic.
+`state.json` still contains sensitive metadata and derived terminal content.
 Treat all terminal transcripts and diagnostic artifacts as sensitive and review
 them before sharing.
 
@@ -269,15 +277,14 @@ make uninstall PREFIX="$HOME/.local"
 
 ## Commands
 
-Use `/help` in Telegram for the complete command list, `/commands` for the
-machine-readable metadata, or `engram commands` locally. Common commands are:
+Use `/help` in Telegram for the complete command list or `engram commands`
+locally for machine-readable metadata. Common commands are:
 
 - `/sessions`
 - `/attach <tmux-target>`
 - `/new <text>`
 - `/send <id> <text>`
-- `/run <id> <text>`
-- `/type <id> <text>`
+- `/text <id> <text>`
 - `/key <id> <keys...>`
 - `/raw <id>`
 - `/dump <id>`
@@ -289,6 +296,16 @@ machine-readable metadata, or `engram commands` locally. Common commands are:
 Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
+
+Each watched session has exactly one live anchor, and Engram silently pins those
+anchors for navigation. When a pane reaches a stable boundary that needs human
+judgment, Engram sends a new full anchor as a reply to the current one, pins the
+new anchor, makes it canonical, then compacts and unpins its predecessor. Only
+the canonical anchor accepts replies, refreshes, and key buttons. Input
+acknowledges the handoff but does not erase it; the same new anchor keeps
+receiving updates while Engram resolves, replaces, or reopens the handoff from
+later evidence. `/sessions` keeps unacknowledged handoffs ahead of quiet
+sessions, with the oldest waiting handoff first.
 
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or
@@ -322,6 +339,15 @@ The gate runs tests, `go vet`, Darwin compile checks, architecture and public
 release checks, workflow checks, documentation checks, a tracked-file secret
 scan, and a smoke build. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change
 guidance and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
+
+The handoff eval is intentionally opt-in because it makes live Anthropic calls
+and is non-deterministic. With `ANTHROPIC_API_KEY` and optionally
+`ANTHROPIC_MODEL` exported, run:
+
+```sh
+ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
+  -run TestLiveHaikuSequentialHandoffEvaluation -count=2
+```
 
 ## License
 
