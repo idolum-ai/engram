@@ -155,7 +155,7 @@ func (a *App) Run(ctx context.Context) int {
 		}
 		backoff = time.Second
 		for _, update := range updates {
-			kind, refs := updateJournalRefs(update)
+			kind, refs := a.updateJournalRefs(update)
 			if err := a.Store.MarkPoll(update.UpdateID, kind, refs); err != nil {
 				fmt.Fprintln(os.Stderr, "state mark poll:", err)
 				return 1
@@ -184,7 +184,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	msg := *update.Message
 	if !a.authorized(&msg) {
-		_ = a.audit("auth.reject", "rejected", map[string]any{"chat_id": msg.Chat.ID})
+		_ = a.audit("auth.reject", "rejected", nil)
 		return "rejected_unauthorized"
 	}
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.MessageID)
@@ -646,6 +646,22 @@ func updateJournalRefs(update telegram.Update) (string, state.UpdateRefs) {
 		return "message", refs
 	}
 	return "unknown", state.UpdateRefs{}
+}
+
+func (a *App) updateJournalRefs(update telegram.Update) (string, state.UpdateRefs) {
+	kind, refs := updateJournalRefs(update)
+	switch {
+	case update.CallbackQuery != nil:
+		cb := update.CallbackQuery
+		if cb.From.ID != a.Config.TelegramAllowedUserID || cb.Message == nil || cb.Message.Chat.ID != a.Config.TelegramChatID {
+			return kind, state.UpdateRefs{}
+		}
+	case update.Message != nil:
+		if !a.authorized(update.Message) {
+			return kind, state.UpdateRefs{}
+		}
+	}
+	return kind, refs
 }
 
 func GoVersion() string { return runtime.Version() }

@@ -1,9 +1,11 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -154,6 +156,8 @@ const (
 	maxAttachmentBypasses = 100
 	maxUpdateJournal      = 200
 	maxProcessedMessages  = 2_000
+	maxAuditFileBytes     = int64(4 << 20)
+	maxAuditRecordBytes   = 64 << 10
 )
 
 func Open(path, auditPath string) (*Store, error) {
@@ -303,13 +307,120 @@ func (s *Store) Audit(eventType, status string, payload any) error {
 	if err != nil {
 		return err
 	}
+	if len(b)+1 > maxAuditRecordBytes {
+		rec["data"] = map[string]any{
+			"omitted":        "audit payload exceeded record limit",
+			"original_bytes": len(b),
+		}
+		b, err = json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+	}
+	line := append(b, '\n')
+	if err := rotateAuditIfNeeded(s.auditPath, int64(len(line))); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(s.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
+	_, err = f.Write(line)
 	return err
+}
+
+func rotateAuditIfNeeded(path string, incomingBytes int64) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("audit path is not a regular file")
+	}
+	if info.Size()+incomingBytes <= maxAuditFileBytes {
+		return nil
+	}
+	backup := path + ".1"
+	if info.Size() <= maxAuditFileBytes {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return err
+		}
+		if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return os.Rename(path, backup)
+	}
+
+	tail, err := boundedAuditTail(path, maxAuditFileBytes)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".audit-rotate-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(tail); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(tmpPath, backup); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return nil
+}
+
+func boundedAuditTail(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	offset := info.Size() - maxBytes
+	if offset < 0 {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, 0); err != nil {
+		return nil, err
+	}
+	tail, err := io.ReadAll(io.LimitReader(f, maxBytes))
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		if newline := bytes.IndexByte(tail, '\n'); newline >= 0 {
+			tail = tail[newline+1:]
+		} else {
+			tail = nil
+		}
+	}
+	return tail, nil
 }
 
 func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string) (TerminalSession, error) {

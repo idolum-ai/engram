@@ -44,7 +44,8 @@ runtime state.
 - `/status` shows version, uptime, session count, snapshot renderer capability,
   state path, audit path, attachment path, free `/tmp` space, poll time, and
   Haiku status.
-- `/logs` uploads a bounded recent redacted audit log tail as an attachment.
+- `/logs` uploads a bounded recent redacted audit log tail as an attachment,
+  spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the local
   service surface without calling Telegram, Anthropic, or starting polling.

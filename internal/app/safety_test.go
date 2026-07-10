@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -225,6 +226,57 @@ func TestUnauthorizedAndStaleCallbacksAreAlwaysAnswered(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("rejected callbacks touched tmux: %#v", runner.calls)
+	}
+}
+
+func TestUnauthorizedOrdinaryMessagesCannotReachDeviceCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", filepath.Join(dir, "tmp"))
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	store, err := state.Open(filepath.Join(dir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AllocateSession("main", "@1", "%1", "shell"); err != nil {
+		t.Fatal(err)
+	}
+	runner := &safetyRunner{identityWindow: "@1"}
+	app := &App{
+		Config: config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100},
+		Store:  store,
+		Tmux:   tmux.New(runner),
+	}
+	before := store.Snapshot()
+	updates := []telegram.Update{
+		{Message: &telegram.Message{MessageID: 1, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 987654321}, Text: "/send 1 id"}},
+		{Message: &telegram.Message{MessageID: 2, Chat: telegram.Chat{ID: 876543219}, From: &telegram.User{ID: 42}, Text: "id"}},
+		{Message: &telegram.Message{MessageID: 3, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 987654321}, Document: &telegram.Document{FileID: "attacker-file", FileName: "payload"}}},
+	}
+	for _, update := range updates {
+		if status := app.handleUpdate(context.Background(), update); status != "rejected_unauthorized" {
+			t.Fatalf("unauthorized update status = %q", status)
+		}
+		_, refs := app.updateJournalRefs(update)
+		if refs != (state.UpdateRefs{}) {
+			t.Fatalf("unauthorized update retained journal identity: %#v", refs)
+		}
+	}
+	after := store.Snapshot()
+	if len(runner.calls) != 0 {
+		t.Fatalf("unauthorized messages touched tmux: %#v", runner.calls)
+	}
+	if !reflect.DeepEqual(after.TerminalSessions, before.TerminalSessions) || len(after.Attachments) != 0 || len(after.ProcessedMessages) != 0 {
+		t.Fatalf("unauthorized messages mutated capability state: before=%#v after=%#v", before, after)
+	}
+	if _, err := os.Stat(app.Config.AttachmentDir()); !os.IsNotExist(err) {
+		t.Fatalf("unauthorized attachment created storage: %v", err)
+	}
+	audit, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes := string(audit); strings.Contains(bytes, "987654321") || strings.Contains(bytes, "876543219") || !strings.Contains(bytes, `"type":"auth.reject"`) {
+		t.Fatalf("unauthorized audit disclosed identity or omitted rejection: %s", bytes)
 	}
 }
 

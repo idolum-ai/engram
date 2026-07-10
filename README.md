@@ -187,7 +187,9 @@ the bot channel and must be revoked immediately.
   apparent work cannot advance without the user. Engram requires cited evidence
   and compatible settled observations before surfacing that interpretation.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
-  and lock files. State includes Telegram identifiers, session metadata, last
+  one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
+  4 MiB and individual records are capped at 64 KiB. State includes Telegram
+  identifiers, session metadata, last
   input previews, capture hashes, Haiku summaries, and active or pending
   handoffs with their cited evidence. Raw terminal captures remain in process
   memory for rendering but are omitted from persisted state.

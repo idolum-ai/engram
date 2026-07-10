@@ -326,7 +326,7 @@ func (a *App) snapshotDownloadSource(source *os.File) (string, error) {
 }
 
 func (a *App) logs(ctx context.Context, msg telegram.Message) {
-	b, err := tailFile(a.Config.AuditPath(), 200_000)
+	b, err := tailAuditLog(a.Config.AuditPath(), 200_000)
 	if err != nil {
 		a.reply(ctx, msg, "log read error: "+err.Error())
 		return
@@ -340,6 +340,21 @@ func (a *App) logs(ctx context.Context, msg telegram.Message) {
 	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, "Engram logs"); err != nil {
 		a.reply(ctx, msg, "log upload error: "+err.Error())
 	}
+}
+
+func tailAuditLog(path string, maxBytes int64) ([]byte, error) {
+	current, err := tailFile(path, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(current)) >= maxBytes {
+		return current, nil
+	}
+	previous, err := tailFile(path+".1", maxBytes-int64(len(current)))
+	if err != nil {
+		return nil, err
+	}
+	return append(previous, current...), nil
 }
 
 func tailFile(path string, maxBytes int64) ([]byte, error) {

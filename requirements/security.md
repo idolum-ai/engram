@@ -8,7 +8,9 @@ filesystem. The security and privacy model must stay small and explicit.
 - Exactly one Telegram user is authorized.
 - Exactly one Telegram chat is authorized.
 - DM-only operation is supported; group operation is out of scope.
-- Unauthorized messages and callbacks must not mutate tmux or state.
+- Unauthorized messages and callbacks must not mutate tmux, sessions,
+  attachments, or processed-message state. Poll offsets and a generic bounded
+  rejection record may advance so rejected updates are not replayed.
 
 ## Secrets
 
@@ -49,6 +51,9 @@ filesystem. The security and privacy model must stay small and explicit.
   persisted state.
 - `audit.jsonl`, lock metadata, tmux history, and `/tmp/engram` artifacts must
   be treated as sensitive.
+- Audit storage retains only a bounded current file and one bounded predecessor.
+  Unauthorized audit and update-journal records must not retain the rejected
+  sender's user or chat identifiers.
 - Uninstall must not silently destroy local state or tmux sessions.
 
 ## Local Effects
