@@ -321,7 +321,7 @@ func (s *Store) Audit(eventType, status string, payload any) error {
 	if err := rotateAuditIfNeeded(s.auditPath, int64(len(line))); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(s.auditPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}
@@ -393,7 +393,7 @@ func rotateAuditIfNeeded(path string, incomingBytes int64) error {
 }
 
 func boundedAuditTail(path string, maxBytes int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -416,6 +416,13 @@ func boundedAuditTail(path string, maxBytes int64) ([]byte, error) {
 	if offset > 0 {
 		if newline := bytes.IndexByte(tail, '\n'); newline >= 0 {
 			tail = tail[newline+1:]
+		} else {
+			tail = nil
+		}
+	}
+	if len(tail) > 0 && tail[len(tail)-1] != '\n' {
+		if newline := bytes.LastIndexByte(tail, '\n'); newline >= 0 {
+			tail = tail[:newline+1]
 		} else {
 			tail = nil
 		}

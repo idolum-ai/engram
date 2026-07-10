@@ -20,6 +20,7 @@ func TestAuditRotationBoundsCurrentAndPreviousFiles(t *testing.T) {
 	}
 	seedLine := []byte(`{"at":"old","type":"seed","status":"ok","data":null}` + "\n")
 	seed := bytes.Repeat(seedLine, int(2*maxAuditFileBytes/int64(len(seedLine)))+1)
+	seed = append(seed, []byte(`{"type":"torn"}`)...)
 	if err := os.WriteFile(auditPath, seed, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +39,7 @@ func TestAuditRotationBoundsCurrentAndPreviousFiles(t *testing.T) {
 	if int64(len(current)) > maxAuditFileBytes || int64(len(previous)) > maxAuditFileBytes {
 		t.Fatalf("audit sizes current=%d previous=%d", len(current), len(previous))
 	}
-	if !bytes.Contains(current, []byte(`"type":"new.event"`)) || !bytes.Contains(previous, []byte(`"type":"seed"`)) {
+	if !bytes.Contains(current, []byte(`"type":"new.event"`)) || !bytes.Contains(previous, []byte(`"type":"seed"`)) || bytes.Contains(previous, []byte(`"type":"torn"`)) {
 		t.Fatalf("rotation content current=%q previous prefix=%q", current, previous[:min(len(previous), 80)])
 	}
 	if len(previous) > 0 && (previous[0] != '{' || previous[len(previous)-1] != '\n') {
@@ -52,6 +53,32 @@ func TestAuditRotationBoundsCurrentAndPreviousFiles(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("%s mode = %o, want 600", path, info.Mode().Perm())
 		}
+	}
+}
+
+func TestAuditRejectsSymlinkPath(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, auditPath); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(filepath.Join(dir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Audit("event", "ok", nil); err == nil {
+		t.Fatal("Audit followed a symlink path")
+	}
+	b, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "unchanged" {
+		t.Fatalf("symlink target changed: %q", b)
 	}
 }
 

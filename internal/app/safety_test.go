@@ -261,6 +261,19 @@ func TestUnauthorizedOrdinaryMessagesCannotReachDeviceCapabilities(t *testing.T)
 			t.Fatalf("unauthorized update retained journal identity: %#v", refs)
 		}
 	}
+	callback := telegram.CallbackQuery{
+		ID:      "attacker-callback",
+		From:    telegram.User{ID: 987654321},
+		Message: &telegram.Message{MessageID: 4, Chat: telegram.Chat{ID: 100}},
+		Data:    "key:1:enter",
+	}
+	if status := app.handleCallback(context.Background(), callback); status != "rejected_unauthorized_callback_answer_failed" {
+		t.Fatalf("unauthorized callback status = %q", status)
+	}
+	_, refs := app.updateJournalRefs(telegram.Update{CallbackQuery: &callback})
+	if refs != (state.UpdateRefs{}) {
+		t.Fatalf("unauthorized callback retained journal identity: %#v", refs)
+	}
 	after := store.Snapshot()
 	if len(runner.calls) != 0 {
 		t.Fatalf("unauthorized messages touched tmux: %#v", runner.calls)
@@ -275,7 +288,7 @@ func TestUnauthorizedOrdinaryMessagesCannotReachDeviceCapabilities(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes := string(audit); strings.Contains(bytes, "987654321") || strings.Contains(bytes, "876543219") || !strings.Contains(bytes, `"type":"auth.reject"`) {
+	if bytes := string(audit); strings.Contains(bytes, "987654321") || strings.Contains(bytes, "876543219") || !strings.Contains(bytes, `"kind":"message"`) || !strings.Contains(bytes, `"kind":"callback_query"`) {
 		t.Fatalf("unauthorized audit disclosed identity or omitted rejection: %s", bytes)
 	}
 }
