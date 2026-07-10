@@ -433,6 +433,41 @@ func TestSendDocumentRetryRebuildsMultipartBody(t *testing.T) {
 	}
 }
 
+func TestSendDocumentNamedUsesVisibleFilename(t *testing.T) {
+	t.Parallel()
+
+	snapshotPath := filepath.Join(t.TempDir(), "engram-download-random.bin")
+	if err := os.WriteFile(snapshotPath, []byte("proposal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseMultipartForm(1024); err != nil {
+			t.Fatal(err)
+		}
+		files := req.MultipartForm.File["document"]
+		if len(files) != 1 || files[0].Filename != "engram-coherence-proposal.md" {
+			t.Fatalf("multipart filename = %#v", files)
+		}
+		return jsonResponse(t, map[string]any{
+			"ok":     true,
+			"result": map[string]any{"message_id": 13, "chat": map[string]any{"id": 5}},
+		}), nil
+	})}
+
+	if _, err := client.SendDocumentNamed(context.Background(), 5, snapshotPath, "engram-coherence-proposal.md", "proposal"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSafeDocumentFilenameRemovesControlCharacters(t *testing.T) {
+	t.Parallel()
+	if got := safeDocumentFilename("../report\n.md"); got != "report_.md" {
+		t.Fatalf("safeDocumentFilename = %q", got)
+	}
+}
+
 func TestRateLimitAboveBoundIsNotRetried(t *testing.T) {
 	t.Parallel()
 

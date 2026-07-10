@@ -216,6 +216,45 @@ func TestDownloadSnapshotUsesOpenedFileAfterPathReplacement(t *testing.T) {
 	}
 }
 
+func TestDownloadPreservesTelegramVisibleFilename(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	path := filepath.Join(dir, "engram-coherence-proposal.md")
+	if err := os.WriteFile(path, []byte("proposal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var visibleFilename string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/botTOKEN/sendMessage":
+			return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
+		case "/botTOKEN/sendDocument":
+			if err := req.ParseMultipartForm(1024); err != nil {
+				t.Fatal(err)
+			}
+			files := req.MultipartForm.File["document"]
+			if len(files) == 1 {
+				visibleFilename = files[0].Filename
+			}
+			return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 3, "chat": map[string]any{"id": 100}}}), nil
+		default:
+			t.Fatalf("unexpected Telegram path %s", req.URL.Path)
+			return nil, nil
+		}
+	})}
+	app := &App{Config: config.Config{Home: dir, TelegramChatID: 100}, Telegram: client}
+	result := app.download(context.Background(), telegram.Message{MessageID: 1, Chat: telegram.Chat{ID: 100}}, path)
+	if !result.OK() {
+		t.Fatalf("download result = %#v", result)
+	}
+	app.transferWG.Wait()
+	if visibleFilename != "engram-coherence-proposal.md" {
+		t.Fatalf("visible filename = %q", visibleFilename)
+	}
+}
+
 func TestBoundedWriterStopsAtUploadLimit(t *testing.T) {
 	var dst bytes.Buffer
 	writer := &boundedWriter{Writer: &dst, Remaining: 5}

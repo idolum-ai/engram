@@ -263,27 +263,28 @@ func (a *App) download(ctx context.Context, msg telegram.Message, path string) a
 	}
 	if info.Size() > telegramCloudUploadMax {
 		source.Close()
-		a.reply(ctx, msg, fmt.Sprintf("upload rejected: %d bytes exceeds Telegram's %d-byte cloud Bot API limit", info.Size(), telegramCloudUploadMax))
+		a.reply(ctx, msg, fmt.Sprintf("send rejected: %d bytes exceeds Telegram's %d-byte cloud Bot API limit", info.Size(), telegramCloudUploadMax))
 		return actionResult{Outcome: actionUserError, Message: "download exceeds upload limit"}
 	}
-	a.reply(ctx, msg, fmt.Sprintf("uploading %s (%d bytes)...", filepath.Base(path), info.Size()))
+	filename := filepath.Base(path)
+	a.reply(ctx, msg, fmt.Sprintf("sending %s (%d bytes)...", filename, info.Size()))
 	if !a.queueTransfer(func(transferCtx context.Context) {
 		defer source.Close()
 		snapshot, err := a.snapshotDownloadSource(source)
 		if err != nil {
-			a.reply(transferCtx, msg, "upload snapshot error: "+err.Error())
+			a.reply(transferCtx, msg, "send snapshot error: "+err.Error())
 			return
 		}
 		defer os.Remove(snapshot)
-		if _, err := a.Telegram.SendDocument(transferCtx, a.Config.TelegramChatID, snapshot, filepath.Base(path)); err != nil {
-			a.reply(transferCtx, msg, "upload error: "+err.Error())
+		if _, err := a.Telegram.SendDocumentNamed(transferCtx, a.Config.TelegramChatID, snapshot, filename, filename); err != nil {
+			a.reply(transferCtx, msg, "send error: "+err.Error())
 		}
 	}) {
 		source.Close()
-		a.reply(ctx, msg, "upload unavailable: Engram is stopping or the transfer queue is full")
+		a.reply(ctx, msg, "send unavailable: Engram is stopping or the transfer queue is full")
 		return actionResult{Outcome: actionStateFailed, Message: "upload transfer unavailable"}
 	}
-	return actionResult{Outcome: actionOK, Message: "upload queued"}
+	return actionResult{Outcome: actionOK, Message: "file send queued"}
 }
 
 func openDownloadSource(path string) (*os.File, os.FileInfo, error) {

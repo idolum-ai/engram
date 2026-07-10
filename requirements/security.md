@@ -56,6 +56,8 @@ filesystem. The security and privacy model must stay small and explicit.
 - `/download` rejects symlinks and non-regular files.
 - `/download` uploads from a private bounded snapshot of the already-opened
   source so path replacement cannot redirect a queued transfer.
+- The private snapshot name must not leak into Telegram. `/download` preserves
+  the original source basename as the Telegram-visible document filename.
 - `/download` rejects files above Telegram's 50 MiB cloud Bot API multipart
   upload ceiling before opening a network request.
 - Attachment downloads hash while streaming, and long file transfers run in

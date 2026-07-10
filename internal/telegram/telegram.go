@@ -349,9 +349,14 @@ func (c *Client) DownloadFileHashed(ctx context.Context, filePath, dest string, 
 }
 
 func (c *Client) SendDocument(ctx context.Context, chatID int64, path string, caption string) (Message, error) {
+	return c.SendDocumentNamed(ctx, chatID, path, filepath.Base(path), caption)
+}
+
+func (c *Client) SendDocumentNamed(ctx context.Context, chatID int64, path, filename, caption string) (Message, error) {
 	var out Message
+	filename = safeDocumentFilename(filename)
 	err := c.do(ctx, "sendDocument", true, func() (*http.Request, error) {
-		return c.documentRequest(ctx, chatID, path, caption)
+		return c.documentRequest(ctx, chatID, path, filename, caption)
 	}, &out)
 	return out, err
 }
@@ -526,7 +531,7 @@ func (c *Client) doOnce(ctx context.Context, method string, req *http.Request, o
 	return nil
 }
 
-func (c *Client) documentRequest(ctx context.Context, chatID int64, path, caption string) (*http.Request, error) {
+func (c *Client) documentRequest(ctx context.Context, chatID int64, path, filename, caption string) (*http.Request, error) {
 	pr, pw := io.Pipe()
 	writer := multipart.NewWriter(pw)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/sendDocument", pr)
@@ -553,7 +558,7 @@ func (c *Client) documentRequest(ctx context.Context, chatID int64, path, captio
 				return
 			}
 		}
-		part, err := writer.CreateFormFile("document", filepath.Base(path))
+		part, err := writer.CreateFormFile("document", filename)
 		if err != nil {
 			writeErr = err
 			return
@@ -570,6 +575,20 @@ func (c *Client) documentRequest(ctx context.Context, chatID int64, path, captio
 		writeErr = writer.Close()
 	}()
 	return req, nil
+}
+
+func safeDocumentFilename(filename string) string {
+	filename = filepath.Base(strings.TrimSpace(filename))
+	filename = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '/' || r == '\\' {
+			return '_'
+		}
+		return r
+	}, filename)
+	if filename == "" || filename == "." {
+		return "document"
+	}
+	return filename
 }
 
 func isOutboundMethod(method string) bool {
