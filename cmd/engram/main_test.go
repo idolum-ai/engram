@@ -48,6 +48,37 @@ func TestDryStartCreatesStateWithoutPolling(t *testing.T) {
 	}
 }
 
+func TestSnapshotPreflightDoesNotRequireAnthropic(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	body := strings.Join([]string{
+		"TELEGRAM_BOT_TOKEN=tg-secret-token",
+		"TELEGRAM_ALLOWED_USER_ID=123",
+		"ENGRAM_ANCHOR_MODE=snapshot",
+		"ENGRAM_SNAPSHOT_BROWSER=" + executable,
+		"ENGRAM_HOME=" + filepath.Join(dir, "home"),
+		"ENGRAM_WORKDIR=" + dir,
+	}, "\n")
+	if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := captureCommand(t, func() int {
+		return run([]string{"preflight", "--env", env})
+	})
+	if code != 0 {
+		t.Fatalf("snapshot preflight code=%d stderr=%s", code, stderr)
+	}
+	for _, want := range []string{"anchor mode: snapshot", "model: disabled", "anthropic_api: not_called", "status: ok"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("snapshot preflight output missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
 func writeTestEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

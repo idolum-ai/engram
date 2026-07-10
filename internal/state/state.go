@@ -86,13 +86,16 @@ type TerminalSession struct {
 	LastInputPreview        string            `json:"last_input_preview,omitempty"`
 	LastInputMode           string            `json:"last_input_mode,omitempty"`
 	LastRawCaptureHash      string            `json:"last_raw_capture_hash,omitempty"`
+	LastSnapshotCaptureHash string            `json:"last_snapshot_capture_hash,omitempty"`
 	LastRenderHash          string            `json:"last_render_hash,omitempty"`
 	LastSummary             string            `json:"last_summary,omitempty"`
 	Handoff                 *Handoff          `json:"handoff,omitempty"`
 	HandoffCandidate        *HandoffCandidate `json:"handoff_candidate,omitempty"`
 	AnchorChatID            int64             `json:"anchor_chat_id,omitempty"`
 	AnchorMessageID         int               `json:"anchor_message_id,omitempty"`
+	AnchorFormat            string            `json:"anchor_format,omitempty"`
 	RetiringAnchorMessageID int               `json:"retiring_anchor_message_id,omitempty"`
+	RetiringAnchorFormat    string            `json:"retiring_anchor_format,omitempty"`
 	AnchorPinned            bool              `json:"anchor_pinned,omitempty"`
 	AnchorPinKnown          bool              `json:"anchor_pin_known,omitempty"`
 	WatchEnabled            bool              `json:"watch_enabled"`
@@ -752,6 +755,15 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 		session.AnchorPinKnown = false
 		if session.AnchorMessageID == 0 || session.RetiringAnchorMessageID == session.AnchorMessageID {
 			session.RetiringAnchorMessageID = 0
+			session.RetiringAnchorFormat = ""
+		}
+		if session.AnchorMessageID == 0 {
+			session.AnchorFormat = ""
+		} else if session.AnchorFormat != "text" && session.AnchorFormat != "snapshot" {
+			session.AnchorFormat = "text"
+		}
+		if session.RetiringAnchorMessageID != 0 && session.RetiringAnchorFormat != "snapshot" {
+			session.RetiringAnchorFormat = "text"
 		}
 		switch session.State {
 		case TerminalRunning, TerminalLost, TerminalClosed:

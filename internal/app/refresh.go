@@ -16,6 +16,10 @@ import (
 const maxStoredVisibleCaptureBytes = 16 * 1024
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
+	if a.Config.SnapshotAnchors() {
+		a.refreshSnapshotAnchor(ctx, id, force)
+		return
+	}
 	ts, ok := a.Store.FindSession(id)
 	if !ok || ts.TmuxPaneID == "" || ts.State == state.TerminalClosed || ts.State == state.TerminalLost || (!force && !ts.WatchEnabled) {
 		return
@@ -329,18 +333,28 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 		return
 	}
 	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
-		summary = firstNonEmpty(ts.LastSummary, summary)
+		if !a.Config.SnapshotAnchors() || ts.AnchorFormat != "snapshot" {
+			summary = firstNonEmpty(ts.LastSummary, summary)
+		}
 		final = true
+	}
+	if a.Config.SnapshotAnchors() && ts.AnchorFormat == "snapshot" {
+		a.updateSnapshotAnchorCaptionLocked(ctx, ts, summary, final)
+		return
 	}
 	rendered := a.renderLocal(ts, summary)
 	renderHash := sha(rendered)
+	if !a.Config.SnapshotAnchors() && ts.AnchorFormat == "snapshot" {
+		a.rotateSnapshotAnchorToTextLocked(ctx, ts, rendered, renderHash)
+		return
+	}
 	if renderHash == ts.LastRenderHash && !final {
 		return
 	}
 	if !final && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
 		return
 	}
-	markup := anchorMarkup(ts)
+	markup := a.anchorMarkup(ts)
 	_, err := a.editAnchor(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, markup)
 	if err != nil {
 		if telegram.IsRateLimited(err) {
@@ -357,6 +371,7 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 			updated, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
 				s.AnchorMessageID = msg.MessageID
+				s.AnchorFormat = "text"
 				s.AnchorPinned = false
 				s.AnchorPinKnown = !anchorShouldBePinned(*s)
 				if s.Handoff != nil && s.Handoff.AnchorMessageID == oldAnchorID {
@@ -417,6 +432,27 @@ func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
 	}()
 }
 
+func (a *App) queueManualRefresh(id int) {
+	if !a.Config.SnapshotAnchors() {
+		a.queueRefresh(id, true, 0)
+		return
+	}
+	a.summaryMu.Lock()
+	a.ensureSummaryQueuesLocked()
+	a.manualRefresh[id] = true
+	a.summaryMu.Unlock()
+	a.queueRefresh(id, true, 0)
+}
+
+func (a *App) consumeManualRefresh(id int) bool {
+	a.summaryMu.Lock()
+	defer a.summaryMu.Unlock()
+	a.ensureSummaryQueuesLocked()
+	manual := a.manualRefresh[id]
+	delete(a.manualRefresh, id)
+	return manual
+}
+
 func (a *App) refreshWorker(ctx context.Context, id int) {
 	for {
 		a.summaryMu.Lock()
@@ -450,6 +486,7 @@ func (a *App) refreshWorker(ctx context.Context, id int) {
 			delete(a.summaryForce, id)
 			delete(a.summaryRunning, id)
 			delete(a.summaryDue, id)
+			delete(a.manualRefresh, id)
 			a.summaryMu.Unlock()
 			return
 		}
@@ -464,6 +501,7 @@ func (a *App) clearRefreshQueue(id int) {
 	delete(a.summaryForce, id)
 	delete(a.summaryRunning, id)
 	delete(a.summaryDue, id)
+	delete(a.manualRefresh, id)
 }
 
 func (a *App) sleep(delay time.Duration) {
@@ -538,6 +576,9 @@ func (a *App) ensureSummaryQueuesLocked() {
 	if a.summaryDue == nil {
 		a.summaryDue = map[int]time.Time{}
 	}
+	if a.manualRefresh == nil {
+		a.manualRefresh = map[int]bool{}
+	}
 }
 
 func (a *App) sendAnchor(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
@@ -602,6 +643,13 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 		return telegram.RecoverMarkup(ts.ID)
 	}
 	return telegram.RefreshMarkup(ts.ID)
+}
+
+func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
+	if ts.State == state.TerminalRunning && a.Config.SnapshotAnchors() {
+		return telegram.SnapshotAnchorMarkup(ts.ID)
+	}
+	return anchorMarkup(ts)
 }
 
 func (a *App) scheduler(ctx context.Context) {

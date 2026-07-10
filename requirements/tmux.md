@@ -40,12 +40,14 @@ tmux is the source of terminal truth.
 - Live anchors include inline key buttons for `Esc`, `Escx2`, `^C`, `^D`, and
   `Enter`. `Escx2` sends one Escape key, waits 500ms, then sends
   another Escape key.
-- Live anchors include an `🖼️` button beside refresh. It captures the immutable
-  pane as ANSI-preserving physical rows without invoking Haiku.
+- In `guide` mode, live anchors include an `🖼️` button beside refresh. It
+  captures the immutable pane as ANSI-preserving physical rows without invoking
+  Haiku. In `snapshot` mode, that image is the anchor itself and the redundant
+  image button is omitted.
 
 ## Capture
 
-- Live anchors explain visible pane capture through Haiku as a plain-English
+- In `guide` mode, live anchors explain visible pane capture through Haiku as a plain-English
   status report plus one recommended next action, with short source-evidence
   quote blocks when useful for grounding the recommendation.
 - Haiku may propose a handoff only when the apparent work cannot usefully
@@ -70,6 +72,8 @@ tmux is the source of terminal truth.
 - An on-demand image captures 64 rows ending at the bottom of the visible pane,
   using recent scrollback above it when the pane is shorter. It renders all
   visible columns into a full-bleed 430×932 logical-pixel canvas at 3× density.
+- In `snapshot` mode, the same bounded capture and renderer produce the live
+  canonical anchor. Capture text is sent to Chromium and Telegram, not Haiku.
 - `/dump` streams physical full scrollback directly to an attachment file.
 - `/raw` and `/dump` stop before exceeding Telegram's 50 MiB cloud upload
   ceiling rather than creating an artifact that cannot be delivered.

@@ -10,6 +10,12 @@ runtime state.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
+- `ENGRAM_ANCHOR_MODE` selects `guide` or `snapshot`. It is read only at process
+  startup, has no Telegram command or reload path, and requires a restart to
+  change.
+- `guide` requires an Anthropic key and initializes the Haiku client.
+- `snapshot` requires a working Chromium-compatible executable at startup and
+  must not require or initialize Anthropic.
 - `ENGRAM_SNAPSHOT_BROWSER` may name or point to a Chromium-compatible
   executable. When unset, Engram searches common Chromium and Chrome names and
   standard macOS application paths.
@@ -41,9 +47,9 @@ runtime state.
 
 ## Diagnostics
 
-- `/status` shows version, uptime, session count, snapshot renderer capability,
-  state path, audit path, attachment path, free `/tmp` space, poll time, and
-  Haiku status.
+- `/status` shows version, uptime, session count, anchor mode, snapshot renderer
+  capability, state path, audit path, attachment path, free `/tmp` space, poll
+  time, and whether Haiku is enabled.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.

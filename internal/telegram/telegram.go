@@ -388,11 +388,32 @@ func (c *Client) SendDocumentNamed(ctx context.Context, chatID int64, path, file
 }
 
 func (c *Client) SendPhoto(ctx context.Context, chatID int64, path, caption string, replyTo int) (Message, error) {
+	return c.SendPhotoWithMarkup(ctx, chatID, path, caption, replyTo, nil)
+}
+
+func (c *Client) SendPhotoWithMarkup(ctx context.Context, chatID int64, path, caption string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
 	var out Message
 	err := c.do(ctx, "sendPhoto", true, func() (*http.Request, error) {
-		return c.mediaRequest(ctx, "sendPhoto", "photo", chatID, path, "engram-window.png", caption, replyTo)
+		return c.mediaRequest(ctx, "sendPhoto", "photo", chatID, path, "engram-window.png", caption, replyTo, markup)
 	}, &out)
 	return out, err
+}
+
+func (c *Client) EditPhoto(ctx context.Context, chatID int64, messageID int, path, caption string, markup *InlineKeyboardMarkup) (Message, error) {
+	var out Message
+	err := c.do(ctx, "editMessageMedia", true, func() (*http.Request, error) {
+		return c.editPhotoRequest(ctx, chatID, messageID, path, caption, markup)
+	}, &out)
+	return out, err
+}
+
+func (c *Client) EditCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup) (Message, error) {
+	body := map[string]any{"chat_id": chatID, "message_id": messageID, "caption": clampCaption(caption)}
+	if markup != nil {
+		body["reply_markup"] = markup
+	}
+	var out Message
+	return out, c.postJSON(ctx, "editMessageCaption", body, &out)
 }
 
 func (m Message) FileAttachment() (Document, bool) {
@@ -427,6 +448,19 @@ func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 			{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)},
 			{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)},
 		},
+		{
+			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
+			{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
+			{Text: "^C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
+			{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
+			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
+		},
+	}}
+}
+
+func SnapshotAnchorMarkup(sessionID int) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+		{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}},
 		{
 			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
 			{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
@@ -573,10 +607,10 @@ func (c *Client) doOnce(ctx context.Context, method string, req *http.Request, o
 }
 
 func (c *Client) documentRequest(ctx context.Context, chatID int64, path, filename, caption string) (*http.Request, error) {
-	return c.mediaRequest(ctx, "sendDocument", "document", chatID, path, filename, caption, 0)
+	return c.mediaRequest(ctx, "sendDocument", "document", chatID, path, filename, caption, 0, nil)
 }
 
-func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID int64, path, filename, caption string, replyTo int) (*http.Request, error) {
+func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID int64, path, filename, caption string, replyTo int, markup *InlineKeyboardMarkup) (*http.Request, error) {
 	pr, pw := io.Pipe()
 	writer := multipart.NewWriter(pw)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+method, pr)
@@ -599,7 +633,7 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 			return
 		}
 		if caption != "" {
-			if writeErr = writer.WriteField("caption", clampText(caption)); writeErr != nil {
+			if writeErr = writer.WriteField("caption", clampCaption(caption)); writeErr != nil {
 				return
 			}
 		}
@@ -608,7 +642,82 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 				return
 			}
 		}
+		if markup != nil {
+			encoded, err := json.Marshal(markup)
+			if err != nil {
+				writeErr = err
+				return
+			}
+			if writeErr = writer.WriteField("reply_markup", string(encoded)); writeErr != nil {
+				return
+			}
+		}
 		part, err := writer.CreateFormFile(field, filename)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			writeErr = err
+			return
+		}
+		defer f.Close()
+		if _, writeErr = io.Copy(part, f); writeErr != nil {
+			return
+		}
+		writeErr = writer.Close()
+	}()
+	return req, nil
+}
+
+func (c *Client) editPhotoRequest(ctx context.Context, chatID int64, messageID int, path, caption string, markup *InlineKeyboardMarkup) (*http.Request, error) {
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/editMessageMedia", pr)
+	if err != nil {
+		_ = pr.Close()
+		_ = pw.Close()
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	go func() {
+		var writeErr error
+		defer func() {
+			if writeErr != nil {
+				_ = pw.CloseWithError(writeErr)
+			} else {
+				_ = pw.Close()
+			}
+		}()
+		fields := map[string]string{
+			"chat_id":    strconv.FormatInt(chatID, 10),
+			"message_id": strconv.Itoa(messageID),
+		}
+		media, err := json.Marshal(map[string]any{"type": "photo", "media": "attach://photo", "caption": clampCaption(caption)})
+		if err != nil {
+			writeErr = err
+			return
+		}
+		fields["media"] = string(media)
+		if markup != nil {
+			encoded, err := json.Marshal(markup)
+			if err != nil {
+				writeErr = err
+				return
+			}
+			fields["reply_markup"] = string(encoded)
+		}
+		for _, name := range []string{"chat_id", "message_id", "media", "reply_markup"} {
+			value, ok := fields[name]
+			if !ok {
+				continue
+			}
+			if writeErr = writer.WriteField(name, value); writeErr != nil {
+				return
+			}
+		}
+		part, err := writer.CreateFormFile("photo", "engram-window.png")
 		if err != nil {
 			writeErr = err
 			return
@@ -643,7 +752,7 @@ func safeDocumentFilename(filename string) string {
 
 func isOutboundMethod(method string) bool {
 	switch method {
-	case "sendMessage", "editMessageText", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage":
+	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageMedia", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage":
 		return true
 	default:
 		return false
@@ -754,6 +863,17 @@ func clampText(text string) string {
 		cut--
 	}
 	return text[:cut] + "\n\n[truncated]"
+}
+
+func clampCaption(text string) string {
+	if len(text) <= 1000 {
+		return text
+	}
+	cut := 960
+	for cut > 0 && !utf8.ValidString(text[:cut]) {
+		cut--
+	}
+	return text[:cut] + "\n[truncated]"
 }
 
 func MarkdownToHTML(text string) string {

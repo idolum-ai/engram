@@ -542,6 +542,76 @@ func TestSendPhotoRepliesToCanonicalAnchor(t *testing.T) {
 	}
 }
 
+func TestSendPhotoIncludesMarkupWithoutReplyTarget(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "snapshot.png")
+	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseMultipartForm(1024); err != nil {
+			t.Fatal(err)
+		}
+		if got := req.FormValue("reply_to_message_id"); got != "" {
+			t.Fatalf("photo reply = %q, want empty", got)
+		}
+		if got := req.FormValue("reply_markup"); !strings.Contains(got, "refresh:7") || strings.Contains(got, "snapshot:7") {
+			t.Fatalf("snapshot markup = %q", got)
+		}
+		return jsonResponse(t, map[string]any{
+			"ok":     true,
+			"result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}},
+		}), nil
+	})}
+	if _, err := client.SendPhotoWithMarkup(context.Background(), 5, path, "terminal snapshot", 0, SnapshotAnchorMarkup(7)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEditPhotoUsesAttachedMediaAndMarkup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.png")
+	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/editMessageMedia" {
+			t.Fatalf("edit photo path = %q", req.URL.Path)
+		}
+		if err := req.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		if req.FormValue("chat_id") != "5" || req.FormValue("message_id") != "77" {
+			t.Fatalf("edit identity chat=%q message=%q", req.FormValue("chat_id"), req.FormValue("message_id"))
+		}
+		var media map[string]any
+		if err := json.Unmarshal([]byte(req.FormValue("media")), &media); err != nil {
+			t.Fatal(err)
+		}
+		if media["type"] != "photo" || media["media"] != "attach://photo" || media["caption"] != "live terminal" {
+			t.Fatalf("media = %#v", media)
+		}
+		if !strings.Contains(req.FormValue("reply_markup"), "refresh:7") || strings.Contains(req.FormValue("reply_markup"), "snapshot:7") {
+			t.Fatalf("snapshot markup = %q", req.FormValue("reply_markup"))
+		}
+		files := req.MultipartForm.File["photo"]
+		if len(files) != 1 || files[0].Filename != "engram-window.png" {
+			t.Fatalf("photo files = %#v", files)
+		}
+		return jsonResponse(t, map[string]any{
+			"ok":     true,
+			"result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 5}},
+		}), nil
+	})}
+	msg, err := client.EditPhoto(context.Background(), 5, 77, path, "live terminal", SnapshotAnchorMarkup(7))
+	if err != nil || msg.MessageID != 77 {
+		t.Fatalf("EditPhoto message = %#v err=%v", msg, err)
+	}
+}
+
 func TestSafeDocumentFilenameRemovesControlCharacters(t *testing.T) {
 	t.Parallel()
 	if got := safeDocumentFilename("../report\n.md"); got != "report_.md" {

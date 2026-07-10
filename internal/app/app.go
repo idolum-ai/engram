@@ -41,6 +41,7 @@ type App struct {
 	transferWG     sync.WaitGroup
 	captureSlots   chan struct{}
 	haikuSlots     chan struct{}
+	renderSlots    chan struct{}
 	transferSlots  chan struct{}
 	transferQueue  chan struct{}
 	summaryMu      sync.Mutex
@@ -48,6 +49,7 @@ type App struct {
 	summaryRunning map[int]bool
 	summaryForce   map[int]bool
 	summaryDue     map[int]time.Time
+	manualRefresh  map[int]bool
 	captureMu      sync.Mutex
 	captureHistory map[int][]map[string]bool
 	closeConfirmMu sync.Mutex
@@ -62,12 +64,19 @@ const summaryQuietPeriod = 2 * time.Second
 const haikuCaptureHistoryLimit = 5
 const maxConcurrentCaptures = 2
 const maxConcurrentHaikuRequests = 2
+const maxConcurrentSnapshotRenders = 2
 const maxConcurrentTransfers = 2
 const maxQueuedTransfers = 8
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
 		return nil, err
+	}
+	snapshotRenderer := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme)
+	if cfg.SnapshotAnchors() {
+		if _, err := snapshotRenderer.Available(); err != nil {
+			return nil, fmt.Errorf("snapshot anchor mode requires Chromium: %w", err)
+		}
 	}
 	key := lockfile.Key(cfg.TelegramBotToken, strconv.FormatInt(cfg.TelegramAllowedUserID, 10), strconv.FormatInt(cfg.TelegramChatID, 10))
 	l, err := lockfile.Acquire(cfg.LockDir(), key, lockfile.Metadata{Details: map[string]string{
@@ -83,24 +92,30 @@ func New(cfg config.Config) (*App, error) {
 		l.Close()
 		return nil, err
 	}
+	var anthropicClient *anthropic.Client
+	if !cfg.SnapshotAnchors() {
+		anthropicClient = anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	}
 	return &App{
 		Config:         cfg,
 		Store:          store,
 		Telegram:       telegram.New(cfg.TelegramBotToken),
-		Anthropic:      anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel),
+		Anthropic:      anthropicClient,
 		Tmux:           tmux.New(tmux.ExecRunner{}),
-		Snapshots:      terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme),
+		Snapshots:      snapshotRenderer,
 		lock:           l,
 		startedAt:      time.Now().UTC(),
 		stopCh:         make(chan struct{}),
 		captureSlots:   make(chan struct{}, maxConcurrentCaptures),
 		haikuSlots:     make(chan struct{}, maxConcurrentHaikuRequests),
+		renderSlots:    make(chan struct{}, maxConcurrentSnapshotRenders),
 		transferSlots:  make(chan struct{}, maxConcurrentTransfers),
 		transferQueue:  make(chan struct{}, maxQueuedTransfers),
 		summaryQueued:  map[int]bool{},
 		summaryRunning: map[int]bool{},
 		summaryForce:   map[int]bool{},
 		summaryDue:     map[int]time.Time{},
+		manualRefresh:  map[int]bool{},
 		captureHistory: map[int][]map[string]bool{},
 		closeConfirms:  map[string]closeConfirmation{},
 	}, nil
@@ -512,10 +527,16 @@ func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
 	space := diskFree(a.Config.ArtifactDir())
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast haiku: %s\nlast haiku error: %s",
+	haiku := "enabled (" + a.Config.AnthropicModel + ")"
+	if a.Config.SnapshotAnchors() {
+		haiku = "disabled"
+	}
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nhaiku: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast haiku: %s\nlast haiku error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
+		a.Config.EffectiveAnchorMode(),
+		haiku,
 		a.snapshotStatus(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),

@@ -216,7 +216,7 @@ func (a *App) ensureHandoffAnchor(ctx context.Context, id int) {
 	renderHash := sha(rendered)
 	prospectiveExists := newAnchorID != 0
 	if prospectiveExists {
-		if _, err := a.editAnchor(ctx, ts.AnchorChatID, newAnchorID, rendered, anchorMarkup(ts)); err != nil {
+		if _, err := a.editAnchor(ctx, ts.AnchorChatID, newAnchorID, rendered, a.anchorMarkup(ts)); err != nil {
 			if isTelegramAnchorUnavailable(err) {
 				if _, _, stateErr := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 					if session.Handoff != nil && session.Handoff.OpenedAt.Equal(ts.Handoff.OpenedAt) && session.Handoff.AnchorMessageID == newAnchorID {
@@ -231,7 +231,7 @@ func (a *App) ensureHandoffAnchor(ctx context.Context, id int) {
 			return
 		}
 	} else {
-		msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldAnchorID, anchorMarkup(ts))
+		msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldAnchorID, a.anchorMarkup(ts))
 		if err != nil {
 			_ = a.audit("telegram.anchor_rotation", "failed", map[string]any{"session_id": id, "stage": "send", "error": err.Error()})
 			return
@@ -243,8 +243,10 @@ func (a *App) ensureHandoffAnchor(ctx context.Context, id int) {
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		if session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == oldAnchorID && session.RetiringAnchorMessageID == 0 && session.Handoff != nil && session.Handoff.OpenedAt.Equal(ts.Handoff.OpenedAt) && session.Handoff.AcknowledgedAt.IsZero() {
 			session.AnchorMessageID = newAnchorID
+			session.AnchorFormat = "text"
 			session.Handoff.AnchorMessageID = newAnchorID
 			session.RetiringAnchorMessageID = oldAnchorID
+			session.RetiringAnchorFormat = firstNonEmpty(ts.AnchorFormat, "text")
 			session.AnchorPinned = false
 			session.AnchorPinKnown = false
 			session.LastRenderHash = renderHash
@@ -265,11 +267,21 @@ func (a *App) ensureHandoffAnchor(ctx context.Context, id int) {
 }
 
 func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
+	ts, ok := a.Store.FindSession(id)
+	if !ok || ts.AnchorMessageID == 0 {
+		return
+	}
+	if a.Config.SnapshotAnchors() && ts.AnchorFormat != "snapshot" && ts.State == state.TerminalRunning && ts.WatchEnabled {
+		a.queueRefresh(id, true, 0)
+	} else if !a.Config.SnapshotAnchors() && ts.AnchorFormat == "snapshot" {
+		a.updateAnchorLocal(ctx, id, ts.LastSummary, true)
+		return
+	}
 	lock := a.anchorMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
-	ts, ok := a.Store.FindSession(id)
+	ts, ok = a.Store.FindSession(id)
 	if !ok || ts.AnchorMessageID == 0 {
 		return
 	}
@@ -293,9 +305,15 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 	}
 	oldID := ts.RetiringAnchorMessageID
 	oldUnavailable := false
-	if _, err := a.editAnchor(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup()); err != nil {
-		if !isTelegramAnchorUnavailable(err) {
-			_ = a.audit("telegram.anchor_retire", "failed", map[string]any{"session_id": id, "message_id": oldID, "stage": "compact", "error": err.Error()})
+	var retireErr error
+	if ts.RetiringAnchorFormat == "snapshot" {
+		_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
+	} else {
+		_, retireErr = a.editAnchor(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
+	}
+	if retireErr != nil {
+		if !isTelegramAnchorUnavailable(retireErr) {
+			_ = a.audit("telegram.anchor_retire", "failed", map[string]any{"session_id": id, "message_id": oldID, "stage": "compact", "error": retireErr.Error()})
 			return
 		}
 		oldUnavailable = true
@@ -309,6 +327,7 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		if session.RetiringAnchorMessageID == oldID {
 			session.RetiringAnchorMessageID = 0
+			session.RetiringAnchorFormat = ""
 		}
 	}); err != nil {
 		_ = a.audit("state.anchor_rotation", "failed", map[string]any{"session_id": id, "error": err.Error()})
