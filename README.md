@@ -356,6 +356,11 @@ every ten seconds. The refresh button renders immediately, including an
 unchanged capture. Handoff interpretation and attention ordering are disabled;
 `/sessions` remains a deterministic map of running, lost, and closed sessions.
 
+Both modes append bounded local references from the captured pane: existing
+absolute or home-relative files and directories under `paths`, and syntactically
+valid HTTP(S) URLs under `links`. Engram never fetches or endorses an extracted
+URL; it is untrusted terminal text surfaced for convenient navigation.
+
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or
 legacy session and leaves its tmux window running. Inline close buttons always

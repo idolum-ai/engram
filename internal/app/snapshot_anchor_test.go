@@ -21,6 +21,12 @@ import (
 
 func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testing.T) {
 	dir := t.TempDir()
+	artifact := filepath.Join(dir, "artifact.pdf")
+	if err := os.WriteFile(artifact, []byte("artifact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	visibleURL := "https://example.test/build/7"
+	captureText := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 62) + artifact + "\n" + visibleURL + "\n"
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -53,8 +59,12 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		if err := json.Unmarshal([]byte(req.FormValue("media")), &media); err != nil {
 			return nil, err
 		}
-		if req.FormValue("message_id") != "77" || !strings.Contains(media["caption"].(string), "[1] running · build") {
+		caption, _ := media["caption"].(string)
+		if req.FormValue("message_id") != "77" || !strings.Contains(caption, "[1] running · build") {
 			return nil, errors.New("incorrect snapshot anchor identity or caption")
+		}
+		if !strings.Contains(caption, "paths:\n"+artifact) || !strings.Contains(caption, "links:\n"+visibleURL) {
+			return nil, errors.New("snapshot anchor omitted visible references")
 		}
 		markup := req.FormValue("reply_markup")
 		if !strings.Contains(markup, "refresh:1") || strings.Contains(markup, "snapshot:1") {
@@ -67,7 +77,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		Config:        config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "contrast-dark", TelegramChatID: 100, Home: dir},
 		Store:         store,
 		Telegram:      client,
-		Tmux:          tmux.New(snapshotTmuxRunner{}),
+		Tmux:          tmux.New(snapshotReferenceTmuxRunner{capture: captureText}),
 		Snapshots:     renderer,
 		captureSlots:  make(chan struct{}, 1),
 		renderSlots:   make(chan struct{}, 1),
@@ -319,6 +329,17 @@ func mustJSON(value any) []byte {
 
 type countingSnapshotRenderer struct {
 	renders int
+}
+
+type snapshotReferenceTmuxRunner struct {
+	capture string
+}
+
+func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "capture-pane" {
+		return r.capture, nil
+	}
+	return (snapshotTmuxRunner{}).Run(ctx, args...)
 }
 
 func (r *countingSnapshotRenderer) Available() (string, error) { return "/usr/bin/chromium", nil }

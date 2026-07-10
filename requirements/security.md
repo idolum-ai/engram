@@ -47,6 +47,10 @@ privacy model must stay small and explicit.
   changed live anchor is rendered, not only after an explicit image request.
 - `snapshot` mode must not initialize or call an Anthropic client even when an
   Anthropic credential remains in the env file.
+- Extracted HTTP(S) URLs are untrusted terminal text. Engram may display them in
+  anchor references but must never fetch, validate remotely, or treat them as
+  recommendations. Extracted reference text receives best-effort credential
+  redaction before Telegram delivery.
 
 ## Local Sensitive Data
 

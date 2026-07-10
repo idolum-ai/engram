@@ -141,7 +141,9 @@ quietly inherit the authority of an interpretation pipeline.
 
 Engram should generate local facts itself whenever it can: session IDs, tmux
 targets, pane IDs, current working directories, attachment paths, visible file
-paths, capture hashes, timestamps, and service status.
+paths, visible URLs, capture hashes, timestamps, and service status. Extracted
+references improve navigation but remain untrusted pane content; Engram does
+not fetch or endorse them.
 
 Haiku should not be asked to infer facts Engram can compute. When enabled, the
 model interprets terminal content; Engram still renders known metadata.

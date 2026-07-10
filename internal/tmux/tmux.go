@@ -82,6 +82,7 @@ type Pane struct {
 
 type StyledCapture struct {
 	ANSI        string
+	Text        string
 	Columns     int
 	VisibleRows int
 	BufferRows  int
@@ -295,6 +296,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}
 	return StyledCapture{
 		ANSI:        ansi,
+		Text:        semanticCapture(ansi),
 		Columns:     columns,
 		VisibleRows: visibleRows,
 		BufferRows:  bufferRows,

@@ -42,7 +42,7 @@ func TestRenderLocalIncludesDeterministicCWD(t *testing.T) {
 	}
 }
 
-func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
+func TestRenderLocalIncludesDeterministicVisibleReferences(t *testing.T) {
 	root := t.TempDir()
 	pdf := filepath.Join(root, "engram-aphelion-feature-lessons.pdf")
 	pdf2 := filepath.Join(root, "engram-aphelion-feature-lessons.pdf2")
@@ -81,6 +81,7 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 		pdf + "\n",
 		pdf2 + "\n",
 		"~/code/github.com/idolum-ai/engram\n",
+		"\n\nlinks:\nhttps://example.test/path",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("renderLocal missing %q:\n%s", want, got)
@@ -88,9 +89,6 @@ func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 	}
 	if strings.Contains(got, "[Haiku]") {
 		t.Fatalf("renderLocal exposed model implementation detail:\n%s", got)
-	}
-	if strings.Contains(got, "example.test/path") {
-		t.Fatalf("renderLocal included URL path:\n%s", got)
 	}
 	if strings.Contains(got, "missing.txt") {
 		t.Fatalf("renderLocal included missing path:\n%s", got)
@@ -113,8 +111,9 @@ func TestRenderLocalRedactsDerivedSecretsWithoutMutatingSession(t *testing.T) {
 	const secret = "secret-value-123"
 	app := &App{Config: config.Config{AnthropicAPIKey: secret}}
 	session := state.TerminalSession{
-		ID:    1,
-		State: state.TerminalRunning,
+		ID:             1,
+		State:          state.TerminalRunning,
+		LastRawCapture: "artifact https://example.test/report?token=" + secret,
 		Handoff: &state.Handoff{
 			StatusReport:      "The pane printed " + secret,
 			RecommendedAction: "Inspect token=" + secret,

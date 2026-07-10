@@ -521,7 +521,7 @@ func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
 
 func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 	a.redactSessionPresentation(&ts)
-	return renderLocal(ts, a.redactText(summary))
+	return a.redactText(renderLocal(ts, a.redactText(summary)))
 }
 
 func (a *App) statusText() string {
@@ -572,9 +572,9 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 		firstNonEmpty(ts.LastInputPreview, "-"),
 		summary,
 	)
-	if paths := renderVisiblePaths(ts.LastRawCapture); paths != "" {
+	if references := renderVisibleReferences(ts.LastRawCapture); references != "" {
 		b.WriteString("\n\n")
-		b.WriteString(paths)
+		b.WriteString(references)
 	}
 	return b.String()
 }

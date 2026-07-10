@@ -149,9 +149,14 @@ func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, th
 }
 
 func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture) string {
+	const safeCaptionBytes = 960
 	title := a.redactText(firstNonEmpty(ts.Title, capture.Title, "terminal"))
 	cwd := a.redactText(capture.CurrentPath)
-	return fmt.Sprintf("[%d] %s · %s\n%s\n%d buffer rows · %dx%d visible", ts.ID, ts.State, title, cwd, capture.BufferRows, capture.Columns, capture.VisibleRows)
+	caption := fmt.Sprintf("[%d] %s · %s\n%s\n%d buffer rows · %dx%d visible", ts.ID, ts.State, title, cwd, capture.BufferRows, capture.Columns, capture.VisibleRows)
+	if references := renderSnapshotReferences(capture.Text, safeCaptionBytes-len(caption)-2); references != "" {
+		caption += "\n\n" + a.redactText(references)
+	}
+	return caption
 }
 
 func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.TerminalSession, summary string, final bool) {
