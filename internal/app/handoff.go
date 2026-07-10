@@ -267,22 +267,19 @@ func (a *App) ensureHandoffAnchor(ctx context.Context, id int) {
 }
 
 func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
+	lock := a.anchorMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
+	a.finishAnchorRotationLocked(ctx, id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 {
+	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return
 	}
 	if a.Config.SnapshotAnchors() && ts.AnchorFormat != "snapshot" && ts.State == state.TerminalRunning && ts.WatchEnabled {
 		a.queueRefresh(id, true, 0)
 	} else if !a.Config.SnapshotAnchors() && ts.AnchorFormat == "snapshot" {
-		a.updateAnchorLocal(ctx, id, ts.LastSummary, true)
-		return
-	}
-	lock := a.anchorMutex(id)
-	lock.Lock()
-	defer lock.Unlock()
-	a.finishAnchorRotationLocked(ctx, id)
-	ts, ok = a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 {
+		rendered := a.renderLocal(ts, ts.LastSummary)
+		a.rotateSnapshotAnchorToTextLocked(ctx, ts, rendered, sha(rendered))
 		return
 	}
 	if anchorShouldBePinned(ts) {

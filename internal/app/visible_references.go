@@ -172,9 +172,10 @@ func scanVisibleURLs(capture string, limit int) ([]string, []textRange) {
 		candidate := capture[start:trimmedEnd]
 		if validVisibleURL(candidate) {
 			ranges = append(ranges, textRange{start: start, end: end})
-			if limit > 0 && len(urls) < limit && len(candidate) <= maxVisibleReferenceBytes && !seen[candidate] {
-				seen[candidate] = true
-				urls = append(urls, candidate)
+			safeURL, safe := sanitizeVisibleURL(candidate)
+			if safe && limit > 0 && len(urls) < limit && len(safeURL) <= maxVisibleReferenceBytes && !seen[safeURL] {
+				seen[safeURL] = true
+				urls = append(urls, safeURL)
 			}
 		}
 		if end <= start {
@@ -207,6 +208,36 @@ func validVisibleURL(candidate string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")
+}
+
+func sanitizeVisibleURL(candidate string) (string, bool) {
+	parsed, err := url.ParseRequestURI(candidate)
+	if err != nil || parsed.Host == "" || parsed.User != nil || !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return "", false
+	}
+	query := parsed.Query()
+	changed := false
+	for key := range query {
+		if sensitiveURLParameter(key) {
+			query.Set(key, "REDACTED")
+			changed = true
+		}
+	}
+	if !changed {
+		return candidate, true
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), true
+}
+
+func sensitiveURLParameter(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	switch normalized {
+	case "api_key", "apikey", "auth", "authorization", "client_secret", "credential", "id_token", "key", "password", "passwd", "refresh_token", "secret", "sig", "signature", "token", "access_token", "x_amz_credential", "x_amz_signature", "x_amz_security_token":
+		return true
+	default:
+		return false
+	}
 }
 
 func isURLPrefixChar(ch byte) bool {

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 	PixelRatio    = 3
 	TargetRows    = 64
 	maxInputBytes = 1 << 20
+	probeTimeout  = 15 * time.Second
 )
 
 type Input struct {
@@ -70,6 +72,36 @@ func (r *Renderer) Available() (string, error) {
 		return "", fmt.Errorf("snapshot renderer is not configured")
 	}
 	return browserPath(r.Browser)
+}
+
+func (r *Renderer) Probe(ctx context.Context) (string, error) {
+	browser, err := r.Available()
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp("", "engram-browser-probe-*")
+	if err != nil {
+		return "", fmt.Errorf("create snapshot browser probe directory: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	path, err := r.Render(probeCtx, Input{
+		ANSI:        "Engram snapshot probe\n",
+		Title:       "Engram",
+		Target:      "probe",
+		CWD:         "/",
+		Columns:     24,
+		VisibleRows: 1,
+		BufferRows:  1,
+	}, dir)
+	if err != nil {
+		return "", fmt.Errorf("snapshot browser probe: %w", err)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("remove snapshot browser probe: %w", err)
+	}
+	return browser, nil
 }
 
 func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string, error) {

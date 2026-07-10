@@ -387,7 +387,7 @@ func writeTrackedSessionsMode(b *strings.Builder, sessions []state.TerminalSessi
 		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
 		if rank == 1 {
 			fmt.Fprintf(b, " — %s", compactSessionAction(session.Handoff.RecommendedAction))
-		} else if session.Handoff != nil && !session.Handoff.AcknowledgedAt.IsZero() {
+		} else if includeHandoffs && session.Handoff != nil && !session.Handoff.AcknowledgedAt.IsZero() {
 			b.WriteString(" — observing")
 		}
 		b.WriteString("\n")

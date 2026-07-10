@@ -15,7 +15,9 @@ runtime state.
   change.
 - `guide` requires an Anthropic key and initializes the Haiku client.
 - `snapshot` requires a working Chromium-compatible executable at startup and
-  must not require or initialize Anthropic.
+  must not require or initialize Anthropic. Startup and diagnostics verify the
+  browser with a bounded, ephemeral PNG render rather than executable metadata
+  alone.
 - `ENGRAM_SNAPSHOT_BROWSER` may name or point to a Chromium-compatible
   executable. When unset, Engram searches common Chromium and Chrome names and
   standard macOS application paths.

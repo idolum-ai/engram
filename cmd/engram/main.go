@@ -99,7 +99,7 @@ func runDiagnostics(args []string, mode string) int {
 		return 1
 	}
 	if cfg.SnapshotAnchors() {
-		if _, err := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Available(); err != nil {
+		if _, err := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Probe(context.Background()); err != nil {
 			fmt.Fprintln(os.Stderr, "snapshot anchor mode:", err)
 			return 1
 		}

@@ -74,7 +74,7 @@ func New(cfg config.Config) (*App, error) {
 	}
 	snapshotRenderer := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme)
 	if cfg.SnapshotAnchors() {
-		if _, err := snapshotRenderer.Available(); err != nil {
+		if _, err := snapshotRenderer.Probe(context.Background()); err != nil {
 			return nil, fmt.Errorf("snapshot anchor mode requires Chromium: %w", err)
 		}
 	}
@@ -92,10 +92,7 @@ func New(cfg config.Config) (*App, error) {
 		l.Close()
 		return nil, err
 	}
-	var anthropicClient *anthropic.Client
-	if !cfg.SnapshotAnchors() {
-		anthropicClient = anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
-	}
+	anthropicClient := anthropicClientFor(cfg)
 	return &App{
 		Config:         cfg,
 		Store:          store,
@@ -119,6 +116,13 @@ func New(cfg config.Config) (*App, error) {
 		captureHistory: map[int][]map[string]bool{},
 		closeConfirms:  map[string]closeConfirmation{},
 	}, nil
+}
+
+func anthropicClientFor(cfg config.Config) *anthropic.Client {
+	if cfg.SnapshotAnchors() {
+		return nil
+	}
+	return anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
 }
 
 func (a *App) Close() error {

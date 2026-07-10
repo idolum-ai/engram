@@ -113,6 +113,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   message identity, pin, reply routing, and controls remain canonical. Returning
   to `guide` mode uses one persisted send-before-retire rotation because Telegram
   cannot convert a media message back to text in place.
+- A session may persist at most one retiring predecessor. Engram must finish or
+  durably retain that retirement before mode migration, media replacement, or
+  any other operation can create another predecessor.
 - If Telegram rejects HTML entity parsing, fall back once to plain text. Other
   API failures retain their typed outcome.
 - Cancellation, timeout, or a generic tmux capture failure does not prove that

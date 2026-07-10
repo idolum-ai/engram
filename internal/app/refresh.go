@@ -328,8 +328,9 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 	lock := a.anchorMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
+	a.finishAnchorRotationLocked(ctx, id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 {
+	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return
 	}
 	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {

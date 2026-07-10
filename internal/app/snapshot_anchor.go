@@ -78,8 +78,9 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	anchorLock := a.anchorMutex(id)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
+	a.finishAnchorRotationLocked(ctx, id)
 	latest, ok := a.Store.FindSession(id)
-	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.TmuxPaneID != current.TmuxPaneID || latest.TmuxWindowID != current.TmuxWindowID {
+	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != current.TmuxPaneID || latest.TmuxWindowID != current.TmuxWindowID {
 		return
 	}
 	caption := a.snapshotAnchorCaption(latest, capture)
@@ -102,7 +103,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		oldFormat := firstNonEmpty(latest.AnchorFormat, "text")
 		replaced := false
 		updated, _, stateErr := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-			if session.AnchorMessageID == oldID && session.State == state.TerminalRunning && session.WatchEnabled {
+			if session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && session.State == state.TerminalRunning && session.WatchEnabled {
 				session.AnchorChatID = msg.Chat.ID
 				session.AnchorMessageID = msg.MessageID
 				session.AnchorFormat = "snapshot"
@@ -200,7 +201,7 @@ func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.Ter
 	}
 	rotated := false
 	updated, _, stateErr := a.Store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == oldID && session.AnchorFormat == "snapshot" {
+		if session.AnchorMessageID == oldID && session.AnchorFormat == "snapshot" && session.RetiringAnchorMessageID == 0 {
 			session.AnchorMessageID = msg.MessageID
 			session.AnchorFormat = "text"
 			session.RetiringAnchorMessageID = oldID

@@ -151,6 +151,24 @@ func TestRendererRejectsMissingConfiguredBrowser(t *testing.T) {
 	}
 }
 
+func TestRendererProbeRequiresPNGCapability(t *testing.T) {
+	t.Parallel()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	working := &fakeBrowserRunner{t: t, expected: "Engram snapshot probe"}
+	if browser, err := (&Renderer{Browser: executable, Theme: "terminal", Runner: working}).Probe(context.Background()); err != nil || browser != executable {
+		t.Fatalf("working probe browser=%q err=%v", browser, err)
+	}
+	if _, err := os.Stat(working.profile); !os.IsNotExist(err) {
+		t.Fatalf("probe browser profile remained: %v", err)
+	}
+	if _, err := (&Renderer{Browser: executable, Theme: "terminal", Runner: noOutputBrowserRunner{}}).Probe(context.Background()); err == nil || !strings.Contains(err.Error(), "produced no PNG") {
+		t.Fatalf("non-rendering executable probe error = %v", err)
+	}
+}
+
 func TestLiveChromiumRender(t *testing.T) {
 	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
 		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
@@ -185,6 +203,7 @@ func TestLiveChromiumRender(t *testing.T) {
 
 type fakeBrowserRunner struct {
 	t        *testing.T
+	expected string
 	args     []string
 	profile  string
 	htmlPath string
@@ -214,7 +233,11 @@ func (r *fakeBrowserRunner) Run(_ context.Context, _ string, args ...string) err
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	if !strings.Contains(string(page), "hello") {
+	expected := r.expected
+	if expected == "" {
+		expected = "hello"
+	}
+	if !strings.Contains(string(page), expected) {
 		r.t.Fatalf("snapshot HTML missing capture: %s", page)
 	}
 	f, err := os.OpenFile(screenshot, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -228,3 +251,7 @@ func (r *fakeBrowserRunner) Run(_ context.Context, _ string, args ...string) err
 	}
 	return closeErr
 }
+
+type noOutputBrowserRunner struct{}
+
+func (noOutputBrowserRunner) Run(context.Context, string, ...string) error { return nil }

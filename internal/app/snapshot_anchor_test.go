@@ -105,28 +105,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 }
 
 func TestSnapshotModeDoesNotInitializeAnthropic(t *testing.T) {
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	app, err := New(config.Config{
-		TelegramBotToken:           "token",
-		TelegramAllowedUserID:      42,
-		TelegramChatID:             42,
-		AnchorMode:                 config.AnchorModeSnapshot,
-		Home:                       dir,
-		Workdir:                    dir,
-		SnapshotBrowser:            executable,
-		SnapshotTheme:              "terminal",
-		AttachmentSoftMaxBytes:     1,
-		TelegramPollTimeoutSeconds: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer app.Close()
-	if app.Anthropic != nil {
+	if anthropicClientFor(config.Config{AnchorMode: config.AnchorModeSnapshot}) != nil {
 		t.Fatal("snapshot mode initialized Anthropic")
 	}
 }
@@ -191,6 +170,73 @@ func TestGuideModeRotatesSnapshotAnchorBackToText(t *testing.T) {
 	want := []string{"/botTOKEN/sendMessage", "/botTOKEN/pinChatMessage", "/botTOKEN/editMessageCaption", "/botTOKEN/unpinChatMessage"}
 	if strings.Join(paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("guide migration paths = %#v, want %#v", paths, want)
+	}
+}
+
+func TestGuideModeFinishesPendingRetirementBeforeMigration(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 88
+		s.AnchorFormat = "snapshot"
+		s.RetiringAnchorMessageID = 77
+		s.RetiringAnchorFormat = "text"
+		s.AnchorPinned = true
+		s.AnchorPinKnown = true
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	retireAttempts := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		switch req.URL.Path {
+		case "/botTOKEN/editMessageText":
+			retireAttempts++
+			if retireAttempts == 1 {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"ok":false,"error_code":500,"description":"temporary failure"}`)),
+				}, nil
+			}
+			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+		case "/botTOKEN/sendMessage":
+			return snapshotJSONResponse(`{"message_id":99,"chat":{"id":100}}`), nil
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
+			return snapshotJSONResponse(`true`), nil
+		case "/botTOKEN/editMessageCaption":
+			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+		default:
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+	})}
+	app := &App{Config: config.Config{AnchorMode: config.AnchorModeGuide, TelegramChatID: 100}, Store: store, Telegram: client}
+
+	app.reconcileAnchorPresentation(context.Background(), session.ID)
+	afterFailure, _ := store.FindSession(session.ID)
+	if afterFailure.AnchorMessageID != 88 || afterFailure.RetiringAnchorMessageID != 77 {
+		t.Fatalf("failed retirement was overwritten: %#v", afterFailure)
+	}
+	if len(paths) != 1 || paths[0] != "/botTOKEN/editMessageText" {
+		t.Fatalf("migration started before retirement completed: %#v", paths)
+	}
+
+	app.reconcileAnchorPresentation(context.Background(), session.ID)
+	afterRetry, _ := store.FindSession(session.ID)
+	if afterRetry.AnchorMessageID != 99 || afterRetry.AnchorFormat != "text" || afterRetry.RetiringAnchorMessageID != 0 || !afterRetry.AnchorPinned {
+		t.Fatalf("migration after retirement = %#v", afterRetry)
 	}
 }
 

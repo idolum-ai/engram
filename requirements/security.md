@@ -50,7 +50,8 @@ privacy model must stay small and explicit.
 - Extracted HTTP(S) URLs are untrusted terminal text. Engram may display them in
   anchor references but must never fetch, validate remotely, or treat them as
   recommendations. Extracted reference text receives best-effort credential
-  redaction before Telegram delivery.
+  redaction before Telegram delivery. URLs containing userinfo are omitted;
+  recognized credential-bearing query parameters are structurally redacted.
 
 ## Local Sensitive Data
 

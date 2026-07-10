@@ -44,14 +44,15 @@ func TestSnapshotSessionsIgnoreHistoricalHandoffs(t *testing.T) {
 		{ID: 1, State: state.TerminalRunning, Title: "recent", LastActivityAt: now},
 		{ID: 2, State: state.TerminalRunning, Title: "old handoff", LastActivityAt: now.Add(-time.Minute), Handoff: &state.Handoff{OpenedAt: now.Add(time.Hour), RecommendedAction: "Ignore me."}},
 		{ID: 3, State: state.TerminalLost, Title: "lost", UpdatedAt: now},
+		{ID: 4, State: state.TerminalRunning, Title: "acknowledged", LastActivityAt: now.Add(-2 * time.Minute), Handoff: &state.Handoff{OpenedAt: now, AcknowledgedAt: now, RecommendedAction: "Also ignore me."}},
 	}
 	var b strings.Builder
 	ids := writeTrackedSessionsMode(&b, sessions, false)
-	want := "\nlost\n[3] lost\n\nquiet\n[1] recent\n[2] old handoff\n"
+	want := "\nlost\n[3] lost\n\nquiet\n[1] recent\n[2] old handoff\n[4] acknowledged\n"
 	if b.String() != want {
 		t.Fatalf("snapshot sessions:\n%s\nwant:\n%s", b.String(), want)
 	}
-	if len(ids) != 3 || ids[0] != 3 || ids[1] != 1 || ids[2] != 2 {
+	if len(ids) != 4 || ids[0] != 3 || ids[1] != 1 || ids[2] != 2 || ids[3] != 4 {
 		t.Fatalf("snapshot session ids = %#v", ids)
 	}
 }

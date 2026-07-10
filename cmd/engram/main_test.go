@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/idolum-ai/engram/internal/config"
 )
 
 func TestPreflightDoesNotCallTelegramOrAnthropic(t *testing.T) {
@@ -48,7 +50,7 @@ func TestDryStartCreatesStateWithoutPolling(t *testing.T) {
 	}
 }
 
-func TestSnapshotPreflightDoesNotRequireAnthropic(t *testing.T) {
+func TestSnapshotPreflightRejectsNonBrowserExecutable(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -66,15 +68,16 @@ func TestSnapshotPreflightDoesNotRequireAnthropic(t *testing.T) {
 	if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, code := captureCommand(t, func() int {
+	_, stderr, code := captureCommand(t, func() int {
 		return run([]string{"preflight", "--env", env})
 	})
-	if code != 0 {
+	if code != 1 || !strings.Contains(stderr, "snapshot anchor mode:") {
 		t.Fatalf("snapshot preflight code=%d stderr=%s", code, stderr)
 	}
-	for _, want := range []string{"anchor mode: snapshot", "model: disabled", "anthropic_api: not_called", "status: ok"} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("snapshot preflight output missing %q:\n%s", want, stdout)
+	diagnostics := diagnosticsText(config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "terminal"}, "preflight")
+	for _, want := range []string{"anchor mode: snapshot", "model: disabled", "anthropic_api: not_called"} {
+		if !strings.Contains(diagnostics, want) {
+			t.Fatalf("snapshot diagnostics missing %q:\n%s", want, diagnostics)
 		}
 	}
 }

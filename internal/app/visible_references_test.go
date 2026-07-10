@@ -14,6 +14,8 @@ func TestExtractVisibleURLsValidatesTrimsAndDeduplicates(t *testing.T) {
 		"docs: https://example.com/guide?q=tmux&mode=phone.",
 		"again (https://example.com/guide?q=tmux&mode=phone)",
 		"upper HTTPS://EXAMPLE.ORG/status",
+		"sanitize https://example.net/build?mode=fast&access_token=secret-value",
+		"reject https://alice:s3cr3t@example.net/private",
 		"reject ftp://example.com/file",
 		"reject abchttps://example.net/hidden",
 		"reject https:///missing-host",
@@ -21,6 +23,7 @@ func TestExtractVisibleURLsValidatesTrimsAndDeduplicates(t *testing.T) {
 	want := []string{
 		"https://example.com/guide?q=tmux&mode=phone",
 		"HTTPS://EXAMPLE.ORG/status",
+		"https://example.net/build?access_token=REDACTED&mode=fast",
 	}
 	if got := extractVisibleURLs(capture, 4); !reflect.DeepEqual(got, want) {
 		t.Fatalf("visible URLs = %#v, want %#v", got, want)
@@ -40,6 +43,13 @@ func TestURLRangesCannotBecomeVisiblePaths(t *testing.T) {
 	}
 	if got := extractVisibleURLs(capture, 4); len(got) != 1 || got[0] != "https://downloads.example.test"+path {
 		t.Fatalf("URL extraction = %#v", got)
+	}
+	credentialURL := "https://user:password@downloads.example.test" + path
+	if got := extractVisiblePaths(credentialURL, 4); len(got) != 0 {
+		t.Fatalf("rejected credential URL became local path: %#v", got)
+	}
+	if got := extractVisibleURLs(credentialURL, 4); len(got) != 0 {
+		t.Fatalf("credential-bearing URL was exposed: %#v", got)
 	}
 }
 
