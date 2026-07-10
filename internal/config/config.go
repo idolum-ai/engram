@@ -27,6 +27,7 @@ type Config struct {
 	Workdir                    string
 	TmuxSession                string
 	SnapshotBrowser            string
+	SnapshotTheme              string
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
 }
@@ -65,6 +66,7 @@ func Load(path string) (Config, error) {
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
 		SnapshotBrowser:            ExpandPath(values["ENGRAM_SNAPSHOT_BROWSER"]),
+		SnapshotTheme:              firstNonEmpty(values["ENGRAM_SNAPSHOT_THEME"], "terminal"),
 		AttachmentSoftMaxBytes:     softMax,
 		TelegramPollTimeoutSeconds: int(pollTimeout),
 	}
@@ -108,6 +110,11 @@ func (c Config) Validate() error {
 	}
 	if c.AttachmentSoftMaxBytes <= 0 {
 		return fmt.Errorf("ENGRAM_ATTACHMENT_SOFT_MAX_BYTES must be positive")
+	}
+	switch c.SnapshotTheme {
+	case "terminal", "contrast-dark", "contrast-light":
+	default:
+		return fmt.Errorf("ENGRAM_SNAPSHOT_THEME must be terminal, contrast-dark, or contrast-light")
 	}
 	if c.TelegramPollTimeoutSeconds <= 0 {
 		return fmt.Errorf("TELEGRAM_POLL_TIMEOUT_SECONDS must be positive")

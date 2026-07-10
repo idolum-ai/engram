@@ -143,6 +143,7 @@ privacy boundaries below before running commands that may print secrets.
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one tmux session name and creates it when absent. |
 | `ENGRAM_SNAPSHOT_BROWSER` | auto-detected Chromium or Chrome | no | Executable name or absolute path used only for on-demand terminal image snapshots. |
+| `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `16777216` | no | Incoming attachment soft limit. An exact SHA-256 bypass may authorize up to the 20 MiB cloud Bot API hard limit and available disk. |
 
 `make run` uses `~/.engram/.env` by default. For a protected local config at a
@@ -175,7 +176,9 @@ the bot channel and must be revoked immediately.
   capture to a local headless Chromium process. Engram renders 64 rows into a
   full-bleed `1290×2796` PNG, replies to the canonical anchor with the photo,
   and removes the private HTML, browser profile, and PNG after delivery. No
-  snapshot content is sent to Anthropic.
+  snapshot content is sent to Anthropic. The two contrast themes use a
+  color-vision-safe ANSI palette, remove opacity-based dim text, and correct
+  low-contrast terminal colors to at least a 4.5:1 contrast ratio.
 - **Anthropic Haiku:** For an anchor refresh, Engram sends session metadata, a
   shortened last-input preview, the previous summary, and a bounded visible
   pane capture. Repeated lines may be omitted. If the first result is uncertain,

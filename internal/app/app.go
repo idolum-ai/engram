@@ -89,7 +89,7 @@ func New(cfg config.Config) (*App, error) {
 		Telegram:       telegram.New(cfg.TelegramBotToken),
 		Anthropic:      anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel),
 		Tmux:           tmux.New(tmux.ExecRunner{}),
-		Snapshots:      terminalshot.New(cfg.SnapshotBrowser),
+		Snapshots:      terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme),
 		lock:           l,
 		startedAt:      time.Now().UTC(),
 		stopCh:         make(chan struct{}),

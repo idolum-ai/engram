@@ -119,9 +119,11 @@ func diagnosticsText(cfg config.Config, mode string) string {
 	if tmuxErr != nil {
 		tmuxPath = "missing"
 	}
-	snapshotPath, snapshotErr := terminalshot.New(cfg.SnapshotBrowser).Available()
+	snapshotPath, snapshotErr := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Available()
 	if snapshotErr != nil {
 		snapshotPath = "unavailable"
+	} else {
+		snapshotPath += " (" + cfg.SnapshotTheme + ")"
 	}
 	stateStatus := "missing"
 	var sessions int

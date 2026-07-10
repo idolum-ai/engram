@@ -21,7 +21,7 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 		Columns:     71,
 		VisibleRows: 37,
 		BufferRows:  64,
-	})
+	}, "terminal")
 	for _, want := range []string{
 		"color:#cd3131",
 		"font-weight:700",
@@ -39,6 +39,64 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLAccessibilityThemesCorrectLowContrastText(t *testing.T) {
+	t.Parallel()
+	input := Input{
+		ANSI:        "\x1b[2;38;2;50;50;50mdim dark text\x1b[0m\n",
+		Title:       "shell",
+		Target:      "[1]",
+		CWD:         "/tmp",
+		Columns:     71,
+		VisibleRows: 37,
+		BufferRows:  64,
+	}
+
+	terminal := RenderHTML(input, "terminal")
+	if !strings.Contains(terminal, "color:#323232") || !strings.Contains(terminal, "opacity:.68") {
+		t.Fatalf("terminal theme did not preserve source styling: %s", terminal)
+	}
+
+	dark := RenderHTML(input, "contrast-dark")
+	for _, want := range []string{"color-scheme:dark", "background:#000000", "color:#ffffff"} {
+		if !strings.Contains(dark, want) {
+			t.Fatalf("contrast-dark HTML missing %q", want)
+		}
+	}
+	if strings.Contains(dark, "opacity:.68") {
+		t.Fatal("contrast-dark retained opacity-based dim text")
+	}
+
+	input.ANSI = "\x1b[2;38;2;238;238;238mdim light text\x1b[0m\n"
+	light := RenderHTML(input, "contrast-light")
+	for _, want := range []string{"color-scheme:light", "background:#ffffff", "color:#000000"} {
+		if !strings.Contains(light, want) {
+			t.Fatalf("contrast-light HTML missing %q", want)
+		}
+	}
+	if strings.Contains(light, "opacity:.68") {
+		t.Fatal("contrast-light retained opacity-based dim text")
+	}
+}
+
+func TestAccessibleThemePalettesMeetTextContrastFloor(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"contrast-dark", "contrast-light"} {
+		theme := snapshotThemeFor(name)
+		for i, color := range theme.ansi {
+			expected := color
+			if contrastRatio(color, theme.screen) < 4.5 {
+				expected = bestContrast(theme.screen)
+			}
+			if css := (terminalStyle{fg: color}).css(theme); !strings.Contains(css, "color:"+expected) {
+				t.Fatalf("%s ANSI color %d %s rendered as %q, want %s", name, i, color, css, expected)
+			}
+			if got := contrastRatio(expected, theme.screen); got < 4.5 {
+				t.Fatalf("%s corrected ANSI color %d %s contrast = %.2f", name, i, expected, got)
+			}
+		}
+	}
+}
+
 func TestRendererUsesPrivateEphemeralBrowserFiles(t *testing.T) {
 	t.Parallel()
 	executable, err := os.Executable()
@@ -46,7 +104,7 @@ func TestRendererUsesPrivateEphemeralBrowserFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeBrowserRunner{t: t}
-	renderer := &Renderer{Browser: executable, Runner: runner}
+	renderer := &Renderer{Browser: executable, Theme: "terminal", Runner: runner}
 	dir := t.TempDir()
 	png, err := renderer.Render(context.Background(), Input{
 		ANSI:        "hello\n",
@@ -88,7 +146,7 @@ func TestRendererUsesPrivateEphemeralBrowserFiles(t *testing.T) {
 func TestRendererRejectsMissingConfiguredBrowser(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "missing-browser")
-	if _, err := (&Renderer{Browser: path}).Available(); err == nil {
+	if _, err := (&Renderer{Browser: path, Theme: "terminal"}).Available(); err == nil {
 		t.Fatal("missing configured browser was accepted")
 	}
 }
@@ -97,7 +155,7 @@ func TestLiveChromiumRender(t *testing.T) {
 	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
 		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
 	}
-	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"))
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
 	path, err := renderer.Render(context.Background(), Input{
 		ANSI:        "\x1b[32;1mEngram terminal snapshot\x1b[0m\n",
 		Title:       "live render",

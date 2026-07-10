@@ -27,7 +27,7 @@ func (a *App) snapshotStatus() string {
 	if err != nil {
 		return "unavailable"
 	}
-	return "ready (" + filepath.Base(path) + ")"
+	return "ready (" + filepath.Base(path) + ", " + a.Config.SnapshotTheme + ")"
 }
 
 func (a *App) queueSnapshot(ts state.TerminalSession) actionResult {
