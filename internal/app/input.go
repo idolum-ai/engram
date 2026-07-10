@@ -44,6 +44,9 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
+	if ts.State == state.TerminalClosed {
+		return actionResult{Outcome: actionUserError, Message: "session is closed"}
+	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	if err := a.validateSessionPane(tctx, ts); err != nil {
@@ -96,6 +99,9 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
+	}
+	if ts.State == state.TerminalClosed {
+		return actionResult{Outcome: actionUserError, Message: "session is closed"}
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()

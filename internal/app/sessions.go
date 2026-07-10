@@ -179,12 +179,23 @@ func (a *App) cd(ctx context.Context, id int, path string) actionResult {
 }
 
 func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResult {
+	lock := a.sessionMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
-	if ts.State == state.TerminalLost || ts.State == state.TerminalClosed {
+	if ts.State == state.TerminalClosed {
 		return actionResult{Outcome: actionUserError, Message: "session is " + string(ts.State) + "; use /sessions to attach an active pane"}
+	}
+	if ts.State == state.TerminalLost {
+		tctx, cancel := tmux.TimeoutContext(ctx)
+		defer cancel()
+		if err := a.validateSessionPane(tctx, ts); err != nil {
+			return actionResult{Outcome: actionTmuxFailed, Message: "session is still lost; use /sessions to locate the intended pane"}
+		}
+		ts, _ = a.Store.FindSession(id)
 	}
 	if ts.AnchorMessageID == 0 {
 		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
@@ -281,9 +292,26 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 func (a *App) validateSessionPane(ctx context.Context, ts state.TerminalSession) error {
 	_, err := a.Tmux.ValidatePane(ctx, ts.TmuxPaneID, ts.TmuxWindowID)
 	if err != nil {
-		a.markSessionLost(ctx, ts, err)
+		if tmux.IsIdentityLoss(err) {
+			a.markSessionLost(ctx, ts, err)
+		} else {
+			_ = a.audit("tmux.identity", "unavailable", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": err.Error()})
+		}
+		return err
 	}
-	return err
+	if ts.State == state.TerminalLost {
+		if _, _, stateErr := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+			s.State = state.TerminalRunning
+			s.WatchEnabled = true
+			s.PendingRefresh = true
+			s.LastTelegramError = ""
+		}); stateErr != nil {
+			_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
+			return fmt.Errorf("recover session state: %w", stateErr)
+		}
+		_ = a.audit("tmux.identity", "recovered", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID})
+	}
+	return nil
 }
 
 func (a *App) sessions(ctx context.Context, msg telegram.Message) {

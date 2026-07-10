@@ -45,11 +45,14 @@ Telegram is Engram's only user interface.
 
 ## Callbacks
 
-- Refresh, watch, close, and attach callbacks must be bounded to the configured
-  user and chat.
+- Refresh, reattach, watch, close, and attach callbacks must be bounded to the
+  configured user and chat.
 - Callback failures must not stop polling.
 - Every callback query is answered, including unauthorized, malformed, and
   stale callbacks. Positive text is sent only after validating the target.
 - Close buttons open a second confirm/cancel prompt using a random, single-use
   token that expires after two minutes and is invalidated by restart.
 - Closed and lost anchors expose no key or refresh controls.
+- A lost anchor exposes only `🧭 Reattach`. It restores the session when its
+  original immutable pane/window identity is live and otherwise directs the
+  user to `/sessions`.

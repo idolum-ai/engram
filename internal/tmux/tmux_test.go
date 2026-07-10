@@ -3,6 +3,7 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -308,6 +309,26 @@ func TestInspectAndValidatePaneIdentity(t *testing.T) {
 				t.Fatalf("invalid identity invoked tmux: %#v", f.calls)
 			}
 		})
+	}
+}
+
+func TestIsIdentityLoss(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{err: fmt.Errorf("tmux display-message: exit status 1: can't find pane: %%8"), want: true},
+		{err: fmt.Errorf("tmux pane identity mismatch: got pane %%8 window @9"), want: true},
+		{err: fmt.Errorf("invalid tmux pane ID %q", "8"), want: true},
+		{err: context.Canceled, want: false},
+		{err: context.DeadlineExceeded, want: false},
+		{err: errors.New("tmux server temporarily unavailable"), want: false},
+	}
+	for _, test := range tests {
+		if got := IsIdentityLoss(test.err); got != test.want {
+			t.Errorf("IsIdentityLoss(%q) = %v, want %v", test.err, got, test.want)
+		}
 	}
 }
 

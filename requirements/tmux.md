@@ -20,6 +20,11 @@ tmux is the source of terminal truth.
 - Before input, capture, cwd lookup, or destructive close, Engram verifies that
   the stored `%pane_id` still belongs to the stored `@window_id`. A mismatch
   marks the session lost and disables watching.
+- Canceled or transient tmux commands do not prove identity loss. If a later
+  user action validates the same immutable pane/window identity, Engram restores
+  the tracked session and resumes watching it.
+- Lost anchors offer a reattach action for this exact-identity recovery. A pane
+  that no longer validates is not replaced or guessed.
 
 ## Input
 

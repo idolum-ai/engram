@@ -77,5 +77,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   unchanged edits count as success.
 - If Telegram rejects HTML entity parsing, fall back once to plain text. Other
   API failures retain their typed outcome.
-- If tmux target capture fails, mark the session lost and stop pretending it is
-  current.
+- Cancellation, timeout, or a generic tmux capture failure does not prove that
+  a pane disappeared. Mark a session lost only when tmux explicitly reports the
+  pane missing or its immutable pane/window identity no longer matches.
+- A later user action may restore a lost session when the same immutable pane
+  and window identity validates successfully. Recovery must be audited and
+  followed by a fresh capture.

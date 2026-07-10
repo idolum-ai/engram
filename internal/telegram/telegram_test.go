@@ -71,6 +71,16 @@ func TestRefreshMarkupIncludesKeyButtons(t *testing.T) {
 	}
 }
 
+func TestRecoverMarkupOffersExactReattach(t *testing.T) {
+	t.Parallel()
+
+	got := RecoverMarkup(7)
+	want := InlineKeyboardButton{Text: "🧭 Reattach", CallbackData: "recover:7"}
+	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 1 || got.InlineKeyboard[0][0] != want {
+		t.Fatalf("RecoverMarkup(7) = %#v, want %#v", got, want)
+	}
+}
+
 func TestMarkdownToHTML(t *testing.T) {
 	t.Parallel()
 

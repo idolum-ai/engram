@@ -44,11 +44,19 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	capture, err := a.Tmux.CaptureVisibleSemantic(tctx, ts.TmuxPaneID)
 	releaseSlot(a.captureSlots)
 	if err != nil {
+		if ctx.Err() != nil {
+			_ = a.audit("tmux.capture", "canceled", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID})
+			return
+		}
+		validationCtx, cancelValidation := tmux.TimeoutContext(ctx)
+		defer cancelValidation()
 		lock := a.sessionMutex(id)
 		lock.Lock()
 		latest, found := a.Store.FindSession(id)
 		if found && latest.State != state.TerminalClosed {
-			a.markSessionLost(ctx, latest, err)
+			if validationErr := a.validateSessionPane(validationCtx, latest); validationErr == nil {
+				_ = a.audit("tmux.capture", "failed", map[string]any{"session_id": id, "pane_id": latest.TmuxPaneID, "error": err.Error()})
+			}
 		}
 		lock.Unlock()
 		return
@@ -450,8 +458,11 @@ func isTelegramAnchorUnavailable(err error) bool {
 }
 
 func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
-	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
+	if ts.State == state.TerminalClosed {
 		return nil
+	}
+	if ts.State == state.TerminalLost {
+		return telegram.RecoverMarkup(ts.ID)
 	}
 	return telegram.RefreshMarkup(ts.ID)
 }
