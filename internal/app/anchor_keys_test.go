@@ -92,6 +92,40 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 	}
 }
 
+func TestRetiredAnchorCallbacksAreInert(t *testing.T) {
+	for _, callbackData := range []string{"refresh:1", "key:1:ctrl-c", "recover:1"} {
+		t.Run(callbackData, func(t *testing.T) {
+			app, runner, refreshed := newAnchorKeyTestApp(t)
+			if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
+				s.AnchorMessageID = 20
+				if strings.HasPrefix(callbackData, "recover:") {
+					s.State = state.TerminalLost
+					s.WatchEnabled = false
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+				ID:      "stale",
+				From:    telegram.User{ID: 42},
+				Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+				Data:    callbackData,
+			})
+			if status != "callback_user_error" {
+				t.Fatalf("status = %q", status)
+			}
+			if len(runner.calls) != 0 {
+				t.Fatalf("retired callback touched tmux: %#v", runner.calls)
+			}
+			select {
+			case <-refreshed:
+				t.Fatal("retired callback queued refresh")
+			default:
+			}
+		})
+	}
+}
+
 func newAnchorKeyTestApp(t *testing.T) (*App, *anchorKeyRunner, <-chan struct{}) {
 	t.Helper()
 	dir := t.TempDir()
@@ -99,7 +133,14 @@ func newAnchorKeyTestApp(t *testing.T) (*App, *anchorKeyRunner, <-chan struct{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AllocateSession("main", "@1", "%1", "shell"); err != nil {
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 10
+	}); err != nil {
 		t.Fatal(err)
 	}
 	client := telegram.New("TOKEN")

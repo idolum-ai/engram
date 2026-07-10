@@ -39,10 +39,9 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
-		ts, ok := a.Store.FindSession(id)
-		if !ok {
-			a.answerCallback(ctx, cb.ID, "session not found")
-			return "callback_user_error"
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
 		}
 		if ts.State == state.TerminalLost || ts.State == state.TerminalClosed {
 			a.answerCallback(ctx, cb.ID, "session is "+string(ts.State))
@@ -60,6 +59,9 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
+		if _, status := a.validateAnchorCallback(ctx, cb, id); status != "" {
+			return status
+		}
 		result := a.watchSession(ctx, id, cb.Message.MessageID)
 		message := result.Message
 		if result.OK() {
@@ -75,6 +77,9 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if !ok {
 			a.answerCallback(ctx, cb.ID, "bad key")
 			return "failed_bad_callback_key"
+		}
+		if _, status := a.validateAnchorCallback(ctx, cb, id); status != "" {
+			return status
 		}
 		action, ok := anchorKeyAction(preset)
 		if !ok {
@@ -148,6 +153,23 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
+}
+
+func (a *App) validateAnchorCallback(ctx context.Context, cb telegram.CallbackQuery, id int) (state.TerminalSession, string) {
+	ts, ok := a.Store.FindSession(id)
+	if !ok {
+		if !a.answerCallback(ctx, cb.ID, "session not found") {
+			return state.TerminalSession{}, "callback_telegram_failed"
+		}
+		return state.TerminalSession{}, "callback_user_error"
+	}
+	if cb.Message == nil || ts.AnchorChatID != cb.Message.Chat.ID || ts.AnchorMessageID != cb.Message.MessageID {
+		if !a.answerCallback(ctx, cb.ID, "anchor moved; use the newer live message") {
+			return state.TerminalSession{}, "callback_telegram_failed"
+		}
+		return state.TerminalSession{}, "callback_user_error"
+	}
+	return ts, ""
 }
 
 func callbackAnswerStatus(answered bool, status string) string {

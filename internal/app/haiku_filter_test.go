@@ -84,7 +84,14 @@ func TestRefreshCallbackClearsHaikuCaptureHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AllocateSession("main", "@1", "%1", "shell"); err != nil {
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 10
+	}); err != nil {
 		t.Fatal(err)
 	}
 	client := telegram.New("TOKEN")
@@ -285,8 +292,8 @@ func TestRefreshPersistsGroundedHandoffCandidate(t *testing.T) {
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(audit), `"type":"telegram.handoff"`) {
-		t.Fatalf("unsettled candidate triggered delivery: %s", audit)
+	if strings.Contains(string(audit), `"type":"telegram.anchor_rotation"`) {
+		t.Fatalf("unsettled candidate triggered rotation: %s", audit)
 	}
 }
 

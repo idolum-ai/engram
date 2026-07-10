@@ -74,11 +74,10 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 		a.auditHandoffTransition(id, transition, hash)
 		if transition != handoffUnchanged {
-			a.updateAnchorLocal(ctx, id, "", true)
-			a.ensureHandoffDelivery(ctx, id)
+			a.renderHandoffTransition(ctx, id, transition, "", true)
 			return
 		}
-		a.ensureHandoffDelivery(ctx, id)
+		a.ensureHandoffAnchor(ctx, id)
 		if !force {
 			return
 		}
@@ -123,8 +122,20 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	lock.Unlock()
 	a.auditHandoffTransition(id, transition, hash)
-	a.updateAnchorLocal(ctx, id, summary, force)
-	a.ensureHandoffDelivery(ctx, id)
+	a.renderHandoffTransition(ctx, id, transition, summary, force)
+}
+
+func (a *App) renderHandoffTransition(ctx context.Context, id int, transition handoffTransition, summary string, final bool) {
+	if !rotatesAnchor(transition) {
+		a.updateAnchorLocal(ctx, id, summary, final)
+		a.ensureHandoffAnchor(ctx, id)
+		return
+	}
+	a.ensureHandoffAnchor(ctx, id)
+	ts, ok := a.Store.FindSession(id)
+	if !ok || ts.Handoff == nil || ts.Handoff.AnchorMessageID != ts.AnchorMessageID {
+		a.updateAnchorLocal(ctx, id, summary, final)
+	}
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -292,6 +303,9 @@ func (a *App) clearHaikuCaptureHistory(sessionID int) {
 }
 
 func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, final bool) {
+	lock := a.anchorMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
 	ts, ok := a.Store.FindSession(id)
 	if !ok || ts.AnchorMessageID == 0 {
 		return
@@ -321,13 +335,22 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 		}
 		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, markup)
 		if sendErr == nil {
-			if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+			oldAnchorID := ts.AnchorMessageID
+			updated, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
 				s.AnchorMessageID = msg.MessageID
+				s.AnchorPinned = false
+				s.AnchorPinKnown = !anchorShouldBePinned(*s)
+				if s.Handoff != nil && s.Handoff.AnchorMessageID == oldAnchorID {
+					s.Handoff.AnchorMessageID = msg.MessageID
+				}
 				s.LastRenderHash = renderHash
 				s.LastAnchorEditAt = time.Now().UTC()
-			}); err != nil {
+			})
+			if err != nil {
 				_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
+			} else if anchorShouldBePinned(updated) {
+				a.ensureCurrentAnchorPinnedLocked(ctx, updated)
 			}
 		} else {
 			_ = a.audit("telegram.anchor_replacement", "failed", map[string]any{"session_id": id, "error": sendErr.Error()})
@@ -575,6 +598,9 @@ func (a *App) scheduler(ctx context.Context) {
 			st := a.Store.Snapshot()
 			now := time.Now()
 			for _, ts := range st.TerminalSessions {
+				if ts.AnchorMessageID != 0 {
+					a.reconcileAnchorPresentation(ctx, ts.ID)
+				}
 				if !ts.WatchEnabled || ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
 					delete(nextCapture, ts.ID)
 					continue

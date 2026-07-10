@@ -28,7 +28,8 @@ tmux is the source of terminal truth.
 
 ## Input
 
-- Replying to an Engram anchor sends text to the tracked pane and submits it.
+- Replying to the current canonical Engram anchor sends text to the tracked pane
+  and submits it. Retired anchors do not route input.
 - A reply beginning with `//` escapes Engram command routing: Engram removes
   exactly one leading slash, sends the remaining text to the tracked pane, and
   submits it. For example, `//clear` sends `/clear` followed by Enter.

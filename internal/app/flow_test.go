@@ -27,6 +27,7 @@ func TestQueueRefreshCoalescesWhileRunning(t *testing.T) {
 	app.queueRefresh(7, true, 0)
 	<-done
 	<-done
+	app.refreshWG.Wait()
 
 	app.summaryMu.Lock()
 	defer app.summaryMu.Unlock()

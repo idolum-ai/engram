@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,8 +59,8 @@ func TestHandoffReopensWhenInputHasNoVisibleEffect(t *testing.T) {
 	if got := settleHandoffCandidate(&ts, "prompt", now.Add(8*time.Second)); got != handoffReopened || ts.Handoff == nil || !ts.Handoff.AcknowledgedAt.IsZero() {
 		t.Fatalf("unchanged capture did not reopen: transition=%q session=%#v", got, ts)
 	}
-	if ts.Handoff.NotificationMessageID != 0 {
-		t.Fatalf("reopened handoff inherited delivery identity: %#v", ts.Handoff)
+	if ts.Handoff.AnchorMessageID != 0 || ts.Handoff.NotificationMessageID != 0 {
+		t.Fatalf("reopened handoff inherited anchor identity: %#v", ts.Handoff)
 	}
 }
 
@@ -109,7 +112,7 @@ func TestHandoffKeyWordingDriftDoesNotResetSettlement(t *testing.T) {
 	}
 }
 
-func TestHandoffNotificationIsDeliveredOnceAndAcceptsReplies(t *testing.T) {
+func TestHandoffRotatesPinsAndRetiresCanonicalAnchorOnce(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -123,35 +126,175 @@ func TestHandoffNotificationIsDeliveredOnceAndAcceptsReplies(t *testing.T) {
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
+		s.WatchEnabled = true
 		s.Handoff = openHandoffSession(now).Handoff
 	}); err != nil {
 		t.Fatal(err)
 	}
-	requests := 0
+	var paths []string
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: appRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		requests++
+		paths = append(paths, req.URL.Path)
 		var payload map[string]any
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["reply_to_message_id"] != float64(77) || payload["reply_markup"] != nil {
-			t.Fatalf("handoff payload = %#v", payload)
+		switch req.URL.Path {
+		case "/botTOKEN/sendMessage":
+			if payload["reply_to_message_id"] != float64(77) || payload["reply_markup"] == nil {
+				t.Fatalf("new anchor payload = %#v", payload)
+			}
+			return telegramTestResponse(t, http.StatusOK, map[string]any{
+				"ok":     true,
+				"result": map[string]any{"message_id": 88, "chat": map[string]any{"id": 100}},
+			}), nil
+		case "/botTOKEN/pinChatMessage":
+			if payload["message_id"] != float64(88) || payload["disable_notification"] != true {
+				t.Fatalf("pin payload = %#v", payload)
+			}
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		case "/botTOKEN/editMessageText":
+			markup, _ := payload["reply_markup"].(map[string]any)
+			keyboard, _ := markup["inline_keyboard"].([]any)
+			if payload["message_id"] != float64(77) || keyboard == nil || len(keyboard) != 0 || !strings.Contains(fmt.Sprint(payload["text"]), "newer live anchor") {
+				t.Fatalf("retired anchor payload = %#v", payload)
+			}
+			return telegramTestResponse(t, http.StatusOK, map[string]any{
+				"ok":     true,
+				"result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}},
+			}), nil
+		case "/botTOKEN/unpinChatMessage":
+			if payload["message_id"] != float64(77) {
+				t.Fatalf("unpin payload = %#v", payload)
+			}
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		default:
+			t.Fatalf("unexpected Telegram path %s", req.URL.Path)
+			return nil, nil
 		}
-		return telegramTestResponse(t, http.StatusOK, map[string]any{
-			"ok":     true,
-			"result": map[string]any{"message_id": 88, "chat": map[string]any{"id": 100}},
-		}), nil
 	})}
 	app := &App{Config: config.Config{TelegramChatID: 100}, Store: store, Telegram: client}
-	app.ensureHandoffDelivery(context.Background(), session.ID)
-	app.ensureHandoffDelivery(context.Background(), session.ID)
-	if requests != 1 {
-		t.Fatalf("handoff requests = %d, want one", requests)
+	app.ensureHandoffAnchor(context.Background(), session.ID)
+	app.ensureHandoffAnchor(context.Background(), session.ID)
+	wantPaths := []string{"/botTOKEN/sendMessage", "/botTOKEN/pinChatMessage", "/botTOKEN/editMessageText", "/botTOKEN/unpinChatMessage"}
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("rotation paths = %#v, want %#v", paths, wantPaths)
+	}
+	rotated, _ := store.FindSession(session.ID)
+	if rotated.AnchorMessageID != 88 || rotated.Handoff.AnchorMessageID != 88 || rotated.RetiringAnchorMessageID != 0 || !rotated.AnchorPinKnown || !rotated.AnchorPinned {
+		t.Fatalf("rotated session = %#v", rotated)
+	}
+	if _, ok := store.FindByAnchor(100, 77); ok {
+		t.Fatal("retired anchor still routes")
 	}
 	if routed, ok := store.FindByAnchor(100, 88); !ok || routed.ID != session.ID {
-		t.Fatalf("handoff reply route = %#v ok=%v", routed, ok)
+		t.Fatalf("new anchor route = %#v ok=%v", routed, ok)
+	}
+}
+
+func TestAnchorRetirementRetriesAfterCanonicalRotation(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 77
+		s.WatchEnabled = true
+		s.Handoff = openHandoffSession(time.Now().UTC()).Handoff
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	retireAttempts := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: appRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		switch req.URL.Path {
+		case "/botTOKEN/sendMessage":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 88, "chat": map[string]any{"id": 100}}}), nil
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		case "/botTOKEN/editMessageText":
+			retireAttempts++
+			if retireAttempts == 1 {
+				return telegramTestResponse(t, http.StatusInternalServerError, map[string]any{"ok": false, "error_code": 500, "description": "temporary failure"}), nil
+			}
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+		default:
+			t.Fatalf("unexpected path %s", req.URL.Path)
+			return nil, nil
+		}
+	})}
+	app := &App{Config: config.Config{TelegramChatID: 100}, Store: store, Telegram: client}
+
+	app.ensureHandoffAnchor(context.Background(), session.ID)
+	afterFailure, _ := store.FindSession(session.ID)
+	if afterFailure.AnchorMessageID != 88 || afterFailure.RetiringAnchorMessageID != 77 || !afterFailure.AnchorPinned {
+		t.Fatalf("rotation was not durable before retirement retry: %#v", afterFailure)
+	}
+	if _, ok := store.FindByAnchor(100, 77); ok {
+		t.Fatal("retiring anchor remained routable")
+	}
+	app.ensureHandoffAnchor(context.Background(), session.ID)
+	afterRetry, _ := store.FindSession(session.ID)
+	if afterRetry.RetiringAnchorMessageID != 0 {
+		t.Fatalf("retirement did not finish: %#v", afterRetry)
+	}
+	want := []string{"/botTOKEN/sendMessage", "/botTOKEN/pinChatMessage", "/botTOKEN/editMessageText", "/botTOKEN/editMessageText", "/botTOKEN/unpinChatMessage"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("paths = %#v, want %#v", paths, want)
+	}
+}
+
+func TestAnchorPinReconciliationTracksWatchLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 77
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: appRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+	})}
+	app := &App{Store: store, Telegram: client}
+	app.reconcileAnchorPresentation(context.Background(), session.ID)
+	pinned, _ := store.FindSession(session.ID)
+	if !pinned.AnchorPinKnown || !pinned.AnchorPinned {
+		t.Fatalf("active anchor was not pinned: %#v", pinned)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) { s.WatchEnabled = false }); err != nil {
+		t.Fatal(err)
+	}
+	app.reconcileAnchorPresentation(context.Background(), session.ID)
+	unpinned, _ := store.FindSession(session.ID)
+	if !unpinned.AnchorPinKnown || unpinned.AnchorPinned {
+		t.Fatalf("inactive anchor was not unpinned: %#v", unpinned)
+	}
+	want := []string{"/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("paths = %#v, want %#v", paths, want)
 	}
 }
 

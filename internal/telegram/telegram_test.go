@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -228,6 +229,47 @@ func TestEditHTMLMessagePayload(t *testing.T) {
 	}
 	if _, ok := got["reply_markup"]; ok {
 		t.Fatalf("reply_markup present = %#v, want omitted", got["reply_markup"])
+	}
+}
+
+func TestPinAndUnpinChatMessagePayloads(t *testing.T) {
+	t.Parallel()
+
+	var requests []map[string]any
+	var paths []string
+	client := New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		requests = append(requests, decodeRequestMap(t, req))
+		return jsonResponse(t, map[string]any{"ok": true, "result": true}), nil
+	})}
+
+	if err := client.PinChatMessage(context.Background(), 5, 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.UnpinChatMessage(context.Background(), 5, 10); err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{"/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage"}
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("paths = %#v, want %#v", paths, wantPaths)
+	}
+	if requests[0]["chat_id"] != float64(5) || requests[0]["message_id"] != float64(11) || requests[0]["disable_notification"] != true {
+		t.Fatalf("pin payload = %#v", requests[0])
+	}
+	if requests[1]["chat_id"] != float64(5) || requests[1]["message_id"] != float64(10) {
+		t.Fatalf("unpin payload = %#v", requests[1])
+	}
+}
+
+func TestPinErrorClassifiers(t *testing.T) {
+	t.Parallel()
+	if !IsMessageAlreadyPinned(&Error{Description: "Bad Request: message is already pinned"}) {
+		t.Fatal("already-pinned error was not classified")
+	}
+	if !IsMessageNotPinned(&Error{Description: "Bad Request: message is not pinned"}) {
+		t.Fatal("not-pinned error was not classified")
 	}
 }
 

@@ -70,6 +70,9 @@ exports a bounded recent tail, not an unbounded full audit file.
 - Pending and active handoffs are persisted with bounded derived text, evidence,
   capture hashes, lifecycle timestamps, acknowledgment, and delivery identity;
   raw captures and handoff history are not.
+- Session state persists the canonical anchor, at most one predecessor awaiting
+  retirement, and known/unknown Telegram pin state. Restart resets pin knowledge
+  and reconciles it without discarding canonical ownership.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
@@ -80,8 +83,9 @@ exports a bounded recent tail, not an unbounded full audit file.
 
 - If Haiku fails, reuse the last summary when possible and mark it stale.
 - A failed or low-confidence Haiku observation cannot resolve an active handoff.
-- A failed handoff notice remains eligible for delivery retry without reopening
-  the handoff lifecycle.
+- A failed handoff anchor send leaves the old anchor canonical. A failed
+  predecessor retirement or pin transition remains eligible for retry without
+  reopening the handoff lifecycle.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.

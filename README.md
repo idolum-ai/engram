@@ -161,8 +161,8 @@ access for the configured local user. A stolen bot token can expose or disrupt
 the bot channel and must be revoked immediately.
 
 - **Telegram:** Engram long-polls the Bot API for messages and attachments, then
-  sends messages, anchor edits, settled handoff notices, and requested files
-  back to the configured DM.
+  sends messages, rotates and pins live anchors, edits retired anchors, and
+  sends requested files back to the configured DM.
   Telegram receives command text, summaries, `/raw`, `/dump`, `/logs`, and
   `/download` results sent through the bot.
 - **tmux and local processes:** Authorized messages can create windows and send
@@ -294,12 +294,15 @@ Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
 
-When a pane reaches a stable boundary that needs human judgment, Engram sends
-one handoff notice as a reply to its anchor. Replying to either message routes
-input to the same pane. Input acknowledges the handoff but does not erase it;
-Engram observes the pane again and then resolves, replaces, or reopens the
-handoff from later evidence. `/sessions` keeps unacknowledged handoffs ahead of
-quiet sessions, with the oldest waiting handoff first.
+Each watched session has exactly one live anchor, and Engram silently pins those
+anchors for navigation. When a pane reaches a stable boundary that needs human
+judgment, Engram sends a new full anchor as a reply to the current one, pins the
+new anchor, makes it canonical, then compacts and unpins its predecessor. Only
+the canonical anchor accepts replies, refreshes, and key buttons. Input
+acknowledges the handoff but does not erase it; the same new anchor keeps
+receiving updates while Engram resolves, replaces, or reopens the handoff from
+later evidence. `/sessions` keeps unacknowledged handoffs ahead of quiet
+sessions, with the oldest waiting handoff first.
 
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or

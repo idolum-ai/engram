@@ -28,7 +28,8 @@ type Handoff struct {
 	LastConfirmedAt         time.Time `json:"last_confirmed_at"`
 	AcknowledgedAt          time.Time `json:"acknowledged_at,omitempty"`
 	AcknowledgedCaptureHash string    `json:"acknowledged_capture_hash,omitempty"`
-	NotificationMessageID   int       `json:"notification_message_id,omitempty"`
+	AnchorMessageID         int       `json:"anchor_message_id,omitempty"`
+	NotificationMessageID   int       `json:"notification_message_id,omitempty"` // Legacy schema 3 field.
 }
 
 type HandoffCandidate struct {
@@ -69,29 +70,32 @@ type State struct {
 }
 
 type TerminalSession struct {
-	ID                 int               `json:"id"`
-	TmuxSessionName    string            `json:"tmux_session_name"`
-	TmuxWindowID       string            `json:"tmux_window_id"`
-	TmuxPaneID         string            `json:"tmux_pane_id"`
-	Origin             TerminalOrigin    `json:"origin,omitempty"`
-	Title              string            `json:"title"`
-	LastKnownCWD       string            `json:"last_known_cwd,omitempty"`
-	State              TerminalState     `json:"state"`
-	CreatedAt          time.Time         `json:"created_at"`
-	UpdatedAt          time.Time         `json:"updated_at"`
-	LastActivityAt     time.Time         `json:"last_activity_at"`
-	LastInputPreview   string            `json:"last_input_preview,omitempty"`
-	LastInputMode      string            `json:"last_input_mode,omitempty"`
-	LastRawCaptureHash string            `json:"last_raw_capture_hash,omitempty"`
-	LastRenderHash     string            `json:"last_render_hash,omitempty"`
-	LastSummary        string            `json:"last_summary,omitempty"`
-	Handoff            *Handoff          `json:"handoff,omitempty"`
-	HandoffCandidate   *HandoffCandidate `json:"handoff_candidate,omitempty"`
-	AnchorChatID       int64             `json:"anchor_chat_id,omitempty"`
-	AnchorMessageID    int               `json:"anchor_message_id,omitempty"`
-	WatchEnabled       bool              `json:"watch_enabled"`
-	LastAnchorEditAt   time.Time         `json:"last_anchor_edit_at,omitempty"`
-	LastRawCapture     string            `json:"last_raw_capture,omitempty"`
+	ID                      int               `json:"id"`
+	TmuxSessionName         string            `json:"tmux_session_name"`
+	TmuxWindowID            string            `json:"tmux_window_id"`
+	TmuxPaneID              string            `json:"tmux_pane_id"`
+	Origin                  TerminalOrigin    `json:"origin,omitempty"`
+	Title                   string            `json:"title"`
+	LastKnownCWD            string            `json:"last_known_cwd,omitempty"`
+	State                   TerminalState     `json:"state"`
+	CreatedAt               time.Time         `json:"created_at"`
+	UpdatedAt               time.Time         `json:"updated_at"`
+	LastActivityAt          time.Time         `json:"last_activity_at"`
+	LastInputPreview        string            `json:"last_input_preview,omitempty"`
+	LastInputMode           string            `json:"last_input_mode,omitempty"`
+	LastRawCaptureHash      string            `json:"last_raw_capture_hash,omitempty"`
+	LastRenderHash          string            `json:"last_render_hash,omitempty"`
+	LastSummary             string            `json:"last_summary,omitempty"`
+	Handoff                 *Handoff          `json:"handoff,omitempty"`
+	HandoffCandidate        *HandoffCandidate `json:"handoff_candidate,omitempty"`
+	AnchorChatID            int64             `json:"anchor_chat_id,omitempty"`
+	AnchorMessageID         int               `json:"anchor_message_id,omitempty"`
+	RetiringAnchorMessageID int               `json:"retiring_anchor_message_id,omitempty"`
+	AnchorPinned            bool              `json:"anchor_pinned,omitempty"`
+	AnchorPinKnown          bool              `json:"anchor_pin_known,omitempty"`
+	WatchEnabled            bool              `json:"watch_enabled"`
+	LastAnchorEditAt        time.Time         `json:"last_anchor_edit_at,omitempty"`
+	LastRawCapture          string            `json:"last_raw_capture,omitempty"`
 }
 
 type Attachment struct {
@@ -183,7 +187,7 @@ func Open(path, auditPath string) (*Store, error) {
 		_ = s.Audit("state.recover", "corrupt_replaced", map[string]any{"backup": backup})
 		return s, nil
 	}
-	s.state.Version = 3
+	s.state.Version = 4
 	normalizeTerminalSessions(s.state.TerminalSessions)
 	if s.state.NextSessionID == 0 {
 		s.state.NextSessionID = maxSessionID(s.state.TerminalSessions) + 1
@@ -197,7 +201,7 @@ func Open(path, auditPath string) (*Store, error) {
 }
 
 func newState() State {
-	return State{Version: 3, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
+	return State{Version: 4, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
 }
 
 func (s *Store) Snapshot() State {
@@ -355,7 +359,7 @@ func (s *Store) FindByAnchor(chatID int64, messageID int) (TerminalSession, bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ts := range s.state.TerminalSessions {
-		if ts.AnchorChatID == chatID && (ts.AnchorMessageID == messageID || ts.Handoff != nil && ts.Handoff.NotificationMessageID == messageID) {
+		if ts.AnchorChatID == chatID && ts.AnchorMessageID == messageID {
 			return cloneTerminalSession(ts), true
 		}
 	}
@@ -622,6 +626,11 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 func normalizeTerminalSessions(sessions []TerminalSession) {
 	for i := range sessions {
 		session := &sessions[i]
+		// Pin state is reconciled with Telegram after every process start.
+		session.AnchorPinKnown = false
+		if session.AnchorMessageID == 0 || session.RetiringAnchorMessageID == session.AnchorMessageID {
+			session.RetiringAnchorMessageID = 0
+		}
 		switch session.State {
 		case TerminalRunning, TerminalLost, TerminalClosed:
 		default:
@@ -630,6 +639,10 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 		}
 		if session.Handoff != nil && (session.Handoff.Key == "" || session.Handoff.ObservationHash == "" || session.Handoff.OpenedAt.IsZero() || len(session.Handoff.Evidence) == 0) {
 			session.Handoff = nil
+		}
+		if session.Handoff != nil && session.Handoff.AnchorMessageID == 0 && session.Handoff.NotificationMessageID != 0 {
+			session.Handoff.AnchorMessageID = session.Handoff.NotificationMessageID
+			session.Handoff.NotificationMessageID = 0
 		}
 		if session.HandoffCandidate != nil {
 			switch session.HandoffCandidate.Kind {

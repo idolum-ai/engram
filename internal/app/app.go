@@ -51,6 +51,7 @@ type App struct {
 	closeConfirmMu sync.Mutex
 	closeConfirms  map[string]closeConfirmation
 	sessionLocks   sync.Map
+	anchorLocks    sync.Map
 	sleepHook      func(time.Duration)
 	refreshHook    func(context.Context, int, bool)
 }
@@ -390,6 +391,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "session not found")
 			return
 		}
+		a.reconcileAnchorPresentation(ctx, id)
 		a.reply(ctx, msg, fmt.Sprintf("[%d] watch stopped", id))
 	case "restart":
 		a.reply(ctx, msg, "Engram restarting. tmux sessions remain open.")

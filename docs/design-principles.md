@@ -66,6 +66,12 @@ session handle, state, title, last input preview, Haiku status, one recommended
 action, deterministic paths that currently exist, a refresh button, and
 a small allowlisted row of common terminal keys.
 
+Each session should have exactly one live anchor. Watched live anchors should be
+pinned for navigation. When attention moves a session forward in chat history,
+the new message becomes the live anchor and the predecessor becomes a compact,
+unpinned, control-free trace. Two simultaneously actionable representations of
+one pane are a product error.
+
 ### Fast input path
 
 Sending input to tmux must stay fast even when summaries are delayed, skipped,
@@ -106,15 +112,16 @@ the user supplies judgment, input, approval, correction, credentials, or the
 next choice.
 
 A model suggestion is not yet a handoff. Engram should wait for compatible
-settled observations, bind the handoff to exact capture evidence, deliver it
-once, and keep it across restarts. User input acknowledges it. Later evidence
-resolves it, replaces it with a materially different need, or reopens it when
-the intervention had no established effect.
+settled observations and bind the handoff to exact capture evidence. Opening a
+handoff rotates the session's single live anchor forward rather than creating a
+second static notice. User input acknowledges it. Later evidence updates that
+anchor, resolves the handoff, replaces it with a materially different need, or
+reopens it when the intervention had no established effect.
 
 This lifecycle is the attention interface. `/sessions` should present waiting
-handoffs before quiet sessions, and Engram should send one quiet notice when a
-handoff opens. Changing output, uncertain interpretation, and bare idleness are
-not reasons to interrupt.
+handoffs before quiet sessions, while pinned anchors keep every watched session
+reachable independent of chat history. Changing output, uncertain
+interpretation, and bare idleness are not reasons to rotate an anchor.
 
 ### Deterministic facts beat guesses
 

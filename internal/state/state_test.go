@@ -119,7 +119,7 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := store.Snapshot()
-	if st.Version != 3 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
+	if st.Version != 4 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
 		t.Fatalf("normalized legacy state = %#v", st)
 	}
 	if got := st.TerminalSessions[0].LastRawCapture; got != "sensitive terminal output" {
@@ -181,8 +181,8 @@ func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
 	if !ok || session.State != TerminalLost || session.WatchEnabled || session.Handoff != nil {
 		t.Fatalf("normalized legacy session = %#v ok=%v", session, ok)
 	}
-	if store.Snapshot().Version != 3 {
-		t.Fatalf("state version = %d, want 3", store.Snapshot().Version)
+	if store.Snapshot().Version != 4 {
+		t.Fatalf("state version = %d, want 4", store.Snapshot().Version)
 	}
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
@@ -198,7 +198,48 @@ func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
 	}
 }
 
-func TestHandoffNotificationRoutesToOwningSessionAndSnapshotsAreIsolated(t *testing.T) {
+func TestStoreMigratesSchemaThreeHandoffNoticeForAnchorRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	legacy := `{
+  "version": 3,
+  "next_session_id": 2,
+  "terminal_sessions": [{
+    "id": 1,
+    "state": "running",
+    "watch_enabled": true,
+    "anchor_chat_id": 100,
+    "anchor_message_id": 10,
+    "anchor_pinned": true,
+    "handoff": {
+      "key": "approval",
+      "status_report": "Waiting for approval.",
+      "recommended_action": "Approve or reject.",
+      "evidence": ["Confirm [y/N]"],
+      "observation_hash": "hash",
+      "opened_at": "2026-07-10T03:00:00Z",
+      "last_confirmed_at": "2026-07-10T03:00:00Z",
+      "notification_message_id": 11
+    }
+  }]
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, ok := store.FindSession(1)
+	if !ok || session.Handoff == nil || session.Handoff.AnchorMessageID != 11 || session.Handoff.NotificationMessageID != 0 || session.AnchorPinKnown {
+		t.Fatalf("schema 3 handoff migration = %#v ok=%v", session, ok)
+	}
+	if store.Snapshot().Version != 4 {
+		t.Fatalf("state version = %d, want 4", store.Snapshot().Version)
+	}
+}
+
+func TestOnlyCanonicalAnchorRoutesAndSnapshotsAreIsolated(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -216,8 +257,12 @@ func TestHandoffNotificationRoutesToOwningSessionAndSnapshotsAreIsolated(t *test
 		t.Fatal(err)
 	}
 	got, ok := store.FindByAnchor(100, 11)
+	if ok {
+		t.Fatalf("noncanonical handoff message routed = %#v", got)
+	}
+	got, ok = store.FindByAnchor(100, 10)
 	if !ok || got.ID != session.ID {
-		t.Fatalf("handoff notification route = %#v ok=%v", got, ok)
+		t.Fatalf("canonical anchor route = %#v ok=%v", got, ok)
 	}
 	snapshot := store.Snapshot()
 	snapshot.TerminalSessions[0].Handoff.Evidence[0] = "mutated"

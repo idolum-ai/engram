@@ -65,6 +65,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	if anchorReady {
+		a.reconcileAnchorPresentation(ctx, ts.ID)
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("created [%d]", ts.ID)}
@@ -129,6 +130,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	if anchorReady {
+		a.reconcileAnchorPresentation(ctx, ts.ID)
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("attached [%d]", ts.ID)}
@@ -201,6 +203,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 				_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 				return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 			}
+			a.reconcileAnchorPresentation(ctx, id)
 			return actionResult{Outcome: actionOK, Message: "watching"}
 		}
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
@@ -209,6 +212,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 	}
+	a.reconcileAnchorPresentation(ctx, id)
 	a.queueRefresh(id, true, 0)
 	return actionResult{Outcome: actionOK, Message: "watching"}
 }
@@ -231,6 +235,7 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 			return actionResult{Outcome: actionStateFailed, Message: "state update failed while untracking"}
 		}
 		a.updateAnchorLocal(ctx, id, "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed.", true)
+		a.reconcileAnchorPresentation(ctx, id)
 		_ = a.audit("tmux.untrack", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "origin": ts.Origin})
 		return actionResult{Outcome: actionOK, Message: "untracked; tmux remains open"}
 	}
@@ -254,6 +259,7 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after close"}
 	}
 	a.updateAnchorLocal(ctx, id, "status:\nThe Engram-created tmux window was closed.", true)
+	a.reconcileAnchorPresentation(ctx, id)
 	return actionResult{Outcome: actionOK, Message: "closed"}
 }
 
@@ -278,6 +284,7 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 	}
 	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
 	a.updateAnchorLocal(ctx, ts.ID, "status:\nThe tracked tmux pane no longer matches this session. Engram stopped watching it.\n\nrecommendation:\nUse /sessions and attach the intended pane again.", true)
+	a.reconcileAnchorPresentation(ctx, ts.ID)
 }
 
 func (a *App) validateSessionPane(ctx context.Context, ts state.TerminalSession) error {
