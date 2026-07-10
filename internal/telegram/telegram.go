@@ -395,6 +395,12 @@ func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 	}}
 }
 
+func RecoverMarkup(sessionID int) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		{Text: "🧭 Reattach", CallbackData: fmt.Sprintf("recover:%d", sessionID)},
+	}}}
+}
+
 func SessionListMarkup(ids []int, attachTargets []AttachTarget) *InlineKeyboardMarkup {
 	if len(ids) == 0 && len(attachTargets) == 0 {
 		return nil

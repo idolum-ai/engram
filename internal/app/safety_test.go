@@ -69,6 +69,54 @@ func TestPaneIdentityMismatchMarksSessionLostBeforeInput(t *testing.T) {
 	}
 }
 
+func TestTransientIdentityFailureDoesNotMarkSessionLost(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.identityErr = context.Canceled
+
+	result := app.sendInput(context.Background(), id, "pwd", "command", true)
+	if result.Outcome != actionTmuxFailed {
+		t.Fatalf("send result = %#v", result)
+	}
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalRunning || !got.WatchEnabled {
+		t.Fatalf("session after transient identity failure = %#v ok=%v", got, ok)
+	}
+}
+
+func TestLostSessionRecoversWhenImmutableIdentityMatches(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.State = state.TerminalLost
+		session.WatchEnabled = false
+		session.LastTelegramError = "context canceled"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	app.runCtx = runCtx
+
+	result := app.sendInput(context.Background(), id, "pwd", "command", true)
+	if !result.OK() {
+		t.Fatalf("send result = %#v", result)
+	}
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalRunning || !got.WatchEnabled || got.LastTelegramError != "" {
+		t.Fatalf("recovered session = %#v ok=%v", got, ok)
+	}
+}
+
+func TestCaptureFailureWithLiveIdentityDoesNotMarkSessionLost(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.captureErr = errors.New("temporary capture failure")
+
+	app.refreshSession(context.Background(), id, true)
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalRunning || !got.WatchEnabled {
+		t.Fatalf("session after capture failure = %#v ok=%v", got, ok)
+	}
+}
+
 func TestCloseCallbackRequiresSecondConfirmation(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	var paths []string
@@ -168,6 +216,63 @@ func TestClosedSessionCannotRefreshAndHasNoControls(t *testing.T) {
 	}
 }
 
+func TestLostSessionOffersOnlyReattach(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.State = state.TerminalLost
+		session.WatchEnabled = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ts, _ := app.Store.FindSession(id)
+	markup := anchorMarkup(ts)
+	if markup == nil || len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 1 {
+		t.Fatalf("lost anchor markup = %#v", markup)
+	}
+	button := markup.InlineKeyboard[0][0]
+	if button.Text != "🧭 Reattach" || button.CallbackData != "recover:"+strconv.Itoa(id) {
+		t.Fatalf("lost anchor button = %#v", button)
+	}
+}
+
+func TestRecoverCallbackRestoresExactLivePane(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.State = state.TerminalLost
+		session.WatchEnabled = false
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	app.runCtx = runCtx
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)), Header: make(http.Header)}, nil
+	})}
+	app.Telegram = client
+
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID:   "cb",
+		From: telegram.User{ID: 42},
+		Message: &telegram.Message{
+			MessageID: 77,
+			Chat:      telegram.Chat{ID: 100},
+		},
+		Data: "recover:" + strconv.Itoa(id),
+	})
+	if status != "callback_ok" {
+		t.Fatalf("recover callback status = %q", status)
+	}
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalRunning || !got.WatchEnabled {
+		t.Fatalf("recovered session = %#v ok=%v", got, ok)
+	}
+}
+
 func TestStaleAnchorUpdateUsesClosedSummary(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
@@ -262,6 +367,8 @@ func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunne
 type safetyRunner struct {
 	calls          [][]string
 	identityWindow string
+	identityErr    error
+	captureErr     error
 	failKill       bool
 }
 
@@ -277,7 +384,13 @@ func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) 
 func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
+		if r.identityErr != nil {
+			return "", r.identityErr
+		}
 		return "$1\t" + r.identityWindow + "\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+	}
+	if len(args) > 0 && args[0] == "capture-pane" && r.captureErr != nil {
+		return "", r.captureErr
 	}
 	if len(args) > 0 && args[0] == "kill-window" && r.failKill {
 		return "", errors.New("tmux refused kill")

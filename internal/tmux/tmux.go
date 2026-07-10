@@ -202,6 +202,21 @@ func (m Manager) ValidatePane(ctx context.Context, paneID, windowID string) (Pan
 	return pane, nil
 }
 
+// IsIdentityLoss reports errors that prove a persisted immutable pane/window
+// identity is no longer usable. Cancellation and generic execution failures do
+// not prove that the pane disappeared.
+func IsIdentityLoss(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "can't find pane:") ||
+		strings.Contains(message, "can't find window:") ||
+		strings.Contains(message, "tmux pane identity mismatch") ||
+		strings.Contains(message, "invalid tmux pane id") ||
+		strings.Contains(message, "invalid tmux window id")
+}
+
 func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {
 	if _, err := m.Runner.Run(ctx, "send-keys", "-t", paneID, "-l", "--", text); err != nil {
 		return err
