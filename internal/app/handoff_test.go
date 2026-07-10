@@ -36,7 +36,7 @@ func TestHandoffRequiresSettledGroundedObservations(t *testing.T) {
 func TestHandoffAcknowledgesThenResolvesFromLaterEvidence(t *testing.T) {
 	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
 	ts := openHandoffSession(now)
-	if !acknowledgeHandoff(&ts, now.Add(time.Second)) || ts.Handoff == nil || ts.Handoff.AcknowledgedAt.IsZero() {
+	if !acknowledgeHandoff(&ts, now.Add(time.Second), "pre-input") || ts.Handoff == nil || ts.Handoff.AcknowledgedAt.IsZero() || ts.Handoff.AcknowledgedCaptureHash != "pre-input" {
 		t.Fatalf("acknowledgment erased or missed handoff: %#v", ts)
 	}
 	clear := anthropic.GuideReport{StatusReport: "Deployment is running.", RecommendedAction: "Wait for it to finish.", Confidence: "high"}
@@ -52,7 +52,7 @@ func TestHandoffReopensWhenInputHasNoVisibleEffect(t *testing.T) {
 	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
 	ts := openHandoffSession(now)
 	ts.LastRawCaptureHash = "prompt"
-	acknowledgeHandoff(&ts, now.Add(time.Second))
+	acknowledgeHandoff(&ts, now.Add(time.Second), "prompt")
 	if got := settleHandoffCandidate(&ts, "prompt", now.Add(2*time.Second)); got != handoffUnchanged || ts.HandoffCandidate == nil || ts.HandoffCandidate.Kind != "reopen" {
 		t.Fatalf("unchanged capture did not stage reopen: transition=%q session=%#v", got, ts)
 	}
@@ -69,7 +69,7 @@ func TestLowConfidenceCannotResolveOpenHandoff(t *testing.T) {
 	ts := openHandoffSession(now)
 	ts.HandoffCandidate = &state.HandoffCandidate{Kind: "resolve", ObservationHash: "old"}
 	report := anthropic.GuideReport{StatusReport: "Unclear.", RecommendedAction: "Inspect.", Confidence: "low"}
-	if got := observeHandoff(&ts, report, "new", now.Add(time.Minute)); got != handoffUnchanged || ts.Handoff == nil || ts.HandoffCandidate != nil {
+	if got := observeHandoff(&ts, report, "new", now.Add(time.Minute)); got != handoffUnchanged || ts.Handoff == nil || ts.HandoffCandidate == nil || ts.HandoffCandidate.ObservationHash != "old" {
 		t.Fatalf("low-confidence report changed handoff: transition=%q session=%#v", got, ts)
 	}
 }

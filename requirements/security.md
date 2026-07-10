@@ -18,6 +18,9 @@ filesystem. The security and privacy model must stay small and explicit.
   issues, or test fixtures.
 - Audit payloads and `/logs` output must redact configured credentials and
   common credential patterns.
+- Model-derived summaries, recommended actions, and handoff evidence must pass
+  through the same best-effort redaction before persistence and Telegram
+  delivery.
 - Documentation must state that redaction is best effort and does not make an
   artifact safe to share without review.
 
@@ -29,6 +32,8 @@ filesystem. The security and privacy model must stay small and explicit.
   previews, prior summaries, visible pane captures, and an optional bounded
   full-scrollback retry.
 - Terminal captures sent to Anthropic are not credential-redacted.
+- Terminal captures are untrusted data for the guide. Pane-authored text cannot
+  instruct Haiku or acquire authority merely by addressing Engram or the user.
 - Incoming attachments are downloaded from Telegram but are not sent to
   Anthropic by default.
 

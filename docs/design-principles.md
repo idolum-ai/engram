@@ -142,6 +142,11 @@ Haiku may propose whether the pane has reached a handoff and give that specific
 need a stable key. Engram owns the lifecycle around that proposal: grounding,
 settlement, persistence, delivery, acknowledgment, and resolution.
 
+Terminal text is evidence, not authority. A pane can print instructions aimed
+at Engram or the user, but those words do not become recommendations merely by
+addressing the guide. Model-derived summaries, actions, and citations should be
+best-effort redacted before they become durable state or Telegram output.
+
 Haiku should not explain Engram features unless the terminal itself is showing
 Engram-related output. It should not produce raw terminal mirrors, long
 analysis, markdown-heavy prose, or broad coaching. Citations should be

@@ -36,8 +36,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		identityLock.Unlock()
 		return
 	}
-	ts, _ = a.Store.FindSession(id)
+	ts, ok = a.Store.FindSession(id)
 	identityLock.Unlock()
+	if !ok {
+		return
+	}
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}
@@ -152,6 +155,20 @@ func tailUTF8(text string, maxBytes int) string {
 	return text[start:]
 }
 
+func headUTF8(text string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(text) <= maxBytes {
+		return text
+	}
+	end := maxBytes
+	for end > 0 && !utf8.ValidString(text[:end]) {
+		end--
+	}
+	return text[:end]
+}
+
 func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string, hasPreviousCapture, captureChanged bool) (anthropic.GuideReport, error) {
 	var handoffEvidence []string
 	if ts.Handoff != nil {
@@ -187,6 +204,7 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 	if err != nil {
 		return anthropic.GuideReport{}, err
 	}
+	report = a.redactGuideReport(report)
 	if !report.WantsFullBuffer() {
 		return report, nil
 	}
@@ -209,7 +227,7 @@ func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, captur
 	if err != nil {
 		return report, nil
 	}
-	return refined, nil
+	return a.redactGuideReport(refined), nil
 }
 
 func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {
@@ -314,7 +332,7 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 		summary = firstNonEmpty(ts.LastSummary, summary)
 		final = true
 	}
-	rendered := renderLocal(ts, summary)
+	rendered := a.renderLocal(ts, summary)
 	renderHash := sha(rendered)
 	if renderHash == ts.LastRenderHash && !final {
 		return

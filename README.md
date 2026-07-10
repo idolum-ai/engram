@@ -193,9 +193,12 @@ the bot channel and must be revoked immediately.
 
 Audit events redact configured credentials and common token, key, password, and
 private-key patterns. `/logs` applies the same pattern-based redaction to a
-bounded audit tail. Redaction can miss unfamiliar secrets or sensitive prose.
-It does not sanitize terminal captures, `state.json`, `/raw`, `/dump`,
-`/download`, incoming attachments, Telegram history, or Anthropic requests.
+bounded audit tail. Haiku-derived summaries, recommendations, and handoff
+evidence receive the same best-effort redaction before persistence or Telegram
+delivery. Redaction can miss unfamiliar secrets or sensitive prose. It does not
+sanitize raw terminal captures, `/raw`, `/dump`, `/download`, incoming
+attachments, existing Telegram history, or captures sent to Anthropic.
+`state.json` still contains sensitive metadata and derived terminal content.
 Treat all terminal transcripts and diagnostic artifacts as sensitive and review
 them before sharing.
 

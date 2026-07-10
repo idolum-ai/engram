@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -113,6 +114,36 @@ func TestCaptureFailureWithLiveIdentityDoesNotMarkSessionLost(t *testing.T) {
 	got, ok := app.Store.FindSession(id)
 	if !ok || got.State != state.TerminalRunning || !got.WatchEnabled {
 		t.Fatalf("session after capture failure = %#v ok=%v", got, ok)
+	}
+}
+
+func TestRefreshStopsWhenSessionIsPrunedAfterIdentityValidation(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.LastKnownCWD = "/tmp"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 199; i++ {
+		if _, err := app.Store.AllocateSession("other", "@2", fmt.Sprintf("%%%d", i+2), "other"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner.onIdentity = func() {
+		runner.onIdentity = nil
+		if _, err := app.Store.AllocateSession("new", "@3", "%999", "new"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app.refreshSession(context.Background(), id, true)
+	if _, ok := app.Store.FindSession(id); ok {
+		t.Fatal("oldest session was not pruned during validation")
+	}
+	for _, call := range runner.calls {
+		if len(call) > 0 && call[0] == "capture-pane" {
+			t.Fatalf("refresh captured after session was pruned: %#v", runner.calls)
+		}
 	}
 }
 
@@ -369,6 +400,7 @@ type safetyRunner struct {
 	identityErr    error
 	captureErr     error
 	failKill       bool
+	onIdentity     func()
 }
 
 type newSessionRunner struct{}
@@ -385,6 +417,9 @@ func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "display-message" {
 		if r.identityErr != nil {
 			return "", r.identityErr
+		}
+		if r.onIdentity != nil {
+			r.onIdentity()
 		}
 		return "$1\t" + r.identityWindow + "\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
 	}

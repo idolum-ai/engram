@@ -47,7 +47,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		a.reply(ctx, msg, "tmux send error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "initial tmux input failed"}
 	}
-	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	resp, err := a.sendAnchor(ctx, msg.Chat.ID, a.renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
 	anchorReady := false
 	if err == nil {
 		if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
@@ -113,7 +113,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionStateFailed, Message: "state error"}
 	}
 	ts = updated
-	resp, err := a.sendAnchor(ctx, msg.Chat.ID, renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
+	resp, err := a.sendAnchor(ctx, msg.Chat.ID, a.renderLocal(ts, "attached existing tmux target; waiting for terminal output"), msg.MessageID, telegram.RefreshMarkup(ts.ID))
 	anchorReady := false
 	if err == nil {
 		if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
@@ -162,9 +162,13 @@ func (a *App) cwd(ctx context.Context, id int, msg telegram.Message) actionResul
 		a.reply(ctx, msg, "session lost; use /sessions to attach the intended pane again")
 		return actionResult{Outcome: actionTmuxFailed, Message: "session identity lost"}
 	}
-	ts, _ = a.Store.FindSession(id)
+	ts, ok = a.Store.FindSession(id)
+	if !ok {
+		a.reply(ctx, msg, "session no longer tracked")
+		return actionResult{Outcome: actionUserError, Message: "session no longer tracked"}
+	}
 	cwd := firstNonEmpty(ts.LastKnownCWD, "unknown")
-	a.reply(ctx, msg, fmt.Sprintf("[%d] cwd\n%s", id, cwd))
+	a.reply(ctx, msg, fmt.Sprintf("[%d] cwd (last observed)\n%s", id, cwd))
 	return actionResult{Outcome: actionOK, Message: cwd}
 }
 
@@ -190,10 +194,13 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 		if err := a.validateSessionPane(tctx, ts); err != nil {
 			return actionResult{Outcome: actionTmuxFailed, Message: "session is still lost; use /sessions to locate the intended pane"}
 		}
-		ts, _ = a.Store.FindSession(id)
+		ts, ok = a.Store.FindSession(id)
+		if !ok {
+			return actionResult{Outcome: actionUserError, Message: "session no longer tracked"}
+		}
 	}
 	if ts.AnchorMessageID == 0 {
-		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
+		msg, err := a.sendAnchor(ctx, a.Config.TelegramChatID, a.renderLocal(ts, firstNonEmpty(ts.LastSummary, "watching")), replyTo, telegram.RefreshMarkup(id))
 		if err == nil {
 			if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
@@ -319,6 +326,9 @@ func (a *App) validateSessionPane(ctx context.Context, ts state.TerminalSession)
 
 func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	st := a.Store.Snapshot()
+	for i := range st.TerminalSessions {
+		a.redactSessionPresentation(&st.TerminalSessions[i])
+	}
 	var b strings.Builder
 	b.WriteString("sessions\n")
 	ids := writeTrackedSessions(&b, st.TerminalSessions)
@@ -340,19 +350,19 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 		}
 	}
 	sort.SliceStable(active, func(i, j int) bool {
-		a, b := active[i], active[j]
-		aRank, bRank := sessionHandoffRank(a), sessionHandoffRank(b)
-		if aRank != bRank {
-			return aRank < bRank
+		left, right := active[i], active[j]
+		leftRank, rightRank := sessionHandoffRank(left), sessionHandoffRank(right)
+		if leftRank != rightRank {
+			return leftRank < rightRank
 		}
-		aTime, bTime := sessionQueueTime(a), sessionQueueTime(b)
-		if !aTime.Equal(bTime) {
-			if aRank == 1 {
-				return aTime.Before(bTime)
+		leftTime, rightTime := sessionQueueTime(left), sessionQueueTime(right)
+		if !leftTime.Equal(rightTime) {
+			if leftRank == 1 {
+				return leftTime.Before(rightTime)
 			}
-			return aTime.After(bTime)
+			return leftTime.After(rightTime)
 		}
-		return a.ID < b.ID
+		return left.ID < right.ID
 	})
 	labels := map[int]string{
 		0: "lost",
@@ -404,7 +414,7 @@ func compactSessionAction(action string) string {
 	if len(action) <= 72 {
 		return firstNonEmpty(action, "open the session anchor")
 	}
-	return strings.TrimSpace(action[:69]) + "..."
+	return strings.TrimSpace(headUTF8(action, 69)) + "..."
 }
 
 func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []telegram.AttachTarget {

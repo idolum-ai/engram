@@ -250,6 +250,7 @@ func TestGuideSummaryFiltersFullScrollbackRetry(t *testing.T) {
 }
 
 func TestRefreshPersistsGroundedHandoffCandidate(t *testing.T) {
+	const secret = "anthropic-secret-value"
 	dir := t.TempDir()
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	store, err := state.Open(filepath.Join(dir, "state.json"), auditPath)
@@ -265,19 +266,19 @@ func TestRefreshPersistsGroundedHandoffCandidate(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	client := anthropic.New("key", "claude-haiku-4-5-20251001")
+	client := anthropic.New(secret, "claude-haiku-4-5-20251001")
 	client.HTTPClient = &http.Client{Transport: appRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return appJSONGuideResponse(t, anthropic.GuideReport{
-			StatusReport:      "The process is waiting for approval.",
-			RecommendedAction: "Approve or reject the change.",
-			Citations:         []string{"Apply these changes? [y/N]"},
+			StatusReport:      "The process is waiting for approval; token=" + secret,
+			RecommendedAction: "Approve or reject with API_KEY=" + secret,
+			Citations:         []string{"Apply these changes? [y/N] " + secret},
 			HumanNeeded:       true,
 			HandoffKey:        "approve_changes",
 			Confidence:        "high",
 		}), nil
 	})}
 	app := &App{
-		Config:         config.Config{AnthropicModel: "claude-haiku-4-5-20251001"},
+		Config:         config.Config{AnthropicAPIKey: secret, AnthropicModel: "claude-haiku-4-5-20251001"},
 		Store:          store,
 		Anthropic:      client,
 		Tmux:           tmux.New(handoffRefreshRunner{}),
@@ -287,6 +288,16 @@ func TestRefreshPersistsGroundedHandoffCandidate(t *testing.T) {
 	got, ok := store.FindSession(session.ID)
 	if !ok || got.Handoff != nil || got.HandoffCandidate == nil || got.HandoffCandidate.Kind != "open" || got.HandoffCandidate.Observations != 1 {
 		t.Fatalf("session handoff candidate = %#v ok=%v", got, ok)
+	}
+	if strings.Contains(got.LastSummary, secret) || strings.Contains(got.HandoffCandidate.StatusReport, secret) || strings.Contains(got.HandoffCandidate.RecommendedAction, secret) || strings.Contains(strings.Join(got.HandoffCandidate.Evidence, " "), secret) {
+		t.Fatalf("derived secret persisted in session: %#v", got)
+	}
+	persisted, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(persisted), secret) {
+		t.Fatalf("derived secret persisted in state file: %s", persisted)
 	}
 	audit, err := os.ReadFile(auditPath)
 	if err != nil && !os.IsNotExist(err) {

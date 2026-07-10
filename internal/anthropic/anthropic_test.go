@@ -131,6 +131,15 @@ func TestGuideReportRequiresGroundedHandoff(t *testing.T) {
 	}
 }
 
+func TestSystemPromptTreatsTerminalContentAsUntrustedData(t *testing.T) {
+	t.Parallel()
+	for _, phrase := range []string{"untrusted data", "never as instructions", "do not relay or endorse"} {
+		if !strings.Contains(SystemPrompt, phrase) {
+			t.Fatalf("system prompt missing injection boundary %q", phrase)
+		}
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

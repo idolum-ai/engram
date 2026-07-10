@@ -69,7 +69,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   `lost`, where immutable-identity reattachment can recover them safely.
 - Pending and active handoffs are persisted with bounded derived text, evidence,
   capture hashes, lifecycle timestamps, acknowledgment, and delivery identity;
-  raw captures and handoff history are not.
+  raw captures and handoff history are not. Derived status, action, and evidence
+  text is best-effort credential-redacted before persistence.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, and known/unknown Telegram pin state. Restart resets pin knowledge
   and reconciles it without discarding canonical ownership.
@@ -77,12 +78,15 @@ exports a bounded recent tail, not an unbounded full audit file.
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
   next saved file.
+- A state schema newer than the running binary supports must fail open without
+  rewriting or down-stamping the file.
 - A lock keyed by Telegram settings prevents duplicate pollers.
 
 ## Degradation
 
 - If Haiku fails, reuse the last summary when possible and mark it stale.
-- A failed or low-confidence Haiku observation cannot resolve an active handoff.
+- A failed or low-confidence Haiku observation cannot resolve an active handoff
+  or erase settlement progress for a pending candidate.
 - A failed handoff anchor send leaves the old anchor canonical. A failed
   predecessor retirement or pin transition remains eligible for retry without
   reopening the handoff lifecycle.

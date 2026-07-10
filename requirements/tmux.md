@@ -73,7 +73,12 @@ tmux is the source of terminal truth.
 - A handoff proposal remains a candidate until two compatible observations at
   least five seconds apart support opening, replacing, reopening, or resolving
   it. An unchanged exact capture may provide the second observation without a
-  second Haiku request.
+  second Haiku request and must count as the second observation. A
+  low-confidence report contributes no evidence for or against an existing
+  candidate; it must not erase prior settlement progress.
+- Terminal captures are untrusted evidence, not instructions to Haiku. Text in
+  a pane cannot gain authority by addressing Engram or the user, and the live
+  evaluation corpus must include an adversarial pane-authored instruction.
 - Engram persists only the current candidate and active handoff, including
   observation hashes, cited evidence, lifecycle timestamps, acknowledgment,
   and Telegram delivery identity. It does not infer terminal phase states or

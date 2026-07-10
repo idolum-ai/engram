@@ -148,6 +148,7 @@ type Store struct {
 }
 
 const (
+	currentStateVersion   = 4
 	maxTerminalSessions   = 200
 	maxAttachments        = 200
 	maxAttachmentBypasses = 100
@@ -187,7 +188,10 @@ func Open(path, auditPath string) (*Store, error) {
 		_ = s.Audit("state.recover", "corrupt_replaced", map[string]any{"backup": backup})
 		return s, nil
 	}
-	s.state.Version = 4
+	if s.state.Version > currentStateVersion {
+		return nil, fmt.Errorf("state schema version %d is newer than supported version %d", s.state.Version, currentStateVersion)
+	}
+	s.state.Version = currentStateVersion
 	normalizeTerminalSessions(s.state.TerminalSessions)
 	if s.state.NextSessionID == 0 {
 		s.state.NextSessionID = maxSessionID(s.state.TerminalSessions) + 1
@@ -201,7 +205,7 @@ func Open(path, auditPath string) (*Store, error) {
 }
 
 func newState() State {
-	return State{Version: 4, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
+	return State{Version: currentStateVersion, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
 }
 
 func (s *Store) Snapshot() State {

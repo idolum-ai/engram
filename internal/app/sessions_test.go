@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/engram/internal/state"
 )
@@ -33,5 +34,14 @@ func TestWriteTrackedSessionsPrioritizesDurableHandoffs(t *testing.T) {
 		if ids[i] != wantIDs[i] {
 			t.Fatalf("ids = %#v, want %#v", ids, wantIDs)
 		}
+	}
+}
+
+func TestCompactSessionActionPreservesUTF8(t *testing.T) {
+	t.Parallel()
+	action := strings.Repeat("a", 67) + "界界界"
+	got := compactSessionAction(action)
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, "...") {
+		t.Fatalf("compact action = %q", got)
 	}
 }

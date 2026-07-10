@@ -149,6 +149,26 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsNewerSchemaWithoutRewritingIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	future := []byte(`{"version":5,"next_session_id":99,"future_field":"keep-me"}`)
+	if err := os.WriteFile(path, future, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, audit); err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("Open future schema error = %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(future) {
+		t.Fatalf("future schema was rewritten:\n%s", got)
+	}
+}
+
 func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")

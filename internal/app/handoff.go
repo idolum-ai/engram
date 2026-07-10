@@ -30,7 +30,9 @@ func rotatesAnchor(transition handoffTransition) bool {
 
 func observeHandoff(ts *state.TerminalSession, report anthropic.GuideReport, observationHash string, now time.Time) handoffTransition {
 	if strings.EqualFold(report.Confidence, "low") {
-		ts.HandoffCandidate = nil
+		// A low-confidence observation contributes no evidence either for or
+		// against the candidate. Preserve prior settlement progress until a
+		// confident incompatible observation supersedes it.
 		return handoffUnchanged
 	}
 	needed := report.HumanNeeded && report.HandoffKey != "" && len(report.Citations) > 0
@@ -133,12 +135,16 @@ func settleHandoffCandidate(ts *state.TerminalSession, observationHash string, n
 	if candidate == nil || candidate.ObservationHash != observationHash || now.Sub(candidate.FirstObservedAt) < handoffSettlePeriod {
 		return handoffUnchanged
 	}
+	// An unchanged later capture is the second observation even though it does
+	// not require another Haiku request.
+	candidate.Observations++
+	candidate.LastObservedAt = now
 	return promoteHandoffCandidate(ts, now)
 }
 
 func promoteHandoffCandidate(ts *state.TerminalSession, now time.Time) handoffTransition {
 	candidate := ts.HandoffCandidate
-	if candidate == nil {
+	if candidate == nil || candidate.Observations < 2 {
 		return handoffUnchanged
 	}
 	ts.HandoffCandidate = nil
@@ -168,12 +174,12 @@ func promoteHandoffCandidate(ts *state.TerminalSession, now time.Time) handoffTr
 	}
 }
 
-func acknowledgeHandoff(ts *state.TerminalSession, now time.Time) bool {
+func acknowledgeHandoff(ts *state.TerminalSession, now time.Time, preInputCaptureHash string) bool {
 	if ts.Handoff == nil || !ts.Handoff.AcknowledgedAt.IsZero() {
 		return false
 	}
 	ts.Handoff.AcknowledgedAt = now
-	ts.Handoff.AcknowledgedCaptureHash = ts.LastRawCaptureHash
+	ts.Handoff.AcknowledgedCaptureHash = preInputCaptureHash
 	ts.HandoffCandidate = nil
 	return true
 }
@@ -206,7 +212,7 @@ func (a *App) ensureHandoffAnchor(ctx context.Context, id int) {
 
 	oldAnchorID := ts.AnchorMessageID
 	newAnchorID := ts.Handoff.AnchorMessageID
-	rendered := renderLocal(ts, ts.LastSummary)
+	rendered := a.renderLocal(ts, ts.LastSummary)
 	renderHash := sha(rendered)
 	prospectiveExists := newAnchorID != 0
 	if prospectiveExists {

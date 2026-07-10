@@ -471,6 +471,41 @@ func (a *App) redactAuditPayload(payload any) any {
 	}
 }
 
+func (a *App) redactText(text string) string {
+	return redact.Secrets(text, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
+}
+
+func (a *App) redactGuideReport(report anthropic.GuideReport) anthropic.GuideReport {
+	report.StatusReport = a.redactText(report.StatusReport)
+	report.RecommendedAction = a.redactText(report.RecommendedAction)
+	for i := range report.Citations {
+		report.Citations[i] = a.redactText(report.Citations[i])
+	}
+	return report
+}
+
+func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
+	ts.Title = a.redactText(ts.Title)
+	ts.LastInputPreview = a.redactText(ts.LastInputPreview)
+	ts.LastSummary = a.redactText(ts.LastSummary)
+	ts.LastKnownCWD = a.redactText(ts.LastKnownCWD)
+	if ts.Handoff != nil {
+		handoff := *ts.Handoff
+		handoff.Evidence = append([]string(nil), ts.Handoff.Evidence...)
+		handoff.StatusReport = a.redactText(handoff.StatusReport)
+		handoff.RecommendedAction = a.redactText(handoff.RecommendedAction)
+		for i := range handoff.Evidence {
+			handoff.Evidence[i] = a.redactText(handoff.Evidence[i])
+		}
+		ts.Handoff = &handoff
+	}
+}
+
+func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
+	a.redactSessionPresentation(&ts)
+	return renderLocal(ts, a.redactText(summary))
+}
+
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
 	space := diskFree(a.Config.ArtifactDir())
@@ -493,7 +528,7 @@ func (a *App) statusText() string {
 func renderLocal(ts state.TerminalSession, summary string) string {
 	title := firstNonEmpty(ts.Title, "-")
 	if len(title) > 40 {
-		title = title[:40]
+		title = headUTF8(title, 40)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%d] %s  %s\n", ts.ID, ts.State, title)
@@ -543,7 +578,7 @@ func parseIDRest(arg string) (int, string, bool) {
 func preview(s string) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
 	if len(s) > 80 {
-		return s[:80]
+		return headUTF8(s, 80)
 	}
 	return s
 }
