@@ -19,7 +19,7 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts, err := store.AllocateSession(100, 42, "main", "@1", "%1", "shell")
+	ts, err := store.AllocateSession("main", "@1", "%1", "shell")
 	if err != nil {
 		t.Fatal(err)
 	}

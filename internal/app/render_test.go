@@ -27,6 +27,19 @@ func TestRenderLocalIsStableForSameInput(t *testing.T) {
 	}
 }
 
+func TestRenderLocalIncludesDeterministicCWD(t *testing.T) {
+	session := state.TerminalSession{
+		ID:           7,
+		State:        state.TerminalRunning,
+		Title:        "build",
+		LastKnownCWD: "/srv/engram",
+	}
+	got := renderLocal(session, "status:\nworking")
+	if !strings.Contains(got, "\ncwd: /srv/engram\n") {
+		t.Fatalf("renderLocal omitted cwd:\n%s", got)
+	}
+}
+
 func TestRenderLocalIncludesDeterministicVisiblePaths(t *testing.T) {
 	root := t.TempDir()
 	pdf := filepath.Join(root, "engram-aphelion-feature-lessons.pdf")

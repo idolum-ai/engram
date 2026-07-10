@@ -4,9 +4,7 @@ Status: draft but binding for implementation.
 
 Engram keeps requirements small and executable. Each document states runtime
 contracts that should either be tested directly or checked by `make check`.
-The requirements documents are the binding source of truth; the original
-`tmux-telegram-client-spec.md` remains useful narrative context and design
-history.
+The requirements documents are the binding source of truth.
 
 ## Foundation
 

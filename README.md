@@ -170,11 +170,14 @@ the bot channel and must be revoked immediately.
   shortened last-input preview, the previous summary, and a bounded visible
   pane capture. Repeated lines may be omitted. If the first result is uncertain,
   Haiku may receive one bounded full-scrollback capture. Captures are not
-  redacted before they are sent.
+  redacted before they are sent. Haiku also assesses whether the session needs
+  no attention, review, or action; this remains model interpretation rather
+  than terminal state.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   and lock files. State includes Telegram identifiers, session metadata, last
-  input previews, capture hashes, and Haiku summaries. Raw terminal captures
-  remain in process memory for rendering but are omitted from persisted state.
+  input previews, capture hashes, Haiku summaries, and the latest attention
+  assessment. Raw terminal captures remain in process memory for rendering but
+  are omitted from persisted state.
   Files are created with private permissions, but anyone with access to the
   host account can read them.
 - **Attachments and generated files:** Incoming Telegram documents are saved
@@ -269,15 +272,14 @@ make uninstall PREFIX="$HOME/.local"
 
 ## Commands
 
-Use `/help` in Telegram for the complete command list, `/commands` for the
-machine-readable metadata, or `engram commands` locally. Common commands are:
+Use `/help` in Telegram for the complete command list or `engram commands`
+locally for machine-readable metadata. Common commands are:
 
 - `/sessions`
 - `/attach <tmux-target>`
 - `/new <text>`
 - `/send <id> <text>`
-- `/run <id> <text>`
-- `/type <id> <text>`
+- `/text <id> <text>`
 - `/key <id> <keys...>`
 - `/raw <id>`
 - `/dump <id>`

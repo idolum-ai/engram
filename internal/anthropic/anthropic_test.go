@@ -111,6 +111,24 @@ func TestGuideReportTelegramTextRendersCitations(t *testing.T) {
 	}
 }
 
+func TestGuideReportAttentionNormalization(t *testing.T) {
+	t.Parallel()
+	report, err := parseGuideReport(`{"status_report":"approval is required","recommended_action":"approve or reject","attention":"ACT","confidence":"high"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Attention != "act" || !strings.HasPrefix(report.TelegramText(), "needs you\n") {
+		t.Fatalf("act report = %#v, text=%q", report, report.TelegramText())
+	}
+	report, err = parseGuideReport(`{"status_report":"unclear","recommended_action":"inspect","attention":"urgent","confidence":"medium"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Attention != "review" {
+		t.Fatalf("unknown attention normalized to %q, want review", report.Attention)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

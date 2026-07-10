@@ -57,12 +57,18 @@ exports a bounded recent tail, not an unbounded full audit file.
   each key rather than adding an age field or changing the schema.
 - Attachment metadata retains the newest 200 records. Attachment bypasses drop
   expired and consumed records and retain the newest 100 active records. The
-  terminal registry retains at most 200 records, preferring running and idle
-  sessions and then the most recently updated terminal records. These limits
+  terminal registry retains at most 200 records, preferring running sessions
+  and then the most recently updated terminal records. These limits
   bound state growth; they do not delete attachment files or tmux sessions.
 - Raw terminal captures are not written to state. Their hashes and derived
   summaries remain persisted, and the current raw capture may remain in process
   memory until restart or pruning.
+- Session state persists only runtime facts used for recovery or rendering.
+  Legacy write-only fields are ignored and disappear on the next save. Legacy
+  terminal states other than `running`, `lost`, and `closed` normalize to
+  `lost`, where immutable-identity reattachment can recover them safely.
+- The latest Haiku attention assessment and its transition time are persisted;
+  assessment history is not.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the

@@ -24,7 +24,6 @@ intervenes only when judgment is needed.
 - Phone-first anchors.
 - Fast input path.
 - Many sessions, low dwell.
-- The environment holds continuity.
 - Deterministic facts beat guesses.
 - Haiku guides; Engram renders.
 - Existing tmux first.
@@ -90,7 +89,9 @@ itself a reason to demand attention.
 
 Automatic anchor edits should be intentionally slow and only happen when there
 is useful new information. Manual refresh should be immediate. `/sessions`
-should act as a map of active and attachable work, not as a verbose report.
+should act as an attention-ordered map of active and attachable work, not as a
+verbose report. Assessment changes should not create notification messages
+until their interruption quality has been demonstrated.
 
 ### Deterministic facts beat guesses
 

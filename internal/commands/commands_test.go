@@ -47,8 +47,8 @@ func TestJSONExportsRegistry(t *testing.T) {
 	if len(metas) != len(All()) {
 		t.Fatalf("JSON exported %d commands, want %d", len(metas), len(All()))
 	}
-	if _, ok := Find("commands"); !ok {
-		t.Fatalf("Find(commands) = false, want true")
+	if _, ok := Find("run"); ok {
+		t.Fatal("Find(run) exposed a hidden compatibility alias")
 	}
 }
 
@@ -56,13 +56,15 @@ func TestHelpTextIncludesPublicCommands(t *testing.T) {
 	t.Parallel()
 
 	text := HelpText()
-	for _, want := range []string{"/help", "/commands", "/status", "/sessions", "/attach <tmux-target>", "/download <absolute-path>", "//clear sends /clear"} {
+	for _, want := range []string{"/help", "/status", "/sessions", "/attach <tmux-target>", "/download <absolute-path>", "//clear sends /clear"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("HelpText() missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "/kill") {
-		t.Fatalf("HelpText() includes reserved command /kill:\n%s", text)
+	for _, hidden := range []string{"/commands", "/version", "/quit", "/run", "/type", "/stop", "/kill"} {
+		if strings.Contains(text, hidden) {
+			t.Fatalf("HelpText() includes non-canonical command %s:\n%s", hidden, text)
+		}
 	}
 }
 
@@ -70,9 +72,6 @@ func TestBotCommandsExcludeReservedCommands(t *testing.T) {
 	t.Parallel()
 
 	for _, meta := range BotCommands() {
-		if meta.Command == "kill" {
-			t.Fatalf("BotCommands() includes reserved /kill")
-		}
 		if strings.Contains(meta.Command, "-") {
 			t.Fatalf("BotCommands() includes Telegram-invalid command %q", meta.Command)
 		}

@@ -18,7 +18,7 @@ func TestStorePersistsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts, err := store.AllocateSession(1, 2, "engram-1", "@1", "%1", "title")
+	ts, err := store.AllocateSession("engram-1", "@1", "%1", "title")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := store.Snapshot()
-	if st.Version != 1 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
+	if st.Version != 2 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
 		t.Fatalf("normalized legacy state = %#v", st)
 	}
 	if got := st.TerminalSessions[0].LastRawCapture; got != "sensitive terminal output" {
@@ -146,6 +146,55 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 	got, ok := reopened.FindSession(7)
 	if !ok || got.LastRawCapture != "" || got.LastRawCaptureHash != "capture-hash" {
 		t.Fatalf("reopened legacy session = %#v ok=%v", got, ok)
+	}
+}
+
+func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	legacy := `{
+  "version": 1,
+  "next_session_id": 2,
+  "terminal_sessions": [{
+    "id": 1,
+    "state": "idle",
+    "watch_enabled": true,
+    "chat_id": 100,
+    "created_by_user_id": 42,
+    "tmux_session_id": "$1",
+    "last_summary_hash": "unused",
+    "last_summary_model": "unused",
+    "pending_refresh": true,
+    "last_telegram_error": "stale"
+  }],
+  "attachments": []
+}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, ok := store.FindSession(1)
+	if !ok || session.State != TerminalLost || session.WatchEnabled || session.LastAttention != "review" {
+		t.Fatalf("normalized legacy session = %#v ok=%v", session, ok)
+	}
+	if store.Snapshot().Version != 2 {
+		t.Fatalf("state version = %d, want 2", store.Snapshot().Version)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{"chat_id", "created_by_user_id", "tmux_session_id", "last_summary_hash", "last_summary_model", "pending_refresh", "last_telegram_error"} {
+		if strings.Contains(string(persisted), `"`+removed+`"`) {
+			t.Fatalf("removed field %q remained in state: %s", removed, persisted)
+		}
 	}
 }
 

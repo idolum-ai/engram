@@ -15,7 +15,6 @@ required_files=(
   .github/pull_request_template.md
   .github/ISSUE_TEMPLATE/bug_report.md
   .github/ISSUE_TEMPLATE/feature_request.md
-  docs/public-release.md
 )
 
 for file in "${required_files[@]}"; do

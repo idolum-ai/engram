@@ -99,7 +99,7 @@ func newAnchorKeyTestApp(t *testing.T) (*App, *anchorKeyRunner, <-chan struct{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AllocateSession(100, 42, "main", "@1", "%1", "shell"); err != nil {
+	if _, err := store.AllocateSession("main", "@1", "%1", "shell"); err != nil {
 		t.Fatal(err)
 	}
 	client := telegram.New("TOKEN")

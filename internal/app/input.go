@@ -68,7 +68,6 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 		s.LastInputPreview = preview(text)
 		s.LastInputMode = mode
 		s.LastActivityAt = time.Now().UTC()
-		s.PendingRefresh = true
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": mode, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "state update error after tmux input: "+err.Error(), true)
@@ -121,7 +120,6 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 		s.LastInputPreview = firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))
 		s.LastInputMode = "keys"
 		s.LastActivityAt = time.Now().UTC()
-		s.PendingRefresh = true
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": "keys", "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "state update error after tmux keys: "+err.Error(), true)

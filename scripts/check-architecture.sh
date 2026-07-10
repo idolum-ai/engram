@@ -21,7 +21,7 @@ for file in "${required_requirements[@]}"; do
 done
 
 for phrase in "make check" "Command metadata" "tmux is the source" "Audit" "Exactly one Telegram user"; do
-  if ! rg -qF "$phrase" requirements README.md tmux-telegram-client-spec.md; then
+  if ! rg -qF "$phrase" requirements README.md; then
     echo "required architecture phrase missing: $phrase" >&2
     exit 1
   fi

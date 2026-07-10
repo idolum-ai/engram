@@ -14,7 +14,10 @@ Telegram is Engram's only user interface.
 - Command metadata lives in `internal/commands`.
 - `/help`, Telegram bot command registration, and `engram commands` must derive
   from the same registry.
-- Every slash command handled by the app must have metadata.
+- Every public slash command handled by the app must have metadata. The parser
+  may temporarily accept undocumented compatibility aliases for renamed input
+  operations, but aliases must not appear in help, registration, or command
+  JSON.
 - Telegram-invalid command names must not be registered with Telegram.
 - Replies beginning with `//` are session input, not Engram commands. Engram
   removes exactly one leading slash before forwarding them to the replied-to
@@ -24,6 +27,10 @@ Telegram is Engram's only user interface.
 
 - Telegram send/edit failures must be audited.
 - `/sessions` must reply even when no Engram sessions exist.
+- `/sessions` groups tracked work as lost, needs attention, worth reviewing,
+  and working quietly. Attention groups use Haiku's latest assessment; lost is
+  deterministic and takes precedence. Sessions within a group use the newest
+  assessment transition first.
 - Empty inline keyboards must not be sent.
 - Anchor messages may use Telegram HTML, but fall back to plain text only for
   formatting parse errors. Rate limits and deleted messages must not amplify
@@ -56,3 +63,11 @@ Telegram is Engram's only user interface.
 - A lost anchor exposes only `🧭 Reattach`. It restores the session when its
   original immutable pane/window identity is live and otherwise directs the
   user to `/sessions`.
+
+## Attention
+
+- Attention assessment initially changes anchor text and `/sessions` ordering
+  only. Output changes and attention transitions must not create new Telegram
+  notification messages.
+- An `act` anchor may show a quiet `needs you` line. The assessment remains
+  subordinate to deterministic state and cited terminal evidence.

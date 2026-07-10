@@ -20,11 +20,8 @@ type TerminalOrigin string
 
 const (
 	TerminalRunning TerminalState = "running"
-	TerminalIdle    TerminalState = "idle"
-	TerminalExited  TerminalState = "exited"
 	TerminalLost    TerminalState = "lost"
 	TerminalClosed  TerminalState = "closed"
-	TerminalKilled  TerminalState = "killed"
 )
 
 const (
@@ -48,10 +45,7 @@ type State struct {
 
 type TerminalSession struct {
 	ID                 int            `json:"id"`
-	ChatID             int64          `json:"chat_id"`
-	CreatedByUserID    int64          `json:"created_by_user_id"`
 	TmuxSessionName    string         `json:"tmux_session_name"`
-	TmuxSessionID      string         `json:"tmux_session_id,omitempty"`
 	TmuxWindowID       string         `json:"tmux_window_id"`
 	TmuxPaneID         string         `json:"tmux_pane_id"`
 	Origin             TerminalOrigin `json:"origin,omitempty"`
@@ -64,16 +58,14 @@ type TerminalSession struct {
 	LastInputPreview   string         `json:"last_input_preview,omitempty"`
 	LastInputMode      string         `json:"last_input_mode,omitempty"`
 	LastRawCaptureHash string         `json:"last_raw_capture_hash,omitempty"`
-	LastSummaryHash    string         `json:"last_summary_hash,omitempty"`
 	LastRenderHash     string         `json:"last_render_hash,omitempty"`
 	LastSummary        string         `json:"last_summary,omitempty"`
-	LastSummaryModel   string         `json:"last_summary_model,omitempty"`
+	LastAttention      string         `json:"last_attention,omitempty"`
+	LastAttentionAt    time.Time      `json:"last_attention_at,omitempty"`
 	AnchorChatID       int64          `json:"anchor_chat_id,omitempty"`
 	AnchorMessageID    int            `json:"anchor_message_id,omitempty"`
 	WatchEnabled       bool           `json:"watch_enabled"`
 	LastAnchorEditAt   time.Time      `json:"last_anchor_edit_at,omitempty"`
-	PendingRefresh     bool           `json:"pending_refresh,omitempty"`
-	LastTelegramError  string         `json:"last_telegram_error,omitempty"`
 	LastRawCapture     string         `json:"last_raw_capture,omitempty"`
 }
 
@@ -166,9 +158,8 @@ func Open(path, auditPath string) (*Store, error) {
 		_ = s.Audit("state.recover", "corrupt_replaced", map[string]any{"backup": backup})
 		return s, nil
 	}
-	if s.state.Version == 0 {
-		s.state.Version = 1
-	}
+	s.state.Version = 2
+	normalizeTerminalSessions(s.state.TerminalSessions)
 	if s.state.NextSessionID == 0 {
 		s.state.NextSessionID = maxSessionID(s.state.TerminalSessions) + 1
 	}
@@ -181,7 +172,7 @@ func Open(path, auditPath string) (*Store, error) {
 }
 
 func newState() State {
-	return State{Version: 1, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
+	return State{Version: 2, NextSessionID: 1, ProcessedMessages: map[string]bool{}}
 }
 
 func (s *Store) Snapshot() State {
@@ -288,7 +279,7 @@ func (s *Store) Audit(eventType, status string, payload any) error {
 	return err
 }
 
-func (s *Store) AllocateSession(chatID, userID int64, tmuxSessionName, windowID, paneID, title string) (TerminalSession, error) {
+func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string) (TerminalSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
@@ -296,8 +287,6 @@ func (s *Store) AllocateSession(chatID, userID int64, tmuxSessionName, windowID,
 	s.state.NextSessionID++
 	ts := TerminalSession{
 		ID:              id,
-		ChatID:          chatID,
-		CreatedByUserID: userID,
 		TmuxSessionName: tmuxSessionName,
 		TmuxWindowID:    windowID,
 		TmuxPaneID:      paneID,
@@ -307,6 +296,7 @@ func (s *Store) AllocateSession(chatID, userID int64, tmuxSessionName, windowID,
 		UpdatedAt:       now,
 		LastActivityAt:  now,
 		WatchEnabled:    false,
+		LastAttention:   "review",
 	}
 	s.state.TerminalSessions = append(s.state.TerminalSessions, ts)
 	return ts, s.saveLocked()
@@ -581,8 +571,8 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 	}
 	sort.SliceStable(indices, func(i, j int) bool {
 		a, b := sessions[indices[i]], sessions[indices[j]]
-		aActive := a.State == TerminalRunning || a.State == TerminalIdle
-		bActive := b.State == TerminalRunning || b.State == TerminalIdle
+		aActive := a.State == TerminalRunning
+		bActive := b.State == TerminalRunning
 		if aActive != bActive {
 			return aActive
 		}
@@ -603,6 +593,23 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 		}
 	}
 	return out
+}
+
+func normalizeTerminalSessions(sessions []TerminalSession) {
+	for i := range sessions {
+		session := &sessions[i]
+		switch session.State {
+		case TerminalRunning, TerminalLost, TerminalClosed:
+		default:
+			session.State = TerminalLost
+			session.WatchEnabled = false
+		}
+		switch session.LastAttention {
+		case "none", "review", "act":
+		default:
+			session.LastAttention = "review"
+		}
+	}
 }
 
 func sessionRecency(session TerminalSession) time.Time {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,7 +68,7 @@ func TestRefreshCallbackClearsHaikuCaptureHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AllocateSession(100, 42, "main", "@1", "%1", "shell"); err != nil {
+	if _, err := store.AllocateSession("main", "@1", "%1", "shell"); err != nil {
 		t.Fatal(err)
 	}
 	client := telegram.New("TOKEN")
@@ -153,10 +154,10 @@ func TestGuideSummarySendsFilteredVisibleCaptureToHaiku(t *testing.T) {
 	}
 	ts := state.TerminalSession{ID: 3, State: state.TerminalRunning}
 
-	if _, err := app.guideSummary(context.Background(), ts, "Run /review on my current changes\nold output"); err != nil {
+	if _, err := app.guideSummary(context.Background(), ts, "Run /review on my current changes\nold output", false, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.guideSummary(context.Background(), ts, "Run /review on my current changes\nfresh compiler error"); err != nil {
+	if _, err := app.guideSummary(context.Background(), ts, "Run /review on my current changes\nfresh compiler error", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if len(prompts) != 2 {
@@ -209,7 +210,7 @@ func TestGuideSummaryFiltersFullScrollbackRetry(t *testing.T) {
 	ts := state.TerminalSession{ID: 3, State: state.TerminalRunning, TmuxPaneID: "%1"}
 
 	_ = app.filterHaikuVisibleCapture(3, "Run /review on my current changes\nold output")
-	if _, err := app.guideSummary(context.Background(), ts, "Run /review on my current changes\nfresh visible"); err != nil {
+	if _, err := app.guideSummary(context.Background(), ts, "Run /review on my current changes\nfresh visible", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if len(prompts) != 2 {
@@ -222,6 +223,53 @@ func TestGuideSummaryFiltersFullScrollbackRetry(t *testing.T) {
 	}
 	if !strings.Contains(prompts[1], "full_scrollback_capture:") || !strings.Contains(prompts[1], "fresh compiler error") {
 		t.Fatalf("full retry prompt missing filtered full scrollback:\n%s", prompts[1])
+	}
+}
+
+func TestRefreshPersistsAttentionTransition(t *testing.T) {
+	dir := t.TempDir()
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	store, err := state.Open(filepath.Join(dir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.WatchEnabled = true
+		s.LastAttention = "review"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := anthropic.New("key", "claude-haiku-4-5-20251001")
+	client.HTTPClient = &http.Client{Transport: appRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return appJSONGuideResponse(t, anthropic.GuideReport{
+			StatusReport:      "The process is waiting for approval.",
+			RecommendedAction: "Approve or reject the change.",
+			Attention:         "act",
+			Confidence:        "high",
+		}), nil
+	})}
+	app := &App{
+		Config:         config.Config{AnthropicModel: "claude-haiku-4-5-20251001"},
+		Store:          store,
+		Anthropic:      client,
+		Tmux:           tmux.New(attentionRefreshRunner{}),
+		captureHistory: map[int][]map[string]bool{},
+	}
+	app.refreshSession(context.Background(), session.ID, true)
+	got, ok := store.FindSession(session.ID)
+	if !ok || got.LastAttention != "act" || got.LastAttentionAt.IsZero() {
+		t.Fatalf("session attention = %#v ok=%v", got, ok)
+	}
+	audit, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(audit), `"type":"haiku.attention"`) || !strings.Contains(string(audit), `"to":"act"`) {
+		t.Fatalf("attention transition missing from audit: %s", audit)
 	}
 }
 
@@ -256,6 +304,22 @@ func appJSONGuideResponse(t *testing.T, report anthropic.GuideReport) *http.Resp
 
 type fakeCaptureRunner struct {
 	full string
+}
+
+type attentionRefreshRunner struct{}
+
+func (attentionRefreshRunner) Run(_ context.Context, args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	switch args[0] {
+	case "display-message":
+		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+	case "capture-pane":
+		return "Apply these changes? [y/N]\n", nil
+	default:
+		return "", nil
+	}
 }
 
 func (r fakeCaptureRunner) Run(ctx context.Context, args ...string) (string, error) {

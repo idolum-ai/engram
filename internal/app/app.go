@@ -255,12 +255,8 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	switch cmd {
 	case "help":
 		a.reply(ctx, msg, commands.HelpText())
-	case "commands":
-		a.commandsMetadata(ctx, msg)
 	case "status":
 		a.reply(ctx, msg, a.statusText())
-	case "version":
-		a.reply(ctx, msg, version.String())
 	case "sessions":
 		a.sessions(ctx, msg)
 	case "attach":
@@ -393,16 +389,10 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			return
 		}
 		a.reply(ctx, msg, fmt.Sprintf("[%d] watch stopped", id))
-	case "quit":
-		a.reply(ctx, msg, "Engram stopping. tmux sessions remain open.")
-		a.quitCode = 0
-		a.stop()
 	case "restart":
 		a.reply(ctx, msg, "Engram restarting. tmux sessions remain open.")
 		a.quitCode = 2
 		a.stop()
-	case "kill":
-		a.reply(ctx, msg, "/kill is reserved; use /close <id>.")
 	case "attachment-bypass", "attachment_bypass":
 		hash := parseBypassHash(args)
 		if hash == "" || !validSHA256Hex(hash) {
@@ -502,10 +492,11 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 		title = title[:40]
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "[%d] %s  %s\nlast: %s\n\n%s",
-		ts.ID,
-		ts.State,
-		title,
+	fmt.Fprintf(&b, "[%d] %s  %s\n", ts.ID, ts.State, title)
+	if ts.LastKnownCWD != "" {
+		fmt.Fprintf(&b, "cwd: %s\n", ts.LastKnownCWD)
+	}
+	fmt.Fprintf(&b, "last: %s\n\n%s",
 		firstNonEmpty(ts.LastInputPreview, "-"),
 		summary,
 	)

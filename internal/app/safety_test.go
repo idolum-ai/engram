@@ -88,7 +88,6 @@ func TestLostSessionRecoversWhenImmutableIdentityMatches(t *testing.T) {
 	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		session.State = state.TerminalLost
 		session.WatchEnabled = false
-		session.LastTelegramError = "context canceled"
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +100,7 @@ func TestLostSessionRecoversWhenImmutableIdentityMatches(t *testing.T) {
 		t.Fatalf("send result = %#v", result)
 	}
 	got, ok := app.Store.FindSession(id)
-	if !ok || got.State != state.TerminalRunning || !got.WatchEnabled || got.LastTelegramError != "" {
+	if !ok || got.State != state.TerminalRunning || !got.WatchEnabled {
 		t.Fatalf("recovered session = %#v ok=%v", got, ok)
 	}
 }
@@ -346,7 +345,7 @@ func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunne
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts, err := store.AllocateSession(100, 42, "main", "@1", "%1", "shell")
+	ts, err := store.AllocateSession("main", "@1", "%1", "shell")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +375,7 @@ type newSessionRunner struct{}
 
 func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "new-window" {
-		return "$1\t@1\t%1\n", nil
+		return "@1\t%1\n", nil
 	}
 	return "", nil
 }

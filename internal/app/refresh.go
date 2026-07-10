@@ -36,7 +36,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		identityLock.Unlock()
 		return
 	}
-	ts = current
+	ts, _ = a.Store.FindSession(id)
 	identityLock.Unlock()
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
@@ -65,17 +65,23 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if hash == ts.LastRawCaptureHash && !force {
 		return
 	}
-	summary, err := a.guideSummary(ctx, ts, capture)
-	if err != nil {
-		if stateErr := a.Store.NoteHaiku(err.Error()); stateErr != nil {
+	report, guideErr := a.guideSummary(ctx, ts, capture, ts.LastRawCaptureHash != "", hash != ts.LastRawCaptureHash)
+	summary := ""
+	attention := ts.LastAttention
+	attentionChanged := false
+	if guideErr != nil {
+		if stateErr := a.Store.NoteHaiku(guideErr.Error()); stateErr != nil {
 			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
 		if ts.LastSummary != "" {
-			summary = ts.LastSummary + "\n\n[summary stale: " + err.Error() + "]"
+			summary = ts.LastSummary + "\n\n[summary stale: " + guideErr.Error() + "]"
 		} else {
-			summary = "summary unavailable: " + err.Error()
+			summary = "summary unavailable: " + guideErr.Error()
 		}
 	} else {
+		summary = report.TelegramText()
+		attention = report.Attention
+		attentionChanged = attention != ts.LastAttention
 		if stateErr := a.Store.NoteHaiku(""); stateErr != nil {
 			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
@@ -91,9 +97,12 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		s.LastRawCapture = tailUTF8(capture, maxStoredVisibleCaptureBytes)
 		s.LastRawCaptureHash = hash
 		s.LastSummary = summary
-		s.LastSummaryHash = sha(summary)
-		s.LastSummaryModel = a.Config.AnthropicModel
-		s.PendingRefresh = false
+		if guideErr == nil {
+			s.LastAttention = attention
+			if attentionChanged || s.LastAttentionAt.IsZero() {
+				s.LastAttentionAt = time.Now().UTC()
+			}
+		}
 	}); err != nil {
 		lock.Unlock()
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
@@ -101,6 +110,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	lock.Unlock()
+	if attentionChanged {
+		_ = a.audit("haiku.attention", "changed", map[string]any{"session_id": id, "from": ts.LastAttention, "to": attention})
+	}
 	a.updateAnchorLocal(ctx, id, summary, force)
 }
 
@@ -118,47 +130,50 @@ func tailUTF8(text string, maxBytes int) string {
 	return text[start:]
 }
 
-func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string) (string, error) {
+func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string, hasPreviousCapture, captureChanged bool) (anthropic.GuideReport, error) {
 	visibleForHaiku, repeatedLines := a.prepareHaikuVisibleCapture(ts.ID, capture)
 	input := anthropic.SummaryInput{
-		SessionID:       ts.ID,
-		State:           string(ts.State),
-		LastInput:       ts.LastInputPreview,
-		LastInputMode:   ts.LastInputMode,
-		PreviousSummary: ts.LastSummary,
-		VisibleCapture:  visibleForHaiku,
+		SessionID:          ts.ID,
+		State:              string(ts.State),
+		LastInput:          ts.LastInputPreview,
+		LastInputMode:      ts.LastInputMode,
+		PreviousSummary:    ts.LastSummary,
+		PreviousAttention:  ts.LastAttention,
+		HasPreviousCapture: hasPreviousCapture,
+		CaptureChanged:     captureChanged,
+		VisibleCapture:     visibleForHaiku,
 	}
 	if !acquireSlot(ctx, a.haikuSlots) {
-		return "", ctx.Err()
+		return anthropic.GuideReport{}, ctx.Err()
 	}
 	report, err := a.Anthropic.Guide(ctx, input)
 	releaseSlot(a.haikuSlots)
 	if err != nil {
-		return "", err
+		return anthropic.GuideReport{}, err
 	}
 	if !report.WantsFullBuffer() {
-		return report.TelegramText(), nil
+		return report, nil
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	if !acquireSlot(tctx, a.captureSlots) {
-		return report.TelegramText(), nil
+		return report, nil
 	}
 	full, err := a.Tmux.CaptureScrollbackTail(tctx, ts.TmuxPaneID, 24_000, 800)
 	releaseSlot(a.captureSlots)
 	if err != nil || strings.TrimSpace(full) == "" {
-		return report.TelegramText(), nil
+		return report, nil
 	}
 	input.FullCapture = filterCaptureLines(full, repeatedLines)
 	if !acquireSlot(ctx, a.haikuSlots) {
-		return report.TelegramText(), nil
+		return report, nil
 	}
 	refined, err := a.Anthropic.Guide(ctx, input)
 	releaseSlot(a.haikuSlots)
 	if err != nil {
-		return report.TelegramText(), nil
+		return report, nil
 	}
-	return refined.TelegramText(), nil
+	return refined, nil
 }
 
 func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {

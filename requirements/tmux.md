@@ -45,6 +45,10 @@ tmux is the source of terminal truth.
 - Live anchors explain visible pane capture through Haiku as a plain-English
   status report plus one recommended next action, with short source-evidence
   quote blocks when useful for grounding the recommendation.
+- Haiku also returns one assessment: `none`, `review`, or `act`. This is model
+  interpretation, not terminal state. `act` is reserved for visible progress
+  that appears to depend on human intervention; uncertainty defaults to
+  `review`.
 - Before sending capture text to Haiku, Engram drops exact lines that appeared
   in any of the previous five visible captures for the same session. This
   applies to both the visible prompt and the optional full-scrollback retry
@@ -62,6 +66,8 @@ tmux is the source of terminal truth.
   ceiling rather than creating an artifact that cannot be delivered.
 - Haiku receives ANSI-clean semantic visible capture. Its optional confidence
   retry receives at most 24,000 bytes and 800 lines of scrollback.
+- Engram records only the latest attention value and transition time. It does
+  not infer additional terminal phase states or retain assessment history.
 
 ## Closing
 

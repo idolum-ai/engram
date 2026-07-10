@@ -48,8 +48,8 @@ filesystem. The security and privacy model must stay small and explicit.
 - Large attachments require a hash-confirmed bypass and remain subject to a
   hard limit derived from the configured soft limit, free disk, and Telegram's
   20 MiB cloud Bot API download ceiling.
-- `/attachment_bypass` is the registered command. The older
-  `/attachment-bypass` spelling remains an unregistered compatibility alias.
+- `/attachment_bypass` is the registered large-attachment authorization
+  command.
 - Attachment soft limits must be enforced during the download stream, not only
   from Telegram-provided file metadata.
 - `/download` only accepts absolute paths and uploads regular files.
