@@ -64,7 +64,14 @@ user answer three questions quickly:
 Anchors should be compact, stable, and easy to scan. They should include the
 session handle, state, title, last input preview, Haiku status, one recommended
 action, deterministic paths that currently exist, a refresh button, and
-a small allowlisted row of common terminal keys.
+an on-demand terminal image button, and a small allowlisted row of common
+terminal keys.
+
+The image is a deterministic glance surface for terminal layouts that lose
+meaning in prose: diffs, TUIs, dashboards, prompts, and spatial output. It
+should use a phone-native canvas, include bounded recent scrollback when space
+allows, and remain subordinate to the text anchor rather than becoming a second
+live control surface.
 
 Each session should have exactly one live anchor. Watched live anchors should be
 pinned for navigation. When attention moves a session forward in chat history,

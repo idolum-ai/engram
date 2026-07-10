@@ -16,6 +16,7 @@ LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=anthropic-key
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ENGRAM_TMUX_SESSION=main
+ENGRAM_SNAPSHOT_BROWSER=/opt/chromium
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -31,6 +32,9 @@ ENGRAM_TMUX_SESSION=main
 	}
 	if cfg.TmuxSession != "main" {
 		t.Fatalf("TmuxSession = %q, want main", cfg.TmuxSession)
+	}
+	if cfg.SnapshotBrowser != "/opt/chromium" {
+		t.Fatalf("SnapshotBrowser = %q, want /opt/chromium", cfg.SnapshotBrowser)
 	}
 }
 

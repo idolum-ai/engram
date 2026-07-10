@@ -387,6 +387,14 @@ func (c *Client) SendDocumentNamed(ctx context.Context, chatID int64, path, file
 	return out, err
 }
 
+func (c *Client) SendPhoto(ctx context.Context, chatID int64, path, caption string, replyTo int) (Message, error) {
+	var out Message
+	err := c.do(ctx, "sendPhoto", true, func() (*http.Request, error) {
+		return c.mediaRequest(ctx, "sendPhoto", "photo", chatID, path, "engram-window.png", caption, replyTo)
+	}, &out)
+	return out, err
+}
+
 func (m Message) FileAttachment() (Document, bool) {
 	if m.Document != nil {
 		return *m.Document, true
@@ -415,7 +423,10 @@ func (m Message) FileAttachment() (Document, bool) {
 
 func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}},
+		{
+			{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)},
+			{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)},
+		},
 		{
 			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
 			{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
@@ -562,9 +573,13 @@ func (c *Client) doOnce(ctx context.Context, method string, req *http.Request, o
 }
 
 func (c *Client) documentRequest(ctx context.Context, chatID int64, path, filename, caption string) (*http.Request, error) {
+	return c.mediaRequest(ctx, "sendDocument", "document", chatID, path, filename, caption, 0)
+}
+
+func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID int64, path, filename, caption string, replyTo int) (*http.Request, error) {
 	pr, pw := io.Pipe()
 	writer := multipart.NewWriter(pw)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/sendDocument", pr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+method, pr)
 	if err != nil {
 		_ = pr.Close()
 		_ = pw.Close()
@@ -588,7 +603,12 @@ func (c *Client) documentRequest(ctx context.Context, chatID int64, path, filena
 				return
 			}
 		}
-		part, err := writer.CreateFormFile("document", filename)
+		if replyTo > 0 {
+			if writeErr = writer.WriteField("reply_to_message_id", strconv.Itoa(replyTo)); writeErr != nil {
+				return
+			}
+		}
+		part, err := writer.CreateFormFile(field, filename)
 		if err != nil {
 			writeErr = err
 			return
@@ -623,7 +643,7 @@ func safeDocumentFilename(filename string) string {
 
 func isOutboundMethod(method string) bool {
 	switch method {
-	case "sendMessage", "editMessageText", "sendDocument", "pinChatMessage", "unpinChatMessage":
+	case "sendMessage", "editMessageText", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage":
 		return true
 	default:
 		return false

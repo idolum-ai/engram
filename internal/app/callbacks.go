@@ -53,6 +53,25 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		a.clearHaikuCaptureHistory(id)
 		a.queueRefresh(id, true, 0)
 		return "callback_ok"
+	case "snapshot":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		if ts.State == state.TerminalLost || ts.State == state.TerminalClosed {
+			a.answerCallback(ctx, cb.ID, "session is "+string(ts.State))
+			return "callback_user_error"
+		}
+		result := a.queueSnapshot(ts)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
+		return result.status("callback")
 	case "recover":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {

@@ -26,6 +26,7 @@ type Config struct {
 	Home                       string
 	Workdir                    string
 	TmuxSession                string
+	SnapshotBrowser            string
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
 }
@@ -63,6 +64,7 @@ func Load(path string) (Config, error) {
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
+		SnapshotBrowser:            ExpandPath(values["ENGRAM_SNAPSHOT_BROWSER"]),
 		AttachmentSoftMaxBytes:     softMax,
 		TelegramPollTimeoutSeconds: int(pollTimeout),
 	}

@@ -49,11 +49,14 @@ func TestRefreshMarkupIncludesKeyButtons(t *testing.T) {
 	t.Parallel()
 
 	got := RefreshMarkup(7)
-	if got == nil || len(got.InlineKeyboard) != 2 {
+	if got == nil || len(got.InlineKeyboard) != 2 || len(got.InlineKeyboard[0]) != 2 {
 		t.Fatalf("RefreshMarkup rows = %#v, want refresh row plus key row", got)
 	}
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
+	}
+	if got.InlineKeyboard[0][1].Text != "🖼️" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
 	want := []InlineKeyboardButton{
 		{Text: "Esc", CallbackData: "key:7:esc"},
@@ -500,6 +503,42 @@ func TestSendDocumentNamedUsesVisibleFilename(t *testing.T) {
 
 	if _, err := client.SendDocumentNamed(context.Background(), 5, snapshotPath, "engram-coherence-proposal.md", "proposal"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSendPhotoRepliesToCanonicalAnchor(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "snapshot.png")
+	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendPhoto" {
+			t.Fatalf("send photo path = %q", req.URL.Path)
+		}
+		if err := req.ParseMultipartForm(1024); err != nil {
+			t.Fatal(err)
+		}
+		files := req.MultipartForm.File["photo"]
+		if len(files) != 1 || files[0].Filename != "engram-window.png" {
+			t.Fatalf("photo files = %#v", files)
+		}
+		if got := req.FormValue("reply_to_message_id"); got != "77" {
+			t.Fatalf("photo reply = %q", got)
+		}
+		if got := req.FormValue("caption"); got != "terminal snapshot" {
+			t.Fatalf("photo caption = %q", got)
+		}
+		return jsonResponse(t, map[string]any{
+			"ok":     true,
+			"result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}},
+		}), nil
+	})}
+	msg, err := client.SendPhoto(context.Background(), 5, path, "terminal snapshot", 77)
+	if err != nil || msg.MessageID != 14 {
+		t.Fatalf("SendPhoto message = %#v err=%v", msg, err)
 	}
 }
 
