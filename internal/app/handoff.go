@@ -28,6 +28,14 @@ func observeHandoff(ts *state.TerminalSession, report anthropic.GuideReport, obs
 		return handoffUnchanged
 	}
 	needed := report.HumanNeeded && report.HandoffKey != "" && len(report.Citations) > 0
+	sameHandoff := ts.Handoff != nil && handoffCompatible(
+		ts.Handoff.Key,
+		ts.Handoff.Evidence,
+		ts.Handoff.RecommendedAction,
+		report.HandoffKey,
+		report.Citations,
+		report.RecommendedAction,
+	)
 	kind := ""
 	switch {
 	case ts.Handoff == nil && needed:
@@ -35,7 +43,7 @@ func observeHandoff(ts *state.TerminalSession, report anthropic.GuideReport, obs
 	case ts.Handoff == nil:
 		ts.HandoffCandidate = nil
 		return handoffUnchanged
-	case needed && report.HandoffKey != ts.Handoff.Key:
+	case needed && !sameHandoff:
 		kind = "replace"
 	case needed && !ts.Handoff.AcknowledgedAt.IsZero():
 		kind = "reopen"
@@ -48,7 +56,15 @@ func observeHandoff(ts *state.TerminalSession, report anthropic.GuideReport, obs
 	}
 
 	candidate := ts.HandoffCandidate
-	if candidate == nil || candidate.Kind != kind || candidate.Key != report.HandoffKey {
+	candidateCompatible := candidate != nil && candidate.Kind == kind && (kind == "resolve" || handoffCompatible(
+		candidate.Key,
+		candidate.Evidence,
+		candidate.RecommendedAction,
+		report.HandoffKey,
+		report.Citations,
+		report.RecommendedAction,
+	))
+	if !candidateCompatible {
 		ts.HandoffCandidate = &state.HandoffCandidate{
 			Kind:              kind,
 			Key:               report.HandoffKey,
@@ -74,6 +90,22 @@ func observeHandoff(ts *state.TerminalSession, report anthropic.GuideReport, obs
 		return handoffUnchanged
 	}
 	return promoteHandoffCandidate(ts, now)
+}
+
+func handoffCompatible(keyA string, evidenceA []string, actionA, keyB string, evidenceB []string, actionB string) bool {
+	keyMatch := keyA != "" && keyA == keyB
+	evidenceMatch := textSetsOverlap(evidenceA, evidenceB)
+	actionMatch := lineSupportsHandoffEvidence(actionA, []string{actionB})
+	return keyMatch && (evidenceMatch || actionMatch) || evidenceMatch && actionMatch
+}
+
+func textSetsOverlap(a, b []string) bool {
+	for _, left := range a {
+		if lineSupportsHandoffEvidence(left, b) {
+			return true
+		}
+	}
+	return false
 }
 
 func settleHandoffCandidate(ts *state.TerminalSession, observationHash string, now time.Time) handoffTransition {

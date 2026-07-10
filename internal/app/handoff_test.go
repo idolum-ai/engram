@@ -75,11 +75,37 @@ func TestDifferentSettledNeedReplacesHandoff(t *testing.T) {
 	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
 	ts := openHandoffSession(now)
 	report := groundedHandoffReport("choose_region")
+	report.StatusReport = "The release tool is waiting for a target region."
+	report.RecommendedAction = "Choose us-east or eu-west for the deployment."
+	report.Citations = []string{"Select deployment region: us-east / eu-west"}
 	if got := observeHandoff(&ts, report, "region-1", now.Add(time.Second)); got != handoffUnchanged {
 		t.Fatalf("first replacement observation = %q", got)
 	}
 	if got := observeHandoff(&ts, report, "region-2", now.Add(7*time.Second)); got != handoffReplaced || ts.Handoff == nil || ts.Handoff.Key != "choose_region" {
 		t.Fatalf("replacement = %q session=%#v", got, ts)
+	}
+}
+
+func TestHandoffKeyWordingDriftDoesNotResetSettlement(t *testing.T) {
+	now := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
+	ts := state.TerminalSession{ID: 1, State: state.TerminalRunning}
+	first := groundedHandoffReport("interrupt_hung_check")
+	first.StatusReport = "The verification appears stuck and is waiting for interruption."
+	first.RecommendedAction = "Interrupt the hung verification and inspect its logs."
+	first.Citations = []string{"Verification has not advanced; press Ctrl+C to interrupt."}
+	if got := observeHandoff(&ts, first, "capture-a", now); got != handoffUnchanged {
+		t.Fatalf("first observation = %q", got)
+	}
+	second := first
+	second.HandoffKey = "stop_stalled_verification"
+	second.StatusReport = "The same verification still appears stalled."
+	second.RecommendedAction = "Press Ctrl+C to interrupt the stalled verification, then inspect its logs."
+	second.Citations = []string{"Verification has not advanced. Press Ctrl+C to interrupt it."}
+	if got := observeHandoff(&ts, second, "capture-b", now.Add(6*time.Second)); got != handoffOpened || ts.Handoff == nil {
+		t.Fatalf("wording drift reset settlement: transition=%q session=%#v", got, ts)
+	}
+	if ts.Handoff.Key != first.HandoffKey {
+		t.Fatalf("settled handoff did not retain first stable key: %#v", ts.Handoff)
 	}
 }
 
