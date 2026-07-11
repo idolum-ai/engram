@@ -6,6 +6,9 @@ cd "$repo_root"
 
 required_docs=(
   docs/design-principles.md
+  docs/frontend-independence-plan.md
+  docs/frontend-independent-core.md
+  docs/protocol-posture.md
   docs/release-strategy.md
   requirements/INDEX.md
 )

@@ -494,6 +494,15 @@ guidance, [`docs/release-strategy.md`](docs/release-strategy.md) for the reviewe
 release path, [`CHANGELOG.md`](CHANGELOG.md) for accumulated user-visible
 changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
 
+Design proposals for making Telegram optional without introducing an ambient
+control service are in
+[`docs/frontend-independent-core.md`](docs/frontend-independent-core.md), with
+the staged sequence in
+[`docs/frontend-independence-plan.md`](docs/frontend-independence-plan.md).
+[`docs/protocol-posture.md`](docs/protocol-posture.md) explains why Engram should
+standardize its truth and attention invariants without becoming a general wire
+protocol.
+
 The conversational Haiku fixture eval is opt-in because it makes live
 Anthropic calls. It fails each fixture on hard regressions such as injected
 instructions, contradictory negation, unsupported numbers, or truncated
