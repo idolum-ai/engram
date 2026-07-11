@@ -58,6 +58,37 @@ checksum_file() {
   fi
 }
 
+validate_version() {
+  local candidate="$1" value core prerelease part identifier
+  local -a parts identifiers
+  [[ "${candidate}" == v* && "${candidate}" != *+* ]] || return 1
+  value="${candidate#v}"
+  if [[ "${value}" == *-* ]]; then
+    core="${value%%-*}"
+    prerelease="${value#*-}"
+    [[ -n "${prerelease}" ]] || return 1
+  else
+    core="${value}"
+    prerelease=""
+  fi
+  [[ "${core}" != .* && "${core}" != *. && "${core}" != *..* ]] || return 1
+  IFS=. read -r -a parts <<< "${core}"
+  [[ "${#parts[@]}" -eq 3 ]] || return 1
+  for part in "${parts[@]}"; do
+    [[ "${part}" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  done
+  if [[ -n "${prerelease}" ]]; then
+    [[ "${prerelease}" != .* && "${prerelease}" != *. && "${prerelease}" != *..* ]] || return 1
+    IFS=. read -r -a identifiers <<< "${prerelease}"
+    for identifier in "${identifiers[@]}"; do
+      [[ -n "${identifier}" && "${identifier}" =~ ^[0-9A-Za-z-]+$ ]] || return 1
+      if [[ "${identifier}" =~ ^[0-9]+$ && ! "${identifier}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        return 1
+      fi
+    done
+  fi
+}
+
 version="${1:-}"
 for command in uname tar install awk sed grep mktemp; do
   command -v "${command}" >/dev/null 2>&1 || die "required command not found: ${command}"
@@ -69,9 +100,7 @@ trap 'rm -rf "${tmp_dir}"' EXIT
 if [[ -z "${version}" ]]; then
   version="$(latest_version "${tmp_dir}/latest.json")"
 fi
-if ! [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-  die "release version must match vX.Y.Z or vX.Y.Z-prerelease; got '${version}'"
-fi
+validate_version "${version}" || die "release version must be Semantic Versioning with a v prefix; got '${version}'"
 
 os="$(normalize_os "$(uname -s)")"
 arch="$(normalize_arch "$(uname -m)")"
@@ -101,10 +130,13 @@ printf '%s\n' "${binary_version}" | grep -F "engram ${version} " >/dev/null || \
   die "binary version does not match ${version}"
 
 mkdir -p "${ENGRAM_INSTALL_DIR}"
+[[ ! -d "${ENGRAM_INSTALL_DIR}/engram" ]] || die "install target is a directory: ${ENGRAM_INSTALL_DIR}/engram"
 install_tmp="$(mktemp "${ENGRAM_INSTALL_DIR}/.engram-install.XXXXXX")"
 trap 'rm -rf "${tmp_dir}"; rm -f "${install_tmp:-}"' EXIT
 install -m 0755 "${tmp_dir}/engram" "${install_tmp}"
 mv -f "${install_tmp}" "${ENGRAM_INSTALL_DIR}/engram"
+[[ -f "${ENGRAM_INSTALL_DIR}/engram" && ! -L "${ENGRAM_INSTALL_DIR}/engram" && -x "${ENGRAM_INSTALL_DIR}/engram" ]] || \
+  die "installed binary did not become a regular executable"
 
 printf 'Installed %s to %s/engram\n' "${version}" "${ENGRAM_INSTALL_DIR}"
 printf 'The service was not restarted. Verify with: %s/engram version\n' "${ENGRAM_INSTALL_DIR}"

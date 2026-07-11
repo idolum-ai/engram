@@ -24,7 +24,9 @@ done
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
 to_commit="$(git rev-parse --verify "${to_ref}^{commit}")"
+auto_from=false
 if [[ -z "${from_ref}" ]]; then
+  auto_from=true
   from_ref="$(git describe --tags --abbrev=0 "${to_commit}^" 2>/dev/null || true)"
   if [[ -z "${from_ref}" ]]; then
     from_ref="$(git rev-list --max-parents=0 "${to_commit}" | tail -n1)"
@@ -32,12 +34,18 @@ if [[ -z "${from_ref}" ]]; then
 fi
 from_commit="$(git rev-parse --verify "${from_ref}^{commit}")"
 range="${from_commit}..${to_commit}"
+history_ref="${range}"
+range_label="$(git rev-parse --short "${from_commit}")..$(git rev-parse --short "${to_commit}")"
+if [[ "${auto_from}" == "true" && "${from_commit}" = "$(git rev-list --max-parents=0 "${to_commit}" | tail -n1)" ]]; then
+  history_ref="${to_commit}"
+  range_label="repository start..$(git rev-parse --short "${to_commit}")"
+fi
 
 emit() {
   printf '# %s\n\n' "${title}"
-  printf 'Range: `%s..%s`\n\n' "$(git rev-parse --short "${from_commit}")" "$(git rev-parse --short "${to_commit}")"
+  printf 'Range: `%s`\n\n' "${range_label}"
   printf '## What changed\n\n'
-  if ! git log --first-parent --reverse --format='- %s (`%h`)' "${range}"; then
+  if ! git log --first-parent --reverse --format='- %s (`%h`)' "${history_ref}"; then
     return 1
   fi
   printf '\n## Compatibility and operations\n\n'

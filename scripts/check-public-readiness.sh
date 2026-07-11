@@ -20,6 +20,10 @@ required_files=(
   scripts/install-release.sh
   scripts/package-release.sh
   scripts/check-release.sh
+  scripts/generate-release-notes.sh
+  scripts/prepare-release-notes.sh
+  scripts/validate-release-notes.sh
+  scripts/validate-release-version.sh
 )
 
 for file in "${required_files[@]}"; do
@@ -47,7 +51,14 @@ if [[ -n "$(git ls-files -- dist)" ]]; then
   exit 1
 fi
 
-for script in scripts/check-release.sh scripts/generate-release-notes.sh scripts/install-release.sh scripts/package-release.sh; do
+for script in \
+  scripts/check-release.sh \
+  scripts/generate-release-notes.sh \
+  scripts/install-release.sh \
+  scripts/package-release.sh \
+  scripts/prepare-release-notes.sh \
+  scripts/validate-release-notes.sh \
+  scripts/validate-release-version.sh; do
   if [[ ! -x "${script}" ]]; then
     echo "release script must be executable: ${script}" >&2
     exit 1

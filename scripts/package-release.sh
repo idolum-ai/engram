@@ -3,18 +3,33 @@ set -euo pipefail
 
 version="${1:-}"
 output_dir="${2:-dist}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if ! [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-  echo "release version must match vX.Y.Z or vX.Y.Z-prerelease; got '${version}'" >&2
-  exit 2
-fi
+version="$("${script_dir}/validate-release-version.sh" "${version}")"
 
-for command in go git tar; do
+for command in go git; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "required command not found: ${command}" >&2
     exit 1
   }
 done
+
+tar_bin="${TAR:-}"
+if [[ -z "${tar_bin}" ]]; then
+  if command -v gtar >/dev/null 2>&1; then
+    tar_bin="gtar"
+  else
+    tar_bin="tar"
+  fi
+fi
+command -v "${tar_bin}" >/dev/null 2>&1 || { echo "required command not found: ${tar_bin}" >&2; exit 1; }
+gnu_tar=false
+if "${tar_bin}" --version 2>/dev/null | grep -q 'GNU tar'; then
+  gnu_tar=true
+elif [[ "${RELEASE_ALLOW_NONDETERMINISTIC_TAR:-}" != "1" ]]; then
+  echo "GNU tar is required for release archives (install gtar on macOS)" >&2
+  exit 1
+fi
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "${repo_root}"
@@ -46,11 +61,11 @@ for target in "${targets[@]}"; do
   chmod 0755 "${package_dir}/engram"
   cp README.md LICENSE "${package_dir}/"
   rm -f "${output_dir}/${asset}"
-  if tar --version 2>/dev/null | grep -q 'GNU tar'; then
-    tar --sort=name --mtime="@${source_epoch}" --owner=0 --group=0 --numeric-owner \
+  if [[ "${gnu_tar}" == "true" ]]; then
+    "${tar_bin}" --sort=name --mtime="@${source_epoch}" --owner=0 --group=0 --numeric-owner \
       -czf "${output_dir}/${asset}" -C "${package_dir}" engram README.md LICENSE
   else
-    tar -czf "${output_dir}/${asset}" -C "${package_dir}" engram README.md LICENSE
+    "${tar_bin}" -czf "${output_dir}/${asset}" -C "${package_dir}" engram README.md LICENSE
   fi
   assets+=("${asset}")
 done

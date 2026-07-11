@@ -2,6 +2,7 @@ name: Release Candidate
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches:
       - main
   workflow_dispatch:
@@ -22,12 +23,13 @@ jobs:
        startsWith(github.event.pull_request.head.ref, 'release/v'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -36,13 +38,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep tmux
 
-      - name: Resolve candidate version
+      - name: Resolve candidate and publication notes
         id: version
         env:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
           INPUT_VERSION: ${{ inputs.version }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           set -euo pipefail
           if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
@@ -50,17 +54,21 @@ jobs:
           else
             tag="${HEAD_REF#release/}"
           fi
-          if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "candidate version must match vX.Y.Z or vX.Y.Z-prerelease; got '${tag}'" >&2
-            exit 1
-          fi
-          grep -F "## [${tag}]" CHANGELOG.md >/dev/null || {
-            echo "CHANGELOG.md is missing a heading for ${tag}" >&2
+          tag="$(./scripts/validate-release-version.sh "${tag}")"
+          prefix="## [${tag}] - "
+          heading="$(awk -v prefix="${prefix}" 'index($0, prefix) == 1 { print; exit }' CHANGELOG.md)"
+          release_date="${heading#"${prefix}"}"
+          [[ "${heading}" == "${prefix}"* && "${release_date}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || {
+            echo "CHANGELOG.md is missing a dated heading for ${tag}" >&2
             exit 1
           }
-          if [[ "${EVENT_NAME}" == "pull_request" && -z "${PR_BODY//[[:space:]]/}" ]]; then
-            echo "release PR body must contain reviewed release notes" >&2
-            exit 1
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            printf '%s\n' "${PR_BODY}" > release-notes-source.md
+            ./scripts/prepare-release-notes.sh "${tag}" "${PR_TITLE}" "${PR_URL}" \
+              release-notes-source.md release-notes-preview.md
+          else
+            ./scripts/generate-release-notes.sh --to HEAD \
+              --output release-notes-preview.md --title "${tag}"
           fi
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
@@ -83,18 +91,11 @@ jobs:
           candidate-smoke/engram version | tee candidate-version.txt
           grep -F "engram ${TAG} commit=${commit}" candidate-version.txt >/dev/null
 
-      - name: Generate release notes preview
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          ./scripts/generate-release-notes.sh \
-            --to HEAD \
-            --output release-notes-preview.md \
-            --title "${TAG}"
-          cat release-notes-preview.md >> "${GITHUB_STEP_SUMMARY}"
+      - name: Show publication notes preview
+        run: cat release-notes-preview.md >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload candidate evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: engram-${{ steps.version.outputs.tag }}-candidate
           path: |

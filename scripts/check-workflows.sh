@@ -21,17 +21,41 @@ if [[ -d scripts ]]; then
   bash -n scripts/*.sh
 fi
 
-required_release_phrases=(
-  'startsWith(github.event.pull_request.head.ref, '\''release/v'\'')'
+required_candidate_phrases=(
+  'persist-credentials: false'
+  './scripts/prepare-release-notes.sh'
   'make release-dist'
   'ENGRAM_TMUX_INTEGRATION=1'
-  'gh release create'
+  'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
 )
-for phrase in "${required_release_phrases[@]}"; do
-  if ! grep -R -F -- "${phrase}" .github/workflows/release*.yml >/dev/null; then
-    echo "release workflows are missing required behavior: ${phrase}" >&2
+for phrase in "${required_candidate_phrases[@]}"; do
+  if ! grep -F -- "${phrase}" .github/workflows/release-candidate.yml >/dev/null; then
+    echo "release candidate workflow is missing required behavior: ${phrase}" >&2
     exit 1
   fi
 done
+
+required_publish_phrases=(
+  'environment: release'
+  'contents: write'
+  'persist-credentials: false'
+  'merged release tree differs from the candidate-reviewed head'
+  'git push origin "${SOURCE_SHA}:refs/tags/${TAG}"'
+  '--verify-tag --draft'
+  'gh release upload'
+  '--draft=false'
+)
+for phrase in "${required_publish_phrases[@]}"; do
+  if ! grep -F -- "${phrase}" .github/workflows/release.yml >/dev/null; then
+    echo "release publication workflow is missing required behavior: ${phrase}" >&2
+    exit 1
+  fi
+done
+
+if grep -R -E 'uses:[[:space:]]+actions/(checkout|setup-go|upload-artifact|download-artifact)@v[0-9]+' \
+  .github/workflows >/dev/null; then
+  echo "workflows must pin official actions by full commit SHA" >&2
+  exit 1
+fi
 
 echo "workflow sanity check passed"

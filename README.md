@@ -260,7 +260,7 @@ make install PREFIX="$HOME/.local"
 ```
 
 For a published release, choose a version from the GitHub Releases page, inspect
-the installer at that same immutable tag, then run it. The installer verifies
+the installer at that same version tag, then run it. The installer verifies
 the archive checksum and embedded version before atomically replacing the
 binary:
 
@@ -273,12 +273,27 @@ bash /tmp/engram-install-release.sh "${version}"
 ```
 
 Release installation does not modify `~/.engram`, create a service, or restart
-one. Existing service operators choose the interruption point explicitly:
+one. A source checkout is still required for the initial `.env` and systemd
+setup. Install the unit without rebuilding over the reviewed release binary:
 
 ```sh
+make install-service-unit PREFIX="$HOME/.local"
+```
+
+Existing service operators choose the interruption point explicitly. Because
+the unit uses `Restart=on-failure`, a crash after binary replacement can activate
+the new binary before a planned restart; stop the service first when that gap is
+unacceptable:
+
+```sh
+systemctl --user stop engram.service # optional strict activation boundary
 "$HOME/.local/bin/engram" version
 systemctl --user restart engram.service
+systemctl --user is-active engram.service
 ```
+
+After restart, `/version` or `/status` in the bot DM verifies the running
+process rather than only the binary on disk.
 
 Install and start the systemd user service. This seeds `~/.engram/.env` with
 mode `0600` only when it does not already exist:

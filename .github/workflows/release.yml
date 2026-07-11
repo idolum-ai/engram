@@ -7,32 +7,35 @@ on:
       - main
 
 permissions:
-  contents: write
-
-concurrency:
-  group: engram-release
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  publish:
+  build:
     if: >-
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      tag: ${{ steps.release.outputs.tag }}
     env:
       RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
-      RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-      RELEASE_TITLE: ${{ github.event.pull_request.title }}
       RELEASE_BODY: ${{ github.event.pull_request.body }}
+      RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      RELEASE_MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      RELEASE_PR_NUMBER: ${{ github.event.pull_request.number }}
+      RELEASE_TITLE: ${{ github.event.pull_request.title }}
       RELEASE_URL: ${{ github.event.pull_request.html_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          persist-credentials: false
           ref: ${{ github.event.pull_request.merge_commit_sha }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
@@ -41,27 +44,32 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ripgrep tmux
 
-      - name: Resolve release
+      - name: Resolve reviewed release source
         id: release
         run: |
           set -euo pipefail
-          tag="${RELEASE_BRANCH#release/}"
-          if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "release branch must match release/vX.Y.Z; got '${RELEASE_BRANCH}'" >&2
-            exit 1
-          fi
-          grep -F "## [${tag}]" CHANGELOG.md >/dev/null || {
-            echo "CHANGELOG.md is missing a heading for ${tag}" >&2
+          tag="$(./scripts/validate-release-version.sh "${RELEASE_BRANCH#release/}")"
+          prefix="## [${tag}] - "
+          heading="$(awk -v prefix="${prefix}" 'index($0, prefix) == 1 { print; exit }' CHANGELOG.md)"
+          release_date="${heading#"${prefix}"}"
+          [[ "${heading}" == "${prefix}"* && "${release_date}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || {
+            echo "CHANGELOG.md is missing a dated heading for ${tag}" >&2
             exit 1
           }
-          if [[ -z "${RELEASE_BODY//[[:space:]]/}" ]]; then
-            echo "release PR body must contain reviewed release notes" >&2
+          git fetch --no-tags origin "refs/pull/${RELEASE_PR_NUMBER}/head:refs/remotes/origin/reviewed-release-head"
+          head_tree="$(git rev-parse "refs/remotes/origin/reviewed-release-head^{tree}")"
+          merge_tree="$(git rev-parse "${RELEASE_MERGE_SHA}^{tree}")"
+          [[ "${head_tree}" = "${merge_tree}" ]] || {
+            echo "merged release tree differs from the candidate-reviewed head" >&2
             exit 1
-          fi
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            echo "tag ${tag} already exists; refusing to overwrite it" >&2
-            exit 1
-          fi
+          }
+          printf '%s\n' "${RELEASE_BODY}" > release-notes-source.md
+          ./scripts/prepare-release-notes.sh "${tag}" "${RELEASE_TITLE}" "${RELEASE_URL}" \
+            release-notes-source.md release-notes.md
+          prerelease=false
+          [[ "${tag}" != *-* ]] || prerelease=true
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          echo "source_sha=${RELEASE_MERGE_SHA}" >> "${GITHUB_OUTPUT}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Full gate
@@ -75,32 +83,112 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          commit="$(git rev-parse --short=12 "${RELEASE_SHA}")"
-          build_date="$(git show -s --format=%cI "${RELEASE_SHA}")"
+          commit="$(git rev-parse --short=12 "${RELEASE_MERGE_SHA}")"
+          build_date="$(git show -s --format=%cI "${RELEASE_MERGE_SHA}")"
           make release-dist VERSION="${TAG}" COMMIT="${commit}" DATE="${build_date}"
           mkdir -p release-smoke
           tar -xzf "dist/engram-${TAG}-linux-amd64.tar.gz" -C release-smoke engram
           release-smoke/engram version | tee release-version.txt
           grep -F "engram ${TAG} commit=${commit}" release-version.txt >/dev/null
 
-      - name: Prepare release notes
-        env:
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          {
-            printf '# %s\n\n' "${TAG}"
-            printf 'Release PR: [%s](%s)\n\n' "${RELEASE_TITLE}" "${RELEASE_URL}"
-            printf '%s\n' "${RELEASE_BODY}"
-          } > release-notes.md
+      - name: Upload reviewed release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-bundle
+          if-no-files-found: error
+          path: |
+            dist/*
+            release-notes.md
+            release-version.txt
 
-      - name: Publish immutable GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    env:
+      PRERELEASE: ${{ needs.build.outputs.prerelease }}
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.build.outputs.source_sha }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-bundle
+
+      - name: Create tag atomically
         run: |
           set -euo pipefail
-          gh release create "${TAG}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${RELEASE_SHA}" \
-            --title "${TAG}" \
-            --notes-file release-notes.md
+          remote_sha="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "${remote_sha}" ]]; then
+            git push origin "${SOURCE_SHA}:refs/tags/${TAG}" || true
+            remote_sha="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk 'NR == 1 { print $1 }')"
+          fi
+          [[ "${remote_sha}" = "${SOURCE_SHA}" ]] || {
+            echo "tag ${TAG} exists at ${remote_sha}, expected ${SOURCE_SHA}" >&2
+            exit 1
+          }
+
+      - name: Publish or recover GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected_assets="$(printf '%s\n' \
+            "checksums.txt" \
+            "engram-${TAG}-darwin-amd64.tar.gz" \
+            "engram-${TAG}-darwin-arm64.tar.gz" \
+            "engram-${TAG}-linux-amd64.tar.gz" \
+            "engram-${TAG}-linux-arm64.tar.gz")"
+          verify_metadata() {
+            actual_title="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json name --jq .name)"
+            actual_notes="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json body --jq .body)"
+            expected_notes="$(cat release-notes.md)"
+            [[ "${actual_title}" = "${TAG}" && "${actual_notes}" = "${expected_notes}" ]]
+          }
+          verify_published() {
+            actual_assets="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' | LC_ALL=C sort)"
+            [[ "${actual_assets}" = "${expected_assets}" ]] || return 1
+            verify_dir="$(mktemp -d)"
+            gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir "${verify_dir}"
+            for local_asset in dist/*; do
+              cmp "${local_asset}" "${verify_dir}/$(basename "${local_asset}")" || return 1
+            done
+            rm -rf "${verify_dir}"
+          }
+
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            is_draft="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft --jq .isDraft)"
+            is_prerelease="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isPrerelease --jq .isPrerelease)"
+            [[ "${is_prerelease}" = "${PRERELEASE}" ]] || {
+              echo "existing release prerelease state does not match ${TAG}" >&2
+              exit 1
+            }
+            if [[ "${is_draft}" = "false" ]]; then
+              verify_metadata || { echo "published release title or notes differ from this build" >&2; exit 1; }
+              verify_published || { echo "published release is incomplete or differs from this build" >&2; exit 1; }
+              echo "release ${TAG} is already complete"
+              exit 0
+            fi
+            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --title "${TAG}" --notes-file release-notes.md
+          else
+            create_args=("${TAG}" --repo "${GITHUB_REPOSITORY}" --verify-tag --draft \
+              --title "${TAG}" --notes-file release-notes.md)
+            if [[ "${PRERELEASE}" = "true" ]]; then
+              create_args+=(--prerelease --latest=false)
+            fi
+            gh release create "${create_args[@]}"
+          fi
+
+          gh release upload "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+          verify_metadata
+          verify_published
+          gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
+          verify_metadata
+          verify_published

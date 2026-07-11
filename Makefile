@@ -9,7 +9,7 @@ GOCACHE ?= /tmp/engram-go-build
 GOMODCACHE ?= /tmp/engram-go-mod
 ENGRAM_ENV ?= $(HOME)/.engram/.env
 
-.PHONY: build release-dist release-smoke install install-release uninstall install-service uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
+.PHONY: build release-dist release-smoke install install-release uninstall install-service install-service-unit uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
 
 build:
 	mkdir -p bin
@@ -33,6 +33,10 @@ uninstall:
 	rm -f $(BINDIR)/$(BINARY)
 
 install-service: install
+	@$(MAKE) --no-print-directory install-service-unit PREFIX="$(PREFIX)" BINDIR="$(BINDIR)"
+
+install-service-unit:
+	@test -x "$(BINDIR)/$(BINARY)" || { echo "missing executable $(BINDIR)/$(BINARY); install a source or release binary first" >&2; exit 1; }
 	mkdir -p $(HOME)/.config/systemd/user $(HOME)/.engram
 	@if [ ! -f "$(HOME)/.engram/.env" ]; then install -m 0600 .env.example "$(HOME)/.engram/.env"; fi
 	printf '%s\n' \
