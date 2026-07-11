@@ -66,12 +66,9 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		_ = a.audit("tmux.snapshot_anchor", "capture_failed", map[string]any{"session_id": id, "pane_id": current.TmuxPaneID, "error": captureErr.Error()})
 		return
 	}
-	observation := observeUpstreamSignal(capture)
-	if observation.Found {
-		a.deliverUpstreamSignal(ctx, current, observation.Latest)
-	}
+	presentationText := a.processCapturedFrame(ctx, current, capture)
 	presentationCapture := capture
-	presentationCapture.Text = observation.PresentationText
+	presentationCapture.Text = presentationText
 	captureHash := snapshotAnchorHash(current, capture, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
 		return

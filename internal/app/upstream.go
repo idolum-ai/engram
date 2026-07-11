@@ -16,11 +16,17 @@ import (
 const upstreamSignalInterval = 10 * time.Second
 
 func observeUpstreamSignal(capture tmux.StyledCapture) upstream.Observation {
-	text := capture.JoinedText
-	if text == "" {
-		text = capture.Text
+	return upstream.Observe(capture.JoinedText)
+}
+
+// processCapturedFrame is the app boundary for styled captures: terminal
+// records are delivered and removed before semantic text reaches a caller.
+func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalSession, capture tmux.StyledCapture) string {
+	observation := observeUpstreamSignal(capture)
+	if observation.Found {
+		a.deliverUpstreamSignal(ctx, observed, observation.Latest)
 	}
-	return upstream.Observe(text)
+	return observation.PresentationText
 }
 
 func (a *App) deliverUpstreamSignal(ctx context.Context, observed state.TerminalSession, record upstream.Record) {
@@ -31,23 +37,23 @@ func (a *App) deliverUpstreamSignal(ctx context.Context, observed state.Terminal
 }
 
 func (a *App) deliverUpstreamSignalLocked(ctx context.Context, observed state.TerminalSession, record upstream.Record) {
-	redacted := a.redactText(record.Payload)
 	latest, ok := a.Store.FindSession(observed.ID)
 	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorChatID == 0 || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != observed.TmuxPaneID || latest.TmuxWindowID != observed.TmuxWindowID {
-		_ = a.audit("terminal.upstream_signal", "superseded", map[string]any{"session_id": observed.ID, "record_id": record.ID, "payload": redacted})
+		_ = a.audit("terminal.upstream_signal", "superseded", map[string]any{"session_id": observed.ID, "record_id": record.ID})
 		return
 	}
 	if latest.HasSeenUpstreamSignal(record.ID) {
 		return
 	}
 	now := time.Now().UTC()
-	if now.Before(latest.UpstreamRetryAt) {
+	if now.Before(a.upstreamRetryDeadline(latest.ID, latest.UpstreamRetryAt)) {
 		return
 	}
 	if !latest.LastUpstreamSignalAt.IsZero() && now.Sub(latest.LastUpstreamSignalAt) < upstreamSignalInterval {
 		_ = a.audit("terminal.upstream_signal", "coalesced", map[string]any{"session_id": latest.ID, "record_id": record.ID})
 		return
 	}
+	redacted := a.redactText(record.Payload)
 	if a.Telegram == nil {
 		_ = a.audit("terminal.upstream_signal", "delivery_failed", map[string]any{"session_id": latest.ID, "record_id": record.ID, "payload": redacted, "error": "telegram unavailable"})
 		return
@@ -90,6 +96,7 @@ func (a *App) deliverUpstreamSignalLocked(ctx context.Context, observed state.Te
 		_ = a.audit("state.upstream_signal", "delivery_failed", map[string]any{"session_id": latest.ID, "message_id": message.MessageID, "record_id": record.ID, "compensating_delete_error": errorText(deleteErr), "error": firstNonEmpty(errorText(stateErr), "superseded")})
 		return
 	}
+	a.signalRetries.Delete(latest.ID)
 	_ = a.audit("terminal.upstream_signal", "delivered", map[string]any{"session_id": latest.ID, "message_id": message.MessageID, "record_id": record.ID, "standalone": standalone, "payload": redacted})
 }
 
@@ -98,12 +105,28 @@ func (a *App) noteUpstreamRetry(id int, err error) {
 	if retryAfter <= 0 {
 		return
 	}
+	deadline := time.Now().UTC().Add(retryAfter)
+	// Keep the deadline process-local first. A pre-replacement persistence
+	// failure must not turn a Telegram rate limit into an immediate retry loop.
+	a.signalRetries.Store(id, deadline)
 	_, _, stateErr := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		session.UpstreamRetryAt = time.Now().UTC().Add(retryAfter)
+		session.UpstreamRetryAt = deadline
 	})
 	if stateErr != nil {
 		_ = a.audit("state.upstream_signal", "retry_failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 	}
+}
+
+func (a *App) upstreamRetryDeadline(id int, persisted time.Time) time.Time {
+	transient, ok := a.signalRetries.Load(id)
+	if !ok {
+		return persisted
+	}
+	deadline, ok := transient.(time.Time)
+	if ok && deadline.After(persisted) {
+		return deadline
+	}
+	return persisted
 }
 
 func (a *App) queueSignalAnchorRecovery(id int) {

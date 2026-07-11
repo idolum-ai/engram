@@ -69,12 +69,8 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		lock.Unlock()
 		return
 	}
-	observation := observeUpstreamSignal(capture)
-	if observation.Found {
-		a.deliverUpstreamSignal(ctx, ts, observation.Latest)
-	}
-	presentationText := observation.PresentationText
-	hash := sha(capture.Text)
+	presentationText := a.processCapturedFrame(ctx, ts, capture)
+	hash := sha(presentationText)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
 			return

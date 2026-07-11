@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
@@ -31,6 +33,24 @@ func TestObserveUpstreamSignalUsesJoinedFrameAndRecordIdentity(t *testing.T) {
 	got := observeUpstreamSignal(capture)
 	if !got.Found || got.Latest != (upstream.Record{ID: firstSignalID, Payload: "tests finished with two failures"}) || got.PresentationText != "before\nafter" {
 		t.Fatalf("observation = %#v", got)
+	}
+}
+
+func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.capturePhysical = "ordinary output\n[engram:upstream] " + firstSignalID + " build finished\n"
+	runner.captureJoined = runner.capturePhysical
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"Ordinary output is visible."}]}`))}, nil
+	})}
+	a.Anthropic = model
+
+	a.refreshSession(context.Background(), id, true)
+	got, _ := a.Store.FindSession(id)
+	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != sha("ordinary output") {
+		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, sha("ordinary output"))
 	}
 }
 
@@ -156,6 +176,30 @@ func TestRateLimitRetryDeadlinePersistsAndSuppressesSchedulerRetry(t *testing.T)
 	got, _ := store.FindSession(session.ID)
 	if calls != 1 || time.Until(got.UpstreamRetryAt) < 29*time.Second {
 		t.Fatalf("calls=%d retry_at=%s", calls, got.UpstreamRetryAt)
+	}
+}
+
+func TestRateLimitRetryDeadlineSurvivesPreReplacementStateFailureInMemory(t *testing.T) {
+	store, session, dir := newUpstreamStoreWithDir(t)
+	movedDir := dir + ".unavailable"
+	if err := os.Rename(dir, movedDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Rename(movedDir, dir) })
+	var calls int
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return telegramTestResponse(t, http.StatusTooManyRequests, map[string]any{"ok": false, "error_code": 429, "description": "Too Many Requests", "parameters": map[string]any{"retry_after": 31}}), nil
+	})}
+	a := &App{Store: store, Telegram: client}
+	record := upstream.Record{ID: firstSignalID, Payload: "build finished"}
+	a.deliverUpstreamSignal(context.Background(), session, record)
+	a.deliverUpstreamSignal(context.Background(), session, record)
+	got, _ := store.FindSession(session.ID)
+	if calls != 1 || !got.UpstreamRetryAt.IsZero() || time.Until(a.upstreamRetryDeadline(session.ID, got.UpstreamRetryAt)) < 29*time.Second {
+		t.Fatalf("calls=%d persisted=%s transient=%s", calls, got.UpstreamRetryAt, a.upstreamRetryDeadline(session.ID, got.UpstreamRetryAt))
 	}
 }
 

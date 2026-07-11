@@ -178,8 +178,16 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	if got.JoinedText != "joined logical line" {
 		t.Fatalf("joined text = %q", got.JoinedText)
 	}
-	if len(runner.calls) != 5 || runner.calls[1][0] != "capture-pane" || !containsArgs(runner.calls[1], []string{";", "capture-pane", "-J"}) || runner.calls[2][0] != "show-buffer" || runner.calls[3][0] != "show-buffer" || runner.calls[4][0] != "delete-buffer" {
+	if len(runner.calls) != 5 || runner.calls[2][0] != "show-buffer" || runner.calls[3][0] != "show-buffer" || runner.calls[4][0] != "delete-buffer" {
 		t.Fatalf("styled capture calls = %#v", runner.calls)
+	}
+	captureCall := runner.calls[1]
+	if len(captureCall) != 22 ||
+		!reflect.DeepEqual(captureCall[:10], []string{"capture-pane", "-e", "-N", "-S", "-27", "-E", "36", "-t", "%7", "-b"}) ||
+		!strings.HasPrefix(captureCall[10], "engram-physical-") ||
+		!reflect.DeepEqual(captureCall[11:21], []string{";", "capture-pane", "-J", "-S", "-27", "-E", "36", "-t", "%7", "-b"}) ||
+		!strings.HasPrefix(captureCall[21], "engram-joined-") {
+		t.Fatalf("capture-pane coordinates = %#v", captureCall)
 	}
 }
 

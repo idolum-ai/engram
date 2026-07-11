@@ -142,8 +142,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   seconds. A retained tmux bell may accelerate capture, but signal discovery
   remains polling-based and does not bypass bounded rendering work or amplify
   Telegram retries.
-- A Telegram `retry_after` that outlives the client's bounded retry is persisted
-  per terminal so scheduler captures do not immediately repeat the request.
+- A Telegram `retry_after` that outlives the client's bounded retry is retained
+  in memory before persistence is attempted, then persisted per terminal. A
+  pre-replacement state-write failure must not cause the running process to
+  immediately repeat the request.
 - The signal delivery timestamp is recorded after Telegram succeeds, so a
   delayed retry cannot shorten the ten-second interval between successful
   notifications.

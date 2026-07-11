@@ -460,12 +460,14 @@ func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunne
 }
 
 type safetyRunner struct {
-	calls          [][]string
-	identityWindow string
-	identityErr    error
-	captureErr     error
-	failKill       bool
-	onIdentity     func()
+	calls           [][]string
+	identityWindow  string
+	identityErr     error
+	captureErr      error
+	capturePhysical string
+	captureJoined   string
+	failKill        bool
+	onIdentity      func()
 }
 
 type newSessionRunner struct{}
@@ -480,6 +482,9 @@ func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) 
 func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
+		if strings.Contains(args[len(args)-1], "pane_width") {
+			return "71\t37\tshell\t/tmp\n", nil
+		}
 		if r.identityErr != nil {
 			return "", r.identityErr
 		}
@@ -492,7 +497,7 @@ func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 		return "", r.captureErr
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
-		return pairedCaptureResult(args, "", ""), nil
+		return pairedCaptureResult(args, r.capturePhysical, r.captureJoined), nil
 	}
 	if len(args) > 0 && args[0] == "kill-window" && r.failKill {
 		return "", errors.New("tmux refused kill")

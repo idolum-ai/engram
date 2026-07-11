@@ -58,6 +58,7 @@ type App struct {
 	closeConfirms  map[string]closeConfirmation
 	sessionLocks   sync.Map
 	anchorLocks    sync.Map
+	signalRetries  sync.Map
 	sleepHook      func(time.Duration)
 	refreshHook    func(context.Context, int, bool)
 }

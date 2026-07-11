@@ -31,6 +31,7 @@ func TestCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-test-%d", os.Getpid())}
