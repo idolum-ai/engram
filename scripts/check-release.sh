@@ -53,7 +53,7 @@ tar -xzf "${tmp_dir}/dist/${asset}" -C "${tmp_dir}" engram
 }
 
 ./scripts/generate-release-notes.sh \
-  --from HEAD^ --to HEAD --output "${tmp_dir}/notes.md" --title "${version}" >/dev/null
+  --from HEAD --to HEAD --output "${tmp_dir}/notes.md" --title "${version}" >/dev/null
 grep -F "# ${version}" "${tmp_dir}/notes.md" >/dev/null || {
   echo "release notes preview omitted its title" >&2
   exit 1
