@@ -16,6 +16,9 @@ func recordAlternateMessage(session *state.TerminalSession, kind string, message
 	case "snapshot":
 		previous = session.SnapshotMessageID
 		session.SnapshotMessageID = messageID
+	case "upstream":
+		previous = session.UpstreamMessageID
+		session.UpstreamMessageID = messageID
 	default:
 		return
 	}
@@ -30,7 +33,7 @@ func recordAlternateMessage(session *state.TerminalSession, kind string, message
 }
 
 func recordStaleMessage(session *state.TerminalSession, messageID int) {
-	if messageID == 0 || messageID == session.AnchorMessageID || messageID == session.SummaryMessageID || messageID == session.SnapshotMessageID {
+	if messageID == 0 || messageID == session.AnchorMessageID || messageID == session.SummaryMessageID || messageID == session.SnapshotMessageID || messageID == session.UpstreamMessageID {
 		return
 	}
 	stale := session.StaleAlternateMessageIDs[:0]

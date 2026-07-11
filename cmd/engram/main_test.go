@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,29 @@ import (
 
 	"github.com/idolum-ai/engram/internal/config"
 )
+
+type signalWriteCloser struct {
+	bytes.Buffer
+	closeErr error
+}
+
+func (w *signalWriteCloser) Close() error { return w.closeErr }
+
+func TestEmitSignalUsesOnlyControllingTerminal(t *testing.T) {
+	tty := &signalWriteCloser{}
+	err := emitSignal("tests\nfinished", func() (io.WriteCloser, error) { return tty, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tty.String(), "\a[engram:upstream] tests finished\n"; got != want {
+		t.Fatalf("signal = %q, want %q", got, want)
+	}
+
+	openErr := errors.New("no controlling terminal")
+	if err := emitSignal("ignored", func() (io.WriteCloser, error) { return nil, openErr }); !errors.Is(err, openErr) {
+		t.Fatalf("open error = %v", err)
+	}
+}
 
 func TestPreflightDoesNotCallTelegramOrAnthropic(t *testing.T) {
 	env := writeTestEnv(t)

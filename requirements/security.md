@@ -55,9 +55,10 @@ privacy model must stay small and explicit.
 ## Local Sensitive Data
 
 - `state.json` may contain Telegram identifiers, bounded reply aliases,
-  conversational summaries, capture hashes, attachment metadata, and the selected anchor mode.
-  Raw terminal captures are retained only in process memory and are omitted from
-  persisted state.
+  conversational summaries, capture and upstream-signal hashes, attachment
+  metadata, and the selected anchor mode. Raw terminal captures and upstream
+  payloads are retained only in process memory and are omitted from persisted
+  state.
 - `audit.jsonl`, lock metadata, tmux history, and `/tmp/engram` artifacts must
   be treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
@@ -98,6 +99,10 @@ privacy model must stay small and explicit.
 - Nested environments signal only through terminal output. They receive no
   Telegram, Anthropic, state-directory, or parent-tmux credentials and require
   no new host listener; the marker is untrusted framing, not authentication.
+- Recognized upstream records are omitted from Haiku input and reference
+  extraction. Their textual notification and audit payload are redacted; an
+  exact snapshot can still contain the literal record under the existing
+  unredacted snapshot boundary.
 
 ## Vulnerability Handling
 

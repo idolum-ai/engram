@@ -178,6 +178,21 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	}
 }
 
+func TestCaptureJoinedTextUsesSameBoundedRows(t *testing.T) {
+	f := &fakeRunner{out: "[engram:upstream] wrapped message\n"}
+	got, err := New(f).CaptureJoinedText(context.Background(), "%7", 37, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "[engram:upstream] wrapped message" {
+		t.Fatalf("joined text = %q", got)
+	}
+	want := [][]string{{"capture-pane", "-p", "-J", "-S", "-27", "-E", "36", "-t", "%7"}}
+	if !reflect.DeepEqual(f.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", f.calls, want)
+	}
+}
+
 func TestSemanticCaptureCleansTerminalOutput(t *testing.T) {
 	input := strings.Join([]string{
 		"\n",

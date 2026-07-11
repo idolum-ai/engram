@@ -162,7 +162,7 @@ below before running commands that may print secrets.
 | `TELEGRAM_ALLOWED_USER_ID` | none | yes | The one Telegram user ID allowed to issue commands. |
 | `TELEGRAM_CHAT_ID` | allowed user ID | no | The one allowed chat. Leave empty for a private DM; group operation is unsupported. |
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
-| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: Haiku `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v6. |
+| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: Haiku `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v7. |
 | `LLM_PROVIDER` | `anthropic` | when enabling Haiku | Must remain `anthropic`; enables guide startup, `🗣️`, and `/mode guide`. |
 | `ANTHROPIC_API_KEY` | none | when enabling Haiku, secret | Credential for one-pass conversational rendering. |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
@@ -200,7 +200,9 @@ the bot channel and must be revoked immediately.
   automatically to Telegram at most once every ten seconds.
 - **tmux and local processes:** Authorized messages can create windows and send
   literal shell input or key presses. tmux owns terminal history and continues
-  running when Engram stops unless a window is explicitly closed.
+  running when Engram stops unless a window is explicitly closed. A process in
+  a nested environment may emit a visible upstream record; the outer Engram
+  observes it through the same bounded capture and may notify the Telegram DM.
 - **Local snapshot browser:** In guide mode, tapping `🖼️` renders an on-demand
   image when Chromium passed startup readiness. In snapshot mode, the renderer
   produces the canonical live anchor whenever its capture changes. Engram
@@ -218,9 +220,10 @@ the bot channel and must be revoked immediately.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
-  identifiers, session metadata, capture hashes, conversational renderings, and selected
-  anchor mode. Raw terminal captures remain in process
-  memory for rendering but are omitted from persisted state.
+  identifiers, session metadata, capture and upstream-signal hashes, latest
+  reply aliases, conversational renderings, and selected anchor mode. Raw
+  terminal captures and upstream payloads remain in process
+  memory for rendering but are omitted from `state.json`.
   Files are created with private permissions, but anyone with access to the
   host account can read them.
 - **Attachments and generated files:** Incoming Telegram documents are saved
@@ -235,7 +238,8 @@ the bot channel and must be revoked immediately.
   file-exfiltration command. Review the exact path before sending it.
 
 Audit events redact configured credentials and common token, key, password, and
-private-key patterns. `/logs` applies the same pattern-based redaction to a
+private-key patterns. Delivered upstream-signal payloads may remain in that
+redacted audit history. `/logs` applies the same pattern-based redaction to a
 bounded audit tail. Haiku-derived prose receives the same best-effort redaction
 before persistence or Telegram delivery. Redaction can miss unfamiliar secrets
 or sensitive prose. It does not
@@ -344,8 +348,33 @@ with a slash, add one extra leading slash: replying with `//clear` sends
 Each watched session has exactly one live anchor, and Engram silently pins those
 anchors for navigation. Controls belong only to the canonical anchor. Replies
 route through that anchor and through the session's latest conversational and
-screenshot replies. Replacing either alternate makes its predecessor stale;
+snapshot replies. The latest upstream-signal notification is another reply
+route to the same outer pane. Replacing any alternate of the same kind makes
+its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
+
+### Nested environments
+
+A process running inside a container or another Engram can request the outer
+user's attention through its controlling terminal:
+
+```sh
+engram signal "Tests finished; two failures need attention."
+```
+
+The command writes one bounded `[engram:upstream] ...` record and a terminal
+bell. It makes no network request and reads no service configuration. The outer
+Engram finds the record through its normal tmux capture loop, refreshes the live
+anchor, and sends a redacted reply to that anchor. At most one signal per pane
+notifies every ten seconds. Replying to the newest signal notification routes
+to the outer pane; foreground terminal behavior carries that input inward when
+possible.
+
+No bot token, state directory, parent tmux socket, listener, or Engram hierarchy
+is required. Delivery is best effort: rapidly scrolling output can move the
+record outside the bounded frame before it is observed. See
+[`requirements/upstream-signals.md`](requirements/upstream-signals.md) for the
+complete contract and non-goals.
 
 In Haiku mode, Engram sends the shared bounded frame to Haiku once and edits the
 canonical text anchor with compact, collaborative prose broken into short
@@ -388,6 +417,7 @@ Local diagnostics use the same protected env file:
 engram preflight --env "$HOME/.engram/.env"
 engram status --env "$HOME/.engram/.env"
 engram dry-start --env "$HOME/.engram/.env"
+engram signal "Build finished; review the two failing tests."
 ```
 
 ## Development

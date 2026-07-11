@@ -31,6 +31,7 @@ func TestRepliesRouteOnlyThroughLatestAlternateViews(t *testing.T) {
 		s.AnchorMessageID = 77
 		s.SummaryMessageID = 88
 		s.SnapshotMessageID = 89
+		s.UpstreamMessageID = 90
 		s.StaleAlternateMessageIDs = []int{86, 87}
 	}); err != nil {
 		t.Fatal(err)
@@ -55,7 +56,7 @@ func TestRepliesRouteOnlyThroughLatestAlternateViews(t *testing.T) {
 		sleepHook: func(time.Duration) {}, refreshHook: func(context.Context, int, bool) {},
 	}
 
-	for i, targetID := range []int{88, 89} {
+	for i, targetID := range []int{88, 89, 90} {
 		status := app.handleUpdate(context.Background(), telegram.Update{Message: &telegram.Message{
 			MessageID: 100 + i, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 42}, Text: "printf routed",
 			ReplyToMessage: &telegram.Message{MessageID: targetID, Chat: telegram.Chat{ID: 100}},
@@ -65,8 +66,8 @@ func TestRepliesRouteOnlyThroughLatestAlternateViews(t *testing.T) {
 		}
 	}
 	app.refreshWG.Wait()
-	if len(runner.calls) != 6 {
-		t.Fatalf("current alternates produced %d tmux calls, want 6: %#v", len(runner.calls), runner.calls)
+	if len(runner.calls) != 9 {
+		t.Fatalf("current alternates produced %d tmux calls, want 9: %#v", len(runner.calls), runner.calls)
 	}
 
 	for i, test := range []struct {
@@ -81,7 +82,7 @@ func TestRepliesRouteOnlyThroughLatestAlternateViews(t *testing.T) {
 			t.Fatalf("stale alternate %d status = %q", test.targetID, status)
 		}
 	}
-	if len(runner.calls) != 6 {
+	if len(runner.calls) != 9 {
 		t.Fatalf("stale alternates reached tmux: %#v", runner.calls)
 	}
 	if len(replies) != 2 || !strings.Contains(replies[0], "no longer current") || !strings.Contains(replies[1], "no longer current") {

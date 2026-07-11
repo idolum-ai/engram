@@ -300,6 +300,22 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}, nil
 }
 
+// CaptureJoinedText captures the same bounded pane rows as CaptureStyled while
+// asking tmux to join physical rows that belong to one wrapped logical line.
+// Engram uses it only after a signal marker appears in the normal frame.
+func (m Manager) CaptureJoinedText(ctx context.Context, paneID string, visibleRows, targetRows int) (string, error) {
+	if visibleRows <= 0 || visibleRows > 400 || targetRows <= 0 || targetRows > 400 {
+		return "", fmt.Errorf("capture rows must be between 1 and 400")
+	}
+	start := visibleRows - targetRows
+	end := visibleRows - 1
+	out, err := m.Runner.Run(ctx, "capture-pane", "-p", "-J", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID)
+	if err != nil {
+		return "", err
+	}
+	return semanticCapture(out), nil
+}
+
 // DumpScrollback streams a physical, ANSI-preserving capture to dst. It does
 // not join wrapped lines or buffer tmux stdout in Engram. The runner must
 // implement StreamRunner so this memory behavior is explicit.

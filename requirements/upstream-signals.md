@@ -44,6 +44,9 @@ second transport or model a deployment hierarchy.
   and produces one concise Telegram reply to that anchor containing the exact
   normalized payload after normal output redaction. Engram does not interpret,
   summarize, execute, or endorse the payload.
+- Engram removes recognized records from Haiku input and deterministic
+  path/URL extraction. A literal snapshot may still show the record as part of
+  the exact terminal frame under the snapshot privacy boundary.
 - The newest upstream reply is a reply alias for the observed parent pane.
   Replying to it sends input to that pane through the normal identity checks.
   Publishing a newer upstream reply makes its predecessor stale; stale replies
@@ -74,9 +77,10 @@ second transport or model a deployment hierarchy.
 - Telegram credentials, allowed user identifiers, Anthropic credentials,
   parent state, and the parent tmux socket must not be passed or mounted into a
   child for signaling.
-- Signal payload is untrusted terminal text. It receives the same best-effort
-  credential redaction as other Telegram-bound terminal text and must never be
-  parsed as a command, callback, path, URL to fetch, or proof of identity.
+- Signal payload is untrusted terminal text. Its textual notification and audit
+  record receive best-effort credential redaction, and it must never be parsed
+  as a command, callback, path, URL to fetch, or proof of identity. Exact
+  snapshot pixels remain unredacted like the rest of that terminal frame.
 - The marker is framing, not authentication. Any process able to write to the
   tracked pane can emit it because that process can already influence what the
   user sees and types into that pane.

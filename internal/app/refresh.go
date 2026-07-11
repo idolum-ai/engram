@@ -69,13 +69,20 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		lock.Unlock()
 		return
 	}
+	upstreamPayload, hasUpstreamSignal, presentationText, presentationSafe := a.captureUpstreamSignal(tctx, ts, capture)
+	if !presentationSafe {
+		return
+	}
 	hash := sha(capture.Text)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
+			if hasUpstreamSignal {
+				a.deliverUpstreamSignal(ctx, ts, upstreamPayload)
+			}
 			return
 		}
 	}
-	summary, guideErr := a.conversationalSummary(ctx, ts.ID, capture.Text)
+	summary, guideErr := a.conversationalSummary(ctx, ts.ID, presentationText)
 	if a.snapshotAnchors() {
 		return
 	}
@@ -101,7 +108,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
-		s.LastRawCapture = tailUTF8(capture.Text, maxStoredVisibleCaptureBytes)
+		s.LastRawCapture = tailUTF8(presentationText, maxStoredVisibleCaptureBytes)
 		s.LastRawCaptureHash = hash
 		s.LastSummary = summary
 	}); err != nil {
@@ -112,6 +119,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	lock.Unlock()
 	a.updateAnchorLocal(ctx, id, summary, force)
+	if hasUpstreamSignal {
+		a.deliverUpstreamSignal(ctx, ts, upstreamPayload)
+	}
 }
 
 func tailUTF8(text string, maxBytes int) string {

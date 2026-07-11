@@ -84,9 +84,11 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v6 persists `anchor_mode`, the latest alternate reply IDs, and a
-  bounded stale-alias set used only to reject confusing replies. Valid legacy state migrates forward;
-  retired interpretation fields are ignored and disappear on save.
+- State schema v7 persists `anchor_mode`, the latest conversational, snapshot,
+  and upstream-signal reply IDs, upstream deduplication facts, and a bounded
+  stale-alias set used only to reject confusing replies. Valid legacy state
+  migrates forward; retired interpretation fields are ignored and disappear on
+  save.
 - A lock keyed by Telegram settings prevents duplicate pollers.
 - Upstream-signal deduplication is bounded per terminal. Restart may redeliver
   the newest still-visible record at most once; signal failures never mark a

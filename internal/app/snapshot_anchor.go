@@ -66,11 +66,20 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		_ = a.audit("tmux.snapshot_anchor", "capture_failed", map[string]any{"session_id": id, "pane_id": current.TmuxPaneID, "error": captureErr.Error()})
 		return
 	}
+	upstreamPayload, hasUpstreamSignal, presentationText, presentationSafe := a.captureUpstreamSignal(tctx, current, capture)
+	if !presentationSafe {
+		return
+	}
+	presentationCapture := capture
+	presentationCapture.Text = presentationText
 	captureHash := snapshotAnchorHash(current, capture, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
 		return
 	}
 	if captureHash == current.LastSnapshotCaptureHash && current.AnchorFormat == "snapshot" && !manual {
+		if hasUpstreamSignal {
+			a.deliverUpstreamSignal(ctx, current, upstreamPayload)
+		}
 		return
 	}
 	if !acquireSlot(ctx, a.renderSlots) {
@@ -102,7 +111,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != current.TmuxPaneID || latest.TmuxWindowID != current.TmuxWindowID {
 		return
 	}
-	caption := a.snapshotAnchorCaption(latest, capture)
+	caption := a.snapshotAnchorCaption(latest, presentationCapture)
 	markup := a.anchorMarkup(latest)
 	_, editErr := a.Telegram.EditPhoto(ctx, latest.AnchorChatID, latest.AnchorMessageID, pngPath, caption, markup)
 	if telegram.IsMessageNotModified(editErr) {
@@ -146,6 +155,9 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 			a.ensureCurrentAnchorPinnedLocked(ctx, updated)
 		}
 		a.finishAnchorRotationLocked(ctx, id)
+		if hasUpstreamSignal {
+			a.deliverUpstreamSignalLocked(ctx, current, upstreamPayload)
+		}
 		return
 	}
 
@@ -162,6 +174,9 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	_ = a.audit("terminal.snapshot_anchor", "updated", map[string]any{"session_id": id, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
+	if hasUpstreamSignal {
+		a.deliverUpstreamSignalLocked(ctx, current, upstreamPayload)
+	}
 }
 
 func (a *App) finishSnapshotMigration(ctx context.Context, id int) bool {

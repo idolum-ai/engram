@@ -51,6 +51,11 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 	}
 	capture, err := a.Tmux.CaptureStyled(tctx, current.TmuxPaneID, terminalshot.TargetRows)
 	releaseSlot(a.captureSlots)
+	presentationText := capture.Text
+	presentationSafe := true
+	if err == nil {
+		_, _, presentationText, presentationSafe = a.captureUpstreamSignal(tctx, current, capture)
+	}
 	cancel()
 	lock.Unlock()
 	if err != nil {
@@ -58,7 +63,11 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		a.conversationNotice(ctx, requested, "I couldn't capture that terminal window. Please try again.")
 		return
 	}
-	summary, err := a.conversationalSummary(ctx, current.ID, capture.Text)
+	if !presentationSafe {
+		a.conversationNotice(ctx, requested, "I couldn't safely reconstruct that terminal window. Please try again.")
+		return
+	}
+	summary, err := a.conversationalSummary(ctx, current.ID, presentationText)
 	if err != nil {
 		_ = a.Store.NoteHaiku(err.Error())
 		_ = a.audit("terminal.conversation", "haiku_failed", map[string]any{"session_id": current.ID, "error": err.Error()})

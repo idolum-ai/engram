@@ -27,7 +27,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		t.Fatal(err)
 	}
 	visibleURL := "https://example.test/build/7"
-	captureText := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 62) + artifact + "\n" + visibleURL + "\n"
+	captureText := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 61) + artifact + "\n" + visibleURL + "\n[engram:upstream] build needs review https://signal.invalid/hidden\n"
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -46,9 +46,21 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 	}
 
 	requests := 0
+	signalRequests := 0
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/botTOKEN/sendMessage" {
+			signalRequests++
+			var body map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				return nil, err
+			}
+			if body["text"] != "[1] upstream\n\nbuild needs review https://signal.invalid/hidden" || body["reply_to_message_id"] != float64(77) {
+				return nil, errors.New("incorrect upstream notification")
+			}
+			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+		}
 		if req.URL.Path != "/botTOKEN/editMessageMedia" {
 			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
 		}
@@ -66,6 +78,9 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		}
 		if !strings.Contains(caption, "paths:\n"+artifact) || !strings.Contains(caption, "links:\n"+visibleURL) {
 			return nil, errors.New("snapshot anchor omitted visible references")
+		}
+		if strings.Contains(caption, "signal.invalid") {
+			return nil, errors.New("snapshot references parsed an upstream payload")
 		}
 		markup := req.FormValue("reply_markup")
 		if !strings.Contains(markup, "refresh:1") || strings.Contains(markup, "snapshot:1") {
@@ -87,11 +102,11 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 
 	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
 	got, ok := store.FindSession(session.ID)
-	if !ok || got.AnchorMessageID != 77 || got.AnchorFormat != "snapshot" || got.LastSnapshotCaptureHash == "" || got.LastKnownCWD != "/tmp" {
+	if !ok || got.AnchorMessageID != 77 || got.AnchorFormat != "snapshot" || got.LastSnapshotCaptureHash == "" || got.LastKnownCWD != "/tmp" || got.UpstreamMessageID != 88 {
 		t.Fatalf("snapshot session = %#v ok=%v", got, ok)
 	}
-	if requests != 1 || renderer.renders != 1 {
-		t.Fatalf("first refresh requests=%d renders=%d", requests, renderer.renders)
+	if requests != 1 || signalRequests != 1 || renderer.renders != 1 {
+		t.Fatalf("first refresh requests=%d signals=%d renders=%d", requests, signalRequests, renderer.renders)
 	}
 
 	app.refreshSnapshotAnchor(context.Background(), session.ID, false)

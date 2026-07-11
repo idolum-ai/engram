@@ -65,6 +65,9 @@ type TerminalSession struct {
 	LastSummary              string         `json:"last_summary,omitempty"`
 	SummaryMessageID         int            `json:"summary_message_id,omitempty"`
 	SnapshotMessageID        int            `json:"snapshot_message_id,omitempty"`
+	UpstreamMessageID        int            `json:"upstream_message_id,omitempty"`
+	LastUpstreamSignalHash   string         `json:"last_upstream_signal_hash,omitempty"`
+	LastUpstreamSignalAt     time.Time      `json:"last_upstream_signal_at,omitempty"`
 	StaleAlternateMessageIDs []int          `json:"stale_alternate_message_ids,omitempty"`
 	AnchorChatID             int64          `json:"anchor_chat_id,omitempty"`
 	AnchorMessageID          int            `json:"anchor_message_id,omitempty"`
@@ -129,7 +132,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion   = 6
+	currentStateVersion   = 7
 	maxTerminalSessions   = 200
 	maxAttachments        = 200
 	maxAttachmentBypasses = 100
@@ -500,7 +503,7 @@ func (s *Store) FindReplyTarget(chatID int64, messageID int) (TerminalSession, R
 		if ts.AnchorChatID != chatID {
 			continue
 		}
-		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID {
+		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID || ts.UpstreamMessageID == messageID {
 			return cloneTerminalSession(ts), ReplyTargetCurrent, true
 		}
 		if ts.RetiringAnchorMessageID == messageID {
