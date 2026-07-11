@@ -79,6 +79,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		a.snapshotNotice(ctx, current.ID, "Could not capture the tmux window.")
 		return
 	}
+	a.processCapturedFrame(ctx, current, capture)
 
 	if !acquireSlot(ctx, a.renderSlots) {
 		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image before the request timed out.")

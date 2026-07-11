@@ -11,7 +11,9 @@ runtime state.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
 - `ENGRAM_ANCHOR_MODE` selects the startup presentation and fallback when no
-  valid persisted mode exists. State schema v6 persists runtime mode changes.
+  valid persisted mode exists. State schema v7 persists runtime mode changes,
+  upstream-signal reply aliases, bounded record IDs, retry deadlines, and
+  delivery timing.
 - The effective startup mode must be available: `guide` requires an Anthropic
   Haiku configuration; `snapshot` requires a successful bounded, ephemeral
   Chromium render. Engram does not call Anthropic merely to probe credentials.
@@ -57,6 +59,8 @@ runtime state.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.
+- `engram signal <message>` writes only to its controlling terminal and does
+  not load service configuration or call Telegram, tmux, or Anthropic.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the local
   service surface without calling Telegram, Anthropic, or starting polling.
 - `dry-start` may create and open local state; `preflight` must not.

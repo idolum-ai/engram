@@ -25,6 +25,7 @@ anchors, copyable references, and simple recovery.
 - Recoverable local service.
 - Small Go, no third-party dependencies.
 - Quiet monochrome signal.
+- Recursion collapses to the terminal.
 
 ## Principles
 
@@ -81,7 +82,8 @@ targeting and capped at 64 rows. Presentation changes; observation does not.
 This shared boundary keeps comparisons honest and prevents either mode from
 quietly seeing more of the machine.
 
-Guide mode sends the frame's plain text to Haiku once. Haiku speaks like a
+Guide mode sends the frame's joined logical text to Haiku once, after removing
+recognized upstream records. Haiku speaks like a
 technically fluent person briefly returning to the topic: compact, natural,
 and focused on what the terminal content means. Its voice stands beside the
 reader, using direct orientation grounded only in visibly named tools,
@@ -122,6 +124,16 @@ controls unless the terminal itself is about Engram.
 Engram should work with tmux sessions that already exist. Target selection is
 predictable: the configured session first, otherwise an existing session,
 otherwise a managed fallback.
+
+### Recursion collapses to the terminal
+
+An Engram may run inside a container or terminal observed by another Engram.
+That does not require a hierarchy or an Engram-to-Engram network. A nested
+process can emit one visible, bounded attention record with a terminal bell;
+the outer Engram observes the record through its normal tmux capture and keeps
+the outer pane as the truthful reply boundary. Composition should emerge from
+the terminal path that already exists, without distributing credentials or
+inventing a control plane.
 
 ### Slow automatic edits, instant manual refresh
 
@@ -164,6 +176,7 @@ quiet and structural rather than competing with the tool.
 - Long model chat memory or cross-window model context.
 - Model-generated file/path inventories.
 - Broad notification routing across chat systems.
+- An Engram-to-Engram control plane or persistent deployment hierarchy.
 
 ## Design Review Questions
 

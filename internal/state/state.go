@@ -65,6 +65,10 @@ type TerminalSession struct {
 	LastSummary              string         `json:"last_summary,omitempty"`
 	SummaryMessageID         int            `json:"summary_message_id,omitempty"`
 	SnapshotMessageID        int            `json:"snapshot_message_id,omitempty"`
+	UpstreamMessageID        int            `json:"upstream_message_id,omitempty"`
+	SeenUpstreamSignalIDs    []string       `json:"seen_upstream_signal_ids,omitempty"`
+	LastUpstreamSignalAt     time.Time      `json:"last_upstream_signal_at,omitempty"`
+	UpstreamRetryAt          time.Time      `json:"upstream_retry_at,omitempty"`
 	StaleAlternateMessageIDs []int          `json:"stale_alternate_message_ids,omitempty"`
 	AnchorChatID             int64          `json:"anchor_chat_id,omitempty"`
 	AnchorMessageID          int            `json:"anchor_message_id,omitempty"`
@@ -77,6 +81,25 @@ type TerminalSession struct {
 	WatchEnabled             bool           `json:"watch_enabled"`
 	LastAnchorEditAt         time.Time      `json:"last_anchor_edit_at,omitempty"`
 	LastRawCapture           string         `json:"last_raw_capture,omitempty"`
+}
+
+func (s TerminalSession) HasSeenUpstreamSignal(recordID string) bool {
+	for _, seen := range s.SeenUpstreamSignalIDs {
+		if seen == recordID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *TerminalSession) RecordSeenUpstreamSignal(recordID string) {
+	if s.HasSeenUpstreamSignal(recordID) {
+		return
+	}
+	s.SeenUpstreamSignalIDs = append(s.SeenUpstreamSignalIDs, recordID)
+	if len(s.SeenUpstreamSignalIDs) > maxSeenUpstreamSignals {
+		s.SeenUpstreamSignalIDs = append([]string(nil), s.SeenUpstreamSignalIDs[len(s.SeenUpstreamSignalIDs)-maxSeenUpstreamSignals:]...)
+	}
 }
 
 type Attachment struct {
@@ -129,15 +152,16 @@ type Store struct {
 }
 
 const (
-	currentStateVersion   = 6
-	maxTerminalSessions   = 200
-	maxAttachments        = 200
-	maxAttachmentBypasses = 100
-	maxUpdateJournal      = 200
-	maxStaleAlternates    = 16
-	maxProcessedMessages  = 2_000
-	maxAuditFileBytes     = int64(4 << 20)
-	maxAuditRecordBytes   = 64 << 10
+	currentStateVersion    = 7
+	maxTerminalSessions    = 200
+	maxAttachments         = 200
+	maxAttachmentBypasses  = 100
+	maxUpdateJournal       = 200
+	maxStaleAlternates     = 16
+	maxSeenUpstreamSignals = 32
+	maxProcessedMessages   = 2_000
+	maxAuditFileBytes      = int64(4 << 20)
+	maxAuditRecordBytes    = 64 << 10
 )
 
 func Open(path, auditPath string) (*Store, error) {
@@ -239,7 +263,7 @@ func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("create state temp: %w", err)
+		return &atomicWriteError{Err: fmt.Errorf("create state temp: %w", err)}
 	}
 	tmpPath := tmp.Name()
 	renamed := false
@@ -251,27 +275,40 @@ func writeFileAtomic(path string, data []byte) error {
 
 	if err := tmp.Chmod(0o600); err != nil {
 		closeErr := tmp.Close()
-		return fmt.Errorf("set state temp permissions: %w", errors.Join(err, closeErr))
+		return &atomicWriteError{Err: fmt.Errorf("set state temp permissions: %w", errors.Join(err, closeErr))}
 	}
 	if _, err := tmp.Write(data); err != nil {
 		closeErr := tmp.Close()
-		return fmt.Errorf("write state temp: %w", errors.Join(err, closeErr))
+		return &atomicWriteError{Err: fmt.Errorf("write state temp: %w", errors.Join(err, closeErr))}
 	}
 	if err := tmp.Sync(); err != nil {
 		closeErr := tmp.Close()
-		return fmt.Errorf("sync state temp: %w", errors.Join(err, closeErr))
+		return &atomicWriteError{Err: fmt.Errorf("sync state temp: %w", errors.Join(err, closeErr))}
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close state temp: %w", err)
+		return &atomicWriteError{Err: fmt.Errorf("close state temp: %w", err)}
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("replace state: %w", err)
+		return &atomicWriteError{Err: fmt.Errorf("replace state: %w", err)}
 	}
 	renamed = true
 	if err := syncParentDir(path); err != nil {
-		return err
+		return &atomicWriteError{Err: err, Replaced: true}
 	}
 	return nil
+}
+
+type atomicWriteError struct {
+	Err      error
+	Replaced bool
+}
+
+func (e *atomicWriteError) Error() string { return e.Err.Error() }
+func (e *atomicWriteError) Unwrap() error { return e.Err }
+
+func PersistenceReachedReplacement(err error) bool {
+	var writeErr *atomicWriteError
+	return errors.As(err, &writeErr) && writeErr.Replaced
 }
 
 func syncParentDir(path string) error {
@@ -455,10 +492,29 @@ func (s *Store) UpdateSession(id int, fn func(*TerminalSession)) (TerminalSessio
 	defer s.mu.Unlock()
 	for i := range s.state.TerminalSessions {
 		if s.state.TerminalSessions[i].ID == id {
+			previous := cloneTerminalSession(s.state.TerminalSessions[i])
 			fn(&s.state.TerminalSessions[i])
 			s.state.TerminalSessions[i].UpdatedAt = time.Now().UTC()
 			ts := cloneTerminalSession(s.state.TerminalSessions[i])
-			return ts, true, s.saveLocked()
+			if err := s.saveLocked(); err != nil {
+				var writeErr *atomicWriteError
+				if !errors.As(err, &writeErr) || !writeErr.Replaced {
+					restored := false
+					for j := range s.state.TerminalSessions {
+						if s.state.TerminalSessions[j].ID == id {
+							s.state.TerminalSessions[j] = previous
+							restored = true
+							break
+						}
+					}
+					if !restored {
+						s.state.TerminalSessions = append(s.state.TerminalSessions, previous)
+					}
+					return cloneTerminalSession(previous), true, err
+				}
+				return ts, true, err
+			}
+			return ts, true, nil
 		}
 	}
 	return TerminalSession{}, false, nil
@@ -500,7 +556,7 @@ func (s *Store) FindReplyTarget(chatID int64, messageID int) (TerminalSession, R
 		if ts.AnchorChatID != chatID {
 			continue
 		}
-		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID {
+		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID || ts.UpstreamMessageID == messageID {
 			return cloneTerminalSession(ts), ReplyTargetCurrent, true
 		}
 		if ts.RetiringAnchorMessageID == messageID {
@@ -798,6 +854,9 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 		if len(session.StaleAlternateMessageIDs) > maxStaleAlternates {
 			session.StaleAlternateMessageIDs = append([]int(nil), session.StaleAlternateMessageIDs[len(session.StaleAlternateMessageIDs)-maxStaleAlternates:]...)
 		}
+		if len(session.SeenUpstreamSignalIDs) > maxSeenUpstreamSignals {
+			session.SeenUpstreamSignalIDs = append([]string(nil), session.SeenUpstreamSignalIDs[len(session.SeenUpstreamSignalIDs)-maxSeenUpstreamSignals:]...)
+		}
 	}
 }
 
@@ -840,5 +899,6 @@ func cloneState(in State) State {
 func cloneTerminalSession(in TerminalSession) TerminalSession {
 	out := in
 	out.StaleAlternateMessageIDs = append([]int(nil), in.StaleAlternateMessageIDs...)
+	out.SeenUpstreamSignalIDs = append([]string(nil), in.SeenUpstreamSignalIDs...)
 	return out
 }

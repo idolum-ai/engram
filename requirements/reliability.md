@@ -9,6 +9,7 @@ Engram is a long-running service. Failure must be visible and recoverable.
 - Keep polling alive after transient Telegram errors.
 - Keep tmux sessions alive when Haiku, Chromium, or Telegram delivery fails.
 - Keep polling and tmux input responsive while terminal images render and upload.
+- Keep polling and tmux input responsive while upstream signals refresh or notify.
 - Prefer truthful degraded presentation over missing anchors.
 
 ## Audit
@@ -20,6 +21,7 @@ The audit JSONL must record important machine facts:
 - Telegram send/edit failures
 - tmux send success and failure
 - Haiku failures
+- upstream-signal observation and delivery outcomes
 - state persistence failures that would otherwise hide lost progress
 - command registration success and failure
 
@@ -36,6 +38,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   after rename can leave the new state visible while reporting an error because
   its rename durability is uncertain; callers must treat every save error as a
   persistence failure rather than retrying the associated external action.
+  Session updates roll in-memory state back after a failure before replacement;
+  after replacement they retain the visible new state and report uncertain
+  durability so memory and the current state file do not diverge.
 - On Linux, failure to sync either the file or parent directory fails the save.
   Subject to the filesystem and storage device honoring `fsync`, a successful
   save survives process failure and sudden power loss. On Darwin, Go's standard
@@ -82,10 +87,19 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v6 persists `anchor_mode`, the latest alternate reply IDs, and a
-  bounded stale-alias set used only to reject confusing replies. Valid legacy state migrates forward;
-  retired interpretation fields are ignored and disappear on save.
+- State schema v7 persists `anchor_mode`, the latest conversational, snapshot,
+  and upstream-signal reply IDs, upstream deduplication facts, and a bounded
+  stale-alias set used only to reject confusing replies. Valid legacy state
+  migrates forward; retired interpretation fields are ignored and disappear on
+  save.
 - A lock keyed by Telegram settings prevents duplicate pollers.
+- Upstream-signal record-ID deduplication is bounded per terminal. Successful
+  persistence suppresses a visible record across restart; a crash between
+  Telegram acceptance and persistence can duplicate it. Signal failures never
+  mark a healthy pane lost.
+- The latest upstream-signal reply alias persists with the terminal registry so
+  reply routing remains truthful after restart. Superseded aliases join the
+  existing bounded stale-alias set.
 
 ## Degradation
 
@@ -124,3 +138,14 @@ exports a bounded recent tail, not an unbounded full audit file.
 - A later user action may restore a lost session when the same immutable pane
   and window identity validates successfully. Recovery must be audited and
   followed by a fresh capture.
+- Upstream-signal notifications are coalesced to at most one per pane every ten
+  seconds. A retained tmux bell may accelerate capture, but signal discovery
+  remains polling-based and does not bypass bounded rendering work or amplify
+  Telegram retries.
+- A Telegram `retry_after` that outlives the client's bounded retry is retained
+  in memory before persistence is attempted, then persisted per terminal. A
+  pre-replacement state-write failure must not cause the running process to
+  immediately repeat the request.
+- The signal delivery timestamp is recorded after Telegram succeeds, so a
+  delayed retry cannot shorten the ten-second interval between successful
+  notifications.

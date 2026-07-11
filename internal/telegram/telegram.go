@@ -115,6 +115,14 @@ func IsRateLimited(err error) bool {
 	return errors.As(err, &telegramErr) && telegramErr.IsRateLimited()
 }
 
+func RetryAfter(err error) time.Duration {
+	var telegramErr *Error
+	if errors.As(err, &telegramErr) {
+		return telegramErr.RetryAfter
+	}
+	return 0
+}
+
 // IsMessageNotModified reports whether Telegram rejected an edit because its
 // content and markup already match the existing message.
 func IsMessageNotModified(err error) bool {
@@ -247,6 +255,12 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, rep
 
 func (c *Client) SendHTMLMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
 	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML")
+}
+
+func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int) error {
+	body := map[string]any{"chat_id": chatID, "message_id": messageID}
+	var out bool
+	return c.postJSON(ctx, "deleteMessage", body, &out)
 }
 
 func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
@@ -752,7 +766,7 @@ func safeDocumentFilename(filename string) string {
 
 func isOutboundMethod(method string) bool {
 	switch method {
-	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageMedia", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage":
+	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageMedia", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage", "deleteMessage":
 		return true
 	default:
 		return false

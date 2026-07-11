@@ -1,0 +1,61 @@
+package upstream
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
+
+const testRecordID = "0123456789abcdef0123456789abcdef"
+
+func TestNormalizeProducesOneBoundedUTF8Line(t *testing.T) {
+	message, err := Normalize("  tests\nfinished\t\x00" + strings.Repeat("é", MaxMessageBytes) + "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(message, "tests finished ") || strings.ContainsAny(message, "\n\r\t\x00") {
+		t.Fatalf("normalized message = %q", message)
+	}
+	if len(message) > MaxMessageBytes || !utf8.ValidString(message) {
+		t.Fatalf("normalized bytes=%d valid=%v", len(message), utf8.ValidString(message))
+	}
+}
+
+func TestNormalizeRejectsEmptyAndInvalidUTF8(t *testing.T) {
+	for _, message := range []string{"\n\t\x00", string([]byte{0xff})} {
+		if _, err := Normalize(message); err == nil {
+			t.Fatalf("Normalize(%q) succeeded", message)
+		}
+	}
+}
+
+func TestWriteRecordEstablishesBoundaryAndObservationKeepsLatestIdentity(t *testing.T) {
+	var output bytes.Buffer
+	if err := WriteRecord(&output, Record{ID: testRecordID, Payload: "tests\nfinished"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "\a\r\n[engram:upstream] " + testRecordID + " tests finished\r\n"
+	if got := output.String(); got != want {
+		t.Fatalf("signal output = %q, want %q", got, want)
+	}
+	secondID := "fedcba9876543210fedcba9876543210"
+	text := "old\n" + Prefix + testRecordID + " first\nnoise\n" + Prefix + secondID + " latest\n"
+	got := Observe(text)
+	if !got.Found || got.Latest != (Record{ID: secondID, Payload: "latest"}) || got.PresentationText != "old\nnoise" {
+		t.Fatalf("Observe = %#v", got)
+	}
+}
+
+func TestObserveStripsMalformedFramingWithoutTreatingItAsSignal(t *testing.T) {
+	got := Observe("safe\n" + Prefix + "not-an-id injected path /tmp/nope\nafter")
+	if got.Found || got.PresentationText != "safe\nafter" {
+		t.Fatalf("Observe malformed = %#v", got)
+	}
+}
+
+func TestWriteRecordRejectsInvalidIdentity(t *testing.T) {
+	if err := WriteRecord(&bytes.Buffer{}, Record{ID: "short", Payload: "done"}); err == nil {
+		t.Fatal("WriteRecord accepted an invalid record ID")
+	}
+}

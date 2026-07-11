@@ -36,7 +36,12 @@ tmux is the source of terminal truth.
 - Both anchor modes use the same ANSI-preserving `CaptureStyled` result. It
   targets and caps at 64 rows ending at the pane bottom, using available recent
   scrollback when needed; a concurrent pane resize may shorten that frame.
-- Guide mode sends that frame's `Text` to Haiku in one non-streaming request,
+- `CaptureStyled` also carries a logical-text view made with tmux's joined-wrap
+  semantics over the same coordinates. The physical and joined captures execute
+  in one tmux command batch so signal parsing, guide text, references, and
+  snapshot pixels do not come from separately timed observations.
+- Guide mode sends that frame's joined logical text, with upstream records
+  removed, to Haiku in one non-streaming request,
   with no model history or structured response and no second request. It
   renders the result as compact conversational prose with short, single-idea
   paragraphs. Shared work uses a collaborative "we" voice; "you" is reserved
@@ -56,6 +61,15 @@ tmux is the source of terminal truth.
 - `/raw` preserves the visible pane's physical wrapped lines and attributes.
   `/dump` streams physical full scrollback to an attachment.
 - `/raw` and `/dump` stop before Telegram's 50 MiB upload ceiling.
+
+## Upstream Signals
+
+- A nested process may request attention by writing the bounded terminal record
+  and bell defined in [`upstream-signals.md`](upstream-signals.md). The outer
+  tracked pane remains the routing and identity boundary.
+- Optional bell acceleration uses tmux's window state; signal discovery uses
+  the existing pane capture path. Engram does not attach to, enumerate, or send
+  input directly to an inner tmux server.
 
 ## Closing
 

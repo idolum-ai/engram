@@ -28,19 +28,24 @@ type fakeStreamRunner struct {
 	err    error
 }
 
-type sequenceRunner struct {
-	calls   [][]string
-	outputs []string
+type styledCaptureRunner struct {
+	calls  [][]string
+	ansi   string
+	joined string
 }
 
-func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) {
+func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
-	if len(r.outputs) == 0 {
-		return "", nil
+	if len(args) > 0 && args[0] == "display-message" {
+		return "71\t37\tbuild\t/home/me\n", nil
 	}
-	out := r.outputs[0]
-	r.outputs = r.outputs[1:]
-	return out, nil
+	if len(args) > 0 && args[0] == "show-buffer" {
+		if strings.Contains(args[len(args)-1], "physical") {
+			return r.ansi, nil
+		}
+		return r.joined, nil
+	}
+	return "", nil
 }
 
 func (f *fakeStreamRunner) Run(ctx context.Context, args ...string) (string, error) {
@@ -155,10 +160,8 @@ func TestCaptureVisibleRawPreservesTmuxOutput(t *testing.T) {
 
 func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	t.Parallel()
-	runner := &sequenceRunner{outputs: []string{
-		"71\t37\tbuild\t/home/me\n",
-		strings.Repeat("\x1b[31mhistory and visible\x1b[0m\n", 64),
-	}}
+	ansi := strings.Repeat("\x1b[31mhistory and visible\x1b[0m\n", 64)
+	runner := &styledCaptureRunner{ansi: ansi, joined: "joined logical line\n"}
 	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
 	if err != nil {
 		t.Fatal(err)
@@ -172,10 +175,29 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	if strings.Contains(got.Text, "\x1b") || strings.Count(got.Text, "history and visible") != 64 {
 		t.Fatalf("styled capture text was not derived from ANSI capture: %q", got.Text)
 	}
-	wantCapture := []string{"capture-pane", "-p", "-e", "-N", "-S", "-27", "-E", "36", "-t", "%7"}
-	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1], wantCapture) {
+	if got.JoinedText != "joined logical line" {
+		t.Fatalf("joined text = %q", got.JoinedText)
+	}
+	if len(runner.calls) != 5 || runner.calls[2][0] != "show-buffer" || runner.calls[3][0] != "show-buffer" || runner.calls[4][0] != "delete-buffer" {
 		t.Fatalf("styled capture calls = %#v", runner.calls)
 	}
+	captureCall := runner.calls[1]
+	if len(captureCall) != 22 ||
+		!reflect.DeepEqual(captureCall[:10], []string{"capture-pane", "-e", "-N", "-S", "-27", "-E", "36", "-t", "%7", "-b"}) ||
+		!strings.HasPrefix(captureCall[10], "engram-physical-") ||
+		!reflect.DeepEqual(captureCall[11:21], []string{";", "capture-pane", "-J", "-S", "-27", "-E", "36", "-t", "%7", "-b"}) ||
+		!strings.HasPrefix(captureCall[21], "engram-joined-") {
+		t.Fatalf("capture-pane coordinates = %#v", captureCall)
+	}
+}
+
+func containsArgs(args, sequence []string) bool {
+	for i := 0; i+len(sequence) <= len(args); i++ {
+		if reflect.DeepEqual(args[i:i+len(sequence)], sequence) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSemanticCaptureCleansTerminalOutput(t *testing.T) {

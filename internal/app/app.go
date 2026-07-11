@@ -58,6 +58,7 @@ type App struct {
 	closeConfirms  map[string]closeConfirmation
 	sessionLocks   sync.Map
 	anchorLocks    sync.Map
+	signalRetries  sync.Map
 	sleepHook      func(time.Duration)
 	refreshHook    func(context.Context, int, bool)
 }
@@ -300,7 +301,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 }
 
 func staleAlternateReply(id int) string {
-	return fmt.Sprintf("That view of [%d] is no longer current. Reply to its latest summary, screenshot, or live anchor.", id)
+	return fmt.Sprintf("That view of [%d] is no longer current. Reply to its latest view or live anchor.", id)
 }
 
 func escapedSlashInput(text string) (string, bool) {

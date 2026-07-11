@@ -83,6 +83,48 @@ func TestConversationUsesSnapshotFrameAndRepliesToCanonicalAnchor(t *testing.T) 
 	}
 }
 
+func TestConversationOmitsUpstreamRecordFromModelInput(t *testing.T) {
+	store, session := conversationTestSession(t, "snapshot")
+	var modelPrompt string
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		modelPrompt = body.Messages[0].Content
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"The ordinary output is visible."}]}`))}, nil
+	})}
+	tg := telegram.New("TOKEN")
+	tg.BaseURL = "https://telegram.test/botTOKEN"
+	tg.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+	})}
+	a := &App{Store: store, Telegram: tg, Anthropic: model, Tmux: tmux.New(conversationSignalRunner{}), mode: "snapshot", haikuAvailable: true}
+	a.sendConversation(context.Background(), session)
+	if !strings.Contains(modelPrompt, "ordinary output") || strings.Contains(modelPrompt, "engram:upstream") || strings.Contains(modelPrompt, "secret signal payload") {
+		t.Fatalf("model prompt retained upstream framing or payload: %q", modelPrompt)
+	}
+}
+
+type conversationSignalRunner struct{}
+
+func (conversationSignalRunner) Run(ctx context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "capture-pane" {
+		return "", nil
+	}
+	if len(args) > 0 && args[0] == "show-buffer" {
+		capture := "ordinary output\n[engram:upstream] " + firstSignalID + " secret signal payload\n"
+		return pairedCaptureResult(args, capture, capture), nil
+	}
+	return (snapshotTmuxRunner{}).Run(ctx, args...)
+}
+
 func TestConversationReportsModelFailureToTheAnchor(t *testing.T) {
 	store, session := conversationTestSession(t, "snapshot")
 	model := anthropic.New("secret", "claude-haiku-4-5-20251001")

@@ -211,10 +211,23 @@ func (snapshotTmuxRunner) Run(_ context.Context, args ...string) (string, error)
 		}
 		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
 	case "capture-pane":
-		return strings.Repeat("\x1b[32mgreen\x1b[0m\n", 64), nil
+		return "", nil
+	case "show-buffer":
+		capture := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 64)
+		return pairedCaptureResult(args, capture, capture), nil
 	default:
 		return "", nil
 	}
+}
+
+func pairedCaptureResult(args []string, physical, joined string) string {
+	if len(args) > 0 && args[0] == "show-buffer" && strings.Contains(args[len(args)-1], "physical") {
+		return physical
+	}
+	if len(args) > 0 && args[0] == "show-buffer" {
+		return joined
+	}
+	return ""
 }
 
 type snapshotRoundTripFunc func(*http.Request) (*http.Response, error)

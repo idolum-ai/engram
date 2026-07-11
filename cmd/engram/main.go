@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/idolum-ai/engram/internal/app"
@@ -16,6 +19,7 @@ import (
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/terminalshot"
+	"github.com/idolum-ai/engram/internal/upstream"
 	"github.com/idolum-ai/engram/internal/version"
 )
 
@@ -65,6 +69,16 @@ func run(args []string) int {
 		}
 		fmt.Println(string(data))
 		return 0
+	case "signal":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: engram signal <message>")
+			return 2
+		}
+		if err := emitSignal(strings.Join(args[1:], " "), openControllingTerminal); err != nil {
+			fmt.Fprintln(os.Stderr, "signal:", err)
+			return 1
+		}
+		return 0
 	case "help", "--help", "-h":
 		printHelp()
 		return 0
@@ -82,9 +96,24 @@ func printHelp() {
   engram status [--env ~/.engram/.env]
   engram dry-start [--env ~/.engram/.env]
   engram commands
+  engram signal <message>
   engram version
   engram help
 `)
+}
+
+func openControllingTerminal() (io.WriteCloser, error) {
+	return os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+}
+
+func emitSignal(message string, openTTY func() (io.WriteCloser, error)) error {
+	tty, err := openTTY()
+	if err != nil {
+		return fmt.Errorf("open controlling terminal: %w", err)
+	}
+	writeErr := upstream.Write(tty, message)
+	closeErr := tty.Close()
+	return errors.Join(writeErr, closeErr)
 }
 
 func runDiagnostics(args []string, mode string) int {

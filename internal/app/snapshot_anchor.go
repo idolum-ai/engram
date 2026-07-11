@@ -66,6 +66,9 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		_ = a.audit("tmux.snapshot_anchor", "capture_failed", map[string]any{"session_id": id, "pane_id": current.TmuxPaneID, "error": captureErr.Error()})
 		return
 	}
+	presentationText := a.processCapturedFrame(ctx, current, capture)
+	presentationCapture := capture
+	presentationCapture.Text = presentationText
 	captureHash := snapshotAnchorHash(current, capture, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
 		return
@@ -102,7 +105,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != current.TmuxPaneID || latest.TmuxWindowID != current.TmuxWindowID {
 		return
 	}
-	caption := a.snapshotAnchorCaption(latest, capture)
+	caption := a.snapshotAnchorCaption(latest, presentationCapture)
 	markup := a.anchorMarkup(latest)
 	_, editErr := a.Telegram.EditPhoto(ctx, latest.AnchorChatID, latest.AnchorMessageID, pngPath, caption, markup)
 	if telegram.IsMessageNotModified(editErr) {
