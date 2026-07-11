@@ -27,7 +27,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		t.Fatal(err)
 	}
 	visibleURL := "https://example.test/build/7"
-	captureText := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 61) + artifact + "\n" + visibleURL + "\n[engram:upstream] build needs review https://signal.invalid/hidden\n"
+	captureText := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 61) + artifact + "\n" + visibleURL + "\n[engram:upstream] " + firstSignalID + " build needs review https://signal.invalid/hidden\n"
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 				return nil, err
 			}
-			if body["text"] != "[1] upstream\n\nbuild needs review https://signal.invalid/hidden" || body["reply_to_message_id"] != float64(77) {
+			if body["text"] != "[1] terminal-authored signal\n\nbuild needs review https://signal.invalid/hidden" || body["reply_to_message_id"] != float64(77) {
 				return nil, errors.New("incorrect upstream notification")
 			}
 			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
@@ -169,6 +169,35 @@ func TestFailedSnapshotMigrationIsThrottledBeforeRendering(t *testing.T) {
 	updated, _ := store.FindSession(session.ID)
 	if updated.LastSnapshotAttemptAt.IsZero() {
 		t.Fatal("failed migration did not persist its attempt time")
+	}
+}
+
+func TestUpstreamSignalDeliversWhenSnapshotRenderingFails(t *testing.T) {
+	store, session := newUpstreamStore(t)
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorFormat = "snapshot"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	capture := "[engram:upstream] " + firstSignalID + " renderer independent\n"
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendMessage" {
+			t.Fatalf("unexpected Telegram path %s", req.URL.Path)
+		}
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 88, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	renderer := &failingSnapshotRenderer{}
+	a := &App{
+		Config: config.Config{AnchorMode: config.AnchorModeSnapshot, TelegramChatID: 100, Home: t.TempDir()},
+		Store:  store, Telegram: client, Tmux: tmux.New(snapshotReferenceTmuxRunner{capture: capture}), Snapshots: renderer,
+		mode: config.AnchorModeSnapshot, captureSlots: make(chan struct{}, 1), renderSlots: make(chan struct{}, 1), manualRefresh: map[int]bool{},
+	}
+	a.refreshSnapshotAnchor(context.Background(), session.ID, true)
+	got, _ := store.FindSession(session.ID)
+	if got.UpstreamMessageID != 88 || got.LastSnapshotCaptureHash != "" || renderer.renders != 1 {
+		t.Fatalf("session=%#v renders=%d", got, renderer.renders)
 	}
 }
 
@@ -470,13 +499,24 @@ type countingSnapshotRenderer struct {
 	renders int
 }
 
+type failingSnapshotRenderer struct{ renders int }
+
+func (r *failingSnapshotRenderer) Available() (string, error) { return "/usr/bin/chromium", nil }
+func (r *failingSnapshotRenderer) Render(context.Context, terminalshot.Input, string) (string, error) {
+	r.renders++
+	return "", errors.New("render failed")
+}
+
 type snapshotReferenceTmuxRunner struct {
 	capture string
 }
 
 func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "capture-pane" {
-		return r.capture, nil
+		return "", nil
+	}
+	if len(args) > 0 && args[0] == "show-buffer" {
+		return pairedCaptureResult(args, r.capture, r.capture), nil
 	}
 	return (snapshotTmuxRunner{}).Run(ctx, args...)
 }

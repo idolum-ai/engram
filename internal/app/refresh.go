@@ -69,16 +69,14 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		lock.Unlock()
 		return
 	}
-	upstreamPayload, hasUpstreamSignal, presentationText, presentationSafe := a.captureUpstreamSignal(tctx, ts, capture)
-	if !presentationSafe {
-		return
+	observation := observeUpstreamSignal(capture)
+	if observation.Found {
+		a.deliverUpstreamSignal(ctx, ts, observation.Latest)
 	}
+	presentationText := observation.PresentationText
 	hash := sha(capture.Text)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
-			if hasUpstreamSignal {
-				a.deliverUpstreamSignal(ctx, ts, upstreamPayload)
-			}
 			return
 		}
 	}
@@ -119,9 +117,6 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	lock.Unlock()
 	a.updateAnchorLocal(ctx, id, summary, force)
-	if hasUpstreamSignal {
-		a.deliverUpstreamSignal(ctx, ts, upstreamPayload)
-	}
 }
 
 func tailUTF8(text string, maxBytes int) string {

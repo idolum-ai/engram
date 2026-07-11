@@ -156,6 +156,42 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 	}
 }
 
+func TestPersistedUpstreamReplyAliasRoutesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	store, err := state.Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 77
+		s.UpstreamMessageID = 90
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := state.Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &slashEscapeRunner{}
+	a := &App{Config: config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100}, Store: reopened, Tmux: tmux.New(runner), refreshHook: func(context.Context, int, bool) {}, sleepHook: func(time.Duration) {}}
+	status := a.handleUpdate(context.Background(), telegram.Update{Message: &telegram.Message{
+		MessageID: 101, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 42}, Text: "echo routed",
+		ReplyToMessage: &telegram.Message{MessageID: 90, Chat: telegram.Chat{ID: 100}},
+	}})
+	a.refreshWG.Wait()
+	if status != "anchor_reply_ok" || len(runner.calls) != 3 {
+		t.Fatalf("status=%q calls=%#v", status, runner.calls)
+	}
+}
+
 func TestEscapedSlashInputRemovesExactlyOneSlash(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

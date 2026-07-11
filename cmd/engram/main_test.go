@@ -25,8 +25,9 @@ func TestEmitSignalUsesOnlyControllingTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := tty.String(), "\a[engram:upstream] tests finished\n"; got != want {
-		t.Fatalf("signal = %q, want %q", got, want)
+	got := tty.String()
+	if !strings.HasPrefix(got, "\a\r\n[engram:upstream] ") || !strings.HasSuffix(got, " tests finished\r\n") {
+		t.Fatalf("signal = %q", got)
 	}
 
 	openErr := errors.New("no controlling terminal")

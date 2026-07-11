@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -216,6 +217,58 @@ func TestSetAnchorModeRollsBackWhenPersistenceFails(t *testing.T) {
 	}
 	if got := store.Snapshot().AnchorMode; got != "guide" {
 		t.Fatalf("mode after failed save = %q, want guide", got)
+	}
+}
+
+func TestUpdateSessionRollsBackWhenReplacementDidNotOccur(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "original")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.path = filepath.Join(dir, "missing", "state.json")
+	updated, ok, err := store.UpdateSession(session.ID, func(s *TerminalSession) {
+		s.Title = "must roll back"
+		s.UpstreamMessageID = 88
+	})
+	if err == nil || !ok || updated.Title != "original" || updated.UpstreamMessageID != 0 {
+		t.Fatalf("failed update = %#v ok=%v err=%v", updated, ok, err)
+	}
+	got, _ := store.FindSession(session.ID)
+	if got.Title != "original" || got.UpstreamMessageID != 0 {
+		t.Fatalf("in-memory state did not roll back: %#v", got)
+	}
+}
+
+func TestStateV6MigratesUpstreamDefaultsAndPersistsV7(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	fixture := `{"version":6,"next_session_id":2,"terminal_sessions":[{"id":1,"state":"running","anchor_chat_id":100,"anchor_message_id":10,"watch_enabled":true}],"attachments":[]}`
+	if err := os.WriteFile(path, []byte(fixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, ok := store.FindSession(1)
+	if !ok || store.Snapshot().Version != currentStateVersion || session.UpstreamMessageID != 0 || len(session.SeenUpstreamSignalIDs) != 0 || !session.LastUpstreamSignalAt.IsZero() || !session.UpstreamRetryAt.IsZero() {
+		t.Fatalf("migrated v6 state = %#v session=%#v ok=%v", store.Snapshot(), session, ok)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Snapshot().Version != currentStateVersion {
+		t.Fatalf("persisted version = %d", reopened.Snapshot().Version)
 	}
 }
 
@@ -576,7 +629,7 @@ func TestUpstreamSignalStatePersistsWithoutPayload(t *testing.T) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 10
 		s.UpstreamMessageID = 40
-		s.LastUpstreamSignalHash = "payload-hash"
+		s.SeenUpstreamSignalIDs = []string{"0123456789abcdef0123456789abcdef"}
 		s.LastUpstreamSignalAt = deliveredAt
 		s.LastRawCapture = "[engram:upstream] signal payload"
 	}); err != nil {
@@ -587,7 +640,7 @@ func TestUpstreamSignalStatePersistsWithoutPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, targetState, ok := reopened.FindReplyTarget(100, 40)
-	if !ok || targetState != ReplyTargetCurrent || got.LastUpstreamSignalHash != "payload-hash" || !got.LastUpstreamSignalAt.Equal(deliveredAt) {
+	if !ok || targetState != ReplyTargetCurrent || !reflect.DeepEqual(got.SeenUpstreamSignalIDs, []string{"0123456789abcdef0123456789abcdef"}) || !got.LastUpstreamSignalAt.Equal(deliveredAt) {
 		t.Fatalf("reopened upstream state = %#v %q ok=%v", got, targetState, ok)
 	}
 	persisted, err := os.ReadFile(path)
@@ -596,6 +649,16 @@ func TestUpstreamSignalStatePersistsWithoutPayload(t *testing.T) {
 	}
 	if bytes.Contains(persisted, []byte("signal payload")) {
 		t.Fatalf("state retained an upstream payload: %s", persisted)
+	}
+}
+
+func TestSeenUpstreamRecordsRemainBounded(t *testing.T) {
+	session := TerminalSession{}
+	for i := 0; i < maxSeenUpstreamSignals+5; i++ {
+		session.RecordSeenUpstreamSignal(fmt.Sprintf("%032x", i))
+	}
+	if len(session.SeenUpstreamSignalIDs) != maxSeenUpstreamSignals || session.SeenUpstreamSignalIDs[0] != fmt.Sprintf("%032x", 5) || !session.HasSeenUpstreamSignal(fmt.Sprintf("%032x", maxSeenUpstreamSignals+4)) {
+		t.Fatalf("seen records = %#v", session.SeenUpstreamSignalIDs)
 	}
 }
 

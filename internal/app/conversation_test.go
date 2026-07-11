@@ -116,7 +116,11 @@ type conversationSignalRunner struct{}
 
 func (conversationSignalRunner) Run(ctx context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "capture-pane" {
-		return "ordinary output\n[engram:upstream] secret signal payload\n", nil
+		return "", nil
+	}
+	if len(args) > 0 && args[0] == "show-buffer" {
+		capture := "ordinary output\n[engram:upstream] " + firstSignalID + " secret signal payload\n"
+		return pairedCaptureResult(args, capture, capture), nil
 	}
 	return (snapshotTmuxRunner{}).Run(ctx, args...)
 }

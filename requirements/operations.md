@@ -12,7 +12,8 @@ runtime state.
   supported configuration surface.
 - `ENGRAM_ANCHOR_MODE` selects the startup presentation and fallback when no
   valid persisted mode exists. State schema v7 persists runtime mode changes,
-  upstream-signal reply aliases, and signal deduplication facts.
+  upstream-signal reply aliases, bounded record IDs, retry deadlines, and
+  delivery timing.
 - The effective startup mode must be available: `guide` requires an Anthropic
   Haiku configuration; `snapshot` requires a successful bounded, ephemeral
   Chromium render. Engram does not call Anthropic merely to probe credentials.

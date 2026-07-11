@@ -38,6 +38,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   after rename can leave the new state visible while reporting an error because
   its rename durability is uncertain; callers must treat every save error as a
   persistence failure rather than retrying the associated external action.
+  Session updates roll in-memory state back after a failure before replacement;
+  after replacement they retain the visible new state and report uncertain
+  durability so memory and the current state file do not diverge.
 - On Linux, failure to sync either the file or parent directory fails the save.
   Subject to the filesystem and storage device honoring `fsync`, a successful
   save survives process failure and sudden power loss. On Darwin, Go's standard
@@ -90,9 +93,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   migrates forward; retired interpretation fields are ignored and disappear on
   save.
 - A lock keyed by Telegram settings prevents duplicate pollers.
-- Upstream-signal deduplication is bounded per terminal. Restart may redeliver
-  the newest still-visible record at most once; signal failures never mark a
-  healthy pane lost.
+- Upstream-signal record-ID deduplication is bounded per terminal. Successful
+  persistence suppresses a visible record across restart; a crash between
+  Telegram acceptance and persistence can duplicate it. Signal failures never
+  mark a healthy pane lost.
 - The latest upstream-signal reply alias persists with the terminal registry so
   reply routing remains truthful after restart. Superseded aliases join the
   existing bounded stale-alias set.
@@ -138,3 +142,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   seconds. A retained tmux bell may accelerate capture, but signal discovery
   remains polling-based and does not bypass bounded rendering work or amplify
   Telegram retries.
+- A Telegram `retry_after` that outlives the client's bounded retry is persisted
+  per terminal so scheduler captures do not immediately repeat the request.
+- The signal delivery timestamp is recorded after Telegram succeeds, so a
+  delayed retry cannot shorten the ten-second interval between successful
+  notifications.

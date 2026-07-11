@@ -1,6 +1,8 @@
 package upstream
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +12,19 @@ import (
 
 const Prefix = "[engram:upstream] "
 const MaxMessageBytes = 1024
+const RecordIDBytes = 16
+const RecordIDLength = RecordIDBytes * 2
+
+type Record struct {
+	ID      string
+	Payload string
+}
+
+type Observation struct {
+	PresentationText string
+	Latest           Record
+	Found            bool
+}
 
 func Normalize(message string) (string, error) {
 	if !utf8.ValidString(message) {
@@ -42,47 +57,78 @@ func Normalize(message string) (string, error) {
 	return message, nil
 }
 
+func NewRecordID() (string, error) {
+	var id [RecordIDBytes]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("generate signal record ID: %w", err)
+	}
+	return hex.EncodeToString(id[:]), nil
+}
+
 func Write(w io.Writer, message string) error {
-	message, err := Normalize(message)
+	id, err := NewRecordID()
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "\a%s%s\n", Prefix, message)
+	return WriteRecord(w, Record{ID: id, Payload: message})
+}
+
+func WriteRecord(w io.Writer, record Record) error {
+	if !validRecordID(record.ID) {
+		return fmt.Errorf("invalid signal record ID")
+	}
+	payload, err := Normalize(record.Payload)
+	if err != nil {
+		return err
+	}
+	// CRLF establishes both a physical row and column-zero boundary even when
+	// the preceding process left the cursor mid-line or disabled ONLCR.
+	_, err = fmt.Fprintf(w, "\a\r\n%s%s %s\r\n", Prefix, record.ID, payload)
 	return err
 }
 
-func Contains(text string) bool {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(strings.TrimLeft(line, "\r"), Prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func Latest(text string) (string, bool) {
-	lines := strings.Split(text, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimLeft(lines[i], "\r")
-		if !strings.HasPrefix(line, Prefix) {
-			continue
-		}
-		message, err := Normalize(strings.TrimPrefix(line, Prefix))
-		if err == nil {
-			return message, true
-		}
-	}
-	return "", false
-}
-
-func WithoutRecords(text string) string {
-	lines := strings.Split(text, "\n")
+func Observe(joinedText string) Observation {
+	lines := strings.Split(joinedText, "\n")
 	kept := lines[:0]
+	var latest Record
+	found := false
 	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimLeft(line, "\r"), Prefix) {
+		line = strings.TrimLeft(line, "\r")
+		if !strings.HasPrefix(line, Prefix) {
+			kept = append(kept, line)
 			continue
 		}
-		kept = append(kept, line)
+		if record, ok := parseRecord(strings.TrimPrefix(line, Prefix)); ok {
+			latest = record
+			found = true
+		}
 	}
-	return strings.Trim(strings.Join(kept, "\n"), "\n")
+	return Observation{
+		PresentationText: strings.Trim(strings.Join(kept, "\n"), "\n"),
+		Latest:           latest,
+		Found:            found,
+	}
+}
+
+func parseRecord(text string) (Record, bool) {
+	if len(text) <= RecordIDLength || text[RecordIDLength] != ' ' {
+		return Record{}, false
+	}
+	id := text[:RecordIDLength]
+	if !validRecordID(id) {
+		return Record{}, false
+	}
+	payload, err := Normalize(text[RecordIDLength+1:])
+	if err != nil {
+		return Record{}, false
+	}
+	return Record{ID: id, Payload: payload}, true
+}
+
+func validRecordID(id string) bool {
+	if len(id) != RecordIDLength {
+		return false
+	}
+	decoded, err := hex.DecodeString(id)
+	return err == nil && len(decoded) == RecordIDBytes && id == strings.ToLower(id)
 }

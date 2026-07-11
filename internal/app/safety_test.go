@@ -491,6 +491,9 @@ func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "capture-pane" && r.captureErr != nil {
 		return "", r.captureErr
 	}
+	if len(args) > 0 && args[0] == "show-buffer" {
+		return pairedCaptureResult(args, "", ""), nil
+	}
 	if len(args) > 0 && args[0] == "kill-window" && r.failKill {
 		return "", errors.New("tmux refused kill")
 	}

@@ -82,7 +82,8 @@ targeting and capped at 64 rows. Presentation changes; observation does not.
 This shared boundary keeps comparisons honest and prevents either mode from
 quietly seeing more of the machine.
 
-Guide mode sends the frame's plain text to Haiku once. Haiku speaks like a
+Guide mode sends the frame's joined logical text to Haiku once, after removing
+recognized upstream records. Haiku speaks like a
 technically fluent person briefly returning to the topic: compact, natural,
 and focused on what the terminal content means. Its voice stands beside the
 reader, using direct orientation grounded only in visibly named tools,

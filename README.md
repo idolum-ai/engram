@@ -211,8 +211,9 @@ the bot channel and must be revoked immediately.
   PNG after delivery. No snapshot content is sent to Anthropic. The two contrast themes use a
   color-vision-safe ANSI palette, remove opacity-based dim text, and correct
   low-contrast terminal colors to at least a 4.5:1 contrast ratio.
-- **Anthropic Haiku:** Guide anchors send the plain text of the same frame,
-  capped at 64 rows, used by Chromium in one non-streaming request. There is no model
+- **Anthropic Haiku:** Guide anchors send the joined logical text of the same
+  frame, with recognized upstream records removed, capped at 64 rows, in one
+  non-streaming request. There is no model
   history or structured response, no second request, and no expanded context.
   In snapshot mode, tapping `🗣️` makes the same one-off request and
   sends its conversational result as a reply without replacing the photo
@@ -220,7 +221,8 @@ the bot channel and must be revoked immediately.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
-  identifiers, session metadata, capture and upstream-signal hashes, latest
+  identifiers, session metadata, capture hashes, bounded upstream record IDs,
+  retry deadlines, latest
   reply aliases, conversational renderings, and selected anchor mode. Raw
   terminal captures and upstream payloads remain in process
   memory for rendering but are omitted from `state.json`.
@@ -356,25 +358,41 @@ replying to a stale view produces a short error and never reaches tmux.
 ### Nested environments
 
 A process running inside a container or another Engram can request the outer
-user's attention through its controlling terminal:
+user's attention when every layer preserves a controlling PTY:
 
 ```sh
 engram signal "Tests finished; two failures need attention."
 ```
 
-The command writes one bounded `[engram:upstream] ...` record and a terminal
-bell. It makes no network request and reads no service configuration. The outer
-Engram finds the record through its normal tmux capture loop, refreshes the live
-anchor, and sends a redacted reply to that anchor. At most one signal per pane
-notifies every ten seconds. Replying to the newest signal notification routes
-to the outer pane; foreground terminal behavior carries that input inward when
-possible.
+The command establishes a fresh terminal row, then writes one bounded
+`[engram:upstream] <record-id> ...` record and a terminal bell. It makes no
+network request and reads no service configuration. The outer Engram finds the
+record through its normal tmux capture loop and immediately attempts a redacted
+terminal-signal notification; Haiku and Chromium continue independently. At
+most one signal per pane notifies every ten seconds. Replying to the newest
+signal notification routes to the outer pane; foreground terminal behavior
+carries that input inward when possible.
+
+The command requires a controlling PTY. Use `docker exec -t`, `podman exec -t`,
+or `ssh -t` where applicable. Detached services, cron/CI jobs, `setsid`, and
+containers without a console cannot use `engram signal`; they may emit the
+documented record only if they already have a terminal path. The child also
+needs an Engram binary for its own operating system and architecture, or can
+emit the wire record directly.
 
 No bot token, state directory, parent tmux socket, listener, or Engram hierarchy
-is required. Delivery is best effort: rapidly scrolling output can move the
-record outside the bounded frame before it is observed. See
+is required. Any pane writer can forge a signal, so its payload is untrusted
+terminal-authored text even though the parent bot delivers it. Delivery is best
+effort: rapidly scrolling output can move the record outside the bounded frame
+before it is observed, and a crash after Telegram accepts a notification but
+before state persistence can produce a duplicate. See
 [`requirements/upstream-signals.md`](requirements/upstream-signals.md) for the
 complete contract and non-goals.
+
+Detection follows normal anchor sampling: approximately ten seconds for recent
+sessions and up to thirty seconds after five minutes without Engram input. The
+terminal bell does not currently shorten that interval. Manual anchor refresh
+observes immediately.
 
 In Haiku mode, Engram sends the shared bounded frame to Haiku once and edits the
 canonical text anchor with compact, collaborative prose broken into short

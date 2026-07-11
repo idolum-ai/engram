@@ -3,6 +3,8 @@ package tmux
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os/exec"
@@ -83,6 +85,7 @@ type Pane struct {
 type StyledCapture struct {
 	ANSI        string
 	Text        string
+	JoinedText  string
 	Columns     int
 	VisibleRows int
 	BufferRows  int
@@ -278,7 +281,26 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}
 	start := visibleRows - targetRows
 	end := visibleRows - 1
-	ansi, err := m.Runner.Run(ctx, "capture-pane", "-p", "-e", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID)
+	nonce, err := captureNonce()
+	if err != nil {
+		return StyledCapture{}, err
+	}
+	physicalBuffer := "engram-physical-" + nonce
+	joinedBuffer := "engram-joined-" + nonce
+	_, err = m.Runner.Run(ctx,
+		"capture-pane", "-e", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID, "-b", physicalBuffer,
+		";", "capture-pane", "-J", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID, "-b", joinedBuffer,
+	)
+	if err != nil {
+		m.cleanupCaptureBuffers(ctx, physicalBuffer, joinedBuffer)
+		return StyledCapture{}, err
+	}
+	defer m.cleanupCaptureBuffers(ctx, physicalBuffer, joinedBuffer)
+	ansi, err := m.Runner.Run(ctx, "show-buffer", "-b", physicalBuffer)
+	if err != nil {
+		return StyledCapture{}, err
+	}
+	joined, err := m.Runner.Run(ctx, "show-buffer", "-b", joinedBuffer)
 	if err != nil {
 		return StyledCapture{}, err
 	}
@@ -292,6 +314,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	return StyledCapture{
 		ANSI:        ansi,
 		Text:        semanticCapture(ansi),
+		JoinedText:  semanticCapture(joined),
 		Columns:     columns,
 		VisibleRows: visibleRows,
 		BufferRows:  bufferRows,
@@ -300,20 +323,25 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}, nil
 }
 
-// CaptureJoinedText captures the same bounded pane rows as CaptureStyled while
-// asking tmux to join physical rows that belong to one wrapped logical line.
-// Engram uses it only after a signal marker appears in the normal frame.
-func (m Manager) CaptureJoinedText(ctx context.Context, paneID string, visibleRows, targetRows int) (string, error) {
-	if visibleRows <= 0 || visibleRows > 400 || targetRows <= 0 || targetRows > 400 {
-		return "", fmt.Errorf("capture rows must be between 1 and 400")
+func captureNonce() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("generate tmux capture nonce: %w", err)
 	}
-	start := visibleRows - targetRows
-	end := visibleRows - 1
-	out, err := m.Runner.Run(ctx, "capture-pane", "-p", "-J", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID)
-	if err != nil {
-		return "", err
+	return hex.EncodeToString(nonce[:]), nil
+}
+
+func (m Manager) cleanupCaptureBuffers(ctx context.Context, names ...string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	args := make([]string, 0, len(names)*4)
+	for _, name := range names {
+		if len(args) != 0 {
+			args = append(args, ";")
+		}
+		args = append(args, "delete-buffer", "-b", name)
 	}
-	return semanticCapture(out), nil
+	_, _ = m.Runner.Run(cleanupCtx, args...)
 }
 
 // DumpScrollback streams a physical, ANSI-preserving capture to dst. It does
