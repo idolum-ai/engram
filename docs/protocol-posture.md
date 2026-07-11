@@ -96,8 +96,8 @@ weakens current-view ownership.
 ### Private capability interfaces: only when earned
 
 Narrow interfaces are useful when they enable fault injection or separate a
-real owner, such as the proposed frontend-independent core. They should remain
-private and typed.
+real owner, such as the proposed private terminal-mechanics boundary. They
+should remain private and typed.
 
 Do not publish a terminal-provider, chat-provider, or plugin SDK. tmux and
 Telegram are productive constraints, not placeholders for arbitrary backends.

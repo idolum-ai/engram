@@ -494,11 +494,11 @@ guidance, [`docs/release-strategy.md`](docs/release-strategy.md) for the reviewe
 release path, [`CHANGELOG.md`](CHANGELOG.md) for accumulated user-visible
 changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
 
-Design proposals for making Telegram optional without introducing an ambient
-control service are in
-[`docs/frontend-independent-core.md`](docs/frontend-independent-core.md), with
-the staged sequence in
-[`docs/frontend-independence-plan.md`](docs/frontend-independence-plan.md).
+The proposed private boundary between Telegram orchestration and tmux truth is
+described in
+[`docs/terminal-mechanics-boundary.md`](docs/terminal-mechanics-boundary.md),
+with the deliberately narrow extraction sequence in
+[`docs/terminal-mechanics-plan.md`](docs/terminal-mechanics-plan.md).
 [`docs/protocol-posture.md`](docs/protocol-posture.md) explains why Engram should
 standardize its truth and attention invariants without becoming a general wire
 protocol.
