@@ -57,6 +57,15 @@ tmux is the source of terminal truth.
   `/dump` streams physical full scrollback to an attachment.
 - `/raw` and `/dump` stop before Telegram's 50 MiB upload ceiling.
 
+## Upstream Signals
+
+- A nested process may request attention by writing the bounded terminal record
+  and bell defined in [`upstream-signals.md`](upstream-signals.md). The outer
+  tracked pane remains the routing and identity boundary.
+- Optional bell acceleration uses tmux's window state; signal discovery uses
+  the existing pane capture path. Engram does not attach to, enumerate, or send
+  input directly to an inner tmux server.
+
 ## Closing
 
 - Sessions record whether Engram created their window. Legacy sessions without

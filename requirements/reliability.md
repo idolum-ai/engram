@@ -9,6 +9,7 @@ Engram is a long-running service. Failure must be visible and recoverable.
 - Keep polling alive after transient Telegram errors.
 - Keep tmux sessions alive when Haiku, Chromium, or Telegram delivery fails.
 - Keep polling and tmux input responsive while terminal images render and upload.
+- Keep polling and tmux input responsive while upstream signals refresh or notify.
 - Prefer truthful degraded presentation over missing anchors.
 
 ## Audit
@@ -20,6 +21,7 @@ The audit JSONL must record important machine facts:
 - Telegram send/edit failures
 - tmux send success and failure
 - Haiku failures
+- upstream-signal observation and delivery outcomes
 - state persistence failures that would otherwise hide lost progress
 - command registration success and failure
 
@@ -86,6 +88,12 @@ exports a bounded recent tail, not an unbounded full audit file.
   bounded stale-alias set used only to reject confusing replies. Valid legacy state migrates forward;
   retired interpretation fields are ignored and disappear on save.
 - A lock keyed by Telegram settings prevents duplicate pollers.
+- Upstream-signal deduplication is bounded per terminal. Restart may redeliver
+  the newest still-visible record at most once; signal failures never mark a
+  healthy pane lost.
+- The latest upstream-signal reply alias persists with the terminal registry so
+  reply routing remains truthful after restart. Superseded aliases join the
+  existing bounded stale-alias set.
 
 ## Degradation
 
@@ -124,3 +132,7 @@ exports a bounded recent tail, not an unbounded full audit file.
 - A later user action may restore a lost session when the same immutable pane
   and window identity validates successfully. Recovery must be audited and
   followed by a fresh capture.
+- Upstream-signal notifications are coalesced to at most one per pane every ten
+  seconds. A retained tmux bell may accelerate capture, but signal discovery
+  remains polling-based and does not bypass bounded rendering work or amplify
+  Telegram retries.

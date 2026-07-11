@@ -11,6 +11,7 @@ required_requirements=(
   requirements/reliability.md
   requirements/security.md
   requirements/operations.md
+  requirements/upstream-signals.md
 )
 
 for file in "${required_requirements[@]}"; do

@@ -95,6 +95,9 @@ privacy model must stay small and explicit.
 
 - A lock prevents two Engram instances from polling the same Telegram settings.
 - Service restart should preserve tmux sessions and state.
+- Nested environments signal only through terminal output. They receive no
+  Telegram, Anthropic, state-directory, or parent-tmux credentials and require
+  no new host listener; the marker is untrusted framing, not authentication.
 
 ## Vulnerability Handling
 

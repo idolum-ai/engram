@@ -25,6 +25,7 @@ anchors, copyable references, and simple recovery.
 - Recoverable local service.
 - Small Go, no third-party dependencies.
 - Quiet monochrome signal.
+- Recursion collapses to the terminal.
 
 ## Principles
 
@@ -123,6 +124,16 @@ Engram should work with tmux sessions that already exist. Target selection is
 predictable: the configured session first, otherwise an existing session,
 otherwise a managed fallback.
 
+### Recursion collapses to the terminal
+
+An Engram may run inside a container or terminal observed by another Engram.
+That does not require a hierarchy or an Engram-to-Engram network. A nested
+process can emit one visible, bounded attention record with a terminal bell;
+the outer Engram observes the record through its normal tmux capture and keeps
+the outer pane as the truthful reply boundary. Composition should emerge from
+the terminal path that already exists, without distributing credentials or
+inventing a control plane.
+
 ### Slow automatic edits, instant manual refresh
 
 Telegram anchors should not flicker. Engram hashes captures, coalesces bursts,
@@ -164,6 +175,7 @@ quiet and structural rather than competing with the tool.
 - Long model chat memory or cross-window model context.
 - Model-generated file/path inventories.
 - Broad notification routing across chat systems.
+- An Engram-to-Engram control plane or persistent deployment hierarchy.
 
 ## Design Review Questions
 
