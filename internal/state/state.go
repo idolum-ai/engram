@@ -20,32 +20,6 @@ import (
 type TerminalState string
 type TerminalOrigin string
 
-type Handoff struct {
-	Key                     string    `json:"key"`
-	StatusReport            string    `json:"status_report"`
-	RecommendedAction       string    `json:"recommended_action"`
-	Evidence                []string  `json:"evidence,omitempty"`
-	ObservationHash         string    `json:"observation_hash"`
-	OpenedAt                time.Time `json:"opened_at"`
-	LastConfirmedAt         time.Time `json:"last_confirmed_at"`
-	AcknowledgedAt          time.Time `json:"acknowledged_at,omitempty"`
-	AcknowledgedCaptureHash string    `json:"acknowledged_capture_hash,omitempty"`
-	AnchorMessageID         int       `json:"anchor_message_id,omitempty"`
-	NotificationMessageID   int       `json:"notification_message_id,omitempty"` // Legacy schema 3 field.
-}
-
-type HandoffCandidate struct {
-	Kind              string    `json:"kind"`
-	Key               string    `json:"key,omitempty"`
-	StatusReport      string    `json:"status_report,omitempty"`
-	RecommendedAction string    `json:"recommended_action,omitempty"`
-	Evidence          []string  `json:"evidence,omitempty"`
-	ObservationHash   string    `json:"observation_hash"`
-	FirstObservedAt   time.Time `json:"first_observed_at"`
-	LastObservedAt    time.Time `json:"last_observed_at"`
-	Observations      int       `json:"observations"`
-}
-
 const (
 	TerminalRunning TerminalState = "running"
 	TerminalLost    TerminalState = "lost"
@@ -59,6 +33,7 @@ const (
 
 type State struct {
 	Version            int                `json:"version"`
+	AnchorMode         string             `json:"anchor_mode,omitempty"`
 	NextSessionID      int                `json:"next_session_id"`
 	LastUpdateID       int                `json:"last_update_id"`
 	LastPollAt         time.Time          `json:"last_poll_at,omitempty"`
@@ -72,35 +47,36 @@ type State struct {
 }
 
 type TerminalSession struct {
-	ID                      int               `json:"id"`
-	TmuxSessionName         string            `json:"tmux_session_name"`
-	TmuxWindowID            string            `json:"tmux_window_id"`
-	TmuxPaneID              string            `json:"tmux_pane_id"`
-	Origin                  TerminalOrigin    `json:"origin,omitempty"`
-	Title                   string            `json:"title"`
-	LastKnownCWD            string            `json:"last_known_cwd,omitempty"`
-	State                   TerminalState     `json:"state"`
-	CreatedAt               time.Time         `json:"created_at"`
-	UpdatedAt               time.Time         `json:"updated_at"`
-	LastActivityAt          time.Time         `json:"last_activity_at"`
-	LastInputPreview        string            `json:"last_input_preview,omitempty"`
-	LastInputMode           string            `json:"last_input_mode,omitempty"`
-	LastRawCaptureHash      string            `json:"last_raw_capture_hash,omitempty"`
-	LastSnapshotCaptureHash string            `json:"last_snapshot_capture_hash,omitempty"`
-	LastRenderHash          string            `json:"last_render_hash,omitempty"`
-	LastSummary             string            `json:"last_summary,omitempty"`
-	Handoff                 *Handoff          `json:"handoff,omitempty"`
-	HandoffCandidate        *HandoffCandidate `json:"handoff_candidate,omitempty"`
-	AnchorChatID            int64             `json:"anchor_chat_id,omitempty"`
-	AnchorMessageID         int               `json:"anchor_message_id,omitempty"`
-	AnchorFormat            string            `json:"anchor_format,omitempty"`
-	RetiringAnchorMessageID int               `json:"retiring_anchor_message_id,omitempty"`
-	RetiringAnchorFormat    string            `json:"retiring_anchor_format,omitempty"`
-	AnchorPinned            bool              `json:"anchor_pinned,omitempty"`
-	AnchorPinKnown          bool              `json:"anchor_pin_known,omitempty"`
-	WatchEnabled            bool              `json:"watch_enabled"`
-	LastAnchorEditAt        time.Time         `json:"last_anchor_edit_at,omitempty"`
-	LastRawCapture          string            `json:"last_raw_capture,omitempty"`
+	ID                       int            `json:"id"`
+	TmuxSessionName          string         `json:"tmux_session_name"`
+	TmuxWindowID             string         `json:"tmux_window_id"`
+	TmuxPaneID               string         `json:"tmux_pane_id"`
+	Origin                   TerminalOrigin `json:"origin,omitempty"`
+	Title                    string         `json:"title"`
+	LastKnownCWD             string         `json:"last_known_cwd,omitempty"`
+	State                    TerminalState  `json:"state"`
+	CreatedAt                time.Time      `json:"created_at"`
+	UpdatedAt                time.Time      `json:"updated_at"`
+	LastActivityAt           time.Time      `json:"last_activity_at"`
+	LastRawCaptureHash       string         `json:"last_raw_capture_hash,omitempty"`
+	LastSnapshotCaptureHash  string         `json:"last_snapshot_capture_hash,omitempty"`
+	LastSnapshotAttemptAt    time.Time      `json:"last_snapshot_attempt_at,omitempty"`
+	LastRenderHash           string         `json:"last_render_hash,omitempty"`
+	LastSummary              string         `json:"last_summary,omitempty"`
+	SummaryMessageID         int            `json:"summary_message_id,omitempty"`
+	SnapshotMessageID        int            `json:"snapshot_message_id,omitempty"`
+	StaleAlternateMessageIDs []int          `json:"stale_alternate_message_ids,omitempty"`
+	AnchorChatID             int64          `json:"anchor_chat_id,omitempty"`
+	AnchorMessageID          int            `json:"anchor_message_id,omitempty"`
+	AnchorFormat             string         `json:"anchor_format,omitempty"`
+	RetiringAnchorMessageID  int            `json:"retiring_anchor_message_id,omitempty"`
+	RetiringAnchorFormat     string         `json:"retiring_anchor_format,omitempty"`
+	RetiringAnchorRetryAt    time.Time      `json:"retiring_anchor_retry_at,omitempty"`
+	AnchorPinned             bool           `json:"anchor_pinned,omitempty"`
+	AnchorPinKnown           bool           `json:"anchor_pin_known,omitempty"`
+	WatchEnabled             bool           `json:"watch_enabled"`
+	LastAnchorEditAt         time.Time      `json:"last_anchor_edit_at,omitempty"`
+	LastRawCapture           string         `json:"last_raw_capture,omitempty"`
 }
 
 type Attachment struct {
@@ -153,11 +129,12 @@ type Store struct {
 }
 
 const (
-	currentStateVersion   = 4
+	currentStateVersion   = 6
 	maxTerminalSessions   = 200
 	maxAttachments        = 200
 	maxAttachmentBypasses = 100
 	maxUpdateJournal      = 200
+	maxStaleAlternates    = 16
 	maxProcessedMessages  = 2_000
 	maxAuditFileBytes     = int64(4 << 20)
 	maxAuditRecordBytes   = 64 << 10
@@ -199,6 +176,9 @@ func Open(path, auditPath string) (*Store, error) {
 		return nil, fmt.Errorf("state schema version %d is newer than supported version %d", s.state.Version, currentStateVersion)
 	}
 	s.state.Version = currentStateVersion
+	if s.state.AnchorMode != "guide" && s.state.AnchorMode != "snapshot" {
+		s.state.AnchorMode = ""
+	}
 	normalizeTerminalSessions(s.state.TerminalSessions)
 	if s.state.NextSessionID == 0 {
 		s.state.NextSessionID = maxSessionID(s.state.TerminalSessions) + 1
@@ -225,6 +205,21 @@ func (s *Store) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked()
+}
+
+func (s *Store) SetAnchorMode(mode string) error {
+	if mode != "guide" && mode != "snapshot" {
+		return fmt.Errorf("invalid anchor mode %q", mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.state.AnchorMode
+	s.state.AnchorMode = mode
+	if err := s.saveLocked(); err != nil {
+		s.state.AnchorMode = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) saveLocked() error {
@@ -489,6 +484,35 @@ func (s *Store) FindByAnchor(chatID int64, messageID int) (TerminalSession, bool
 		}
 	}
 	return TerminalSession{}, false
+}
+
+type ReplyTargetState string
+
+const (
+	ReplyTargetCurrent ReplyTargetState = "current"
+	ReplyTargetStale   ReplyTargetState = "stale"
+)
+
+func (s *Store) FindReplyTarget(chatID int64, messageID int) (TerminalSession, ReplyTargetState, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ts := range s.state.TerminalSessions {
+		if ts.AnchorChatID != chatID {
+			continue
+		}
+		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID {
+			return cloneTerminalSession(ts), ReplyTargetCurrent, true
+		}
+		if ts.RetiringAnchorMessageID == messageID {
+			return cloneTerminalSession(ts), ReplyTargetStale, true
+		}
+		for _, staleID := range ts.StaleAlternateMessageIDs {
+			if staleID == messageID {
+				return cloneTerminalSession(ts), ReplyTargetStale, true
+			}
+		}
+	}
+	return TerminalSession{}, "", false
 }
 
 func (s *Store) FindByPane(paneID string) (TerminalSession, bool) {
@@ -771,22 +795,8 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.State = TerminalLost
 			session.WatchEnabled = false
 		}
-		if session.Handoff != nil && (session.Handoff.Key == "" || session.Handoff.ObservationHash == "" || session.Handoff.OpenedAt.IsZero() || len(session.Handoff.Evidence) == 0) {
-			session.Handoff = nil
-		}
-		if session.Handoff != nil && session.Handoff.AnchorMessageID == 0 && session.Handoff.NotificationMessageID != 0 {
-			session.Handoff.AnchorMessageID = session.Handoff.NotificationMessageID
-			session.Handoff.NotificationMessageID = 0
-		}
-		if session.HandoffCandidate != nil {
-			switch session.HandoffCandidate.Kind {
-			case "open", "replace", "resolve", "reopen":
-			default:
-				session.HandoffCandidate = nil
-			}
-			if candidate := session.HandoffCandidate; candidate != nil && (candidate.ObservationHash == "" || candidate.FirstObservedAt.IsZero() || candidate.Observations < 1 || candidate.Kind != "resolve" && (candidate.Key == "" || len(candidate.Evidence) == 0)) {
-				session.HandoffCandidate = nil
-			}
+		if len(session.StaleAlternateMessageIDs) > maxStaleAlternates {
+			session.StaleAlternateMessageIDs = append([]int(nil), session.StaleAlternateMessageIDs[len(session.StaleAlternateMessageIDs)-maxStaleAlternates:]...)
 		}
 	}
 }
@@ -829,15 +839,6 @@ func cloneState(in State) State {
 
 func cloneTerminalSession(in TerminalSession) TerminalSession {
 	out := in
-	if in.Handoff != nil {
-		handoff := *in.Handoff
-		handoff.Evidence = append([]string(nil), in.Handoff.Evidence...)
-		out.Handoff = &handoff
-	}
-	if in.HandoffCandidate != nil {
-		candidate := *in.HandoffCandidate
-		candidate.Evidence = append([]string(nil), in.HandoffCandidate.Evidence...)
-		out.HandoffCandidate = &candidate
-	}
+	out.StaleAlternateMessageIDs = append([]int(nil), in.StaleAlternateMessageIDs...)
 	return out
 }

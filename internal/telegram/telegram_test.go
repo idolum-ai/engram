@@ -45,10 +45,10 @@ func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	}
 }
 
-func TestRefreshMarkupIncludesKeyButtons(t *testing.T) {
+func TestAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
 	t.Parallel()
 
-	got := RefreshMarkup(7)
+	got := AnchorMarkup(7, true, false)
 	if got == nil || len(got.InlineKeyboard) != 2 || len(got.InlineKeyboard[0]) != 2 {
 		t.Fatalf("RefreshMarkup rows = %#v, want refresh row plus key row", got)
 	}
@@ -187,7 +187,7 @@ func TestSendHTMLMessagePayload(t *testing.T) {
 		}), nil
 	})}
 
-	if _, err := client.SendHTMLMessage(context.Background(), 5, "<b>ok</b>", 7, RefreshMarkup(1)); err != nil {
+	if _, err := client.SendHTMLMessage(context.Background(), 5, "<b>ok</b>", 7, AnchorMarkup(1, true, false)); err != nil {
 		t.Fatal(err)
 	}
 	if got["parse_mode"] != "HTML" {
@@ -565,7 +565,7 @@ func TestSendPhotoIncludesMarkupWithoutReplyTarget(t *testing.T) {
 			"result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}},
 		}), nil
 	})}
-	if _, err := client.SendPhotoWithMarkup(context.Background(), 5, path, "terminal snapshot", 0, SnapshotAnchorMarkup(7)); err != nil {
+	if _, err := client.SendPhotoWithMarkup(context.Background(), 5, path, "terminal snapshot", 0, AnchorMarkup(7, false, true)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -606,7 +606,7 @@ func TestEditPhotoUsesAttachedMediaAndMarkup(t *testing.T) {
 			"result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 5}},
 		}), nil
 	})}
-	msg, err := client.EditPhoto(context.Background(), 5, 77, path, "live terminal", SnapshotAnchorMarkup(7))
+	msg, err := client.EditPhoto(context.Background(), 5, 77, path, "live terminal", AnchorMarkup(7, false, true))
 	if err != nil || msg.MessageID != 77 {
 		t.Fatalf("EditPhoto message = %#v err=%v", msg, err)
 	}

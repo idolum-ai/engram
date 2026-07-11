@@ -13,10 +13,9 @@ import (
 
 func TestRenderLocalIsStableForSameInput(t *testing.T) {
 	session := state.TerminalSession{
-		ID:               7,
-		State:            state.TerminalRunning,
-		Title:            "build",
-		LastInputPreview: "make check",
+		ID:    7,
+		State: state.TerminalRunning,
+		Title: "build",
 	}
 
 	first := renderLocal(session, "summary:\n- running")
@@ -113,19 +112,16 @@ func TestRenderLocalRedactsDerivedSecretsWithoutMutatingSession(t *testing.T) {
 	session := state.TerminalSession{
 		ID:             1,
 		State:          state.TerminalRunning,
+		Title:          "token=" + secret,
+		LastKnownCWD:   "/tmp/" + secret,
 		LastRawCapture: "artifact https://example.test/report?token=" + secret,
-		Handoff: &state.Handoff{
-			StatusReport:      "The pane printed " + secret,
-			RecommendedAction: "Inspect token=" + secret,
-			Evidence:          []string{"API_KEY=" + secret},
-		},
 	}
 	got := app.renderLocal(session, "summary "+secret)
 	if strings.Contains(got, secret) || !strings.Contains(got, "<redacted>") {
 		t.Fatalf("rendered secret was not redacted:\n%s", got)
 	}
-	if !strings.Contains(session.Handoff.StatusReport, secret) || !strings.Contains(session.Handoff.Evidence[0], secret) {
-		t.Fatalf("render mutated source session: %#v", session.Handoff)
+	if !strings.Contains(session.Title, secret) || !strings.Contains(session.LastKnownCWD, secret) {
+		t.Fatalf("render mutated source session: %#v", session)
 	}
 }
 

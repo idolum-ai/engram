@@ -98,11 +98,18 @@ func runDiagnostics(args []string, mode string) int {
 		fmt.Fprintln(os.Stderr, "config:", err)
 		return 1
 	}
-	if cfg.SnapshotAnchors() {
-		if _, err := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Probe(context.Background()); err != nil {
-			fmt.Fprintln(os.Stderr, "snapshot anchor mode:", err)
-			return 1
+	st, stateErr := readState(cfg.StatePath())
+	snapshotPath, snapshotReady, snapshotErr := probeSnapshot(cfg)
+	anchorMode, err := cfg.ResolveAnchorMode(st.AnchorMode, config.ModeCapabilities{
+		HaikuConfigured: cfg.HaikuConfigured(),
+		SnapshotReady:   snapshotReady,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "anchor mode:", err)
+		if snapshotErr != nil {
+			fmt.Fprintln(os.Stderr, "snapshot probe:", snapshotErr)
 		}
+		return 1
 	}
 	if mode == "dry-start" {
 		if err := config.EnsureDirs(cfg); err != nil {
@@ -116,36 +123,47 @@ func runDiagnostics(args []string, mode string) int {
 		}
 		_ = store
 	}
-	fmt.Print(diagnosticsText(cfg, mode))
+	fmt.Print(formatDiagnostics(cfg, mode, st, stateErr == nil, anchorMode, snapshotPath))
 	return 0
 }
 
 func diagnosticsText(cfg config.Config, mode string) string {
+	st, stateErr := readState(cfg.StatePath())
+	snapshotPath, snapshotReady, _ := probeSnapshot(cfg)
+	anchorMode, err := cfg.ResolveAnchorMode(st.AnchorMode, config.ModeCapabilities{
+		HaikuConfigured: cfg.HaikuConfigured(),
+		SnapshotReady:   snapshotReady,
+	})
+	if err != nil {
+		anchorMode = "unavailable"
+	}
+	return formatDiagnostics(cfg, mode, st, stateErr == nil, anchorMode, snapshotPath)
+}
+
+func probeSnapshot(cfg config.Config) (string, bool, error) {
+	path, err := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Probe(context.Background())
+	if err != nil {
+		return "unavailable", false, err
+	}
+	return path + " (" + cfg.SnapshotTheme + ")", true, nil
+}
+
+func formatDiagnostics(cfg config.Config, mode string, st state.State, stateReadable bool, anchorMode, snapshotPath string) string {
 	tmuxPath, tmuxErr := exec.LookPath("tmux")
 	if tmuxErr != nil {
 		tmuxPath = "missing"
 	}
-	snapshotPath, snapshotErr := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme).Available()
-	if snapshotErr != nil {
-		snapshotPath = "unavailable"
-	} else {
-		snapshotPath += " (" + cfg.SnapshotTheme + ")"
-	}
 	stateStatus := "missing"
-	var sessions int
-	var lastUpdate int
-	var journal int
-	if st, err := readState(cfg.StatePath()); err == nil {
+	if stateReadable {
 		stateStatus = "readable"
-		sessions = len(st.TerminalSessions)
-		lastUpdate = st.LastUpdateID
-		journal = len(st.UpdateJournal)
 	}
-	model := cfg.AnthropicModel
-	if cfg.SnapshotAnchors() {
-		model = "disabled"
+	model := "unavailable"
+	haiku := "unavailable"
+	if cfg.HaikuConfigured() {
+		model = cfg.AnthropicModel
+		haiku = "configured, not probed"
 	}
-	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nhaiku: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
 		mode,
 		version.String(),
 		cfg.EnvPath,
@@ -155,14 +173,15 @@ func diagnosticsText(cfg config.Config, mode string) string {
 		cfg.AttachmentDir(),
 		cfg.Workdir,
 		tmuxPath,
-		cfg.EffectiveAnchorMode(),
+		anchorMode,
+		haiku,
 		snapshotPath,
 		cfg.TelegramAllowedUserID,
 		cfg.TelegramChatID,
 		model,
-		sessions,
-		lastUpdate,
-		journal,
+		len(st.TerminalSessions),
+		st.LastUpdateID,
+		len(st.UpdateJournal),
 	)
 }
 

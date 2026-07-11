@@ -21,10 +21,12 @@ substrate for a small remote-work tool.
 
 | Haiku | Chromium |
 | --- | --- |
-| **Experience:** compact plain-English status, one recommended action, grounded excerpts, and settled handoffs when the pane genuinely needs you.<br><br>**Pros:** fast to scan across many sessions; interprets noisy output; attention-orders `/sessions`.<br><br>**Cons:** an external model can misunderstand the pane; bounded terminal text leaves the machine.<br><br>**Dependencies:** `ENGRAM_ANCHOR_MODE=guide`, `ANTHROPIC_API_KEY`, and network access to Anthropic. Chromium remains optional for the `🖼️` button. | **Experience:** the live anchor is an iPhone-sized, ANSI-preserving image of the terminal and bounded recent scrollback.<br><br>**Pros:** literal and deterministic; no model interpretation; no Anthropic key or request.<br><br>**Cons:** exact terminal content is automatically uploaded to Telegram; rendering uses more local CPU and each frame is denser to inspect.<br><br>**Dependencies:** `ENGRAM_ANCHOR_MODE=snapshot` and a local Chromium-compatible executable, optionally selected with `ENGRAM_SNAPSHOT_BROWSER`. |
+| **Experience:** Haiku conveys the bounded terminal frame as compact, natural conversation.<br><br>**Pros:** quick to absorb across many sessions; plain language can make dense output legible.<br><br>**Cons:** a model can misunderstand the pane; raw bounded terminal text leaves the machine.<br><br>**Dependencies:** `ANTHROPIC_API_KEY` and network access to Anthropic. Chromium is optional and enables `🖼️` plus `/mode snapshot`. | **Experience:** Chromium renders the same bounded frame as an iPhone-sized, ANSI-preserving terminal image.<br><br>**Pros:** literal and deterministic; no model interpretation is required.<br><br>**Cons:** exact terminal content is uploaded to Telegram; rendering uses more local CPU and each frame is denser to inspect.<br><br>**Dependencies:** a local Chromium-compatible executable, optionally selected with `ENGRAM_SNAPSHOT_BROWSER`. Haiku is optional and enables `🗣️` plus `/mode guide`. |
 
-The mode is read once at process startup. Changing it requires an Engram
-restart; there is intentionally no Telegram command or live toggle.
+`ENGRAM_ANCHOR_MODE` is the startup fallback when no usable persisted choice
+exists. Haiku is available when configured; Chromium is locally probed.
+`/mode guide` and `/mode snapshot` begin migrating the live anchors and persist
+that choice across restarts.
 
 ## First Run
 
@@ -39,7 +41,7 @@ You need:
 - For **Haiku mode**, an Anthropic API key with access to Claude Haiku 4.5;
   Chromium is optional and enables the `🖼️` button
 - For **Chromium mode**, Chromium, Chrome, or another Chromium-compatible
-  executable; no Anthropic key is needed
+  executable; an Anthropic key is optional and enables `🗣️`
 
 Linux with a systemd user session is the supported service installation. macOS
 is compile-checked and runs manually in the foreground; Engram does not install
@@ -160,14 +162,14 @@ below before running commands that may print secrets.
 | `TELEGRAM_ALLOWED_USER_ID` | none | yes | The one Telegram user ID allowed to issue commands. |
 | `TELEGRAM_CHAT_ID` | allowed user ID | no | The one allowed chat. Leave empty for a private DM; group operation is unsupported. |
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
-| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup-time anchor presentation: Haiku `guide` or Chromium `snapshot`. A change requires restart. |
-| `LLM_PROVIDER` | `anthropic` | Haiku mode only | Must remain `anthropic` in `guide` mode; ignored in `snapshot` mode. |
-| `ANTHROPIC_API_KEY` | none | Haiku mode only, secret | Credential used for Haiku status requests. Unused in `snapshot` mode. |
-| `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID in `guide` mode; the `claude-haiku-4-5` alias is also accepted. Unused in `snapshot` mode. |
+| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: Haiku `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v6. |
+| `LLM_PROVIDER` | `anthropic` | when enabling Haiku | Must remain `anthropic`; enables guide startup, `🗣️`, and `/mode guide`. |
+| `ANTHROPIC_API_KEY` | none | when enabling Haiku, secret | Credential for one-pass conversational rendering. |
+| `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one tmux session name and creates it when absent. |
-| `ENGRAM_SNAPSHOT_BROWSER` | auto-detected Chromium or Chrome | Chromium mode only | Executable name or absolute path used for live or on-demand terminal image snapshots. |
+| `ENGRAM_SNAPSHOT_BROWSER` | auto-detected Chromium or Chrome | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. |
 | `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Live and on-demand snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `16777216` | no | Incoming attachment soft limit. An exact SHA-256 bypass may authorize up to the 20 MiB cloud Bot API hard limit and available disk. |
 
@@ -199,26 +201,25 @@ the bot channel and must be revoked immediately.
 - **tmux and local processes:** Authorized messages can create windows and send
   literal shell input or key presses. tmux owns terminal history and continues
   running when Engram stops unless a window is explicitly closed.
-- **Local snapshot browser:** In Haiku mode, tapping `🖼️` renders an on-demand
-  image. In Chromium mode, the same renderer produces the canonical live anchor
-  whenever its capture changes. Engram renders 64 ANSI-preserving rows into a
+- **Local snapshot browser:** In guide mode, tapping `🖼️` renders an on-demand
+  image when Chromium passed startup readiness. In snapshot mode, the renderer
+  produces the canonical live anchor whenever its capture changes. Engram
+  renders a frame capped at 64 ANSI-preserving rows into a
   full-bleed `1290×2796` PNG and removes the private HTML, browser profile, and
   PNG after delivery. No snapshot content is sent to Anthropic. The two contrast themes use a
   color-vision-safe ANSI palette, remove opacity-based dim text, and correct
   low-contrast terminal colors to at least a 4.5:1 contrast ratio.
-- **Anthropic Haiku:** Used only in Haiku mode. For an anchor refresh, Engram sends session metadata, a
-  shortened last-input preview, the previous summary, and a bounded visible
-  pane capture. Repeated lines may be omitted. If the first result is uncertain,
-  Haiku may receive one bounded full-scrollback capture. Captures are not
-  redacted before they are sent. Haiku may propose a specific handoff when the
-  apparent work cannot advance without the user. Engram requires cited evidence
-  and compatible settled observations before surfacing that interpretation.
+- **Anthropic Haiku:** Guide anchors send the plain text of the same frame,
+  capped at 64 rows, used by Chromium in one non-streaming request. There is no model
+  history or structured response, no second request, and no expanded context.
+  In snapshot mode, tapping `🗣️` makes the same one-off request and
+  sends its conversational result as a reply without replacing the photo
+  anchor. Captures are not credential-redacted before they are sent.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
-  identifiers, session metadata, last
-  input previews, capture hashes, Haiku summaries, and active or pending
-  handoffs with their cited evidence. Raw terminal captures remain in process
+  identifiers, session metadata, capture hashes, conversational renderings, and selected
+  anchor mode. Raw terminal captures remain in process
   memory for rendering but are omitted from persisted state.
   Files are created with private permissions, but anyone with access to the
   host account can read them.
@@ -235,9 +236,9 @@ the bot channel and must be revoked immediately.
 
 Audit events redact configured credentials and common token, key, password, and
 private-key patterns. `/logs` applies the same pattern-based redaction to a
-bounded audit tail. Haiku-derived summaries, recommendations, and handoff
-evidence receive the same best-effort redaction before persistence or Telegram
-delivery. Redaction can miss unfamiliar secrets or sensitive prose. It does not
+bounded audit tail. Haiku-derived prose receives the same best-effort redaction
+before persistence or Telegram delivery. Redaction can miss unfamiliar secrets
+or sensitive prose. It does not
 sanitize raw terminal captures, `/raw`, `/dump`, `/download`, incoming
 attachments, existing Telegram history, or captures sent to Anthropic.
 `state.json` still contains sensitive metadata and derived terminal content.
@@ -334,27 +335,34 @@ locally for machine-readable metadata. Common commands are:
 - `/attachment_bypass sha256:<hash>`
 - `/logs`
 - `/status`
+- `/mode [guide|snapshot]`
 
 Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
 
 Each watched session has exactly one live anchor, and Engram silently pins those
-anchors for navigation. Only the canonical anchor accepts replies, refreshes,
-image requests, and key buttons.
+anchors for navigation. Controls belong only to the canonical anchor. Replies
+route through that anchor and through the session's latest conversational and
+screenshot replies. Replacing either alternate makes its predecessor stale;
+replying to a stale view produces a short error and never reaches tmux.
 
-In Haiku mode, when a pane reaches a stable boundary that needs human judgment,
-Engram sends a new full anchor as a reply to the current one, pins the new
-anchor, makes it canonical, then compacts and unpins its predecessor. The
-`🖼️` button replies with an iPhone-sized image of the visible terminal plus
-bounded recent scrollback. Input acknowledges the handoff but does not erase
-it; `/sessions` keeps unacknowledged handoffs ahead of quiet sessions.
+In Haiku mode, Engram sends the shared bounded frame to Haiku once and edits the
+canonical text anchor with compact, collaborative prose broken into short
+phone-readable paragraphs. If Chromium passed
+startup readiness, `🖼️` replies with an iPhone-sized image of that frame.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its
 media in place only when the styled capture changes, automatically at most once
 every ten seconds. The refresh button renders immediately, including an
-unchanged capture. Handoff interpretation and attention ordering are disabled;
-`/sessions` remains a deterministic map of running, lost, and closed sessions.
+unchanged capture. If Haiku is configured, `🗣️` replies with a one-off
+conversational rendering without replacing the canonical image. `/sessions`
+lists lost sessions first, then active sessions by recency in either mode.
+
+`/mode guide` and `/mode snapshot` begin changing the canonical presentation
+when the target capability is available. Existing anchors migrate in the
+background. The choice persists across restart; `ENGRAM_ANCHOR_MODE` remains
+the initial configuration and fallback.
 
 Both modes append bounded local references from the captured pane: existing
 absolute or home-relative files and directories under `paths`, and syntactically
@@ -396,13 +404,29 @@ release checks, workflow checks, documentation checks, a tracked-file secret
 scan, and a smoke build. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change
 guidance and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
 
-The Haiku-mode handoff eval is intentionally opt-in because it makes live
-Anthropic calls and is non-deterministic. With `ANTHROPIC_API_KEY` and optionally
-`ANTHROPIC_MODEL` exported, run:
+The conversational Haiku fixture eval is opt-in because it makes live
+Anthropic calls. It fails each fixture on hard regressions such as injected
+instructions, contradictory negation, unsupported numbers, or truncated
+output. With `ANTHROPIC_API_KEY` and optionally `ANTHROPIC_MODEL` exported,
+run:
 
 ```sh
 ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
-  -run TestLiveHaikuSequentialHandoffEvaluation -count=2
+  -run TestLiveHaikuConversationEvaluation -count=1
+```
+
+Compare a challenger prompt with the production prompt using the tournament.
+Both candidates receive identical inputs at production temperature `0.2`. Candidate order
+rotates, candidate names are replaced with fresh opaque IDs, and a separate
+judge uses its model-default decoding and scores fidelity, usefulness, voice, and readability from JSON-serialized
+untrusted evidence. Hard fixture regressions fail the run independently of the
+judge:
+
+```sh
+ENGRAM_LIVE_HAIKU_TOURNAMENT=1 \
+ENGRAM_TOURNAMENT_JUDGE_MODEL=claude-sonnet-4-6 \
+ENGRAM_TOURNAMENT_PROMPT_FILE=/tmp/challenger-prompt.txt \
+go test -v ./internal/anthropic -run TestLiveHaikuPromptTournament -count=1
 ```
 
 ## License

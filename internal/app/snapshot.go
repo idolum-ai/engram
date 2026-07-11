@@ -13,6 +13,7 @@ import (
 )
 
 const snapshotRenderTimeout = 30 * time.Second
+const snapshotNoticeTimeout = 15 * time.Second
 
 type snapshotRenderer interface {
 	Available() (string, error)
@@ -20,7 +21,7 @@ type snapshotRenderer interface {
 }
 
 func (a *App) snapshotStatus() string {
-	if a.Snapshots == nil {
+	if a.Snapshots == nil || !a.snapshotReady {
 		return "unavailable"
 	}
 	path, err := a.Snapshots.Available()
@@ -66,6 +67,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	if !acquireSlot(tctx, a.captureSlots) {
 		cancel()
 		lock.Unlock()
+		a.snapshotNotice(ctx, requested.ID, "Could not capture the tmux window before the request timed out.")
 		return
 	}
 	capture, captureErr := a.Tmux.CaptureStyled(tctx, current.TmuxPaneID, terminalshot.TargetRows)
@@ -78,6 +80,10 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		return
 	}
 
+	if !acquireSlot(ctx, a.renderSlots) {
+		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image before the request timed out.")
+		return
+	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
 	pngPath, renderErr := a.Snapshots.Render(renderCtx, terminalshot.Input{
 		ANSI:        capture.ANSI,
@@ -89,6 +95,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		BufferRows:  capture.BufferRows,
 	}, a.Config.ArtifactDir())
 	renderCancel()
+	releaseSlot(a.renderSlots)
 	if renderErr != nil {
 		_ = a.audit("terminal.snapshot", "render_failed", map[string]any{"session_id": current.ID, "error": renderErr.Error()})
 		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image; check /status and /logs.")
@@ -96,15 +103,28 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	defer os.Remove(pngPath)
 
+	anchorLock := a.anchorMutex(current.ID)
+	anchorLock.Lock()
+	defer anchorLock.Unlock()
+	a.finishAnchorRotationLocked(ctx, current.ID)
 	latest, ok := a.Store.FindSession(current.ID)
-	if !ok || latest.State != state.TerminalRunning || latest.TmuxPaneID != current.TmuxPaneID || latest.AnchorMessageID == 0 {
+	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || latest.TmuxPaneID != current.TmuxPaneID || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 {
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": current.ID})
 		return
 	}
 	caption := fmt.Sprintf("[%d] %s\n%d buffer rows · %dx%d visible", latest.ID, a.redactText(firstNonEmpty(latest.Title, "terminal")), capture.BufferRows, capture.Columns, capture.VisibleRows)
-	if _, err := a.Telegram.SendPhoto(ctx, latest.AnchorChatID, pngPath, caption, latest.AnchorMessageID); err != nil {
+	message, err := a.Telegram.SendPhoto(ctx, latest.AnchorChatID, pngPath, caption, latest.AnchorMessageID)
+	if err != nil {
 		_ = a.audit("telegram.snapshot", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})
 		a.snapshotNotice(ctx, latest.ID, "Rendered the terminal image, but Telegram could not receive it.")
+		return
+	}
+	if _, _, err := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
+		if session.AnchorMessageID == latest.AnchorMessageID {
+			recordAlternateMessage(session, "snapshot", message.MessageID)
+		}
+	}); err != nil {
+		_ = a.audit("state.snapshot", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})
 		return
 	}
 	_ = a.audit("terminal.snapshot", "sent", map[string]any{"session_id": latest.ID, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
@@ -115,7 +135,9 @@ func (a *App) snapshotNotice(ctx context.Context, id int, text string) {
 	if !ok || ts.AnchorChatID == 0 || ts.AnchorMessageID == 0 || a.Telegram == nil {
 		return
 	}
-	if _, err := a.Telegram.SendMessage(ctx, ts.AnchorChatID, text, ts.AnchorMessageID, nil); err != nil {
+	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
+	defer cancel()
+	if _, err := a.Telegram.SendMessage(noticeCtx, ts.AnchorChatID, text, ts.AnchorMessageID, nil); err != nil {
 		_ = a.audit("telegram.snapshot_notice", "failed", map[string]any{"session_id": id, "error": err.Error()})
 	}
 }

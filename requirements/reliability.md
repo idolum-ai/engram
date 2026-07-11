@@ -9,7 +9,7 @@ Engram is a long-running service. Failure must be visible and recoverable.
 - Keep polling alive after transient Telegram errors.
 - Keep tmux sessions alive when Haiku, Chromium, or Telegram delivery fails.
 - Keep polling and tmux input responsive while terminal images render and upload.
-- Prefer truthful degraded summaries over missing anchors.
+- Prefer truthful degraded presentation over missing anchors.
 
 ## Audit
 
@@ -65,17 +65,13 @@ exports a bounded recent tail, not an unbounded full audit file.
   terminal registry retains at most 200 records, preferring running sessions
   and then the most recently updated terminal records. These limits
   bound state growth; they do not delete attachment files or tmux sessions.
-- Raw terminal captures are not written to state. Their hashes and derived
-  summaries remain persisted, and the current raw capture may remain in process
-  memory until restart or pruning.
+- Raw terminal captures are not written to state. Their hashes and bounded
+  conversational renderings may remain persisted; current raw capture may
+  remain in process memory until restart or pruning.
 - Session state persists only runtime facts used for recovery or rendering.
   Legacy write-only fields are ignored and disappear on the next save. Legacy
   terminal states other than `running`, `lost`, and `closed` normalize to
   `lost`, where immutable-identity reattachment can recover them safely.
-- Pending and active handoffs are persisted with bounded derived text, evidence,
-  capture hashes, lifecycle timestamps, acknowledgment, and delivery identity;
-  raw captures and handoff history are not. Derived status, action, and evidence
-  text is best-effort credential-redacted before persistence.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
   pin state. Restart resets pin knowledge and reconciles presentation without
@@ -86,29 +82,33 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
+- State schema v6 persists `anchor_mode`, the latest alternate reply IDs, and a
+  bounded stale-alias set used only to reject confusing replies. Valid legacy state migrates forward;
+  retired interpretation fields are ignored and disappear on save.
 - A lock keyed by Telegram settings prevents duplicate pollers.
 
 ## Degradation
 
-- If Haiku fails, reuse the last summary when possible and mark it stale.
-- A failed or low-confidence Haiku observation cannot resolve an active handoff
-  or erase settlement progress for a pending candidate.
-- A failed handoff anchor send leaves the old anchor canonical. A failed
-  predecessor retirement or pin transition remains eligible for retry without
-  reopening the handoff lifecycle.
+- If Haiku fails, retain the canonical anchor and report the failure without
+  inventing a conversational rendering.
+- A failed mode-migration send leaves the old anchor canonical. A failed
+  predecessor retirement or pin transition remains eligible for retry.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.
-- In `guide` mode, a missing or failed snapshot browser disables only on-demand
-  image delivery. The callback reports the condition truthfully and leaves the
-  canonical anchor and tmux session unchanged.
-- In `snapshot` mode, a missing browser fails startup. A later capture, render,
+- Chromium readiness controls both snapshot startup and whether guide anchors
+  expose `🖼️` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session
   unchanged for retry.
 - Snapshot refreshes hash styled capture and metadata before invoking Chromium,
   coalesce per session, use bounded capture/render concurrency, and edit
   automatically no more than once every ten seconds when content changed. A
-  manual refresh may render the same capture immediately.
+  failed automatic migration attempt is also throttled before capture and
+  rendering, preventing retry amplification. A manual refresh may render the
+  same capture immediately.
+- An acknowledged one-off conversational request ends with either its reply or
+  one bounded failure notice. A concurrent anchor or mode change supersedes the
+  request visibly rather than delivering it against a different live anchor.
 - Entering `snapshot` mode converts a text anchor to photo media in place so its
   message identity, pin, reply routing, and controls remain canonical. Returning
   to `guide` mode uses one persisted send-before-retire rotation because Telegram

@@ -92,11 +92,6 @@ type StyledCapture struct {
 
 const paneFormat = "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"
 
-const (
-	compatFullMaxBytes = 4 << 20
-	compatFullMaxLines = 50_000
-)
-
 func New(r Runner) Manager {
 	return Manager{Runner: r}
 }
@@ -305,38 +300,6 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}, nil
 }
 
-// CaptureVisibleSemantic returns model-facing text with wrapped lines joined
-// and terminal control sequences removed.
-func (m Manager) CaptureVisibleSemantic(ctx context.Context, paneID string) (string, error) {
-	out, err := m.Runner.Run(ctx, "capture-pane", "-p", "-J", "-t", paneID)
-	return semanticCapture(out), err
-}
-
-// CaptureScrollbackTail returns at most maxBytes and maxLines of semantic text.
-// ExecRunner streams the full capture through fixed-capacity storage. A legacy
-// Runner without StreamRunner support must materialize tmux stdout first, but
-// the returned value remains bounded.
-func (m Manager) CaptureScrollbackTail(ctx context.Context, paneID string, maxBytes, maxLines int) (string, error) {
-	if maxBytes <= 0 {
-		return "", fmt.Errorf("max bytes must be positive")
-	}
-	if maxLines <= 0 {
-		return "", fmt.Errorf("max lines must be positive")
-	}
-
-	tail := newTailBuffer(maxBytes)
-	args := []string{"capture-pane", "-p", "-J", "-S", "-", "-E", "-", "-t", paneID}
-	var err error
-	if runner, ok := m.Runner.(StreamRunner); ok {
-		err = runner.RunToWriter(ctx, tail, args...)
-	} else {
-		var out string
-		out, err = m.Runner.Run(ctx, args...)
-		_, _ = tail.Write([]byte(out))
-	}
-	return tailLines(semanticCapture(string(tail.Bytes())), maxLines), err
-}
-
 // DumpScrollback streams a physical, ANSI-preserving capture to dst. It does
 // not join wrapped lines or buffer tmux stdout in Engram. The runner must
 // implement StreamRunner so this memory behavior is explicit.
@@ -349,16 +312,6 @@ func (m Manager) DumpScrollback(ctx context.Context, paneID string, dst io.Write
 		return fmt.Errorf("tmux runner does not support streaming")
 	}
 	return runner.RunToWriter(ctx, dst, "capture-pane", "-p", "-e", "-N", "-S", "-", "-E", "-", "-t", paneID)
-}
-
-// CaptureVisible is retained for application compatibility.
-func (m Manager) CaptureVisible(ctx context.Context, paneID string) (string, error) {
-	return m.CaptureVisibleSemantic(ctx, paneID)
-}
-
-// CaptureFull is retained as a bounded compatibility wrapper.
-func (m Manager) CaptureFull(ctx context.Context, paneID string) (string, error) {
-	return m.CaptureScrollbackTail(ctx, paneID, compatFullMaxBytes, compatFullMaxLines)
 }
 
 func (m Manager) KillWindow(ctx context.Context, windowID string) error {
@@ -455,61 +408,6 @@ func validImmutableID(id string, prefix byte) bool {
 	}
 	_, err := strconv.ParseUint(id[1:], 10, 64)
 	return err == nil
-}
-
-type tailBuffer struct {
-	buf   []byte
-	start int
-	size  int
-}
-
-func newTailBuffer(capacity int) *tailBuffer {
-	return &tailBuffer{buf: make([]byte, capacity)}
-}
-
-func (b *tailBuffer) Write(p []byte) (int, error) {
-	written := len(p)
-	if len(p) >= len(b.buf) {
-		copy(b.buf, p[len(p)-len(b.buf):])
-		b.start = 0
-		b.size = len(b.buf)
-		return written, nil
-	}
-	if overflow := b.size + len(p) - len(b.buf); overflow > 0 {
-		b.start = (b.start + overflow) % len(b.buf)
-		b.size -= overflow
-	}
-	end := (b.start + b.size) % len(b.buf)
-	first := min(len(p), len(b.buf)-end)
-	copy(b.buf[end:], p[:first])
-	copy(b.buf, p[first:])
-	b.size += len(p)
-	return written, nil
-}
-
-func (b *tailBuffer) Bytes() []byte {
-	out := make([]byte, b.size)
-	first := min(b.size, len(b.buf)-b.start)
-	copy(out, b.buf[b.start:b.start+first])
-	copy(out[first:], b.buf[:b.size-first])
-	return out
-}
-
-func tailLines(s string, maxLines int) string {
-	if s == "" {
-		return ""
-	}
-	lines := 1
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] != '\n' {
-			continue
-		}
-		lines++
-		if lines > maxLines {
-			return s[i+1:]
-		}
-	}
-	return s
 }
 
 func semanticCapture(s string) string {

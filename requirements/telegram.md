@@ -2,111 +2,59 @@
 
 Telegram is Engram's only user interface.
 
-## Admission
+## Admission And Commands
 
-- Engram accepts exactly one configured Telegram user.
-- For direct messages, `TELEGRAM_CHAT_ID` may be omitted and defaults to
-  `TELEGRAM_ALLOWED_USER_ID`.
-- Unauthorized messages must not reach tmux, session, attachment, command, or
-  processed-message handlers. Admission bookkeeping may advance without
-  retaining the rejected sender's identifiers.
-
-## Commands
-
-- Command metadata lives in `internal/commands`.
-- `/help`, Telegram bot command registration, and `engram commands` must derive
-  from the same registry.
-- Every public slash command handled by the app must have metadata. The parser
-  may temporarily accept undocumented compatibility aliases for renamed input
-  operations, but aliases must not appear in help, registration, or command
-  JSON.
-- Telegram-invalid command names must not be registered with Telegram.
-- Replies beginning with `//` are session input, not Engram commands. Engram
-  removes exactly one leading slash before forwarding them to the replied-to
-  tracked pane.
+- Engram accepts exactly one configured user and one private chat.
+- Unauthorized updates must not reach tmux or application handlers. Bounded
+  admission bookkeeping may advance without retaining rejected identifiers.
+- Command metadata has one source: `/help`, Bot API registration, and
+  `engram commands` derive from the registry. Every public slash command handled
+  by the app has metadata.
+- Replies beginning `//` are escaped pane input, not Engram commands.
+- `/mode` reports the current and available presentations, distinguishing
+  configured Haiku from locally probed Chromium. `/mode guide` or `/mode
+  snapshot` begins migration only when the target capability is available, and
+  the selected mode persists across restart.
 
 ## Delivery
 
-- Telegram send/edit failures must be audited.
-- `/sessions` must reply even when no Engram sessions exist.
-- In `guide` mode, `/sessions` groups tracked work as lost, needs you, and quiet.
-  Lost is deterministic and takes precedence. Unacknowledged handoffs appear
-  oldest first with a compact recommended action; acknowledged handoffs remain
-  quiet with an observing marker. In `snapshot` mode, historical handoffs do not
-  affect ordering or labels; the view groups deterministic lost and quiet work.
-- Empty inline keyboards must not be attached to newly sent messages. An edit
-  may include an explicitly empty keyboard to retire an anchor's controls.
-- Anchor messages may use Telegram HTML, but fall back to plain text only for
-  formatting parse errors. Rate limits and deleted messages must not amplify
-  into an immediate second edit.
-- A failed initial anchor delivery leaves the session unwatched. Replacement
-  anchors are created only when Telegram reports the original missing, too old,
-  or otherwise uneditable; transient server errors retain the original anchor.
-- Bot API errors are typed and sanitized at the client boundary; request URLs,
-  paths, and bot tokens must never appear in returned errors.
-- Telegram `retry_after` is honored with bounded, context-aware retry. A
-  `message is not modified` edit response counts as success.
+- `/sessions` always replies and groups tracked work as lost, then active by
+  recency. Presentation mode and model output do not alter this ordering.
+- Telegram send/edit failures are audited. Empty keyboards are not attached to
+  new messages; explicit empty keyboards may retire controls.
+- Anchor HTML falls back to plain text only for formatting errors. Rate limits
+  and unchanged edits must not amplify into replacement messages.
+- Initial delivery failure leaves a session unwatched. A replacement anchor is
+  created only when Telegram says the canonical message is uneditable.
+- Bot API errors are typed and sanitized; `retry_after` is honored with bounded,
+  context-aware retry.
+- Haiku prose is not trusted as Telegram markup. Engram escapes raw HTML and
+  converts only its supported Markdown subset.
 
-## Formatting
+## Callbacks And Alternate Views
 
-- Haiku summaries are not trusted as Telegram-ready markup.
-- Engram converts a small Markdown subset to Telegram HTML:
-  bold, italic, inline code, and fenced code blocks.
-- Conversion must escape raw HTML characters.
-
-## Callbacks
-
-- Refresh, snapshot, reattach, watch, close, and attach callbacks must be bounded to the
-  configured user and chat.
-- Callback failures must not stop polling.
-- Every callback query is answered, including unauthorized, malformed, and
-  stale callbacks. Positive text is sent only after validating the target.
-- Refresh, snapshot, key, and reattach callbacks must come from the session's current
-  canonical anchor. Controls on a retired or superseded message are inert even
-  when Telegram has not yet removed their visible keyboard.
-- Close buttons open a second confirm/cancel prompt using a random, single-use
-  token that expires after two minutes and is invalidated by restart.
-- Closed and lost anchors expose no key or refresh controls.
-- A lost anchor exposes only `🧭 Reattach`. It restores the session when its
-  original immutable pane/window identity is live and otherwise directs the
-  user to `/sessions`.
-- In `guide` mode, a successful snapshot callback must answer immediately,
-  queue bounded background work, and send a Telegram photo as a reply to the
-  canonical live anchor. In `snapshot` mode, the same legacy callback refreshes
-  the canonical photo instead. Rendering and upload must not block polling or
-  tmux input.
-- Running `snapshot` anchors expose refresh and the allowlisted key buttons but
-  no redundant image button. Their media is edited in place for changed frames.
-
-## Handoffs
-
-This lifecycle is active only in `guide` mode. Persisted handoffs remain intact
-but do not rotate anchors, change `/sessions` ordering, or acknowledge input in
-`snapshot` mode.
-
-- Opening, replacing, or reopening a settled handoff rotates the session's live
-  anchor. Engram sends the full new anchor as a reply to its predecessor, makes
-  the new message canonical, and continues all later rendering there.
-- After canonical state is durable, Engram compacts the predecessor to a short
-  continuation marker, clears its keyboard, and unpins it. A transient edit or
-  unpin failure remains persisted for retry; routing and callbacks still accept
-  only the canonical message.
-- A failed new-anchor send leaves the predecessor canonical. A state failure
-  after sending the prospective anchor causes a best-effort removal of its
-  controls and pin. A crash in that external-action window may leave an inert
-  orphan message, but it must not create two routable anchors.
-- Repeated captures of the same open handoff do not rotate again. An
-  unacknowledged handoff adds `needs you` to the live anchor. After input, that
-  same anchor says Engram is observing until later evidence resolves or reopens
-  the handoff.
+- Every callback is answered and authorized against configured user, chat, and
+  current canonical message. Retired controls are inert.
+- Close uses a random, single-use confirmation token expiring after two minutes.
+- Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
+- Guide anchors expose refresh, allowed keys, and `🖼️` only when Chromium is
+  ready. Snapshot anchors expose refresh, allowed keys, and `🗣️` only when
+  Haiku is configured.
+- `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one Haiku
+  request over the shared bounded frame and replies conversationally to a
+  snapshot anchor. Neither blocks polling or replaces the canonical anchor.
+- The latest conversational reply and latest screenshot reply for each session
+  route Telegram replies to that session. Publishing a newer alternate of the
+  same kind makes the predecessor stale. Replies to known stale alternates must
+  not reach tmux and receive a concise normal bot reply; Telegram offers no
+  callback-style ephemeral banner for an ordinary message reply.
+- Snapshot anchors edit their media in place for changed frames. Mode migration
+  preserves one canonical, routable anchor even where Telegram requires
+  retiring a predecessor.
 
 ## Pinned Anchors
 
-- Every running watched session with an anchor should have its canonical anchor
-  silently pinned in the configured DM. Pinning must not create a notification.
-- Rotation pins the new canonical anchor before unpinning its predecessor.
-- Unwatch, close, and deterministic identity loss unpin the current anchor.
-  Rewatch or exact-identity recovery pins it again.
-- Pin state is unknown after process start and must be reconciled once for every
-  tracked anchor. Pin and unpin failures are audited and retried without
-  blocking tmux input or anchor rendering.
+- Every running watched session should have its canonical anchor silently
+  pinned. Unwatch, close, and identity loss unpin it.
+- Pin state is reconciled after restart. Pin failures are audited and retried
+  without blocking tmux input or rendering.

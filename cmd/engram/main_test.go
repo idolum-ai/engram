@@ -71,14 +71,43 @@ func TestSnapshotPreflightRejectsNonBrowserExecutable(t *testing.T) {
 	_, stderr, code := captureCommand(t, func() int {
 		return run([]string{"preflight", "--env", env})
 	})
-	if code != 1 || !strings.Contains(stderr, "snapshot anchor mode:") {
+	if code != 1 || !strings.Contains(stderr, "snapshot probe:") {
 		t.Fatalf("snapshot preflight code=%d stderr=%s", code, stderr)
 	}
 	diagnostics := diagnosticsText(config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "terminal"}, "preflight")
-	for _, want := range []string{"anchor mode: snapshot", "model: disabled", "anthropic_api: not_called"} {
+	for _, want := range []string{"anchor mode: unavailable", "haiku: unavailable", "model: unavailable", "anthropic_api: not_called"} {
 		if !strings.Contains(diagnostics, want) {
 			t.Fatalf("snapshot diagnostics missing %q:\n%s", want, diagnostics)
 		}
+	}
+}
+
+func TestPreflightUsesPersistedModeBeforeEnvironmentFallback(t *testing.T) {
+	env := writeTestEnv(t)
+	cfg, err := config.Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.Home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stateJSON := `{"version":6,"anchor_mode":"guide","next_session_id":1,"terminal_sessions":[],"attachments":[]}`
+	if err := os.WriteFile(cfg.StatePath(), []byte(stateJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withSnapshotMode := strings.ReplaceAll(string(mustRead(t, env)), "ENGRAM_HOME=", "ENGRAM_ANCHOR_MODE=snapshot\nENGRAM_SNAPSHOT_BROWSER=/missing/chromium\nENGRAM_HOME=")
+	if err := os.WriteFile(env, []byte(withSnapshotMode), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := captureCommand(t, func() int {
+		return run([]string{"preflight", "--env", env})
+	})
+	if code != 0 || !strings.Contains(stdout, "anchor mode: guide") {
+		t.Fatalf("preflight code=%d stderr=%s stdout=%s", code, stderr, stdout)
+	}
+	if !strings.Contains(stdout, "haiku: configured, not probed") {
+		t.Fatalf("preflight Haiku status was not honest:\n%s", stdout)
 	}
 }
 
@@ -124,4 +153,13 @@ func captureCommand(t *testing.T, fn func() int) (string, string, int) {
 	_, _ = io.Copy(&outBuf, outR)
 	_, _ = io.Copy(&errBuf, errR)
 	return outBuf.String(), errBuf.String(), code
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

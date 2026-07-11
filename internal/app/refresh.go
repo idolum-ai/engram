@@ -10,13 +10,14 @@ import (
 	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
+	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
 const maxStoredVisibleCaptureBytes = 16 * 1024
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
-	if a.Config.SnapshotAnchors() {
+	if a.snapshotAnchors() {
 		a.refreshSnapshotAnchor(ctx, id, force)
 		return
 	}
@@ -48,7 +49,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}
-	capture, err := a.Tmux.CaptureVisibleSemantic(tctx, ts.TmuxPaneID)
+	capture, err := a.Tmux.CaptureStyled(tctx, ts.TmuxPaneID, terminalshot.TargetRows)
 	releaseSlot(a.captureSlots)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -68,29 +69,16 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		lock.Unlock()
 		return
 	}
-	hash := sha(capture)
+	hash := sha(capture.Text)
 	if hash == ts.LastRawCaptureHash {
-		transition := handoffUnchanged
-		if ts.HandoffCandidate != nil || ts.Handoff != nil && !ts.Handoff.AcknowledgedAt.IsZero() {
-			if _, _, stateErr := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
-				transition = settleHandoffCandidate(s, hash, time.Now().UTC())
-			}); stateErr != nil {
-				_ = a.audit("state.handoff", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
-				return
-			}
-		}
-		a.auditHandoffTransition(id, transition, hash)
-		if transition != handoffUnchanged {
-			a.renderHandoffTransition(ctx, id, transition, "", true)
-			return
-		}
-		a.ensureHandoffAnchor(ctx, id)
 		if !force {
 			return
 		}
 	}
-	report, guideErr := a.guideSummary(ctx, ts, capture, ts.LastRawCaptureHash != "", hash != ts.LastRawCaptureHash)
-	summary := ""
+	summary, guideErr := a.conversationalSummary(ctx, ts.ID, capture.Text)
+	if a.snapshotAnchors() {
+		return
+	}
 	if guideErr != nil {
 		if stateErr := a.Store.NoteHaiku(guideErr.Error()); stateErr != nil {
 			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
@@ -101,7 +89,6 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			summary = "summary unavailable: " + guideErr.Error()
 		}
 	} else {
-		summary = report.TelegramText()
 		if stateErr := a.Store.NoteHaiku(""); stateErr != nil {
 			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
@@ -113,14 +100,10 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		lock.Unlock()
 		return
 	}
-	transition := handoffUnchanged
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
-		s.LastRawCapture = tailUTF8(capture, maxStoredVisibleCaptureBytes)
+		s.LastRawCapture = tailUTF8(capture.Text, maxStoredVisibleCaptureBytes)
 		s.LastRawCaptureHash = hash
 		s.LastSummary = summary
-		if guideErr == nil {
-			transition = observeHandoff(s, report, hash, time.Now().UTC())
-		}
 	}); err != nil {
 		lock.Unlock()
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
@@ -128,21 +111,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	lock.Unlock()
-	a.auditHandoffTransition(id, transition, hash)
-	a.renderHandoffTransition(ctx, id, transition, summary, force)
-}
-
-func (a *App) renderHandoffTransition(ctx context.Context, id int, transition handoffTransition, summary string, final bool) {
-	if !rotatesAnchor(transition) {
-		a.updateAnchorLocal(ctx, id, summary, final)
-		a.ensureHandoffAnchor(ctx, id)
-		return
-	}
-	a.ensureHandoffAnchor(ctx, id)
-	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.Handoff == nil || ts.Handoff.AnchorMessageID != ts.AnchorMessageID {
-		a.updateAnchorLocal(ctx, id, summary, final)
-	}
+	a.updateAnchorLocal(ctx, id, summary, force)
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -173,155 +142,16 @@ func headUTF8(text string, maxBytes int) string {
 	return text[:end]
 }
 
-func (a *App) guideSummary(ctx context.Context, ts state.TerminalSession, capture string, hasPreviousCapture, captureChanged bool) (anthropic.GuideReport, error) {
-	var handoffEvidence []string
-	if ts.Handoff != nil {
-		handoffEvidence = append(handoffEvidence, ts.Handoff.Evidence...)
-	}
-	if ts.HandoffCandidate != nil {
-		handoffEvidence = append(handoffEvidence, ts.HandoffCandidate.Evidence...)
-	}
-	visibleForHaiku, repeatedLines := a.prepareHaikuVisibleCapturePreserving(ts.ID, capture, handoffEvidence)
-	input := anthropic.SummaryInput{
-		SessionID:          ts.ID,
-		State:              string(ts.State),
-		LastInput:          ts.LastInputPreview,
-		LastInputMode:      ts.LastInputMode,
-		PreviousSummary:    ts.LastSummary,
-		HasPreviousCapture: hasPreviousCapture,
-		CaptureChanged:     captureChanged,
-		VisibleCapture:     visibleForHaiku,
-	}
-	if ts.Handoff != nil {
-		input.OpenHandoff = true
-		input.HandoffKey = ts.Handoff.Key
-		input.HandoffStatus = ts.Handoff.StatusReport
-		input.HandoffAction = ts.Handoff.RecommendedAction
-		input.HandoffEvidence = append([]string(nil), ts.Handoff.Evidence...)
-		input.HandoffAcknowledged = !ts.Handoff.AcknowledgedAt.IsZero()
-	}
+func (a *App) conversationalSummary(ctx context.Context, sessionID int, capture string) (string, error) {
 	if !acquireSlot(ctx, a.haikuSlots) {
-		return anthropic.GuideReport{}, ctx.Err()
+		return "", ctx.Err()
 	}
-	report, err := a.Anthropic.Guide(ctx, input)
+	summary, err := a.Anthropic.Converse(ctx, anthropic.ConversationInput{SessionID: sessionID, VisibleText: capture})
 	releaseSlot(a.haikuSlots)
 	if err != nil {
-		return anthropic.GuideReport{}, err
+		return "", err
 	}
-	report = a.redactGuideReport(report)
-	if !report.WantsFullBuffer() {
-		return report, nil
-	}
-	tctx, cancel := tmux.TimeoutContext(ctx)
-	defer cancel()
-	if !acquireSlot(tctx, a.captureSlots) {
-		return report, nil
-	}
-	full, err := a.Tmux.CaptureScrollbackTail(tctx, ts.TmuxPaneID, 24_000, 800)
-	releaseSlot(a.captureSlots)
-	if err != nil || strings.TrimSpace(full) == "" {
-		return report, nil
-	}
-	input.FullCapture = filterCaptureLinesPreserving(full, repeatedLines, handoffEvidence)
-	if !acquireSlot(ctx, a.haikuSlots) {
-		return report, nil
-	}
-	refined, err := a.Anthropic.Guide(ctx, input)
-	releaseSlot(a.haikuSlots)
-	if err != nil {
-		return report, nil
-	}
-	return a.redactGuideReport(refined), nil
-}
-
-func (a *App) filterHaikuVisibleCapture(sessionID int, capture string) string {
-	filtered, _ := a.prepareHaikuVisibleCapture(sessionID, capture)
-	return filtered
-}
-
-func (a *App) prepareHaikuVisibleCapture(sessionID int, capture string) (string, map[string]bool) {
-	return a.prepareHaikuVisibleCapturePreserving(sessionID, capture, nil)
-}
-
-func (a *App) prepareHaikuVisibleCapturePreserving(sessionID int, capture string, evidence []string) (string, map[string]bool) {
-	a.captureMu.Lock()
-	defer a.captureMu.Unlock()
-	if a.captureHistory == nil {
-		a.captureHistory = map[int][]map[string]bool{}
-	}
-	history := a.captureHistory[sessionID]
-	repeated := map[string]bool{}
-	for _, previous := range history {
-		for line := range previous {
-			repeated[line] = true
-		}
-	}
-	current := map[string]bool{}
-	for _, line := range strings.Split(capture, "\n") {
-		current[line] = true
-	}
-	history = append(history, current)
-	if len(history) > haikuCaptureHistoryLimit {
-		history = history[len(history)-haikuCaptureHistoryLimit:]
-	}
-	a.captureHistory[sessionID] = history
-	return filterCaptureLinesPreserving(capture, repeated, evidence), repeated
-}
-
-func filterCaptureLines(capture string, repeated map[string]bool) string {
-	return filterCaptureLinesPreserving(capture, repeated, nil)
-}
-
-func filterCaptureLinesPreserving(capture string, repeated map[string]bool, evidence []string) string {
-	if len(repeated) == 0 {
-		return capture
-	}
-	lines := strings.Split(capture, "\n")
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if repeated[line] && !lineSupportsHandoffEvidence(line, evidence) {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-	return strings.Join(filtered, "\n")
-}
-
-func lineSupportsHandoffEvidence(line string, evidence []string) bool {
-	line = strings.ToLower(strings.Join(strings.Fields(line), " "))
-	if line == "" {
-		return false
-	}
-	for _, excerpt := range evidence {
-		excerpt = strings.ToLower(strings.Join(strings.Fields(excerpt), " "))
-		if excerpt == "" {
-			continue
-		}
-		if strings.Contains(excerpt, line) || strings.Contains(line, excerpt) {
-			return true
-		}
-		significant, matched := 0, 0
-		for _, word := range strings.Fields(excerpt) {
-			word = strings.Trim(word, "[]():;,.!?`'\"")
-			if len(word) < 3 {
-				continue
-			}
-			significant++
-			if strings.Contains(line, word) {
-				matched++
-			}
-		}
-		if matched >= 2 || significant == 1 && matched == 1 {
-			return true
-		}
-	}
-	return false
-}
-
-func (a *App) clearHaikuCaptureHistory(sessionID int) {
-	a.captureMu.Lock()
-	defer a.captureMu.Unlock()
-	delete(a.captureHistory, sessionID)
+	return a.redactText(summary), nil
 }
 
 func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, final bool) {
@@ -334,18 +164,18 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 		return
 	}
 	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
-		if !a.Config.SnapshotAnchors() || ts.AnchorFormat != "snapshot" {
+		if !a.snapshotAnchors() || ts.AnchorFormat != "snapshot" {
 			summary = firstNonEmpty(ts.LastSummary, summary)
 		}
 		final = true
 	}
-	if a.Config.SnapshotAnchors() && ts.AnchorFormat == "snapshot" {
+	if a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
 		a.updateSnapshotAnchorCaptionLocked(ctx, ts, summary, final)
 		return
 	}
 	rendered := a.renderLocal(ts, summary)
 	renderHash := sha(rendered)
-	if !a.Config.SnapshotAnchors() && ts.AnchorFormat == "snapshot" {
+	if !a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
 		a.rotateSnapshotAnchorToTextLocked(ctx, ts, rendered, renderHash)
 		return
 	}
@@ -368,16 +198,16 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 		}
 		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, markup)
 		if sendErr == nil {
-			oldAnchorID := ts.AnchorMessageID
+			oldID := ts.AnchorMessageID
+			oldFormat := firstNonEmpty(ts.AnchorFormat, "text")
 			updated, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 				s.AnchorChatID = msg.Chat.ID
 				s.AnchorMessageID = msg.MessageID
 				s.AnchorFormat = "text"
+				s.RetiringAnchorMessageID = oldID
+				s.RetiringAnchorFormat = oldFormat
 				s.AnchorPinned = false
-				s.AnchorPinKnown = !anchorShouldBePinned(*s)
-				if s.Handoff != nil && s.Handoff.AnchorMessageID == oldAnchorID {
-					s.Handoff.AnchorMessageID = msg.MessageID
-				}
+				s.AnchorPinKnown = false
 				s.LastRenderHash = renderHash
 				s.LastAnchorEditAt = time.Now().UTC()
 			})
@@ -385,6 +215,9 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 				_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 			} else if anchorShouldBePinned(updated) {
 				a.ensureCurrentAnchorPinnedLocked(ctx, updated)
+			}
+			if err == nil {
+				a.finishAnchorRotationLocked(ctx, id)
 			}
 		} else {
 			_ = a.audit("telegram.anchor_replacement", "failed", map[string]any{"session_id": id, "error": sendErr.Error()})
@@ -434,7 +267,7 @@ func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
 }
 
 func (a *App) queueManualRefresh(id int) {
-	if !a.Config.SnapshotAnchors() {
+	if !a.snapshotAnchors() {
 		a.queueRefresh(id, true, 0)
 		return
 	}
@@ -643,17 +476,22 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalLost {
 		return telegram.RecoverMarkup(ts.ID)
 	}
-	return telegram.RefreshMarkup(ts.ID)
+	return telegram.AnchorMarkup(ts.ID, false, false)
 }
 
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
-	if ts.State == state.TerminalRunning && a.Config.SnapshotAnchors() {
-		return telegram.SnapshotAnchorMarkup(ts.ID)
+	if ts.State == state.TerminalRunning {
+		return telegram.AnchorMarkup(ts.ID, ts.AnchorFormat != "snapshot" && a.snapshotReady, ts.AnchorFormat == "snapshot" && a.haikuAvailable)
 	}
 	return anchorMarkup(ts)
 }
 
 func (a *App) scheduler(ctx context.Context) {
+	for _, ts := range a.Store.Snapshot().TerminalSessions {
+		if ts.AnchorMessageID != 0 {
+			a.reconcileAnchorControls(ctx, ts.ID)
+		}
+	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	nextCapture := map[int]time.Time{}

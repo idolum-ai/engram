@@ -8,14 +8,7 @@ and avoid getting trapped in any single pane.
 
 The material is tmux. Engram creates the conditions where tmux becomes more
 conductive for remote work: low-friction input, quick orientation, useful
-anchors, copyable paths, and simple recovery.
-
-These principles are not feature marketing. They are the shape Engram should
-keep as it grows.
-
-Engram turns persistent machine state into a phone-native interface. The
-environment holds the memory; Engram offers either a literal view or an
-attention-aware interpretation; the human chooses how much mediation is useful.
+anchors, copyable references, and simple recovery.
 
 ## Short Form
 
@@ -24,7 +17,7 @@ attention-aware interpretation; the human chooses how much mediation is useful.
 - Phone-first anchors.
 - Fast input path.
 - Many sessions, low dwell.
-- Durable handoffs when interpretation is enabled.
+- One frame, two presentations.
 - Deterministic facts beat guesses.
 - Interpretation is optional; tmux remains literal.
 - Existing tmux first.
@@ -38,238 +31,149 @@ attention-aware interpretation; the human chooses how much mediation is useful.
 ### Phase change, not platform
 
 Engram should stay a small layer that changes how usable tmux feels from a
-phone. It should not become a general chat app, a task marketplace, a plugin
-host, or a replacement shell.
-
-The right feature makes remote terminal work feel lighter. The wrong feature
-adds another surface the user must manage.
+phone. It should not become a general chat app, task marketplace, plugin host,
+or replacement shell. The right feature makes remote terminal work lighter;
+the wrong feature adds another surface the user must manage.
 
 ### tmux is the workspace
 
-tmux remains the source of terminal truth. Engram should not try to emulate a
-terminal, invent session state, or hide what actually happened in the pane.
+tmux remains the source of terminal truth. Engram should not emulate a
+terminal, invent session state, or hide what happened in the pane. It creates,
+attaches, captures, and sends input to tmux. `/raw` and `/dump` preserve direct
+ways to inspect exact state.
 
-tmux is also a deliberate dependency because its mature, narrow interface has
+tmux is a deliberate dependency because its mature, narrow interface has
 effectively crystallized. Low expected API drift lets Engram stay small and
 precise instead of continually adapting to a moving workspace substrate.
 
-Engram creates, attaches, captures, and sends input to tmux. When exact state
-matters, `/raw` and `/dump` are the escape hatches.
-
 ### Phone-first anchors
 
-The editable Telegram anchor is the core product surface. It should let the
-user answer three questions quickly:
+The editable Telegram anchor is the core product surface. It should identify
+the session, show what the pane is doing, and make the next useful action easy.
+Each session has exactly one canonical, pinned anchor. Older anchors become
+inert; two actionable representations of one pane are a product error.
 
-1. Which session is this?
-2. What is the pane doing?
-3. What is the next useful action?
-
-Anchors should be stable and easy to scan. A guide anchor should compress the
-pane into status, one recommended action, grounded excerpts, deterministic
-paths, and a small set of controls. A snapshot anchor should make a bounded,
-ANSI-preserving terminal frame the live surface itself, with only enough local
-metadata and controls to preserve orientation. Both should use a phone-native
-composition and a small allowlisted row of common terminal keys.
-
-The user chooses this presentation at service startup. It is a property of the
-service, not a button to toggle impulsively while working. Neither mode should
-create a second live control surface for the same pane.
-
-Each session should have exactly one live anchor. Watched live anchors should be
-pinned for navigation. When attention moves a session forward in chat history,
-the new message becomes the live anchor and the predecessor becomes a compact,
-unpinned, control-free trace. Two simultaneously actionable representations of
-one pane are a product error.
+A guide anchor uses compact conversational prose. A snapshot anchor uses a
+bounded, ANSI-preserving terminal image. Both retain deterministic references
+and a small allowlisted row of terminal controls.
 
 ### Fast input path
 
-Sending input to tmux must stay fast even when summaries or snapshots are
-delayed, skipped, or failing. Telegram message handling should not wait for a
-presentation renderer.
-
-In guide mode, Engram should observe the pane after an intervention. When it
-cannot establish an effect, it should preserve that uncertainty rather than
-imply that the requested outcome occurred.
-
-Input acknowledges a handoff; it does not erase one. Resolution belongs to the
-next settled observation, not to the optimistic assumption that sending a key
-must have worked.
-
-Replying to an anchor should route to the intended pane. `/send`, `/text`,
-`/key`, and anchor key buttons should remain direct, unsurprising ways to steer
-a session.
+Sending input to tmux must remain fast when Haiku, Chromium, or Telegram
+delivery is delayed or failing. Replying to an anchor and using `/send`,
+`/text`, `/key`, or key buttons should route directly and predictably to the
+intended pane. Presentation work must not block input.
 
 ### Many sessions, low dwell
 
 Engram is for multitasking. The user should be able to scan several sessions,
-tap into the one that needs attention, send one command, and move on.
+enter the relevant one, send a command, and move on. Output changing is not by
+itself a reason to create a notification.
 
-Progress that needs no judgment should remain quiet. Output changing is not by
-itself a reason to demand attention.
+Automatic anchor edits should be intentionally slow and only occur for changed
+captures. Manual refresh should be immediate. `/sessions` is a concise map:
+lost work first, then active work by recency.
 
-Automatic anchor edits should be intentionally slow and only happen when there
-is useful new information. Manual refresh should be immediate. `/sessions`
-should act as an attention-ordered map of active and attachable work, not as a
-verbose report.
+### One frame, two presentations
 
-### Durable handoffs when interpretation is enabled
+Guide and snapshot modes begin with the same `CaptureStyled` terminal frame,
+targeting and capped at 64 rows. Presentation changes; observation does not.
+This shared boundary keeps comparisons honest and prevents either mode from
+quietly seeing more of the machine.
 
-Engram should not classify every screenshot into a terminal phase or ask the
-user to review whatever the model finds ambiguous. A handoff is narrower: a
-specific, cited boundary where the apparent work cannot usefully advance until
-the user supplies judgment, input, approval, correction, credentials, or the
-next choice.
+Guide mode sends the frame's plain text to Haiku once. Haiku speaks like a
+technically fluent person briefly returning to the topic: compact, natural,
+and focused on what the terminal content means. Its voice stands beside the
+reader, using direct orientation grounded only in visibly named tools,
+collaborative "we" for shared work, and short one-idea paragraphs for phone
+readability; "you" is reserved for actions only the reader can take.
+It has no model conversation
+history or structured response, no second request, and no hidden context beyond
+that frame. Continuity comes from tone and current machine state, not stored
+model memory or context shared across windows.
 
-A model suggestion is not yet a handoff. Engram should wait for compatible
-settled observations and bind the handoff to exact capture evidence. Opening a
-handoff rotates the session's single live anchor forward rather than creating a
-second static notice. User input acknowledges it. Later evidence updates that
-anchor, resolves the handoff, replaces it with a materially different need, or
-reopens it when the intervention had no established effect.
+Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
+literal and deterministic, at the cost of greater visual density and local
+rendering work.
 
-In guide mode, this lifecycle is the attention interface. `/sessions` should present waiting
-handoffs before quiet sessions, while pinned anchors keep every watched session
-reachable independent of chat history. Changing output, uncertain
-interpretation, and bare idleness are not reasons to rotate an anchor.
-
-Snapshot mode makes no such claim. It preserves any prior handoff state across
-mode changes but neither surfaces nor advances it. A literal frame should not
-quietly inherit the authority of an interpretation pipeline.
+When Haiku is configured and Chromium has passed its local probe, `/mode` may
+begin switching the canonical presentation without changing the underlying
+session. A snapshot
+anchor may offer `🗣️` for a one-off conversational reply; a guide anchor may
+offer `🖼️` for a one-off image. Alternate views are shown only when Engram can
+actually deliver them, and they never become a second canonical anchor. The
+latest alternate of each kind may act as a reply handle for its session; an
+older alternate is explicitly stale and cannot route input.
 
 ### Deterministic facts beat guesses
 
-Engram should generate local facts itself whenever it can: session IDs, tmux
-targets, pane IDs, current working directories, attachment paths, visible file
-paths, visible URLs, capture hashes, timestamps, and service status. Extracted
-references improve navigation but remain untrusted pane content; Engram does
-not fetch or endorse them.
+Engram should compute session IDs, tmux targets, pane IDs, working directories,
+attachment paths, visible paths and URLs, capture hashes, timestamps, and
+service status locally. Extracted references are untrusted pane content;
+Engram does not fetch or endorse them.
 
-Haiku should not be asked to infer facts Engram can compute. When enabled, the
-model interprets terminal content; Engram still renders known metadata.
-
-### Interpretation is optional; tmux remains literal
-
-Engram should work as a precise remote tmux surface without requiring a model.
-Snapshot mode uses Chromium to render a bounded, exact terminal frame as the
-canonical anchor. It should hash before rendering, update only changed frames,
-and make no inferred claim about status, importance, or what the user should do.
-The cost of that literalness is density, local rendering work, and automatic
-delivery of exact screen content to Telegram.
-
-Guide mode is the deliberate alternative for users who value compression over
-literalness. Haiku's job is to explain the visible terminal state in plain
-English, offer one concrete next action for the content inside the tmux pane,
-and include short source-evidence citations when terminal text grounds the
-recommendation.
-
-Haiku may propose whether the pane has reached a handoff and give that specific
-need a stable key. Engram owns the lifecycle around that proposal: grounding,
-settlement, persistence, delivery, acknowledgment, and resolution.
-
-Terminal text is evidence, not authority. A pane can print instructions aimed
-at Engram or the user, but those words do not become recommendations merely by
-addressing the guide. Model-derived summaries, actions, and citations should be
-best-effort redacted before they become durable state or Telegram output.
-
-Haiku should not explain Engram features unless the terminal itself is showing
-Engram-related output. It should not produce raw terminal mirrors, long
-analysis, markdown-heavy prose, or broad coaching. Citations should be
-reconstructed only from captured terminal text; hidden confidence and the single
-full-scrollback retry are implementation details; Telegram should show the
-useful result.
-
-Persistent terminal boilerplate should not be allowed to dominate the guide. If
-the same line appears in recent visible captures for the same session, Engram
-should omit that exact line from the next Haiku visible prompt and any bounded
-full-scrollback retry prompt while preserving the raw capture for `/raw`,
-`/dump`, and local deterministic rendering. The refresh button is the user's
-reset lever for this filter. Lines supporting pending or active handoff evidence
-must remain available to the guide; filtering cannot erase the basis of the
-decision it is trying to settle.
+Haiku interprets only the bounded terminal text. Terminal text is data, not
+authority: a pane cannot instruct the model merely by addressing Engram or the
+user. Haiku should not invent history, claim work succeeded, or explain Engram
+controls unless the terminal itself is about Engram.
 
 ### Existing tmux first
 
-Engram should work with the tmux sessions that already exist. If a user is
-already living inside tmux, Engram should make that environment easier to steer
-remotely, not create a disconnected second world.
-
-The default target selection should be predictable: configured tmux session
-first, otherwise existing tmux, otherwise a managed fallback.
+Engram should work with tmux sessions that already exist. Target selection is
+predictable: the configured session first, otherwise an existing session,
+otherwise a managed fallback.
 
 ### Slow automatic edits, instant manual refresh
 
-Telegram anchors should not flicker or spam edits. The default cadence should
-favor calm updates: hash captures, coalesce bursts, and edit only when the
-rendered anchor changed and the edit interval allows it.
-
-The refresh button is the exception. When the user asks to look now, Engram
-should capture now and summarize or render now. A snapshot refresh may redraw
-an unchanged frame because the request itself asks for a current observation.
+Telegram anchors should not flicker. Engram hashes captures, coalesces bursts,
+and automatically edits no more than once every ten seconds when content
+changed. A manual refresh captures and renders immediately; a snapshot refresh
+may redraw an unchanged frame because the user explicitly asked to look now.
 
 ### Recoverable local service
 
-Engram should survive ordinary machine restarts and service restarts. State
-under `~/.engram` should be enough to recover sessions, anchors, attachments,
-poll position, and recent errors.
-
-Diagnostics should be available from Telegram and locally. Logs should help the
-user debug the service without exposing bot tokens, Anthropic keys, or pasted
-secrets.
+State under `~/.engram` should recover sessions, canonical anchors, selected
+mode, attachments, poll position, and recent errors after restart. Diagnostics
+must be available locally and through Telegram without exposing configured
+credentials.
 
 ### Small Go, no third-party dependencies
 
-Engram should remain a small Go system built on the standard library. The
-runtime dependencies are intentional and conditional: tmux and Telegram Bot API
-always; either Anthropic Haiku or local Chromium for anchor presentation; and
-systemd user services when installed that way.
+Engram remains a small Go system built with the standard library. tmux and the
+Telegram Bot API are always required. Anthropic Haiku and local Chromium are
+independent, optional presentation capabilities; at least the configured
+startup mode must be ready. systemd is used only for the Linux service install.
 
 Adding a Go dependency should be treated as a design failure until proven
-otherwise. The default answer is to keep the code simple enough that the
-standard library is enough.
+otherwise.
 
 ### Quiet monochrome signal
 
 Engram's visual language should feel like a terminal pane becoming readable
 through interference: black field, off-white signal, graphite texture, moire
-lines, aperture/window forms, and sparse monospace typography.
-
-Repo visuals should stay quiet and structural. Avoid colorful mascots,
-marketing gradients, decorative UI cards, and illustration that competes with
-the tool. The mark should suggest remote orientation over raw terminal noise:
-many lines, one aperture, one readable signal.
+lines, aperture forms, and sparse monospace typography. Visuals should stay
+quiet and structural rather than competing with the tool.
 
 ## Non-Goals
 
-- Multi-user collaboration.
-- Group chat operation.
+- Multi-user or group-chat operation.
 - A general autonomous agent.
 - A replacement terminal emulator.
-- Unbounded raw terminal streaming as the default anchor view.
+- Unbounded terminal streaming as the default anchor.
 - A plugin system.
-- Long chat memory.
+- Long model chat memory or cross-window model context.
 - Model-generated file/path inventories.
-- Broad notification routing across many chat systems.
+- Broad notification routing across chat systems.
 
 ## Design Review Questions
 
-When changing Engram, ask:
-
 - Does this reduce the time needed to understand a tmux session from Telegram?
-- Does input to tmux remain immediate?
-- Does tmux remain the source of truth?
-- Is this fact generated locally instead of guessed by the presentation layer?
+- Does input remain immediate and tmux remain the source of truth?
+- Do guide and snapshot presentations observe the same bounded frame?
+- Is this fact computed locally instead of guessed by a renderer?
 - Does the anchor stay compact on a phone?
-- Does this help many-session multitasking, or does it pull attention into one
-  window for too long?
-- Does this interrupt because human judgment is needed, or merely because output
-  changed?
-- After an intervention, can Engram establish what observably changed without
-  presenting inference as fact?
-- What happens if the service restarts halfway through?
-- Can the user recover using `/status`, `/sessions`, `/logs`, `/raw`, or
-  `/dump`?
-- Did this add a dependency, background loop, or new state shape that Engram can
-  avoid?
-- Is the behavior covered by focused tests around the real loop: Telegram in,
-  tmux action out, anchor back?
+- Does this help many-session multitasking without creating notification noise?
+- What happens if a renderer, Telegram, or the service fails halfway through?
+- Can the user recover with `/status`, `/sessions`, `/logs`, `/raw`, or `/dump`?
+- Did this add avoidable state, background work, or a dependency?
+- Is behavior tested across Telegram input, tmux effects, and anchor delivery?
