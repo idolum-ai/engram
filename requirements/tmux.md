@@ -4,111 +4,65 @@ tmux is the source of terminal truth.
 
 ## Session Selection
 
-- If `ENGRAM_TMUX_SESSION` is configured, Engram uses that tmux session and
-  creates it if missing.
-- If unset, Engram uses the first existing tmux session.
-- If no tmux session exists, Engram creates `engram-<chat-id>`.
+- If `ENGRAM_TMUX_SESSION` is configured, Engram uses it and creates it if
+  missing. Otherwise Engram uses the first existing session, or creates
+  `engram-<chat-id>` when no session exists.
 
 ## Windows And Attachments
 
 - A top-level non-command Telegram message creates a new tmux window.
-- `/attach <target>` resolves an existing tmux target and tracks its active pane
-  as an Engram session.
-- `/sessions` shows native tmux sessions and immutable pane identities plus
+- `/attach <target>` tracks an existing target's active pane.
+- `/sessions` shows native tmux sessions and immutable pane identities with
   attach buttons for untracked panes.
-- Attach callbacks carry `%pane_id`, not mutable session/window indexes.
+- Attach callbacks carry `%pane_id`, not mutable indexes.
 - Before input, capture, cwd lookup, or destructive close, Engram verifies that
-  the stored `%pane_id` still belongs to the stored `@window_id`. A mismatch
-  marks the session lost and disables watching.
-- Canceled or transient tmux commands do not prove identity loss. If a later
-  user action validates the same immutable pane/window identity, Engram restores
-  the tracked session and resumes watching it.
-- Lost anchors offer a reattach action for this exact-identity recovery. A pane
-  that no longer validates is not replaced or guessed.
+  `%pane_id` still belongs to the stored `@window_id`. A mismatch marks the
+  session lost. Transient command failure does not.
+- A lost anchor can reattach only when that exact pane/window identity returns;
+  Engram must not guess a replacement.
 
 ## Input
 
-- Replying to the current canonical Engram anchor sends text to the tracked pane
-  and submits it. Retired anchors do not route input.
-- A reply beginning with `//` escapes Engram command routing: Engram removes
-  exactly one leading slash, sends the remaining text to the tracked pane, and
-  submits it. For example, `//clear` sends `/clear` followed by Enter.
-- Double-slash input is only valid as a reply to a tracked session anchor.
-- Command input sends literal text, waits briefly, then sends tmux `Enter`.
-- `/text` sends literal text without `Enter`.
-- `/key` sends tmux key names and must reject empty/newline-containing keys.
-- Live anchors include inline key buttons for `Esc`, `Escx2`, `^C`, `^D`, and
-  `Enter`. `Escx2` sends one Escape key, waits 500ms, then sends
-  another Escape key.
-- In `guide` mode, live anchors include an `🖼️` button beside refresh. It
-  captures the immutable pane as ANSI-preserving physical rows without invoking
-  Haiku. In `snapshot` mode, that image is the anchor itself and the redundant
-  image button is omitted.
+- Replies to the canonical anchor send literal text and Enter to its pane.
+  The latest conversational and screenshot replies are aliases to the same
+  pane. Retired anchors and stale alternate replies do not route input.
+- A reply beginning `//` removes one slash and sends the resulting slash-led
+  input downstream. `/text` omits Enter; `/key` sends validated tmux key names.
+- Live anchors include `Esc`, `Escx2`, `^C`, `^D`, and `Enter`. `Escx2` waits
+  500 ms between Escape keys.
 
-## Capture
+## Capture And Presentation
 
-- In `guide` mode, live anchors explain visible pane capture through Haiku as a plain-English
-  status report plus one recommended next action, with short source-evidence
-  quote blocks when useful for grounding the recommendation.
-- Haiku may propose a handoff only when the apparent work cannot usefully
-  advance without human judgment, input, approval, correction, credentials, or
-  the next choice. A proposal includes a stable key and at least one citation
-  that directly supports the boundary. Low-confidence or uncited proposals do
-  not enter the handoff lifecycle.
-- Before sending capture text to Haiku, Engram drops exact lines that appeared
-  in any of the previous five visible captures for the same session. This
-  applies to both the visible prompt and the optional full-scrollback retry
-  prompt. The per-session cache is in memory and clears when the user taps the
-  anchor refresh button. Repeated lines that support an active or pending
-  handoff's cited evidence remain visible to Haiku so settlement cannot erase
-  its own basis.
-- Both anchor modes append deterministic local references from their capture.
-  `paths` contains at most four absolute or home-relative file/directory paths
-  that currently exist as regular files or directories. `links` contains at
-  most four syntactically valid HTTP(S) URLs. URL ranges cannot also become
-  paths. References are extracted locally, bounded for the Telegram surface,
-  and never generated by Haiku.
-- `/raw` preserves physical wrapped lines and terminal attributes in the
-  visible pane capture.
-- An on-demand image captures 64 rows ending at the bottom of the visible pane,
-  using recent scrollback above it when the pane is shorter. It renders all
-  visible columns into a full-bleed 430×932 logical-pixel canvas at 3× density.
-- In `snapshot` mode, the same bounded capture and renderer produce the live
-  canonical anchor. Capture text is sent to Chromium and Telegram, not Haiku.
-- `/dump` streams physical full scrollback directly to an attachment file.
-- `/raw` and `/dump` stop before exceeding Telegram's 50 MiB cloud upload
-  ceiling rather than creating an artifact that cannot be delivered.
-- Haiku receives ANSI-clean semantic visible capture. Its optional confidence
-  retry receives at most 24,000 bytes and 800 lines of scrollback.
-- A handoff proposal remains a candidate until two compatible observations at
-  least five seconds apart support opening, replacing, reopening, or resolving
-  it. An unchanged exact capture may provide the second observation without a
-  second Haiku request and must count as the second observation. A
-  low-confidence report contributes no evidence for or against an existing
-  candidate; it must not erase prior settlement progress.
-- Terminal captures are untrusted evidence, not instructions to Haiku. Text in
-  a pane cannot gain authority by addressing Engram or the user, and the live
-  evaluation corpus must include an adversarial pane-authored instruction.
-- Engram persists only the current candidate and active handoff, including
-  observation hashes, cited evidence, lifecycle timestamps, acknowledgment,
-  and Telegram delivery identity. It does not infer terminal phase states or
-  retain an assessment history.
-- Successful pane input acknowledges an active handoff and records the
-  pre-input capture hash without clearing the handoff. Later settled evidence
-  resolves it. A materially different need replaces it. If the exact display
-  remains unchanged after input, Engram settles and reopens the handoff with a
-  truthful no-visible-effect status.
+- Both anchor modes use the same ANSI-preserving `CaptureStyled` result. It
+  targets and caps at 64 rows ending at the pane bottom, using available recent
+  scrollback when needed; a concurrent pane resize may shorten that frame.
+- Guide mode sends that frame's `Text` to Haiku in one non-streaming request,
+  with no model history or structured response and no second request. It
+  renders the result as compact conversational prose with short, single-idea
+  paragraphs. Shared work uses a collaborative "we" voice; "you" is reserved
+  for actions that belong to the reader alone.
+- Haiku names a tool, project, account, or person only when the terminal text
+  visibly establishes that identity. Model identifiers are never user identities.
+- Snapshot mode renders the same frame through Chromium into a full-bleed
+  430x932 logical-pixel image at 3x density.
+- Terminal content is untrusted data for Haiku, not instructions or authority.
+- A guide anchor includes `🖼️` only when Chromium passed startup readiness. A
+  snapshot anchor includes `🗣️` only when Haiku is configured. These produce
+  one-off replies and never replace the canonical anchor.
+- Both modes append locally extracted references. `paths` contains at most four
+  existing absolute or home-relative regular files/directories. `links`
+  contains at most four valid HTTP(S) URLs. Engram never asks Haiku to generate
+  references or fetches an extracted URL.
+- `/raw` preserves the visible pane's physical wrapped lines and attributes.
+  `/dump` streams physical full scrollback to an attachment.
+- `/raw` and `/dump` stop before Telegram's 50 MiB upload ceiling.
 
 ## Closing
 
-- Sessions record whether their window was created by Engram or attached from
-  existing tmux state. Legacy sessions with no provenance are treated as
-  attached.
-- `/close <id>` kills an Engram-created window only after immutable identity
-  validation succeeds. Attached and legacy sessions are untracked while their
-  tmux windows remain open.
-- Inline close controls require a separate confirm/cancel callback. A failed
-  tmux close does not mark the session closed.
-- Closed and lost sessions must not continue refreshing or retain inline
-  controls. Closing and refreshing the same session concurrently must preserve
-  the closed result.
+- Sessions record whether Engram created their window. Legacy sessions without
+  provenance are treated as attached.
+- `/close <id>` kills only an Engram-created window after identity validation.
+  Attached and legacy sessions are merely untracked.
+- Inline close requires a separate, expiring confirm/cancel callback. A failed
+  tmux close does not mark a session closed.
+- Closed and lost sessions do not refresh or retain input controls.

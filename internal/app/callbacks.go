@@ -51,7 +51,6 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if !a.answerCallback(ctx, cb.ID, "refreshing") {
 			return "callback_telegram_failed"
 		}
-		a.clearHaikuCaptureHistory(id)
 		a.queueManualRefresh(id)
 		return "callback_ok"
 	case "snapshot":
@@ -68,7 +67,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "session is "+string(ts.State))
 			return "callback_user_error"
 		}
-		if a.Config.SnapshotAnchors() {
+		if a.snapshotAnchors() {
 			if !a.answerCallback(ctx, cb.ID, "refreshing live window") {
 				return "callback_telegram_failed"
 			}
@@ -76,6 +75,25 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_ok"
 		}
 		result := a.queueSnapshot(ts)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
+		return result.status("callback")
+	case "voice":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		if ts.State != state.TerminalRunning || !a.snapshotAnchors() || !a.haikuAvailable || ts.AnchorFormat != "snapshot" || ts.RetiringAnchorMessageID != 0 {
+			a.answerCallback(ctx, cb.ID, "voice is unavailable")
+			return "callback_user_error"
+		}
+		result := a.queueConversation(ts)
 		if !a.answerCallback(ctx, cb.ID, result.Message) {
 			return "callback_telegram_failed"
 		}
@@ -93,7 +111,6 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		message := result.Message
 		if result.OK() {
 			message = "reattached"
-			a.clearHaikuCaptureHistory(id)
 		}
 		if !a.answerCallback(ctx, cb.ID, message) {
 			return "callback_telegram_failed"

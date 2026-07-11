@@ -77,6 +77,7 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 		Tmux:          tmux.New(snapshotTmuxRunner{}),
 		Snapshots:     renderer,
 		captureSlots:  make(chan struct{}, 1),
+		renderSlots:   make(chan struct{}, 1),
 		transferSlots: make(chan struct{}, 1),
 		transferQueue: make(chan struct{}, 1),
 	}
@@ -99,6 +100,10 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	if replyTo != "77" || !strings.Contains(caption, "[1] build") || !strings.Contains(caption, "64 buffer rows") {
 		t.Fatalf("photo reply=%q caption=%q", replyTo, caption)
 	}
+	updated, _ := store.FindSession(session.ID)
+	if updated.SnapshotMessageID != 88 {
+		t.Fatalf("snapshot reply alias = %d, want 88", updated.SnapshotMessageID)
+	}
 	mu.Lock()
 	gotPaths := append([]string(nil), paths...)
 	mu.Unlock()
@@ -113,9 +118,69 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	}
 }
 
+func TestOnDemandSnapshotUsesSharedRenderLimit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 77
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	renderer := &fakeSnapshotRenderer{}
+	notices := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/botTOKEN/sendMessage" {
+			notices++
+			return snapshotJSONResponse(`{"message_id":87,"chat":{"id":100}}`), nil
+		}
+		if req.URL.Path != "/botTOKEN/sendPhoto" {
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+		return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+	})}
+	app := &App{
+		Config:       config.Config{TelegramChatID: 100, Home: dir},
+		Store:        store,
+		Telegram:     client,
+		Tmux:         tmux.New(snapshotTmuxRunner{}),
+		Snapshots:    renderer,
+		captureSlots: make(chan struct{}, 1),
+		renderSlots:  make(chan struct{}, 1),
+	}
+	app.renderSlots <- struct{}{}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	app.sendSnapshot(canceled, session)
+	if renderer.renders != 0 {
+		t.Fatalf("on-demand render bypassed occupied render slot: renders = %d", renderer.renders)
+	}
+	if notices != 1 {
+		t.Fatalf("render-slot timeout notices = %d, want 1", notices)
+	}
+
+	<-app.renderSlots
+	app.sendSnapshot(context.Background(), session)
+	if renderer.renders != 1 {
+		t.Fatalf("on-demand render after slot release = %d, want 1", renderer.renders)
+	}
+}
+
 type fakeSnapshotRenderer struct {
-	input terminalshot.Input
-	path  string
+	input   terminalshot.Input
+	path    string
+	renders int
 }
 
 func (r *fakeSnapshotRenderer) Available() (string, error) {
@@ -123,6 +188,7 @@ func (r *fakeSnapshotRenderer) Available() (string, error) {
 }
 
 func (r *fakeSnapshotRenderer) Render(_ context.Context, input terminalshot.Input, dir string) (string, error) {
+	r.renders++
 	r.input = input
 	r.path = filepath.Join(dir, "snapshot.png")
 	if err := os.MkdirAll(dir, 0o700); err != nil {

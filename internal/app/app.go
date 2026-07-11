@@ -31,6 +31,10 @@ type App struct {
 	Anthropic      *anthropic.Client
 	Tmux           tmux.Manager
 	Snapshots      snapshotRenderer
+	modeMu         sync.RWMutex
+	mode           string
+	haikuAvailable bool
+	snapshotReady  bool
 	lock           *lockfile.Lock
 	startedAt      time.Time
 	quitCode       int
@@ -50,8 +54,6 @@ type App struct {
 	summaryForce   map[int]bool
 	summaryDue     map[int]time.Time
 	manualRefresh  map[int]bool
-	captureMu      sync.Mutex
-	captureHistory map[int][]map[string]bool
 	closeConfirmMu sync.Mutex
 	closeConfirms  map[string]closeConfirmation
 	sessionLocks   sync.Map
@@ -61,7 +63,6 @@ type App struct {
 }
 
 const summaryQuietPeriod = 2 * time.Second
-const haikuCaptureHistoryLimit = 5
 const maxConcurrentCaptures = 2
 const maxConcurrentHaikuRequests = 2
 const maxConcurrentSnapshotRenders = 2
@@ -73,11 +74,8 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	snapshotRenderer := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme)
-	if cfg.SnapshotAnchors() {
-		if _, err := snapshotRenderer.Probe(context.Background()); err != nil {
-			return nil, fmt.Errorf("snapshot anchor mode requires Chromium: %w", err)
-		}
-	}
+	_, snapshotErr := snapshotRenderer.Probe(context.Background())
+	snapshotReady := snapshotErr == nil
 	key := lockfile.Key(cfg.TelegramBotToken, strconv.FormatInt(cfg.TelegramAllowedUserID, 10), strconv.FormatInt(cfg.TelegramChatID, 10))
 	l, err := lockfile.Acquire(cfg.LockDir(), key, lockfile.Metadata{Details: map[string]string{
 		"telegram_user_id": strconv.FormatInt(cfg.TelegramAllowedUserID, 10),
@@ -93,6 +91,20 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	anthropicClient := anthropicClientFor(cfg)
+	mode, err := cfg.ResolveAnchorMode(store.Snapshot().AnchorMode, config.ModeCapabilities{
+		HaikuConfigured: anthropicClient != nil,
+		SnapshotReady:   snapshotReady,
+	})
+	if err != nil {
+		l.Close()
+		return nil, err
+	}
+	if store.Snapshot().AnchorMode != mode {
+		if err := store.SetAnchorMode(mode); err != nil {
+			l.Close()
+			return nil, err
+		}
+	}
 	return &App{
 		Config:         cfg,
 		Store:          store,
@@ -100,6 +112,9 @@ func New(cfg config.Config) (*App, error) {
 		Anthropic:      anthropicClient,
 		Tmux:           tmux.New(tmux.ExecRunner{}),
 		Snapshots:      snapshotRenderer,
+		mode:           mode,
+		haikuAvailable: anthropicClient != nil,
+		snapshotReady:  snapshotReady,
 		lock:           l,
 		startedAt:      time.Now().UTC(),
 		stopCh:         make(chan struct{}),
@@ -113,16 +128,43 @@ func New(cfg config.Config) (*App, error) {
 		summaryForce:   map[int]bool{},
 		summaryDue:     map[int]time.Time{},
 		manualRefresh:  map[int]bool{},
-		captureHistory: map[int][]map[string]bool{},
 		closeConfirms:  map[string]closeConfirmation{},
 	}, nil
 }
 
 func anthropicClientFor(cfg config.Config) *anthropic.Client {
-	if cfg.SnapshotAnchors() {
+	if !cfg.HaikuConfigured() {
 		return nil
 	}
 	return anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+}
+
+func modeAvailable(mode string, haiku, snapshot bool) bool {
+	switch mode {
+	case config.AnchorModeGuide:
+		return haiku
+	case config.AnchorModeSnapshot:
+		return snapshot
+	default:
+		return false
+	}
+}
+
+func (a *App) anchorMode() string {
+	a.modeMu.RLock()
+	defer a.modeMu.RUnlock()
+	if a.mode == "" {
+		return a.Config.EffectiveAnchorMode()
+	}
+	return a.mode
+}
+
+func (a *App) snapshotAnchors() bool { return a.anchorMode() == config.AnchorModeSnapshot }
+
+func (a *App) setAnchorMode(mode string) {
+	a.modeMu.Lock()
+	a.mode = mode
+	a.modeMu.Unlock()
 }
 
 func (a *App) Close() error {
@@ -223,12 +265,15 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	if input, ok := escapedSlashInput(text); ok {
 		if msg.ReplyToMessage != nil {
-			if ts, found := a.Store.FindByAnchor(msg.Chat.ID, msg.ReplyToMessage.MessageID); found {
+			if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
 				result := a.sendInput(ctx, ts.ID, input, "command", true)
 				if !result.OK() {
 					a.reply(ctx, msg, result.Message)
 				}
 				return result.status("anchor_reply")
+			} else if found && targetState == state.ReplyTargetStale {
+				a.reply(ctx, msg, staleAlternateReply(ts.ID))
+				return "anchor_reply_stale"
 			}
 		}
 		a.reply(ctx, msg, "reply to a session anchor to send slash input; for example, //clear sends /clear")
@@ -238,17 +283,24 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		return a.handleCommand(ctx, msg, text)
 	}
 	if msg.ReplyToMessage != nil {
-		if ts, ok := a.Store.FindByAnchor(msg.Chat.ID, msg.ReplyToMessage.MessageID); ok {
+		if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
 			result := a.sendInput(ctx, ts.ID, text, "command", true)
 			if !result.OK() {
 				a.reply(ctx, msg, result.Message)
 			}
 			return result.status("anchor_reply")
+		} else if found && targetState == state.ReplyTargetStale {
+			a.reply(ctx, msg, staleAlternateReply(ts.ID))
+			return "anchor_reply_stale"
 		}
 		a.reply(ctx, msg, "session not found for this reply; use /sessions to find an active anchor")
 		return "anchor_reply_user_error"
 	}
 	return a.newSession(ctx, msg, text).status("new_session")
+}
+
+func staleAlternateReply(id int) string {
+	return fmt.Sprintf("That view of [%d] is no longer current. Reply to its latest summary, screenshot, or live anchor.", id)
 }
 
 func escapedSlashInput(text string) (string, bool) {
@@ -282,6 +334,14 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		a.reply(ctx, msg, commands.HelpText())
 	case "status":
 		a.reply(ctx, msg, a.statusText())
+	case "mode":
+		if strings.TrimSpace(args) == "" {
+			a.reply(ctx, msg, a.modeText())
+			break
+		}
+		result := a.switchAnchorMode(ctx, args)
+		status = result.status("command")
+		a.reply(ctx, msg, result.Message)
 	case "sessions":
 		a.sessions(ctx, msg)
 	case "attach":
@@ -497,30 +557,10 @@ func (a *App) redactText(text string) string {
 	return redact.Secrets(text, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
 }
 
-func (a *App) redactGuideReport(report anthropic.GuideReport) anthropic.GuideReport {
-	report.StatusReport = a.redactText(report.StatusReport)
-	report.RecommendedAction = a.redactText(report.RecommendedAction)
-	for i := range report.Citations {
-		report.Citations[i] = a.redactText(report.Citations[i])
-	}
-	return report
-}
-
 func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
 	ts.Title = a.redactText(ts.Title)
-	ts.LastInputPreview = a.redactText(ts.LastInputPreview)
 	ts.LastSummary = a.redactText(ts.LastSummary)
 	ts.LastKnownCWD = a.redactText(ts.LastKnownCWD)
-	if ts.Handoff != nil {
-		handoff := *ts.Handoff
-		handoff.Evidence = append([]string(nil), ts.Handoff.Evidence...)
-		handoff.StatusReport = a.redactText(handoff.StatusReport)
-		handoff.RecommendedAction = a.redactText(handoff.RecommendedAction)
-		for i := range handoff.Evidence {
-			handoff.Evidence[i] = a.redactText(handoff.Evidence[i])
-		}
-		ts.Handoff = &handoff
-	}
 }
 
 func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
@@ -531,15 +571,15 @@ func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
 	space := diskFree(a.Config.ArtifactDir())
-	haiku := "enabled (" + a.Config.AnthropicModel + ")"
-	if a.Config.SnapshotAnchors() {
-		haiku = "disabled"
+	haiku := "unavailable"
+	if a.haikuAvailable {
+		haiku = "configured, not probed (" + a.Config.AnthropicModel + ")"
 	}
 	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nhaiku: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast haiku: %s\nlast haiku error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
-		a.Config.EffectiveAnchorMode(),
+		a.anchorMode(),
 		haiku,
 		a.snapshotStatus(),
 		a.Config.StatePath(),
@@ -561,21 +601,11 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%d] %s  %s\n", ts.ID, ts.State, title)
-	if ts.Handoff != nil {
-		if ts.Handoff.AcknowledgedAt.IsZero() {
-			b.WriteString("needs you\n")
-		} else {
-			b.WriteString("observing after your input\n")
-		}
-		summary = handoffSummary(ts.Handoff)
-	}
 	if ts.LastKnownCWD != "" {
 		fmt.Fprintf(&b, "cwd: %s\n", ts.LastKnownCWD)
 	}
-	fmt.Fprintf(&b, "last: %s\n\n%s",
-		firstNonEmpty(ts.LastInputPreview, "-"),
-		summary,
-	)
+	b.WriteString("\n")
+	b.WriteString(summary)
 	if references := renderVisibleReferences(ts.LastRawCapture); references != "" {
 		b.WriteString("\n\n")
 		b.WriteString(references)

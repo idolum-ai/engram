@@ -10,14 +10,16 @@ runtime state.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
-- `ENGRAM_ANCHOR_MODE` selects `guide` or `snapshot`. It is read only at process
-  startup, has no Telegram command or reload path, and requires a restart to
-  change.
-- `guide` requires an Anthropic key and initializes the Haiku client.
-- `snapshot` requires a working Chromium-compatible executable at startup and
-  must not require or initialize Anthropic. Startup and diagnostics verify the
-  browser with a bounded, ephemeral PNG render rather than executable metadata
-  alone.
+- `ENGRAM_ANCHOR_MODE` selects the startup presentation and fallback when no
+  valid persisted mode exists. State schema v6 persists runtime mode changes.
+- The effective startup mode must be available: `guide` requires an Anthropic
+  Haiku configuration; `snapshot` requires a successful bounded, ephemeral
+  Chromium render. Engram does not call Anthropic merely to probe credentials.
+- Optional dependencies are checked at startup. A configured Haiku client or
+  probed renderer enables its corresponding alternate view and `/mode` target.
+- `/mode [guide|snapshot]` persists the selection and begins anchor migration
+  without restarting. Its response says switching has begun; each anchor keeps
+  its current format until migration succeeds.
 - `ENGRAM_SNAPSHOT_BROWSER` may name or point to a Chromium-compatible
   executable. When unset, Engram searches common Chromium and Chrome names and
   standard macOS application paths.

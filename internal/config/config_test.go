@@ -96,6 +96,42 @@ ENGRAM_ANCHOR_MODE=snapshot
 	}
 }
 
+func TestLoadAllowsDefaultModeWithoutAnthropicForPersistedFallback(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EffectiveAnchorMode() != AnchorModeGuide || cfg.HaikuConfigured() {
+		t.Fatalf("default config = %#v", cfg)
+	}
+}
+
+func TestResolveAnchorModePrefersPersistedThenEnvironmentFallback(t *testing.T) {
+	cfg := Config{AnchorMode: AnchorModeGuide}
+
+	mode, err := cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{HaikuConfigured: true, SnapshotReady: true})
+	if err != nil || mode != AnchorModeSnapshot {
+		t.Fatalf("persisted resolution mode=%q err=%v", mode, err)
+	}
+
+	mode, err = cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{HaikuConfigured: true})
+	if err != nil || mode != AnchorModeGuide {
+		t.Fatalf("fallback resolution mode=%q err=%v", mode, err)
+	}
+
+	if _, err := cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{}); err == nil {
+		t.Fatal("resolution succeeded without an available mode")
+	}
+}
+
 func TestLoadRejectsUnknownAnchorMode(t *testing.T) {
 	dir := t.TempDir()
 	env := filepath.Join(dir, ".env")

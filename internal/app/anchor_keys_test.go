@@ -37,7 +37,7 @@ func TestKeyCallbackSendsCtrlC(t *testing.T) {
 		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
 	}
 	ts, ok := app.Store.FindSession(1)
-	if !ok || ts.LastInputPreview != "^C" || ts.LastInputMode != "keys" {
+	if !ok || ts.LastActivityAt.IsZero() {
 		t.Fatalf("session after key = %#v ok=%v", ts, ok)
 	}
 	select {
@@ -77,7 +77,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
 	}
 	ts, ok := app.Store.FindSession(1)
-	if !ok || ts.LastInputPreview != "Escx2" || ts.LastInputMode != "keys" {
+	if !ok || ts.LastActivityAt.IsZero() {
 		t.Fatalf("session after key = %#v ok=%v", ts, ok)
 	}
 	select {

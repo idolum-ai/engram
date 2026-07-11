@@ -57,7 +57,7 @@ func TestAnchorEditClassifiesTelegramFailures(t *testing.T) {
 			httpStatus:      http.StatusBadRequest,
 			editDescription: "Bad Request: message to edit not found",
 			editCode:        400,
-			wantPaths:       []string{"/botTOKEN/editMessageText", "/botTOKEN/sendMessage"},
+			wantPaths:       []string{"/botTOKEN/editMessageText", "/botTOKEN/sendMessage", "/botTOKEN/editMessageText", "/botTOKEN/unpinChatMessage"},
 			wantAnchorID:    88,
 			wantHash:        true,
 		},
@@ -125,6 +125,9 @@ func newAnchorDeliveryApp(t *testing.T, httpStatus, editCode int, editDescriptio
 		}
 		if req.URL.Path == "/botTOKEN/sendMessage" {
 			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 88, "chat": map[string]any{"id": 100}}}), nil
+		}
+		if req.URL.Path == "/botTOKEN/unpinChatMessage" {
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
 		}
 		t.Fatalf("unexpected Telegram path %s", req.URL.Path)
 		return nil, nil

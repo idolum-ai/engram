@@ -284,6 +284,15 @@ func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int, t
 	return out, c.postJSON(ctx, "editMessageText", body, &out)
 }
 
+func (c *Client) EditReplyMarkup(ctx context.Context, chatID int64, messageID int, markup *InlineKeyboardMarkup) (Message, error) {
+	body := map[string]any{"chat_id": chatID, "message_id": messageID}
+	if markup != nil {
+		body["reply_markup"] = markup
+	}
+	var out Message
+	return out, c.postJSON(ctx, "editMessageReplyMarkup", body, &out)
+}
+
 func (c *Client) AnswerCallback(ctx context.Context, id string, text string) error {
 	body := map[string]any{"callback_query_id": id}
 	if text != "" {
@@ -442,25 +451,16 @@ func (m Message) FileAttachment() (Document, bool) {
 	return Document{}, false
 }
 
-func RefreshMarkup(sessionID int) *InlineKeyboardMarkup {
+func AnchorMarkup(sessionID int, includeImage, includeVoice bool) *InlineKeyboardMarkup {
+	actions := []InlineKeyboardButton{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}}
+	if includeImage {
+		actions = append(actions, InlineKeyboardButton{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
+	}
+	if includeVoice {
+		actions = append(actions, InlineKeyboardButton{Text: "🗣️", CallbackData: fmt.Sprintf("voice:%d", sessionID)})
+	}
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{
-			{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)},
-			{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)},
-		},
-		{
-			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
-			{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
-			{Text: "^C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
-			{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
-			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
-		},
-	}}
-}
-
-func SnapshotAnchorMarkup(sessionID int) *InlineKeyboardMarkup {
-	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
-		{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}},
+		actions,
 		{
 			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
 			{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},

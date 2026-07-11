@@ -178,72 +178,20 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	}
 }
 
-func TestCaptureVisibleSemanticCleansTerminalOutput(t *testing.T) {
-	f := &fakeRunner{out: strings.Join([]string{
+func TestSemanticCaptureCleansTerminalOutput(t *testing.T) {
+	input := strings.Join([]string{
 		"\n",
 		"\x1b[31mred\x1b[0m   \r\n",
 		"link: \x1b]8;;https://example.com\x07label\x1b]8;;\x1b\\\n",
 		"charset \x1b(Bkept\x00\x07\x7f\n",
 		"dcs \x1bPignored\x1b\\done\t \n",
 		"c1 \u009dignored\u009cdone\n",
-	}, "")}
-
-	got, err := New(f).CaptureVisibleSemantic(context.Background(), "%8")
-	if err != nil {
-		t.Fatal(err)
-	}
+	}, "")
+	got := semanticCapture(input)
 	want := "red\nlink: label\ncharset kept\ndcs done\nc1 done"
 	if got != want {
-		t.Fatalf("CaptureVisibleSemantic = %q, want %q", got, want)
+		t.Fatalf("semanticCapture = %q, want %q", got, want)
 	}
-	wantCalls := [][]string{{"capture-pane", "-p", "-J", "-t", "%8"}}
-	if !reflect.DeepEqual(f.calls, wantCalls) {
-		t.Fatalf("calls = %#v, want %#v", f.calls, wantCalls)
-	}
-}
-
-func TestCaptureScrollbackTailBoundsStreamedOutput(t *testing.T) {
-	t.Run("lines", func(t *testing.T) {
-		f := &fakeStreamRunner{chunks: []string{"one\ntwo\n", "three\n", "four\n"}}
-		got, err := New(f).CaptureScrollbackTail(context.Background(), "%9", 128, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := "three\nfour"; got != want {
-			t.Fatalf("CaptureScrollbackTail = %q, want %q", got, want)
-		}
-		wantCalls := [][]string{{"capture-pane", "-p", "-J", "-S", "-", "-E", "-", "-t", "%9"}}
-		if !reflect.DeepEqual(f.calls, wantCalls) {
-			t.Fatalf("calls = %#v, want %#v", f.calls, wantCalls)
-		}
-	})
-
-	t.Run("bytes across chunks", func(t *testing.T) {
-		f := &fakeStreamRunner{chunks: []string{"0123", "456", "789"}}
-		got, err := New(f).CaptureScrollbackTail(context.Background(), "%9", 5, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := "56789"; got != want {
-			t.Fatalf("CaptureScrollbackTail = %q, want %q", got, want)
-		}
-		if len(got) > 5 {
-			t.Fatalf("CaptureScrollbackTail returned %d bytes", len(got))
-		}
-	})
-
-	t.Run("invalid limits", func(t *testing.T) {
-		f := &fakeStreamRunner{}
-		if _, err := New(f).CaptureScrollbackTail(context.Background(), "%9", 0, 1); err == nil {
-			t.Fatal("CaptureScrollbackTail accepted zero max bytes")
-		}
-		if _, err := New(f).CaptureScrollbackTail(context.Background(), "%9", 1, 0); err == nil {
-			t.Fatal("CaptureScrollbackTail accepted zero max lines")
-		}
-		if len(f.calls) != 0 {
-			t.Fatalf("invalid limits invoked tmux: %#v", f.calls)
-		}
-	})
 }
 
 func TestDumpScrollbackStreamsRawPhysicalCapture(t *testing.T) {

@@ -1,7 +1,7 @@
 # Security Requirements
 
 Engram intentionally bridges Telegram, local tmux, the local filesystem, and
-one selected presentation dependency: Anthropic or Chromium. The security and
+optional presentation dependencies Anthropic and Chromium. The security and
 privacy model must stay small and explicit.
 
 ## Identity
@@ -21,9 +21,8 @@ privacy model must stay small and explicit.
   issues, or test fixtures.
 - Audit payloads and `/logs` output must redact configured credentials and
   common credential patterns.
-- Model-derived summaries, recommended actions, and handoff evidence must pass
-  through the same best-effort redaction before persistence and Telegram
-  delivery.
+- Model-derived conversational prose must pass through the same best-effort
+  redaction before persistence and Telegram delivery.
 - Documentation must state that redaction is best effort and does not make an
   artifact safe to share without review.
 
@@ -31,10 +30,11 @@ privacy model must stay small and explicit.
 
 - Documentation must explain that Telegram receives commands, replies,
   summaries, captures, logs, and files sent through bot commands.
-- Documentation must explain that Anthropic is used only in `guide` mode and
-  receives session metadata, input previews, prior summaries, visible pane
-  captures, and an optional bounded full-scrollback retry.
-- Terminal captures sent to Anthropic are not credential-redacted.
+- Documentation must explain that Anthropic receives the plain text of the same
+  `CaptureStyled` frame, capped at 64 rows, used by Chromium. Guide anchors call it
+  automatically; `🗣️` invokes it on demand from snapshot mode.
+- Bounded terminal text sent to Anthropic is not credential-redacted. Engram
+  sends one request with no model history, structured report, or retry.
 - Terminal captures are untrusted data for the guide. Pane-authored text cannot
   instruct Haiku or acquire authority merely by addressing Engram or the user.
 - Incoming attachments are downloaded from Telegram but are not sent to
@@ -44,9 +44,8 @@ privacy model must stay small and explicit.
   Anthropic. Terminal text must be HTML-escaped; browser networking, extensions,
   and persistent profiles must be disabled.
 - In `snapshot` mode, exact terminal images are sent automatically whenever a
-  changed live anchor is rendered, not only after an explicit image request.
-- `snapshot` mode must not initialize or call an Anthropic client even when an
-  Anthropic credential remains in the env file.
+  changed live anchor is rendered. Anthropic is called only when the user taps
+  `🗣️`, if that capability was configured and enabled at startup.
 - Extracted HTTP(S) URLs are untrusted terminal text. Engram may display them in
   anchor references but must never fetch, validate remotely, or treat them as
   recommendations. Extracted reference text receives best-effort credential
@@ -55,8 +54,8 @@ privacy model must stay small and explicit.
 
 ## Local Sensitive Data
 
-- `state.json` may contain Telegram identifiers, input previews, summaries,
-  hashes, attachment metadata, and pending or active handoff text and evidence.
+- `state.json` may contain Telegram identifiers, bounded reply aliases,
+  conversational summaries, capture hashes, attachment metadata, and the selected anchor mode.
   Raw terminal captures are retained only in process memory and are omitted from
   persisted state.
 - `audit.jsonl`, lock metadata, tmux history, and `/tmp/engram` artifacts must

@@ -35,8 +35,6 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 	}
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.Origin = state.TerminalOriginCreated
-		s.LastInputPreview = preview(input)
-		s.LastInputMode = "command"
 	})
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
@@ -106,8 +104,6 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.Origin = state.TerminalOriginAttached
 		s.LastKnownCWD = window.CurrentPath
-		s.LastInputPreview = "attached " + strings.TrimSpace(target)
-		s.LastInputMode = "attach"
 	})
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
@@ -334,7 +330,7 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	}
 	var b strings.Builder
 	b.WriteString("sessions\n")
-	ids := writeTrackedSessionsMode(&b, st.TerminalSessions, !a.Config.SnapshotAnchors())
+	ids := writeTrackedSessions(&b, st.TerminalSessions)
 	if len(ids) == 0 {
 		b.WriteString("\nNo tracked sessions.\n")
 	}
@@ -346,10 +342,6 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 }
 
 func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) []int {
-	return writeTrackedSessionsMode(b, sessions, true)
-}
-
-func writeTrackedSessionsMode(b *strings.Builder, sessions []state.TerminalSession, includeHandoffs bool) []int {
 	active := make([]state.TerminalSession, 0, len(sessions))
 	for _, session := range sessions {
 		if session.State != state.TerminalClosed {
@@ -358,90 +350,47 @@ func writeTrackedSessionsMode(b *strings.Builder, sessions []state.TerminalSessi
 	}
 	sort.SliceStable(active, func(i, j int) bool {
 		left, right := active[i], active[j]
-		leftRank, rightRank := sessionPresentationRank(left, includeHandoffs), sessionPresentationRank(right, includeHandoffs)
+		leftRank, rightRank := sessionPresentationRank(left), sessionPresentationRank(right)
 		if leftRank != rightRank {
 			return leftRank < rightRank
 		}
-		leftTime, rightTime := sessionPresentationTime(left, includeHandoffs), sessionPresentationTime(right, includeHandoffs)
+		leftTime, rightTime := sessionPresentationTime(left), sessionPresentationTime(right)
 		if !leftTime.Equal(rightTime) {
-			if leftRank == 1 {
-				return leftTime.Before(rightTime)
-			}
 			return leftTime.After(rightTime)
 		}
 		return left.ID < right.ID
 	})
 	labels := map[int]string{
 		0: "lost",
-		1: "needs you",
-		2: "quiet",
+		1: "active",
 	}
 	lastRank := -1
 	ids := make([]int, 0, len(active))
 	for _, session := range active {
-		rank := sessionPresentationRank(session, includeHandoffs)
+		rank := sessionPresentationRank(session)
 		if rank != lastRank {
 			fmt.Fprintf(b, "\n%s\n", labels[rank])
 			lastRank = rank
 		}
 		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
-		if rank == 1 {
-			fmt.Fprintf(b, " — %s", compactSessionAction(session.Handoff.RecommendedAction))
-		} else if includeHandoffs && session.Handoff != nil && !session.Handoff.AcknowledgedAt.IsZero() {
-			b.WriteString(" — observing")
-		}
 		b.WriteString("\n")
 		ids = append(ids, session.ID)
 	}
 	return ids
 }
 
-func sessionPresentationRank(session state.TerminalSession, includeHandoffs bool) int {
-	if !includeHandoffs {
-		if session.State == state.TerminalLost {
-			return 0
-		}
-		return 2
-	}
-	return sessionHandoffRank(session)
-}
-
-func sessionPresentationTime(session state.TerminalSession, includeHandoffs bool) time.Time {
-	if includeHandoffs {
-		return sessionQueueTime(session)
-	}
-	if session.State == state.TerminalLost {
-		return session.UpdatedAt
-	}
-	return session.LastActivityAt
-}
-
-func sessionHandoffRank(session state.TerminalSession) int {
+func sessionPresentationRank(session state.TerminalSession) int {
 	if session.State == state.TerminalLost {
 		return 0
 	}
-	if session.Handoff != nil && session.Handoff.AcknowledgedAt.IsZero() {
-		return 1
-	}
-	return 2
+	return 1
 }
 
-func sessionQueueTime(session state.TerminalSession) time.Time {
+func sessionPresentationTime(session state.TerminalSession) time.Time {
 	if session.State == state.TerminalLost {
 		return session.UpdatedAt
 	}
-	if session.Handoff != nil && session.Handoff.AcknowledgedAt.IsZero() {
-		return session.Handoff.OpenedAt
-	}
 	return session.LastActivityAt
-}
-
-func compactSessionAction(action string) string {
-	action = strings.Join(strings.Fields(action), " ")
-	if len(action) <= 72 {
-		return firstNonEmpty(action, "open the session anchor")
-	}
-	return strings.TrimSpace(headUTF8(action, 69)) + "..."
 }
 
 func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []telegram.AttachTarget {

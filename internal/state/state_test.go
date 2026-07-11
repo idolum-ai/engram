@@ -168,6 +168,78 @@ func TestStorePersistsSession(t *testing.T) {
 	}
 }
 
+func TestStorePersistsAnchorMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAnchorMode("guide"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Snapshot().AnchorMode; got != "guide" {
+		t.Fatalf("anchor mode = %q, want guide", got)
+	}
+	if err := store.SetAnchorMode("snapshot"); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().AnchorMode; got != "snapshot" {
+		t.Fatalf("reopened anchor mode = %q, want snapshot", got)
+	}
+	if err := reopened.SetAnchorMode("unsupported"); err == nil {
+		t.Fatal("SetAnchorMode accepted an unsupported mode")
+	}
+	if got := reopened.Snapshot().AnchorMode; got != "snapshot" {
+		t.Fatalf("invalid update changed anchor mode to %q", got)
+	}
+}
+
+func TestSetAnchorModeRollsBackWhenPersistenceFails(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAnchorMode("guide"); err != nil {
+		t.Fatal(err)
+	}
+	store.path = filepath.Join(dir, "missing", "state.json")
+	if err := store.SetAnchorMode("snapshot"); err == nil {
+		t.Fatal("SetAnchorMode succeeded with an unwritable state path")
+	}
+	if got := store.Snapshot().AnchorMode; got != "guide" {
+		t.Fatalf("mode after failed save = %q, want guide", got)
+	}
+}
+
+func TestStoreClearsInvalidPersistedAnchorMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte(`{
+  "version": 4,
+  "anchor_mode": "unsupported",
+  "next_session_id": 1,
+  "terminal_sessions": [],
+  "attachments": []
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Snapshot().AnchorMode; got != "" {
+		t.Fatalf("normalized anchor mode = %q, want empty", got)
+	}
+}
+
 func TestStoreRecordsUpdateJournal(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
@@ -245,7 +317,7 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := store.Snapshot()
-	if st.Version != 4 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
+	if st.Version != 6 || st.NextSessionID != 8 || st.ProcessedMessages == nil {
 		t.Fatalf("normalized legacy state = %#v", st)
 	}
 	if got := st.TerminalSessions[0].LastRawCapture; got != "sensitive terminal output" {
@@ -305,7 +377,7 @@ func TestStoreRejectsNewerSchemaWithoutRewritingIt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 	audit := filepath.Join(dir, "audit.jsonl")
-	future := []byte(`{"version":5,"next_session_id":99,"future_field":"keep-me"}`)
+	future := []byte(`{"version":7,"next_session_id":99,"future_field":"keep-me"}`)
 	if err := os.WriteFile(path, future, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -350,11 +422,11 @@ func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, ok := store.FindSession(1)
-	if !ok || session.State != TerminalLost || session.WatchEnabled || session.Handoff != nil {
+	if !ok || session.State != TerminalLost || session.WatchEnabled {
 		t.Fatalf("normalized legacy session = %#v ok=%v", session, ok)
 	}
-	if store.Snapshot().Version != 4 {
-		t.Fatalf("state version = %d, want 4", store.Snapshot().Version)
+	if store.Snapshot().Version != 6 {
+		t.Fatalf("state version = %d, want 6", store.Snapshot().Version)
 	}
 	if err := store.Save(); err != nil {
 		t.Fatal(err)
@@ -370,7 +442,7 @@ func TestStoreNormalizesLegacyConceptsAndDropsWriteOnlyFields(t *testing.T) {
 	}
 }
 
-func TestStoreMigratesSchemaThreeHandoffNoticeForAnchorRotation(t *testing.T) {
+func TestStoreIgnoresLegacyHandoffAndPreservesAnchorLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
 	legacy := `{
@@ -382,6 +454,9 @@ func TestStoreMigratesSchemaThreeHandoffNoticeForAnchorRotation(t *testing.T) {
     "watch_enabled": true,
     "anchor_chat_id": 100,
     "anchor_message_id": 10,
+    "anchor_format": "snapshot",
+    "retiring_anchor_message_id": 9,
+    "retiring_anchor_format": "text",
     "anchor_pinned": true,
     "handoff": {
       "key": "approval",
@@ -403,15 +478,25 @@ func TestStoreMigratesSchemaThreeHandoffNoticeForAnchorRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, ok := store.FindSession(1)
-	if !ok || session.Handoff == nil || session.Handoff.AnchorMessageID != 11 || session.Handoff.NotificationMessageID != 0 || session.AnchorPinKnown {
-		t.Fatalf("schema 3 handoff migration = %#v ok=%v", session, ok)
+	if !ok || session.AnchorChatID != 100 || session.AnchorMessageID != 10 || session.AnchorFormat != "snapshot" || session.RetiringAnchorMessageID != 9 || session.RetiringAnchorFormat != "text" || session.AnchorPinKnown {
+		t.Fatalf("schema 3 anchor migration = %#v ok=%v", session, ok)
 	}
-	if store.Snapshot().Version != 4 {
-		t.Fatalf("state version = %d, want 4", store.Snapshot().Version)
+	if store.Snapshot().Version != 6 {
+		t.Fatalf("state version = %d, want 6", store.Snapshot().Version)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(persisted), `"handoff"`) {
+		t.Fatalf("legacy handoff persisted: %s", persisted)
 	}
 }
 
-func TestOnlyCanonicalAnchorRoutesAndSnapshotsAreIsolated(t *testing.T) {
+func TestOnlyCanonicalAnchorRoutes(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -424,23 +509,52 @@ func TestOnlyCanonicalAnchorRoutesAndSnapshotsAreIsolated(t *testing.T) {
 	if _, _, err := store.UpdateSession(session.ID, func(s *TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 10
-		s.Handoff = &Handoff{Key: "approval", ObservationHash: "hash", Evidence: []string{"Confirm [y/N]"}, NotificationMessageID: 11}
 	}); err != nil {
 		t.Fatal(err)
 	}
 	got, ok := store.FindByAnchor(100, 11)
 	if ok {
-		t.Fatalf("noncanonical handoff message routed = %#v", got)
+		t.Fatalf("noncanonical message routed = %#v", got)
 	}
 	got, ok = store.FindByAnchor(100, 10)
 	if !ok || got.ID != session.ID {
 		t.Fatalf("canonical anchor route = %#v ok=%v", got, ok)
 	}
-	snapshot := store.Snapshot()
-	snapshot.TerminalSessions[0].Handoff.Evidence[0] = "mutated"
-	stored, _ := store.FindSession(session.ID)
-	if stored.Handoff.Evidence[0] != "Confirm [y/N]" {
-		t.Fatalf("snapshot mutation leaked into store: %#v", stored.Handoff)
+}
+
+func TestReplyTargetsDistinguishCurrentAndStaleAlternates(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 10
+		s.SummaryMessageID = 20
+		s.SnapshotMessageID = 30
+		s.StaleAlternateMessageIDs = []int{18, 28}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, messageID := range []int{10, 20, 30} {
+		got, targetState, ok := store.FindReplyTarget(100, messageID)
+		if !ok || targetState != ReplyTargetCurrent || got.ID != session.ID {
+			t.Fatalf("current reply target %d = %#v %q ok=%v", messageID, got, targetState, ok)
+		}
+	}
+	for _, messageID := range []int{18, 28} {
+		got, targetState, ok := store.FindReplyTarget(100, messageID)
+		if !ok || targetState != ReplyTargetStale || got.ID != session.ID {
+			t.Fatalf("stale reply target %d = %#v %q ok=%v", messageID, got, targetState, ok)
+		}
+	}
+	if _, _, ok := store.FindReplyTarget(100, 99); ok {
+		t.Fatal("unrelated message resolved as a reply target")
 	}
 }
 

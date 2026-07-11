@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
@@ -104,9 +105,64 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 	}
 }
 
+func TestFailedSnapshotMigrationIsThrottledBeforeRendering(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 77
+		s.AnchorFormat = "text"
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Status:     "500 Internal Server Error",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"ok":false,"description":"Internal Server Error"}`)),
+		}, nil
+	})}
+	renderer := &countingSnapshotRenderer{}
+	app := &App{
+		Config:        config.Config{AnchorMode: config.AnchorModeSnapshot, TelegramChatID: 100, Home: dir},
+		Store:         store,
+		Telegram:      client,
+		Tmux:          tmux.New(snapshotTmuxRunner{}),
+		Snapshots:     renderer,
+		captureSlots:  make(chan struct{}, 1),
+		renderSlots:   make(chan struct{}, 1),
+		manualRefresh: map[int]bool{},
+	}
+
+	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
+	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
+	if renderer.renders != 1 {
+		t.Fatalf("failed migration rendered %d times inside throttle window, want 1", renderer.renders)
+	}
+	updated, _ := store.FindSession(session.ID)
+	if updated.LastSnapshotAttemptAt.IsZero() {
+		t.Fatal("failed migration did not persist its attempt time")
+	}
+}
+
 func TestSnapshotModeDoesNotInitializeAnthropic(t *testing.T) {
 	if anthropicClientFor(config.Config{AnchorMode: config.AnchorModeSnapshot}) != nil {
-		t.Fatal("snapshot mode initialized Anthropic")
+		t.Fatal("snapshot mode initialized Anthropic without a key")
+	}
+	if anthropicClientFor(config.Config{AnchorMode: config.AnchorModeSnapshot, AnthropicAPIKey: "key", AnthropicModel: config.DefaultModel}) == nil {
+		t.Fatal("snapshot mode did not initialize optional Anthropic voice support")
 	}
 }
 
@@ -122,8 +178,39 @@ func TestSnapshotModeRequiresAvailableBrowser(t *testing.T) {
 		SnapshotBrowser:       filepath.Join(dir, "missing-chromium"),
 		SnapshotTheme:         "terminal",
 	})
-	if app != nil || err == nil || !strings.Contains(err.Error(), "requires Chromium") {
+	if app != nil || err == nil || !strings.Contains(err.Error(), "snapshot requires probed Chromium") {
 		t.Fatalf("snapshot browser requirement app=%#v err=%v", app, err)
+	}
+}
+
+func TestNewPrefersAvailablePersistedModeOverEnvironmentMode(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAnchorMode(config.AnchorModeGuide); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := New(config.Config{
+		TelegramBotToken:      "token",
+		TelegramAllowedUserID: 42,
+		TelegramChatID:        42,
+		AnthropicAPIKey:       "key",
+		AnthropicModel:        config.DefaultModel,
+		AnchorMode:            config.AnchorModeSnapshot,
+		Home:                  dir,
+		Workdir:               dir,
+		SnapshotBrowser:       filepath.Join(dir, "missing-chromium"),
+		SnapshotTheme:         "terminal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if a.anchorMode() != config.AnchorModeGuide {
+		t.Fatalf("anchor mode = %q, want persisted guide", a.anchorMode())
 	}
 }
 
@@ -167,76 +254,15 @@ func TestGuideModeRotatesSnapshotAnchorBackToText(t *testing.T) {
 	if !ok || got.AnchorMessageID != 88 || got.AnchorFormat != "text" || got.RetiringAnchorMessageID != 0 || !got.AnchorPinned {
 		t.Fatalf("guide migration = %#v ok=%v", got, ok)
 	}
+	if len(got.StaleAlternateMessageIDs) != 1 || got.StaleAlternateMessageIDs[0] != 77 {
+		t.Fatalf("retired snapshot anchor was not marked stale: %#v", got.StaleAlternateMessageIDs)
+	}
+	if routed, targetState, ok := store.FindReplyTarget(100, 77); !ok || targetState != state.ReplyTargetStale || routed.ID != session.ID {
+		t.Fatalf("retired snapshot reply = %#v %q ok=%v", routed, targetState, ok)
+	}
 	want := []string{"/botTOKEN/sendMessage", "/botTOKEN/pinChatMessage", "/botTOKEN/editMessageCaption", "/botTOKEN/unpinChatMessage"}
 	if strings.Join(paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("guide migration paths = %#v, want %#v", paths, want)
-	}
-}
-
-func TestGuideModeFinishesPendingRetirementBeforeMigration(t *testing.T) {
-	dir := t.TempDir()
-	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := store.AllocateSession("main", "@1", "%1", "build")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
-		s.AnchorChatID = 100
-		s.AnchorMessageID = 88
-		s.AnchorFormat = "snapshot"
-		s.RetiringAnchorMessageID = 77
-		s.RetiringAnchorFormat = "text"
-		s.AnchorPinned = true
-		s.AnchorPinKnown = true
-		s.WatchEnabled = true
-	}); err != nil {
-		t.Fatal(err)
-	}
-	var paths []string
-	retireAttempts := 0
-	client := telegram.New("TOKEN")
-	client.BaseURL = "https://api.telegram.org/botTOKEN"
-	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		paths = append(paths, req.URL.Path)
-		switch req.URL.Path {
-		case "/botTOKEN/editMessageText":
-			retireAttempts++
-			if retireAttempts == 1 {
-				return &http.Response{
-					StatusCode: http.StatusInternalServerError,
-					Header:     make(http.Header),
-					Body:       io.NopCloser(strings.NewReader(`{"ok":false,"error_code":500,"description":"temporary failure"}`)),
-				}, nil
-			}
-			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
-		case "/botTOKEN/sendMessage":
-			return snapshotJSONResponse(`{"message_id":99,"chat":{"id":100}}`), nil
-		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
-			return snapshotJSONResponse(`true`), nil
-		case "/botTOKEN/editMessageCaption":
-			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
-		default:
-			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
-		}
-	})}
-	app := &App{Config: config.Config{AnchorMode: config.AnchorModeGuide, TelegramChatID: 100}, Store: store, Telegram: client}
-
-	app.reconcileAnchorPresentation(context.Background(), session.ID)
-	afterFailure, _ := store.FindSession(session.ID)
-	if afterFailure.AnchorMessageID != 88 || afterFailure.RetiringAnchorMessageID != 77 {
-		t.Fatalf("failed retirement was overwritten: %#v", afterFailure)
-	}
-	if len(paths) != 1 || paths[0] != "/botTOKEN/editMessageText" {
-		t.Fatalf("migration started before retirement completed: %#v", paths)
-	}
-
-	app.reconcileAnchorPresentation(context.Background(), session.ID)
-	afterRetry, _ := store.FindSession(session.ID)
-	if afterRetry.AnchorMessageID != 99 || afterRetry.AnchorFormat != "text" || afterRetry.RetiringAnchorMessageID != 0 || !afterRetry.AnchorPinned {
-		t.Fatalf("migration after retirement = %#v", afterRetry)
 	}
 }
 
@@ -280,7 +306,7 @@ func TestSnapshotAnchorReplacesUnavailableTextAnchor(t *testing.T) {
 				return nil, errors.New("replacement snapshot omitted controls")
 			}
 			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
-		case "/botTOKEN/pinChatMessage":
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
 			return snapshotJSONResponse(`true`), nil
 		default:
 			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
@@ -302,9 +328,61 @@ func TestSnapshotAnchorReplacesUnavailableTextAnchor(t *testing.T) {
 	if !ok || got.AnchorMessageID != 88 || got.AnchorFormat != "snapshot" || got.RetiringAnchorMessageID != 0 || !got.AnchorPinned {
 		t.Fatalf("replacement snapshot session = %#v ok=%v", got, ok)
 	}
-	want := []string{"/botTOKEN/editMessageMedia", "/botTOKEN/sendPhoto", "/botTOKEN/pinChatMessage", "/botTOKEN/editMessageText"}
+	want := []string{"/botTOKEN/editMessageMedia", "/botTOKEN/sendPhoto", "/botTOKEN/pinChatMessage", "/botTOKEN/editMessageText", "/botTOKEN/unpinChatMessage"}
 	if strings.Join(paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("replacement paths = %#v, want %#v", paths, want)
+	}
+}
+
+func TestSnapshotRefreshBacksOffPendingRetirementBeforeRendering(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 88
+		s.AnchorFormat = "snapshot"
+		s.RetiringAnchorMessageID = 77
+		s.RetiringAnchorFormat = "text"
+		s.AnchorPinKnown = true
+		s.AnchorPinned = true
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retireAttempts := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/editMessageText" {
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+		retireAttempts++
+		return telegramTestResponse(t, http.StatusInternalServerError, map[string]any{"ok": false, "error_code": 500, "description": "injected compact failure"}), nil
+	})}
+	renderer := &countingSnapshotRenderer{}
+	app := &App{
+		Config:        config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "terminal", TelegramChatID: 100, Home: dir},
+		Store:         store,
+		Telegram:      client,
+		Tmux:          tmux.New(snapshotTmuxRunner{}),
+		Snapshots:     renderer,
+		captureSlots:  make(chan struct{}, 1),
+		renderSlots:   make(chan struct{}, 1),
+		manualRefresh: map[int]bool{},
+	}
+
+	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
+	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
+	got, _ := store.FindSession(session.ID)
+	if retireAttempts != 1 || renderer.renders != 0 || got.RetiringAnchorMessageID != 77 || !got.RetiringAnchorRetryAt.After(time.Now()) {
+		t.Fatalf("migration attempts=%d renders=%d session=%#v", retireAttempts, renderer.renders, got)
 	}
 }
 

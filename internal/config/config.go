@@ -35,6 +35,11 @@ type Config struct {
 	TelegramPollTimeoutSeconds int
 }
 
+type ModeCapabilities struct {
+	HaikuConfigured bool
+	SnapshotReady   bool
+}
+
 func DefaultEnvPath() string {
 	return ExpandPath("~/.engram/.env")
 }
@@ -97,21 +102,19 @@ func (c Config) Validate() error {
 	if c.TelegramAllowedUserID == 0 {
 		missing = append(missing, "TELEGRAM_ALLOWED_USER_ID")
 	}
-	if c.EffectiveAnchorMode() == AnchorModeGuide && strings.TrimSpace(c.AnthropicAPIKey) == "" {
-		missing = append(missing, "ANTHROPIC_API_KEY")
-	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
 	}
-	switch c.EffectiveAnchorMode() {
-	case AnchorModeGuide:
+	if c.HaikuConfigured() {
 		if c.LLMProvider != "anthropic" {
 			return fmt.Errorf("LLM_PROVIDER must be anthropic")
 		}
 		if c.AnthropicModel != DefaultModel && c.AnthropicModel != DefaultModelAlias {
 			return fmt.Errorf("ANTHROPIC_MODEL must be %s or %s", DefaultModel, DefaultModelAlias)
 		}
-	case AnchorModeSnapshot:
+	}
+	switch c.EffectiveAnchorMode() {
+	case AnchorModeGuide, AnchorModeSnapshot:
 	default:
 		return fmt.Errorf("ENGRAM_ANCHOR_MODE must be guide or snapshot")
 	}
@@ -139,7 +142,27 @@ func (c Config) EffectiveAnchorMode() string {
 	return strings.TrimSpace(c.AnchorMode)
 }
 
+// ResolveAnchorMode prefers a usable persisted choice and treats the
+// environment setting as the startup fallback.
+func (c Config) ResolveAnchorMode(persisted string, capabilities ModeCapabilities) (string, error) {
+	for _, mode := range []string{strings.TrimSpace(persisted), c.EffectiveAnchorMode()} {
+		switch mode {
+		case AnchorModeGuide:
+			if capabilities.HaikuConfigured {
+				return mode, nil
+			}
+		case AnchorModeSnapshot:
+			if capabilities.SnapshotReady {
+				return mode, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no available anchor mode (guide requires configured Anthropic Haiku; snapshot requires probed Chromium)")
+}
+
 func (c Config) SnapshotAnchors() bool { return c.EffectiveAnchorMode() == AnchorModeSnapshot }
+
+func (c Config) HaikuConfigured() bool { return strings.TrimSpace(c.AnthropicAPIKey) != "" }
 
 func (c Config) StatePath() string       { return filepath.Join(c.Home, "state.json") }
 func (c Config) AuditPath() string       { return filepath.Join(c.Home, "audit.jsonl") }

@@ -19,7 +19,23 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !ok || ts.TmuxPaneID == "" || ts.State != state.TerminalRunning || !ts.WatchEnabled || ts.AnchorMessageID == 0 {
 		return
 	}
-	if !manual && ts.AnchorFormat == "snapshot" && !ts.LastAnchorEditAt.IsZero() && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
+	if !a.finishSnapshotMigration(ctx, id) {
+		return
+	}
+	ts, ok = a.Store.FindSession(id)
+	if !ok {
+		return
+	}
+	if !manual && !ts.LastSnapshotAttemptAt.IsZero() && time.Since(ts.LastSnapshotAttemptAt) < 10*time.Second {
+		return
+	}
+	attemptedAt := time.Now().UTC()
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		if session.AnchorMessageID == ts.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled {
+			session.LastSnapshotAttemptAt = attemptedAt
+		}
+	}); err != nil {
+		_ = a.audit("state.snapshot_anchor", "attempt_failed", map[string]any{"session_id": id, "error": err.Error()})
 		return
 	}
 
@@ -51,6 +67,9 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	captureHash := snapshotAnchorHash(current, capture, a.Config.SnapshotTheme)
+	if !a.snapshotAnchors() {
+		return
+	}
 	if captureHash == current.LastSnapshotCaptureHash && current.AnchorFormat == "snapshot" && !manual {
 		return
 	}
@@ -80,7 +99,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	latest, ok := a.Store.FindSession(id)
-	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != current.TmuxPaneID || latest.TmuxWindowID != current.TmuxWindowID {
+	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != current.TmuxPaneID || latest.TmuxWindowID != current.TmuxWindowID {
 		return
 	}
 	caption := a.snapshotAnchorCaption(latest, capture)
@@ -143,6 +162,15 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	_ = a.audit("terminal.snapshot_anchor", "updated", map[string]any{"session_id": id, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
+}
+
+func (a *App) finishSnapshotMigration(ctx context.Context, id int) bool {
+	lock := a.anchorMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
+	a.finishAnchorRotationLocked(ctx, id)
+	ts, ok := a.Store.FindSession(id)
+	return ok && ts.RetiringAnchorMessageID == 0
 }
 
 func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, theme string) string {
@@ -210,9 +238,6 @@ func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.Ter
 			session.AnchorPinKnown = false
 			session.LastRenderHash = renderHash
 			session.LastAnchorEditAt = time.Now().UTC()
-			if session.Handoff != nil && session.Handoff.AnchorMessageID == oldID {
-				session.Handoff.AnchorMessageID = msg.MessageID
-			}
 			rotated = true
 		}
 	})
