@@ -40,3 +40,11 @@ manually. Use synthetic values in tests and reports.
 
 Security issues must use the private reporting route in
 [`SECURITY.md`](SECURITY.md), not a public issue.
+
+## Releases
+
+Ordinary contributions target `main` and must not create tags or GitHub Release
+assets. Maintainer releases use a short-lived `release/vX.Y.Z` branch, a reviewed
+pull request into protected `main`, a matching changelog section, and guarded
+automation. See [`docs/release-strategy.md`](docs/release-strategy.md) for the
+complete procedure and recovery rules.

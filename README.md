@@ -253,11 +253,47 @@ them before sharing.
 
 ## Linux Lifecycle
 
-Install or replace the binary:
+Install or replace the binary from a source checkout:
 
 ```sh
 make install PREFIX="$HOME/.local"
 ```
+
+For a published release, choose a version from the GitHub Releases page, inspect
+the installer at that same version tag, then run it. The installer verifies
+the archive checksum and embedded version before atomically replacing the
+binary:
+
+```sh
+version=v0.1.0 # replace with the release you reviewed
+curl -fsSLo /tmp/engram-install-release.sh \
+  "https://raw.githubusercontent.com/idolum-ai/engram/${version}/scripts/install-release.sh"
+less /tmp/engram-install-release.sh
+bash /tmp/engram-install-release.sh "${version}"
+```
+
+Release installation does not modify `~/.engram`, create a service, or restart
+one. A source checkout is still required for the initial `.env` and systemd
+setup. Install the unit without rebuilding over the reviewed release binary:
+
+```sh
+make install-service-unit PREFIX="$HOME/.local"
+```
+
+Existing service operators choose the interruption point explicitly. Because
+the unit uses `Restart=on-failure`, a crash after binary replacement can activate
+the new binary before a planned restart; stop the service first when that gap is
+unacceptable:
+
+```sh
+systemctl --user stop engram.service # optional strict activation boundary
+"$HOME/.local/bin/engram" version
+systemctl --user restart engram.service
+systemctl --user is-active engram.service
+```
+
+After restart, `/version` or `/status` in the bot DM verifies the running
+process rather than only the binary on disk.
 
 Install and start the systemd user service. This seeds `~/.engram/.env` with
 mode `0600` only when it does not already exist:
@@ -312,6 +348,10 @@ make install PREFIX="$HOME/.local"
 "$HOME/.local/bin/engram" preflight --env "$HOME/.engram/.env"
 "$HOME/.local/bin/engram" run --env "$HOME/.engram/.env"
 ```
+
+The tagged-release installer shown in the Linux lifecycle also supports Darwin
+on `amd64` and `arm64`. It replaces only the binary and never creates or starts
+a LaunchAgent.
 
 Stop the foreground process with `Ctrl+C`; tmux sessions remain. Engram does not
 ship launchd integration, and `make install-service` and
@@ -450,7 +490,9 @@ make check
 The gate runs tests, `go vet`, Darwin compile checks, architecture and public
 release checks, workflow checks, documentation checks, a tracked-file secret
 scan, and a smoke build. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change
-guidance and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
+guidance, [`docs/release-strategy.md`](docs/release-strategy.md) for the reviewed
+release path, [`CHANGELOG.md`](CHANGELOG.md) for accumulated user-visible
+changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
 
 The conversational Haiku fixture eval is opt-in because it makes live
 Anthropic calls. It fails each fixture on hard regressions such as injected
