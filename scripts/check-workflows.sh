@@ -21,4 +21,17 @@ if [[ -d scripts ]]; then
   bash -n scripts/*.sh
 fi
 
+required_release_phrases=(
+  'startsWith(github.event.pull_request.head.ref, '\''release/v'\'')'
+  'make release-dist'
+  'ENGRAM_TMUX_INTEGRATION=1'
+  'gh release create'
+)
+for phrase in "${required_release_phrases[@]}"; do
+  if ! grep -R -F -- "${phrase}" .github/workflows/release*.yml >/dev/null; then
+    echo "release workflows are missing required behavior: ${phrase}" >&2
+    exit 1
+  fi
+done
+
 echo "workflow sanity check passed"

@@ -1,0 +1,103 @@
+name: Release Candidate
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Candidate version (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'release/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install runtime tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep tmux
+
+      - name: Resolve candidate version
+        id: version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          INPUT_VERSION: ${{ inputs.version }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${INPUT_VERSION}"
+          else
+            tag="${HEAD_REF#release/}"
+          fi
+          if ! [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "candidate version must match vX.Y.Z or vX.Y.Z-prerelease; got '${tag}'" >&2
+            exit 1
+          fi
+          grep -F "## [${tag}]" CHANGELOG.md >/dev/null || {
+            echo "CHANGELOG.md is missing a heading for ${tag}" >&2
+            exit 1
+          }
+          if [[ "${EVENT_NAME}" == "pull_request" && -z "${PR_BODY//[[:space:]]/}" ]]; then
+            echo "release PR body must contain reviewed release notes" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Full gate
+        run: make check
+
+      - name: Real tmux integration
+        run: ENGRAM_TMUX_INTEGRATION=1 go test ./internal/tmux -run TestCaptureStyledJoinsMarkerInNarrowRealPane -count=1
+
+      - name: Package candidate
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse --short=12 HEAD)"
+          build_date="$(git show -s --format=%cI HEAD)"
+          make release-dist VERSION="${TAG}" COMMIT="${commit}" DATE="${build_date}"
+          mkdir -p candidate-smoke
+          tar -xzf "dist/engram-${TAG}-linux-amd64.tar.gz" -C candidate-smoke engram
+          candidate-smoke/engram version | tee candidate-version.txt
+          grep -F "engram ${TAG} commit=${commit}" candidate-version.txt >/dev/null
+
+      - name: Generate release notes preview
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          ./scripts/generate-release-notes.sh \
+            --to HEAD \
+            --output release-notes-preview.md \
+            --title "${TAG}"
+          cat release-notes-preview.md >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload candidate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: engram-${{ steps.version.outputs.tag }}-candidate
+          path: |
+            dist/*
+            candidate-version.txt
+            release-notes-preview.md

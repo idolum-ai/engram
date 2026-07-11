@@ -10,11 +10,16 @@ required_files=(
   CONTRIBUTING.md
   THIRD_PARTY_NOTICES.md
   README.md
+  CHANGELOG.md
+  docs/release-strategy.md
   .env.example
   .gitleaks.toml
   .github/pull_request_template.md
   .github/ISSUE_TEMPLATE/bug_report.md
   .github/ISSUE_TEMPLATE/feature_request.md
+  scripts/install-release.sh
+  scripts/package-release.sh
+  scripts/check-release.sh
 )
 
 for file in "${required_files[@]}"; do
@@ -32,6 +37,19 @@ fi
 for forbidden in .env bin/engram; do
   if git ls-files --error-unmatch "$forbidden" >/dev/null 2>&1; then
     echo "forbidden tracked file: $forbidden" >&2
+    exit 1
+  fi
+done
+
+if [[ -n "$(git ls-files -- dist)" ]]; then
+  echo "generated release assets must not be tracked under dist/" >&2
+  git ls-files -- dist >&2
+  exit 1
+fi
+
+for script in scripts/check-release.sh scripts/generate-release-notes.sh scripts/install-release.sh scripts/package-release.sh; do
+  if [[ ! -x "${script}" ]]; then
+    echo "release script must be executable: ${script}" >&2
     exit 1
   fi
 done

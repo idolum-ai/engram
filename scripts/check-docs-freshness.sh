@@ -6,6 +6,7 @@ cd "$repo_root"
 
 required_docs=(
   docs/design-principles.md
+  docs/release-strategy.md
   requirements/INDEX.md
 )
 

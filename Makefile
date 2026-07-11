@@ -9,15 +9,25 @@ GOCACHE ?= /tmp/engram-go-build
 GOMODCACHE ?= /tmp/engram-go-mod
 ENGRAM_ENV ?= $(HOME)/.engram/.env
 
-.PHONY: build install uninstall install-service uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
+.PHONY: build release-dist release-smoke install install-release uninstall install-service uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
 
 build:
 	mkdir -p bin
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/engram
 
+release-dist:
+	@if [ "$(VERSION)" = "dev" ]; then echo "VERSION=vX.Y.Z is required" >&2; exit 2; fi
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) RELEASE_COMMIT=$(COMMIT) RELEASE_DATE=$(DATE) ./scripts/package-release.sh "$(VERSION)" dist
+
+release-smoke:
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) ./scripts/check-release.sh
+
 install: build
 	mkdir -p $(BINDIR)
 	install -m 0755 bin/$(BINARY) $(BINDIR)/$(BINARY)
+
+install-release:
+	@if [ "$(VERSION)" = "dev" ]; then ./scripts/install-release.sh; else ./scripts/install-release.sh "$(VERSION)"; fi
 
 uninstall:
 	rm -f $(BINDIR)/$(BINARY)
@@ -60,7 +70,7 @@ darwin-compile:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOOS=darwin GOARCH=amd64 go test -exec=/bin/true ./...
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOOS=darwin GOARCH=arm64 go test -exec=/bin/true ./...
 
-check: test vet darwin-compile build architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke
+check: test vet darwin-compile build release-smoke architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke
 
 architecture:
 	bash scripts/check-architecture.sh
