@@ -228,10 +228,13 @@ the bot channel and must be revoked immediately.
   memory for rendering but are omitted from `state.json`.
   Files are created with private permissions, but anyone with access to the
   host account can read them.
-- **Attachments and generated files:** Incoming Telegram documents are saved
-  under `/tmp/engram/attachments`. `/raw`, `/dump`, `/logs`, and command metadata
-  create files under `/tmp/engram`. These files are not automatically removed
-  by uninstall and may remain until manual or operating-system cleanup.
+- **Attachments and generated files:** Engram prefers
+  `$XDG_RUNTIME_DIR/engram` when that directory is private and writable;
+  otherwise it uses `engram-<uid>` under the system temporary directory.
+  Incoming Telegram documents are saved in its `attachments` subdirectory.
+  `/raw`, `/dump`, `/logs`, and command metadata create files in the private
+  runtime root. These files are not automatically removed by uninstall and may
+  remain until manual or operating-system cleanup.
   On-demand snapshot intermediates are the exception: they are removed after
   delivery or failure.
 - **Downloads:** `/download <absolute-path>` opens a local regular file, copies
@@ -328,6 +331,12 @@ make install PREFIX="$HOME/.local"
 systemctl --user restart engram.service
 ```
 
+When upgrading from a build that predates tmux server-incarnation binding,
+existing watches appear as `reattach` entries in `/sessions`. Tap the pane's
+attach button once to adopt it explicitly. Engram preserves the watch ID and
+anchor, but treats the adopted window as externally owned so `/close` will only
+untrack it.
+
 Remove the service before removing the binary:
 
 ```sh
@@ -335,9 +344,9 @@ make uninstall-service
 make uninstall PREFIX="$HOME/.local"
 ```
 
-Uninstall does not delete tmux sessions, `~/.engram`, or `/tmp/engram`. Review
-and remove those separately only when their state, logs, and attachments are no
-longer needed.
+Uninstall does not delete tmux sessions, `~/.engram`, or Engram's private
+runtime root. Review and remove those separately only when their state, logs,
+and attachments are no longer needed.
 
 ## macOS Lifecycle
 
@@ -487,8 +496,9 @@ engram inspect sessions
 engram inspect frame 3
 ```
 
-Inspection emits bounded sanitized text, never sends input, and leaves tmux and
-Engram state unchanged. See
+Inspection emits bounded control-safe text, never sends input, and leaves
+Engram state unchanged. It does not redact literal pane content, and invoking
+tmux may run hooks configured by the owning user. See
 [`docs/headless-operation.md`](docs/headless-operation.md) for its exact limits.
 
 ## Development

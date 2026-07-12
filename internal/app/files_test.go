@@ -281,6 +281,63 @@ func TestBoundedWriterStopsAtUploadLimit(t *testing.T) {
 	}
 }
 
+func TestCreatePredictableArtifactDoesNotTruncateOrFollow(t *testing.T) {
+	dir := t.TempDir()
+	original := filepath.Join(dir, "engram-raw-1-stamp.txt")
+	if err := os.WriteFile(original, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	file, created, err := createPredictableArtifact(dir, filepath.Base(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString("new capture"); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := created, filepath.Join(dir, "engram-raw-1-stamp-2.txt"); got != want {
+		t.Fatalf("created path = %q, want %q", got, want)
+	}
+	data, err := os.ReadFile(original)
+	if err != nil || string(data) != "keep me" {
+		t.Fatalf("preexisting artifact = %q, err=%v", data, err)
+	}
+	info, err := os.Stat(created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("created artifact mode = %v", info.Mode())
+	}
+
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "engram-logs-stamp.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	linkedFile, linkedCreated, err := createPredictableArtifact(dir, filepath.Base(link))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := linkedFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := linkedCreated, filepath.Join(dir, "engram-logs-stamp-2.jsonl"); got != want {
+		t.Fatalf("created path beside symlink = %q, want %q", got, want)
+	}
+	data, err = os.ReadFile(target)
+	if err != nil || string(data) != "target" {
+		t.Fatalf("symlink target = %q, err=%v", data, err)
+	}
+}
+
 func TestTransferQueueRejectsExcessWork(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -166,6 +167,9 @@ func TestStorePersistsSession(t *testing.T) {
 	byPane, ok := reopened.FindByPane("%1")
 	if !ok || byPane.ID != 1 {
 		t.Fatalf("FindByPane = %#v ok=%v", byPane, ok)
+	}
+	if _, ok := reopened.FindByBinding("%1", "@1", "wrong-server"); ok {
+		t.Fatal("FindByBinding matched a different server incarnation")
 	}
 }
 
@@ -928,7 +932,7 @@ func TestReadSnapshotRejectsSymlinkAndFutureSchema(t *testing.T) {
 	if err := os.Symlink(realPath, linkPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadSnapshot(linkPath); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+	if _, err := ReadSnapshot(linkPath); err == nil || (!strings.Contains(err.Error(), "symbolic links") && !strings.Contains(err.Error(), "too many levels")) {
 		t.Fatalf("symlink error = %v", err)
 	}
 	if err := os.Remove(linkPath); err != nil {
@@ -939,5 +943,25 @@ func TestReadSnapshotRejectsSymlinkAndFutureSchema(t *testing.T) {
 	}
 	if _, err := ReadSnapshot(linkPath); err == nil || !strings.Contains(err.Error(), "newer than supported") {
 		t.Fatalf("future schema error = %v", err)
+	}
+}
+
+func TestReadSnapshotRejectsFIFOAndPublicPermissions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSnapshot(path); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("FIFO error = %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":7}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSnapshot(path); err == nil || !strings.Contains(err.Error(), "group or other") {
+		t.Fatalf("permissions error = %v", err)
 	}
 }

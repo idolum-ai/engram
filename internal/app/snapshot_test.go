@@ -29,6 +29,7 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	session = bindTestSession(t, store, session.ID)
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
@@ -128,6 +129,7 @@ func TestOnDemandSnapshotUsesSharedRenderLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	session = bindTestSession(t, store, session.ID)
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
@@ -204,6 +206,8 @@ func (snapshotTmuxRunner) Run(_ context.Context, args ...string) (string, error)
 		return "", nil
 	}
 	switch args[0] {
+	case "show-options":
+		return appTestServerID + "\n", nil
 	case "display-message":
 		format := args[len(args)-1]
 		if strings.Contains(format, "pane_width") {

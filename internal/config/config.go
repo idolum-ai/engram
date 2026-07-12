@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -167,9 +168,42 @@ func (c Config) HaikuConfigured() bool { return strings.TrimSpace(c.AnthropicAPI
 func (c Config) StatePath() string       { return filepath.Join(c.Home, "state.json") }
 func (c Config) AuditPath() string       { return filepath.Join(c.Home, "audit.jsonl") }
 func (c Config) LockDir() string         { return filepath.Join(c.Home, "locks") }
-func (c Config) AttachmentDir() string   { return filepath.Join(os.TempDir(), "engram", "attachments") }
-func (c Config) ArtifactDir() string     { return filepath.Join(os.TempDir(), "engram") }
+func (c Config) AttachmentDir() string   { return filepath.Join(c.ArtifactDir(), "attachments") }
+func (c Config) ArtifactDir() string     { return artifactRoot() }
 func (c Config) TelegramAPIBase() string { return "https://api.telegram.org/bot" + c.TelegramBotToken }
+
+func artifactRoot() string {
+	if runtimeDir, ok := privateRuntimeBase(os.Getenv("XDG_RUNTIME_DIR")); ok {
+		return filepath.Join(runtimeDir, "engram")
+	}
+	tempDir := canonicalDir(os.TempDir())
+	return filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+}
+
+func privateRuntimeBase(path string) (string, bool) {
+	if path == "" || !filepath.IsAbs(path) {
+		return "", false
+	}
+	path = filepath.Clean(path)
+	if err := rejectSymlinkComponents(path); err != nil {
+		return "", false
+	}
+	if err := validatePrivateDir(path); err != nil {
+		return "", false
+	}
+	if err := syscall.Access(path, 2); err != nil {
+		return "", false
+	}
+	return path, true
+}
+
+func canonicalDir(path string) string {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
+}
 
 func ExpandPath(path string) string {
 	if path == "~" {
@@ -259,12 +293,73 @@ func firstNonEmpty(values ...string) string {
 }
 
 func EnsureDirs(cfg Config) error {
-	for _, dir := range []string{cfg.Home, cfg.LockDir(), cfg.AttachmentDir(), cfg.ArtifactDir()} {
+	for _, dir := range []string{cfg.Home, cfg.LockDir()} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
+	for _, dir := range []string{cfg.ArtifactDir(), cfg.AttachmentDir()} {
+		if err := ensurePrivateDir(dir); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func ensurePrivateDir(path string) error {
+	if err := rejectSymlinkComponents(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("unsafe parent for private directory %s: %w", path, err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
+		return fmt.Errorf("create private directory %s: %w", path, err)
+	}
+	if err := validatePrivateDir(path); err != nil {
+		return fmt.Errorf("unsafe private directory %s: %w", path, err)
+	}
+	return nil
+}
+
+func validatePrivateDir(path string) error {
+	if err := rejectSymlinkComponents(path); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("must not be a symlink")
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("must be a directory")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot determine directory owner")
+	}
+	if stat.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("must be owned by uid %d", os.Getuid())
+	}
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("permissions must be 0700, got %04o", info.Mode().Perm())
+	}
+	return nil
+}
+
+func rejectSymlinkComponents(path string) error {
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink path component: %s", current)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
+	}
 }
 
 func validateEnvFileMetadata(path string) error {

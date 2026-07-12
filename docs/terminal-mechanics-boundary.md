@@ -111,9 +111,11 @@ independent of Telegram construction. Its complete surface is:
 - tracked watches with immutable identity and provenance;
 - one bounded literal frame selected by an Engram watch ID.
 
-The probe opens no listener, performs no network request, starts no background
-worker, renders no ANSI control bytes, mutates neither tmux nor state, and
-requires no Telegram, Anthropic, or Chromium configuration. It is a diagnostic
+The probe opens no listener, constructs no network client, starts no background
+worker, renders no terminal or Unicode presentation controls, issues no tmux
+mutation, leaves state unchanged, and requires no Telegram, Anthropic, or
+Chromium configuration. Literal pane content is not secret-redacted, and the
+owning user's tmux hooks remain possible tmux-side effects. It is a diagnostic
 and architecture test, not a second Engram interface.
 
 If a useful probe requires generic routing, frontend state, mutation, or a

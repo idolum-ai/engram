@@ -3,8 +3,138 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
+
+func TestArtifactDirPrefersPrivateXDGRunTimeDir(t *testing.T) {
+	runtimeDir := filepath.Join(t.TempDir(), "runtime")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "unused-tmp"))
+
+	cfg := Config{Home: filepath.Join(t.TempDir(), "home")}
+	if got, want := cfg.ArtifactDir(), filepath.Join(runtimeDir, "engram"); got != want {
+		t.Fatalf("ArtifactDir = %q, want %q", got, want)
+	}
+	if err := EnsureDirs(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{cfg.ArtifactDir(), cfg.AttachmentDir()} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("private dir %s has mode %v", path, info.Mode())
+		}
+	}
+}
+
+func TestArtifactDirFallsBackForUnsafeXDGRunTimeDir(t *testing.T) {
+	parent := t.TempDir()
+	runtimeDir := filepath.Join(parent, "runtime")
+	if err := os.Mkdir(runtimeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := filepath.Join(parent, "tmp")
+	if err := os.Mkdir(tempDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("TMPDIR", tempDir)
+
+	cfg := Config{}
+	want := filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+	if got := cfg.ArtifactDir(); got != want {
+		t.Fatalf("ArtifactDir = %q, want fallback %q", got, want)
+	}
+}
+
+func TestArtifactDirFallsBackForSymlinkedXDGRunTimeDir(t *testing.T) {
+	parent := t.TempDir()
+	realRuntime := filepath.Join(parent, "runtime-real")
+	if err := os.Mkdir(realRuntime, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeLink := filepath.Join(parent, "runtime-link")
+	if err := os.Symlink(realRuntime, runtimeLink); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := filepath.Join(parent, "tmp")
+	if err := os.Mkdir(tempDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", runtimeLink)
+	t.Setenv("TMPDIR", tempDir)
+
+	want := filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+	if got := (Config{}).ArtifactDir(); got != want {
+		t.Fatalf("ArtifactDir = %q, want fallback %q", got, want)
+	}
+}
+
+func TestArtifactDirFallsBackForSymlinkedXDGAncestor(t *testing.T) {
+	parent := t.TempDir()
+	realParent := filepath.Join(parent, "real")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(realParent, "runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(parent, "linked")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+	tempDir := filepath.Join(parent, "tmp")
+	if err := os.Mkdir(tempDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(linkedParent, "runtime"))
+	t.Setenv("TMPDIR", tempDir)
+
+	want := filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+	if got := (Config{}).ArtifactDir(); got != want {
+		t.Fatalf("ArtifactDir = %q, want fallback %q", got, want)
+	}
+}
+
+func TestEnsureDirsRejectsUnsafePreexistingArtifactRoot(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(string) error
+	}{
+		{name: "symlink", setup: func(path string) error {
+			target := filepath.Join(filepath.Dir(path), "attacker-dir")
+			if err := os.Mkdir(target, 0o700); err != nil {
+				return err
+			}
+			return os.Symlink(target, path)
+		}},
+		{name: "regular file", setup: func(path string) error { return os.WriteFile(path, []byte("occupied"), 0o600) }},
+		{name: "weak permissions", setup: func(path string) error { return os.Mkdir(path, 0o755) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent := t.TempDir()
+			tempDir := filepath.Join(parent, "tmp")
+			if err := os.Mkdir(tempDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("XDG_RUNTIME_DIR", "")
+			t.Setenv("TMPDIR", tempDir)
+			cfg := Config{Home: filepath.Join(parent, "home")}
+			if err := test.setup(cfg.ArtifactDir()); err != nil {
+				t.Fatal(err)
+			}
+			if err := EnsureDirs(cfg); err == nil {
+				t.Fatal("EnsureDirs accepted unsafe artifact root")
+			}
+		})
+	}
+}
 
 func TestLoadValidatesAndDefaults(t *testing.T) {
 	dir := t.TempDir()

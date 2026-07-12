@@ -26,6 +26,7 @@ func TestRepliesRouteOnlyThroughLatestAlternateViews(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	session = bindTestSession(t, store, session.ID)
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
@@ -66,8 +67,8 @@ func TestRepliesRouteOnlyThroughLatestAlternateViews(t *testing.T) {
 		}
 	}
 	app.refreshWG.Wait()
-	if len(runner.calls) != 9 {
-		t.Fatalf("current alternates produced %d tmux calls, want 9: %#v", len(runner.calls), runner.calls)
+	if len(runner.calls) != 12 {
+		t.Fatalf("current alternates produced %d tmux calls, want 12: %#v", len(runner.calls), runner.calls)
 	}
 
 	for i, test := range []struct {
@@ -82,7 +83,7 @@ func TestRepliesRouteOnlyThroughLatestAlternateViews(t *testing.T) {
 			t.Fatalf("stale alternate %d status = %q", test.targetID, status)
 		}
 	}
-	if len(runner.calls) != 9 {
+	if len(runner.calls) != 12 {
 		t.Fatalf("stale alternates reached tmux: %#v", runner.calls)
 	}
 	if len(replies) != 2 || !strings.Contains(replies[0], "no longer current") || !strings.Contains(replies[1], "no longer current") {
@@ -100,6 +101,7 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ts = bindTestSession(t, store, ts.ID)
 	if _, _, err := store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
 		session.AnchorChatID = 100
 		session.AnchorMessageID = 77
@@ -142,7 +144,7 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 		{"send-keys", "-t", "%1", "-l", "--", "/clear"},
 		{"send-keys", "-t", "%1", "Enter"},
 	}
-	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || !reflect.DeepEqual(runner.calls[1:], want) {
+	if len(runner.calls) != 4 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" || !reflect.DeepEqual(runner.calls[2:], want) {
 		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
 	}
 	got, ok := store.FindSession(ts.ID)
@@ -168,6 +170,7 @@ func TestPersistedUpstreamReplyAliasRoutesAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	session = bindTestSession(t, store, session.ID)
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
@@ -187,7 +190,7 @@ func TestPersistedUpstreamReplyAliasRoutesAfterRestart(t *testing.T) {
 		ReplyToMessage: &telegram.Message{MessageID: 90, Chat: telegram.Chat{ID: 100}},
 	}})
 	a.refreshWG.Wait()
-	if status != "anchor_reply_ok" || len(runner.calls) != 3 {
+	if status != "anchor_reply_ok" || len(runner.calls) != 4 {
 		t.Fatalf("status=%q calls=%#v", status, runner.calls)
 	}
 }
@@ -218,6 +221,9 @@ type slashEscapeRunner struct {
 
 func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "show-options" {
+		return appTestServerID + "\n", nil
+	}
 	if len(args) > 0 && args[0] == "display-message" {
 		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
 	}

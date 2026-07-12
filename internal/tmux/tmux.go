@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -94,6 +95,22 @@ type StyledCapture struct {
 }
 
 const paneFormat = "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"
+const serverIDOption = "@engram_server_id"
+const identityMismatchMarker = "ENGRAM_IDENTITY_MISMATCH"
+
+type IdentityError struct {
+	Reason string
+	Err    error
+}
+
+func (e *IdentityError) Error() string {
+	if e.Err != nil {
+		return e.Reason + ": " + e.Err.Error()
+	}
+	return e.Reason
+}
+
+func (e *IdentityError) Unwrap() error { return e.Err }
 
 func New(r Runner) Manager {
 	return Manager{Runner: r}
@@ -191,38 +208,95 @@ func (m Manager) InspectPane(ctx context.Context, target string) (Pane, error) {
 	return panes[0], nil
 }
 
+func (m Manager) CurrentServerID(ctx context.Context) (string, error) {
+	out, err := m.Runner.Run(ctx, "show-options", "-gqv", serverIDOption)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(out)
+	if id == "" {
+		return "", &IdentityError{Reason: "tmux server has no Engram incarnation"}
+	}
+	if !validServerID(id) {
+		return "", &IdentityError{Reason: fmt.Sprintf("invalid tmux server incarnation %q", id)}
+	}
+	return id, nil
+}
+
+func (m Manager) EnsureServerID(ctx context.Context) (string, error) {
+	if id, err := m.CurrentServerID(ctx); err == nil {
+		return id, nil
+	} else if !IsIdentityLoss(err) {
+		return "", err
+	}
+	id, err := captureNonce()
+	if err != nil {
+		return "", err
+	}
+	if _, err := m.Runner.Run(ctx, "set-option", "-go", serverIDOption, id); err != nil {
+		if current, currentErr := m.CurrentServerID(ctx); currentErr == nil {
+			return current, nil
+		}
+		return "", err
+	}
+	return m.CurrentServerID(ctx)
+}
+
+func validServerID(id string) bool {
+	if len(id) != 32 || id != strings.ToLower(id) {
+		return false
+	}
+	decoded, err := hex.DecodeString(id)
+	return err == nil && len(decoded) == 16
+}
+
 // ValidatePane resolves paneID and verifies that it still belongs to windowID.
 // Both arguments must be tmux immutable IDs, not names or numeric indexes.
 func (m Manager) ValidatePane(ctx context.Context, paneID, windowID string) (Pane, error) {
 	if !validImmutableID(paneID, '%') {
-		return Pane{}, fmt.Errorf("invalid tmux pane ID %q", paneID)
+		return Pane{}, &IdentityError{Reason: fmt.Sprintf("invalid tmux pane ID %q", paneID)}
 	}
 	if !validImmutableID(windowID, '@') {
-		return Pane{}, fmt.Errorf("invalid tmux window ID %q", windowID)
+		return Pane{}, &IdentityError{Reason: fmt.Sprintf("invalid tmux window ID %q", windowID)}
 	}
 	pane, err := m.InspectPane(ctx, paneID)
 	if err != nil {
+		if missingTmuxTarget(err) {
+			return Pane{}, &IdentityError{Reason: "tmux pane identity is gone", Err: err}
+		}
 		return Pane{}, err
 	}
 	if pane.ID != paneID || pane.WindowID != windowID {
-		return Pane{}, fmt.Errorf("tmux pane identity mismatch: got pane %q window %q, want pane %q window %q", pane.ID, pane.WindowID, paneID, windowID)
+		return Pane{}, &IdentityError{Reason: fmt.Sprintf("tmux pane identity mismatch: got pane %q window %q, want pane %q window %q", pane.ID, pane.WindowID, paneID, windowID)}
 	}
 	return pane, nil
+}
+
+func (m Manager) ValidateBinding(ctx context.Context, paneID, windowID, serverID string) (Pane, error) {
+	if !validServerID(serverID) {
+		return Pane{}, &IdentityError{Reason: "missing or invalid persisted tmux server incarnation"}
+	}
+	current, err := m.CurrentServerID(ctx)
+	if err != nil {
+		return Pane{}, err
+	}
+	if current != serverID {
+		return Pane{}, &IdentityError{Reason: "tmux server incarnation mismatch"}
+	}
+	return m.ValidatePane(ctx, paneID, windowID)
 }
 
 // IsIdentityLoss reports errors that prove a persisted immutable pane/window
 // identity is no longer usable. Cancellation and generic execution failures do
 // not prove that the pane disappeared.
 func IsIdentityLoss(err error) bool {
-	if err == nil {
-		return false
-	}
+	var identity *IdentityError
+	return errors.As(err, &identity)
+}
+
+func missingTmuxTarget(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "can't find pane:") ||
-		strings.Contains(message, "can't find window:") ||
-		strings.Contains(message, "tmux pane identity mismatch") ||
-		strings.Contains(message, "invalid tmux pane id") ||
-		strings.Contains(message, "invalid tmux window id")
+	return strings.Contains(message, "can't find pane:") || strings.Contains(message, "can't find window:")
 }
 
 func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {
@@ -392,6 +466,28 @@ func (m Manager) DumpScrollback(ctx context.Context, paneID string, dst io.Write
 func (m Manager) KillWindow(ctx context.Context, windowID string) error {
 	_, err := m.Runner.Run(ctx, "kill-window", "-t", windowID)
 	return err
+}
+
+// KillWindowIfBindingMatches evaluates identity and closes the window in one
+// tmux command queue, so another client cannot move the pane between them.
+func (m Manager) KillWindowIfBindingMatches(ctx context.Context, paneID, windowID, serverID string) error {
+	if !validImmutableID(paneID, '%') || !validImmutableID(windowID, '@') || !validServerID(serverID) {
+		return &IdentityError{Reason: "invalid tmux binding for close"}
+	}
+	condition := fmt.Sprintf("#{&&:#{==:#{%s},%s},#{==:#{window_id},%s}}", serverIDOption, serverID, windowID)
+	trueCommand := "kill-window -t " + windowID
+	falseCommand := "display-message -p " + identityMismatchMarker
+	out, err := m.Runner.Run(ctx, "if-shell", "-F", "-t", paneID, condition, trueCommand, falseCommand)
+	if err != nil {
+		if missingTmuxTarget(err) {
+			return &IdentityError{Reason: "tmux pane identity is gone", Err: err}
+		}
+		return err
+	}
+	if strings.TrimSpace(out) == identityMismatchMarker {
+		return &IdentityError{Reason: "tmux binding changed before close"}
+	}
+	return nil
 }
 
 func SessionName(chatID int64) string {

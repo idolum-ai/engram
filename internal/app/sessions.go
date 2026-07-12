@@ -22,6 +22,11 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux session unavailable"}
 	}
+	serverID, err := a.Tmux.EnsureServerID(tmuxCtx)
+	if err != nil {
+		a.reply(ctx, msg, "tmux identity error: "+err.Error())
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux server identity unavailable"}
+	}
 	title := tmux.WindowTitle(0, input)
 	windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionName, a.Config.Workdir, title)
 	if err != nil {
@@ -30,12 +35,13 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 	}
 	ts, err := a.Store.AllocateSession(sessionName, windowID, paneID, title)
 	if err != nil {
-		_, _ = a.terminalMechanics().CloseWindow(tmuxCtx, mechanics.Binding{PaneID: paneID, WindowID: windowID})
+		_, _ = a.terminalMechanics().CloseWindow(tmuxCtx, mechanics.Binding{PaneID: paneID, WindowID: windowID, ServerID: serverID})
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "session state allocation failed"}
 	}
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.Origin = state.TerminalOriginCreated
+		s.TmuxServerID = serverID
 	})
 	if err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
@@ -98,9 +104,40 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux target not found"}
 	}
-	if existing, ok := a.Store.FindByPane(window.PaneID); ok {
+	serverID, err := a.Tmux.EnsureServerID(tmuxCtx)
+	if err != nil {
+		a.reply(ctx, msg, "tmux identity error: "+err.Error())
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux server identity unavailable"}
+	}
+	if existing, ok := a.Store.FindByBinding(window.PaneID, window.ID, serverID); ok {
 		a.reply(ctx, msg, fmt.Sprintf("%s is already tracked as [%d]", window.PaneID, existing.ID))
 		return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("already tracked as [%d]", existing.ID)}
+	}
+	if existing, ok := a.Store.FindByPane(window.PaneID); ok {
+		lock := a.sessionMutex(existing.ID)
+		lock.Lock()
+		updated, found, applied, updateErr := a.updateSessionIfCurrent(existing, func(s *state.TerminalSession) {
+			s.TmuxSessionName = window.SessionName
+			s.TmuxWindowID = window.ID
+			s.TmuxPaneID = window.PaneID
+			s.TmuxServerID = serverID
+			s.Origin = state.TerminalOriginAttached
+			s.State = state.TerminalRunning
+			s.WatchEnabled = true
+			s.LastKnownCWD = window.CurrentPath
+			s.LastRawCaptureHash = ""
+			s.LastSnapshotCaptureHash = ""
+			s.LastRenderHash = ""
+		})
+		lock.Unlock()
+		if updateErr != nil || !found || !applied {
+			a.reply(ctx, msg, "state changed while attaching; run /sessions and try again")
+			return actionResult{Outcome: actionStateFailed, Message: "session changed while attaching"}
+		}
+		a.reply(ctx, msg, fmt.Sprintf("reattached %s as [%d]", window.PaneID, updated.ID))
+		a.reconcileAnchorPresentation(ctx, updated.ID)
+		a.queueRefresh(updated.ID, true, 0)
+		return actionResult{Outcome: actionOK, Message: fmt.Sprintf("reattached [%d]", updated.ID)}
 	}
 	title := tmux.AttachedTitle(window)
 	ts, err := a.Store.AllocateSession(window.SessionName, window.ID, window.PaneID, title)
@@ -110,6 +147,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 	}
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.Origin = state.TerminalOriginAttached
+		s.TmuxServerID = serverID
 		s.LastKnownCWD = window.CurrentPath
 	})
 	if err != nil {
@@ -239,13 +277,17 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
 	if ts.Origin != state.TerminalOriginCreated {
-		if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 			s.State = state.TerminalClosed
 			s.WatchEnabled = false
 			s.LastSummary = "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed."
-		}); err != nil {
+		})
+		if err != nil {
 			_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 			return actionResult{Outcome: actionStateFailed, Message: "state update failed while untracking"}
+		}
+		if !found || !applied {
+			return actionResult{Outcome: actionStateFailed, Message: "session changed while untracking"}
 		}
 		a.updateAnchorLocal(ctx, id, "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed.", true)
 		a.reconcileAnchorPresentation(ctx, id)
@@ -263,13 +305,17 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 		a.updateAnchorLocal(ctx, id, "status:\nClose failed; the tmux window remains open.\n\nrecommendation:\nCheck the session with /sessions and retry when tmux is available.", true)
 		return actionResult{Outcome: actionTmuxFailed, Message: "close failed: " + err.Error()}
 	}
-	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
 		s.LastSummary = "status:\nThe Engram-created tmux window was closed."
-	}); err != nil {
+	})
+	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after close"}
+	}
+	if !found || !applied {
+		return actionResult{Outcome: actionStateFailed, Message: "session no longer tracked after close"}
 	}
 	a.updateAnchorLocal(ctx, id, "status:\nThe Engram-created tmux window was closed.", true)
 	a.reconcileAnchorPresentation(ctx, id)
@@ -284,15 +330,22 @@ func closeConfirmationText(ts state.TerminalSession) string {
 }
 
 func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
+	if ts.State == state.TerminalClosed {
+		return
+	}
 	message := "session identity is no longer valid"
 	if cause != nil {
 		message = cause.Error()
 	}
-	if _, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.State = state.TerminalLost
 		s.WatchEnabled = false
-	}); err != nil {
+	})
+	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
+		return
+	}
+	if !found || !applied {
 		return
 	}
 	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
@@ -382,6 +435,11 @@ func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []teleg
 		b.WriteString("No tmux sessions.")
 		return nil
 	}
+	serverID, err := a.Tmux.EnsureServerID(tctx)
+	if err != nil {
+		fmt.Fprintf(b, "\n\nIdentity unavailable: %s", err)
+		return nil
+	}
 	selected := strings.TrimSpace(a.Config.TmuxSession)
 	if selected == "" {
 		selected = sessions[0].Name
@@ -406,8 +464,11 @@ func (a *App) writeTmuxSessions(ctx context.Context, b *strings.Builder) []teleg
 	for _, pane := range panes {
 		target := fmt.Sprintf("%s:%s.%s", pane.SessionName, pane.WindowIndex, pane.Index)
 		tracked := ""
-		if ts, ok := a.Store.FindByPane(pane.ID); ok {
+		if ts, ok := a.Store.FindByBinding(pane.ID, pane.WindowID, serverID); ok {
 			tracked = fmt.Sprintf(" tracked:[%d]", ts.ID)
+		} else if ts, ok := a.Store.FindByPane(pane.ID); ok {
+			tracked = fmt.Sprintf(" reattach:[%d]", ts.ID)
+			attachTargets = append(attachTargets, telegram.AttachTarget{Label: target, Target: pane.ID})
 		}
 		active := ""
 		if pane.Active {

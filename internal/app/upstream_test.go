@@ -290,6 +290,7 @@ func newUpstreamStoreWithDir(t *testing.T) (*state.Store, state.TerminalSession,
 		t.Fatal(err)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.TmuxServerID = appTestServerID
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
 		s.AnchorFormat = "text"

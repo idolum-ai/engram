@@ -102,7 +102,7 @@ tmux identity, provenance, and observed lifecycle state:
 engram inspect sessions
 ```
 
-Print one sanitized bounded literal frame by Engram watch ID:
+Print one control-safe bounded literal frame by Engram watch ID:
 
 ```sh
 engram inspect frame 3
@@ -144,9 +144,12 @@ Engram's tmux mechanics easier to diagnose and prove.
 
 Both headless shapes run with the permissions of the local OS user and can see
 that user's tmux panes. The Telegram service intentionally sends selected pane
-content and files across configured external boundaries. The local inspection
-command makes no network request and sanitizes terminal controls before writing
-to stdout.
+content and files across configured external boundaries. The inspector process
+constructs no network client and makes no direct network request. It removes
+terminal and Unicode presentation controls before writing to stdout, but it
+does not redact pane text or secrets. Invoking tmux can also run hooks configured
+by the owning user; Engram does not claim those tmux-side effects as part of its
+no-client boundary.
 
 Neither mode protects against compromise of the owning OS account. Do not run
 Engram under an account whose tmux sessions it should not observe.

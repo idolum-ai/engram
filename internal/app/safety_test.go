@@ -48,8 +48,7 @@ func TestFailedCreatedWindowCloseDoesNotClaimClosed(t *testing.T) {
 	if !ok || got.State == state.TerminalClosed || !got.WatchEnabled {
 		t.Fatalf("session after failed close = %#v ok=%v", got, ok)
 	}
-	wantLast := []string{"kill-window", "-t", "@1"}
-	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || !reflect.DeepEqual(runner.calls[1], wantLast) {
+	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" {
 		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
 }
@@ -66,7 +65,7 @@ func TestPaneIdentityMismatchMarksSessionLostBeforeInput(t *testing.T) {
 	if !ok || got.State != state.TerminalLost || got.WatchEnabled {
 		t.Fatalf("session after identity mismatch = %#v ok=%v", got, ok)
 	}
-	if len(runner.calls) != 1 || runner.calls[0][0] != "display-message" {
+	if len(runner.calls) != 2 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" {
 		t.Fatalf("tmux calls = %#v, want identity check only", runner.calls)
 	}
 }
@@ -231,6 +230,7 @@ func TestUnauthorizedAndStaleCallbacksAreAlwaysAnswered(t *testing.T) {
 
 func TestUnauthorizedOrdinaryMessagesCannotReachDeviceCapabilities(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("TMPDIR", filepath.Join(dir, "tmp"))
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	store, err := state.Open(filepath.Join(dir, "state.json"), auditPath)
@@ -445,6 +445,7 @@ func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunne
 	if err != nil {
 		t.Fatal(err)
 	}
+	ts = bindTestSession(t, store, ts.ID)
 	if _, _, err := store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
 		session.Origin = origin
 		session.WatchEnabled = true
@@ -473,6 +474,9 @@ type safetyRunner struct {
 type newSessionRunner struct{}
 
 func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "show-options" {
+		return appTestServerID + "\n", nil
+	}
 	if len(args) > 0 && args[0] == "new-window" {
 		return "@1\t%1\n", nil
 	}
@@ -484,6 +488,9 @@ func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) 
 
 func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "show-options" {
+		return appTestServerID + "\n", nil
+	}
 	if len(args) > 0 && args[0] == "display-message" {
 		if strings.Contains(args[len(args)-1], "pane_width") {
 			return "71\t37\tshell\t/tmp\n", nil
@@ -502,7 +509,7 @@ func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "show-buffer" {
 		return pairedCaptureResult(args, r.capturePhysical, r.captureJoined), nil
 	}
-	if len(args) > 0 && args[0] == "kill-window" && r.failKill {
+	if len(args) > 0 && (args[0] == "kill-window" || args[0] == "if-shell") && r.failKill {
 		return "", errors.New("tmux refused kill")
 	}
 	return "", nil

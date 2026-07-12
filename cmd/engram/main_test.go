@@ -160,7 +160,7 @@ func TestInspectRejectsMissingSubcommandWithoutLoadingConfig(t *testing.T) {
 	_, stderr, code := captureCommand(t, func() int {
 		return run([]string{"inspect"})
 	})
-	if code != 1 || !strings.Contains(stderr, "usage: engram inspect") {
+	if code != 2 || !strings.Contains(stderr, "usage: engram inspect") {
 		t.Fatalf("inspect code=%d stderr=%q", code, stderr)
 	}
 }

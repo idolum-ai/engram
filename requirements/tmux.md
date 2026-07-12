@@ -13,16 +13,21 @@ tmux is the source of terminal truth.
 - A top-level non-command Telegram message creates a new tmux window.
 - `/attach <target>` tracks an existing target's active pane.
 - `/sessions` shows native tmux sessions and immutable pane identities with
-  attach buttons for untracked panes.
+  attach buttons for untracked panes and explicit reattach buttons when a
+  persisted watch belongs to an older tmux server incarnation.
 - Attach callbacks carry `%pane_id`, not mutable indexes.
-- Before input, capture, cwd lookup, or destructive close, Engram verifies that
-  `%pane_id` still belongs to the stored `@window_id`. A mismatch marks the
-  session lost. Transient command failure does not.
+- Each watch stores a random tmux server incarnation in addition to immutable
+  pane/window IDs. Before input, capture, or cwd lookup, Engram verifies all
+  three identities. Destructive close evaluates and kills in one tmux command
+  queue so a concurrent pane move cannot redirect it. A mismatch marks the
+  session lost; transient command failure does not.
 - Pane-bound input, capture, scrollback, and destructive close cross the private
   terminal-mechanics boundary, which has no Telegram, state, or presentation
   dependency and validates immutable identity immediately before the operation.
-- A lost anchor can reattach only when that exact pane/window identity returns;
-  Engram must not guess a replacement.
+- A lost anchor can recover automatically only when its exact server, pane, and
+  window identity returns. `/attach` is the explicit authority to rebind an old
+  watch to the selected pane after a tmux restart; it adopts the pane as an
+  attached window and never inherits destructive close authority.
 
 ## Input
 

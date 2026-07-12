@@ -87,11 +87,15 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v7 persists `anchor_mode`, the latest conversational, snapshot,
+- State schema v8 persists `anchor_mode`, the latest conversational, snapshot,
   and upstream-signal reply IDs, upstream deduplication facts, and a bounded
-  stale-alias set used only to reject confusing replies. Valid legacy state
-  migrates forward; retired interpretation fields are ignored and disappear on
-  save.
+  stale-alias set used only to reject confusing replies. It binds each watch to
+  a random tmux server incarnation so reused pane/window IDs after a server
+  restart cannot silently gain authority. Legacy watches without that identity
+  require an explicit `/attach` from `/sessions`; reattachment changes their
+  origin to attached, so Engram cannot close a newly adopted window. Valid
+  legacy state otherwise migrates forward; retired interpretation fields are
+  ignored and disappear on save.
 - A lock keyed by Telegram settings prevents duplicate pollers.
 - Upstream-signal record-ID deduplication is bounded per terminal. Successful
   persistence suppresses a visible record across restart; a crash between

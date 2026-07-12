@@ -33,7 +33,7 @@ func TestKeyCallbackSendsCtrlC(t *testing.T) {
 		t.Fatalf("handleCallback status = %q", status)
 	}
 	want := []string{"send-keys", "-t", "%1", "C-c"}
-	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || !reflect.DeepEqual(runner.calls[1], want) {
+	if len(runner.calls) != 3 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" || !reflect.DeepEqual(runner.calls[2], want) {
 		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
 	}
 	ts, ok := app.Store.FindSession(1)
@@ -69,7 +69,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
-	want := []string{"display-message", "send-keys", "display-message", "send-keys"}
+	want := []string{"show-options", "display-message", "send-keys", "show-options", "display-message", "send-keys"}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
@@ -139,6 +139,7 @@ func newAnchorKeyTestApp(t *testing.T) (*App, *anchorKeyRunner, <-chan struct{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	session = bindTestSession(t, store, session.ID)
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 10
@@ -191,6 +192,9 @@ type anchorKeyRunner struct {
 
 func (r *anchorKeyRunner) Run(ctx context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "show-options" {
+		return appTestServerID + "\n", nil
+	}
 	if len(args) > 0 && args[0] == "display-message" {
 		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
 	}
