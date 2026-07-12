@@ -60,6 +60,26 @@ func TestPackageImportBoundaries(t *testing.T) {
 				"github.com/idolum-ai/engram/internal/tmux",
 			},
 		},
+		{
+			dir: "internal/mechanics",
+			forbidden: []string{
+				"github.com/idolum-ai/engram/internal/app",
+				"github.com/idolum-ai/engram/internal/anthropic",
+				"github.com/idolum-ai/engram/internal/inspect",
+				"github.com/idolum-ai/engram/internal/state",
+				"github.com/idolum-ai/engram/internal/telegram",
+				"github.com/idolum-ai/engram/internal/terminalshot",
+			},
+		},
+		{
+			dir: "internal/inspect",
+			forbidden: []string{
+				"github.com/idolum-ai/engram/internal/app",
+				"github.com/idolum-ai/engram/internal/anthropic",
+				"github.com/idolum-ai/engram/internal/telegram",
+				"github.com/idolum-ai/engram/internal/terminalshot",
+			},
+		},
 	}
 
 	root := repoRoot(t)

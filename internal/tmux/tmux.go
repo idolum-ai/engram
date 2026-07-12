@@ -259,6 +259,37 @@ func (m Manager) CaptureVisibleRaw(ctx context.Context, paneID string) (string, 
 	return m.Runner.Run(ctx, "capture-pane", "-p", "-e", "-N", "-t", paneID)
 }
 
+// CaptureLiteral returns a bounded plain-text frame without creating tmux
+// paste buffers or preserving terminal control sequences.
+func (m Manager) CaptureLiteral(ctx context.Context, paneID string, targetRows int) (string, error) {
+	if targetRows <= 0 || targetRows > 400 {
+		return "", fmt.Errorf("target rows must be between 1 and 400")
+	}
+	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_width}\t#{pane_height}")
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Split(strings.TrimSpace(meta), "\t")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("unexpected tmux literal metadata")
+	}
+	columns, err := strconv.Atoi(parts[0])
+	if err != nil || columns <= 0 || columns > 400 {
+		return "", fmt.Errorf("invalid tmux pane width %q", parts[0])
+	}
+	visibleRows, err := strconv.Atoi(parts[1])
+	if err != nil || visibleRows <= 0 || visibleRows > 400 {
+		return "", fmt.Errorf("invalid tmux pane height %q", parts[1])
+	}
+	start := visibleRows - targetRows
+	end := visibleRows - 1
+	out, err := m.Runner.Run(ctx, "capture-pane", "-p", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID)
+	if err != nil {
+		return "", err
+	}
+	return semanticCapture(out), nil
+}
+
 func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows int) (StyledCapture, error) {
 	if targetRows <= 0 || targetRows > 400 {
 		return StyledCapture{}, fmt.Errorf("target rows must be between 1 and 400")

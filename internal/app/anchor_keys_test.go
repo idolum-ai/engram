@@ -69,12 +69,14 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
-	want := [][]string{
-		{"send-keys", "-t", "%1", "Escape"},
-		{"send-keys", "-t", "%1", "Escape"},
+	want := []string{"display-message", "send-keys", "display-message", "send-keys"}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
-	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || !reflect.DeepEqual(runner.calls[1:], want) {
-		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
+	for i, command := range want {
+		if runner.calls[i][0] != command {
+			t.Fatalf("tmux calls = %#v, want command order %#v", runner.calls, want)
+		}
 	}
 	ts, ok := app.Store.FindSession(1)
 	if !ok || ts.LastActivityAt.IsZero() {

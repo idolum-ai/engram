@@ -60,6 +60,13 @@ func TestCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if strings.Contains(capture.Text, record) || !strings.Contains(capture.JoinedText, record) {
 		t.Fatalf("physical=%q joined=%q", capture.Text, capture.JoinedText)
 	}
+	literal, err := manager.CaptureLiteral(ctx, window.PaneID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(literal, "\x1b") || !strings.Contains(strings.ReplaceAll(literal, "\n", ""), record) {
+		t.Fatalf("literal capture = %q", literal)
+	}
 	if buffers, err := runner.Run(ctx, "list-buffers", "-F", "#{buffer_name}"); err == nil && strings.Contains(buffers, "engram-") {
 		t.Fatalf("capture buffers leaked: %q", buffers)
 	}

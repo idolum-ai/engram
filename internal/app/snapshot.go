@@ -58,19 +58,13 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		return
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
-	if err := a.validateSessionPane(tctx, current); err != nil {
-		cancel()
-		lock.Unlock()
-		a.snapshotNotice(ctx, requested.ID, "Could not print the window because the tmux pane is unavailable.")
-		return
-	}
 	if !acquireSlot(tctx, a.captureSlots) {
 		cancel()
 		lock.Unlock()
 		a.snapshotNotice(ctx, requested.ID, "Could not capture the tmux window before the request timed out.")
 		return
 	}
-	capture, captureErr := a.Tmux.CaptureStyled(tctx, current.TmuxPaneID, terminalshot.TargetRows)
+	capture, captureErr := a.captureStyled(tctx, current, terminalshot.TargetRows)
 	releaseSlot(a.captureSlots)
 	cancel()
 	lock.Unlock()

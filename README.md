@@ -478,6 +478,19 @@ engram dry-start --env "$HOME/.engram/.env"
 engram signal "Build finished; review the two failing tests."
 ```
 
+Read-only inspection needs no Telegram or presentation configuration and makes
+no network calls. It reads `ENGRAM_HOME`, defaulting to `~/.engram`:
+
+```sh
+engram inspect status
+engram inspect sessions
+engram inspect frame 3
+```
+
+Inspection emits bounded sanitized text, never sends input, and leaves tmux and
+Engram state unchanged. See
+[`docs/headless-operation.md`](docs/headless-operation.md) for its exact limits.
+
 ## Development
 
 Engram uses only the Go standard library. Run the full local gate before
@@ -493,6 +506,18 @@ scan, and a smoke build. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change
 guidance, [`docs/release-strategy.md`](docs/release-strategy.md) for the reviewed
 release path, [`CHANGELOG.md`](CHANGELOG.md) for accumulated user-visible
 changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
+
+The private boundary between Telegram orchestration and tmux truth is
+described in
+[`docs/terminal-mechanics-boundary.md`](docs/terminal-mechanics-boundary.md),
+with the deliberately narrow extraction sequence in
+[`docs/terminal-mechanics-plan.md`](docs/terminal-mechanics-plan.md).
+[`docs/headless-operation.md`](docs/headless-operation.md) distinguishes the
+unattended Telegram service from no-network inspection and documents the
+operating boundary of each.
+[`docs/protocol-posture.md`](docs/protocol-posture.md) explains why Engram should
+standardize its truth and attention invariants without becoming a general wire
+protocol.
 
 The conversational Haiku fixture eval is opt-in because it makes live
 Anthropic calls. It fails each fixture on hard regressions such as injected

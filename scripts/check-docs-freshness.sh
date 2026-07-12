@@ -6,7 +6,11 @@ cd "$repo_root"
 
 required_docs=(
   docs/design-principles.md
+  docs/headless-operation.md
+  docs/protocol-posture.md
   docs/release-strategy.md
+  docs/terminal-mechanics-boundary.md
+  docs/terminal-mechanics-plan.md
   requirements/INDEX.md
 )
 

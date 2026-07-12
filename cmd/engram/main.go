@@ -17,8 +17,10 @@ import (
 	"github.com/idolum-ai/engram/internal/app"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/inspect"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/terminalshot"
+	"github.com/idolum-ai/engram/internal/tmux"
 	"github.com/idolum-ai/engram/internal/upstream"
 	"github.com/idolum-ai/engram/internal/version"
 )
@@ -58,6 +60,17 @@ func run(args []string) int {
 		return runDiagnostics(args[1:], "status")
 	case "dry-start":
 		return runDiagnostics(args[1:], "dry-start")
+	case "inspect":
+		home, err := inspect.HomeFromEnvironment()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "inspect:", err)
+			return 1
+		}
+		if err := (inspect.Inspector{Home: home, Runner: tmux.ExecRunner{}}).Run(context.Background(), args[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "inspect:", err)
+			return 1
+		}
+		return 0
 	case "version", "--version", "-v":
 		fmt.Println(version.String())
 		return 0
@@ -95,6 +108,9 @@ func printHelp() {
   engram preflight [--env ~/.engram/.env]
   engram status [--env ~/.engram/.env]
   engram dry-start [--env ~/.engram/.env]
+  engram inspect status
+  engram inspect sessions
+  engram inspect frame <watch-id>
   engram commands
   engram signal <message>
   engram version

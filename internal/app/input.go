@@ -49,19 +49,24 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	if err := a.validateSessionPane(tctx, ts); err != nil {
-		return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
-	}
+	var pane tmux.Pane
 	var err error
 	if enter {
-		err = a.Tmux.SendCommand(tctx, ts.TmuxPaneID, text)
+		pane, err = a.terminalMechanics().SendCommand(tctx, terminalBinding(ts), text)
 	} else {
-		err = a.Tmux.SendText(tctx, ts.TmuxPaneID, text)
+		pane, err = a.terminalMechanics().SendText(tctx, terminalBinding(ts), text)
 	}
 	if err != nil {
+		a.recordIdentityLoss(ctx, ts, err)
 		_ = a.audit("tmux.send", "failed", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "tmux send error: "+err.Error(), true)
+		if tmux.IsIdentityLoss(err) {
+			return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
+		}
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux send failed: " + err.Error()}
+	}
+	if err := a.recordValidatedPane(ts, pane); err != nil {
+		return actionResult{Outcome: actionStateFailed, Message: err.Error()}
 	}
 	_ = a.audit("tmux.send", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter})
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
@@ -102,17 +107,24 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	if err := a.validateSessionPane(tctx, ts); err != nil {
-		return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
-	}
+	var pane tmux.Pane
 	for i, keys := range groups {
-		if err := a.Tmux.SendKeys(tctx, ts.TmuxPaneID, keys); err != nil {
+		validated, err := a.terminalMechanics().SendKeys(tctx, terminalBinding(ts), keys)
+		if err != nil {
+			a.recordIdentityLoss(ctx, ts, err)
 			a.updateAnchorLocal(ctx, id, "tmux key error: "+err.Error(), true)
+			if tmux.IsIdentityLoss(err) {
+				return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
+			}
 			return actionResult{Outcome: actionTmuxFailed, Message: "tmux key failed: " + err.Error()}
 		}
+		pane = validated
 		if delay > 0 && i < len(groups)-1 && !a.sleepContext(ctx, delay) {
 			return actionResult{Outcome: actionTmuxFailed, Message: "key sequence canceled"}
 		}
+	}
+	if err := a.recordValidatedPane(ts, pane); err != nil {
+		return actionResult{Outcome: actionStateFailed, Message: err.Error()}
 	}
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
 		s.LastActivityAt = time.Now().UTC()

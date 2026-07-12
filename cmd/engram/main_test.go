@@ -136,6 +136,35 @@ func TestPreflightUsesPersistedModeBeforeEnvironmentFallback(t *testing.T) {
 	}
 }
 
+func TestInspectSessionsNeedsNoTelegramConfiguration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ENGRAM_HOME", home)
+	stateJSON := `{"version":7,"next_session_id":2,"terminal_sessions":[{"id":1,"tmux_session_name":"work","tmux_window_id":"@2","tmux_pane_id":"%3","origin":"attached","title":"build","last_known_cwd":"/tmp/project","state":"running"}],"attachments":[]}`
+	if err := os.WriteFile(filepath.Join(home, "state.json"), []byte(stateJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := captureCommand(t, func() int {
+		return run([]string{"inspect", "sessions"})
+	})
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "[1] state=running origin=attached pane=%3 window=@2") {
+		t.Fatalf("inspect code=%d stderr=%q stdout=%q", code, stderr, stdout)
+	}
+}
+
+func TestInspectRejectsMissingSubcommandWithoutLoadingConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ENGRAM_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "state.json"), []byte(`{"version":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := captureCommand(t, func() int {
+		return run([]string{"inspect"})
+	})
+	if code != 1 || !strings.Contains(stderr, "usage: engram inspect") {
+		t.Fatalf("inspect code=%d stderr=%q", code, stderr)
+	}
+}
+
 func writeTestEnv(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

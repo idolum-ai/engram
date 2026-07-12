@@ -69,6 +69,12 @@ privacy model must stay small and explicit.
 
 ## Local Effects
 
+- Local `engram inspect` commands construct no Telegram, Anthropic, or Chromium
+  client, perform no network request, and sanitize terminal control sequences
+  before writing bounded output to stdout.
+- Read-only inspection follows neither state-file symlinks nor pane-authored
+  paths and never accepts Telegram identifiers or arbitrary tmux targets.
+
 - Telegram messages can cause shell input in tmux.
 - Attachments are saved under `/tmp/engram/attachments`.
 - Large attachments require a hash-confirmed bypass and remain subject to a

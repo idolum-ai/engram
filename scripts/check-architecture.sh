@@ -53,8 +53,18 @@ if contains_pattern 'github.com/idolum-ai/engram/internal/app' internal/telegram
   exit 1
 fi
 
-if contains_pattern 'github.com/idolum-ai/engram/internal/telegram' internal/tmux internal/anthropic internal/config internal/state internal/terminalshot >/dev/null; then
+if contains_pattern 'github.com/idolum-ai/engram/internal/telegram' internal/tmux internal/anthropic internal/config internal/inspect internal/mechanics internal/state internal/terminalshot >/dev/null; then
   echo "non-app core packages must not import telegram" >&2
+  exit 1
+fi
+
+if contains_pattern 'github.com/idolum-ai/engram/internal/(app|anthropic|inspect|state|telegram|terminalshot)' internal/mechanics >/dev/null; then
+  echo "terminal mechanics may depend only on tmux and the standard library" >&2
+  exit 1
+fi
+
+if contains_pattern '\.Tmux\.(ValidatePane|SendCommand|SendText|SendKeys|CaptureStyled|CaptureVisibleRaw|DumpScrollback|KillWindow)' internal/app >/dev/null; then
+  echo "pane-bound app operations must cross internal/mechanics" >&2
   exit 1
 fi
 

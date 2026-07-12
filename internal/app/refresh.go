@@ -49,7 +49,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}
-	capture, err := a.Tmux.CaptureStyled(tctx, ts.TmuxPaneID, terminalshot.TargetRows)
+	capture, err := a.captureStyled(tctx, ts, terminalshot.TargetRows)
 	releaseSlot(a.captureSlots)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -61,7 +61,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		lock := a.sessionMutex(id)
 		lock.Lock()
 		latest, found := a.Store.FindSession(id)
-		if found && latest.State != state.TerminalClosed {
+		if found && latest.State != state.TerminalClosed && latest.State != state.TerminalLost {
 			if validationErr := a.validateSessionPane(validationCtx, latest); validationErr == nil {
 				_ = a.audit("tmux.capture", "failed", map[string]any{"session_id": id, "pane_id": latest.TmuxPaneID, "error": err.Error()})
 			}

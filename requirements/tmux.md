@@ -18,6 +18,9 @@ tmux is the source of terminal truth.
 - Before input, capture, cwd lookup, or destructive close, Engram verifies that
   `%pane_id` still belongs to the stored `@window_id`. A mismatch marks the
   session lost. Transient command failure does not.
+- Pane-bound input, capture, scrollback, and destructive close cross the private
+  terminal-mechanics boundary, which has no Telegram, state, or presentation
+  dependency and validates immutable identity immediately before the operation.
 - A lost anchor can reattach only when that exact pane/window identity returns;
   Engram must not guess a replacement.
 
@@ -61,6 +64,9 @@ tmux is the source of terminal truth.
 - `/raw` preserves the visible pane's physical wrapped lines and attributes.
   `/dump` streams physical full scrollback to an attachment.
 - `/raw` and `/dump` stop before Telegram's 50 MiB upload ceiling.
+- `engram inspect frame <watch-id>` captures at most 64 recent plain-text rows
+  without tmux paste buffers, strips terminal controls, and caps stdout at
+  128 KiB. It accepts an Engram watch ID, never an arbitrary tmux target.
 
 ## Upstream Signals
 

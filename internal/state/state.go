@@ -162,7 +162,55 @@ const (
 	maxProcessedMessages   = 2_000
 	maxAuditFileBytes      = int64(4 << 20)
 	maxAuditRecordBytes    = 64 << 10
+	maxReadOnlyStateBytes  = 16 << 20
 )
+
+// ReadSnapshot reads and normalizes persisted state without creating,
+// replacing, pruning, chmodding, or otherwise modifying it.
+func ReadSnapshot(path string) (State, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return State{}, fmt.Errorf("inspect state: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return State{}, fmt.Errorf("inspect state: %s is not a regular file", path)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return State{}, fmt.Errorf("inspect state: %w", err)
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxReadOnlyStateBytes+1))
+	if err != nil {
+		return State{}, fmt.Errorf("inspect state: %w", err)
+	}
+	if len(b) > maxReadOnlyStateBytes {
+		return State{}, fmt.Errorf("inspect state: file exceeds %d bytes", maxReadOnlyStateBytes)
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return State{}, fmt.Errorf("inspect state: file is empty")
+	}
+	var snapshot State
+	if err := json.Unmarshal(b, &snapshot); err != nil {
+		return State{}, fmt.Errorf("inspect state: parse: %w", err)
+	}
+	if snapshot.Version > currentStateVersion {
+		return State{}, fmt.Errorf("state schema version %d is newer than supported version %d", snapshot.Version, currentStateVersion)
+	}
+	normalizeTerminalSessions(snapshot.TerminalSessions)
+	for index := range snapshot.TerminalSessions {
+		if snapshot.TerminalSessions[index].Origin != TerminalOriginCreated {
+			snapshot.TerminalSessions[index].Origin = TerminalOriginAttached
+		}
+	}
+	if snapshot.NextSessionID == 0 {
+		snapshot.NextSessionID = maxSessionID(snapshot.TerminalSessions) + 1
+	}
+	if snapshot.ProcessedMessages == nil {
+		snapshot.ProcessedMessages = map[string]bool{}
+	}
+	return cloneState(snapshot), nil
+}
 
 func Open(path, auditPath string) (*Store, error) {
 	s := &Store{path: path, auditPath: auditPath}

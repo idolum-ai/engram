@@ -56,10 +56,6 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts state.TerminalSession, full bool) {
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	if err := a.validateSessionPane(tctx, ts); err != nil {
-		a.reply(ctx, msg, "session lost; use /sessions to attach the intended pane again")
-		return
-	}
 	name := "raw"
 	path := filepath.Join(a.Config.ArtifactDir(), fmt.Sprintf("engram-%s-%d-%s.txt", name, ts.ID, time.Now().UTC().Format("20060102T150405Z")))
 	if full {
@@ -70,10 +66,13 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 			a.reply(ctx, msg, "write error: "+err.Error())
 			return
 		}
-		dumpErr := a.Tmux.DumpScrollback(tctx, ts.TmuxPaneID, &boundedWriter{Writer: file, Remaining: telegramCloudUploadMax})
+		pane, dumpErr := a.terminalMechanics().DumpScrollback(tctx, terminalBinding(ts), &boundedWriter{Writer: file, Remaining: telegramCloudUploadMax})
 		closeErr := file.Close()
 		if dumpErr != nil || closeErr != nil {
 			_ = os.Remove(path)
+			if dumpErr != nil {
+				a.recordIdentityLoss(ctx, ts, dumpErr)
+			}
 			if errors.Is(dumpErr, errArtifactTooLarge) {
 				a.reply(ctx, msg, fmt.Sprintf("capture rejected: scrollback exceeds Telegram's %d-byte cloud Bot API limit", telegramCloudUploadMax))
 				return
@@ -81,10 +80,20 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 			a.reply(ctx, msg, "capture error: "+firstError(dumpErr, closeErr).Error())
 			return
 		}
+		if err := a.recordValidatedPane(ts, pane); err != nil {
+			_ = os.Remove(path)
+			a.reply(ctx, msg, "state error: "+err.Error())
+			return
+		}
 	} else {
-		text, err := a.Tmux.CaptureVisibleRaw(tctx, ts.TmuxPaneID)
+		pane, text, err := a.terminalMechanics().CaptureVisibleRaw(tctx, terminalBinding(ts))
 		if err != nil {
+			a.recordIdentityLoss(ctx, ts, err)
 			a.reply(ctx, msg, "capture error: "+err.Error())
+			return
+		}
+		if err := a.recordValidatedPane(ts, pane); err != nil {
+			a.reply(ctx, msg, "state error: "+err.Error())
 			return
 		}
 		if int64(len(text)) > telegramCloudUploadMax {
