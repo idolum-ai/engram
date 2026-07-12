@@ -868,3 +868,76 @@ func assertNoStateTemps(t *testing.T, dir string) {
 		t.Fatalf("temporary state files remain: %#v", matches)
 	}
 }
+
+func TestReadSnapshotDoesNotModifyOrRecoverState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	body := []byte(`{"version":7,"next_session_id":2,"terminal_sessions":[{"id":1,"tmux_window_id":"@2","tmux_pane_id":"%3","state":"running"}],"attachments":[]}`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ReadSnapshot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.TerminalSessions) != 1 || snapshot.TerminalSessions[0].Origin != TerminalOriginAttached {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	afterBody, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterBody, body) || after.Mode() != before.Mode() || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("ReadSnapshot modified persisted state")
+	}
+
+	corrupt := []byte(`{"version":`)
+	if err := os.WriteFile(path, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSnapshot(path); err == nil {
+		t.Fatal("ReadSnapshot accepted corrupt state")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, corrupt) {
+		t.Fatal("ReadSnapshot replaced corrupt state")
+	}
+	if matches, _ := filepath.Glob(path + ".corrupt-*"); len(matches) != 0 {
+		t.Fatalf("ReadSnapshot created recovery files: %v", matches)
+	}
+}
+
+func TestReadSnapshotRejectsSymlinkAndFutureSchema(t *testing.T) {
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real.json")
+	linkPath := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(realPath, []byte(`{"version":7}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSnapshot(linkPath); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("symlink error = %v", err)
+	}
+	if err := os.Remove(linkPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(linkPath, []byte(`{"version":999}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSnapshot(linkPath); err == nil || !strings.Contains(err.Error(), "newer than supported") {
+		t.Fatalf("future schema error = %v", err)
+	}
+}

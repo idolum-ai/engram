@@ -3,7 +3,7 @@
 Engram has two deliberately different headless shapes:
 
 1. the unattended Telegram service available today; and
-2. a proposed local, read-only inspection command that makes no network calls.
+2. a local, read-only inspection command that makes no network calls.
 
 Neither shape adds a daemon API, generic transport, or background command
 inbox. Telegram remains Engram's product surface. Local inspection is a bounded
@@ -73,9 +73,9 @@ tmux sessions. Engram does not install a macOS LaunchAgent.
 
 ## Local Read-Only Inspection
 
-Status: proposed; these commands are not implemented by this design PR.
+Status: available on Linux and macOS.
 
-After the private terminal-mechanics boundary is proven, Engram may expose:
+Engram exposes:
 
 ```text
 engram inspect status
@@ -108,8 +108,7 @@ Print one sanitized bounded literal frame by Engram watch ID:
 engram inspect frame 3
 ```
 
-The exact output format must be specified and tested in the implementation PR.
-Human-readable output is not a stable machine protocol unless that PR says so.
+Output is bounded human-readable text, not a stable machine protocol.
 
 ### State Selection And Locking
 
@@ -117,13 +116,14 @@ Inspection uses `ENGRAM_HOME`, defaulting to `~/.engram`. It never accepts a bot
 token, chat ID, Telegram message ID, arbitrary tmux target, or state path from
 pane content.
 
-The implementation must choose one conservative read strategy:
+Inspection reads the complete state file produced by Engram's atomic replacement
+path while the Telegram service continues. It takes no writer lock because it
+cannot write. It does not create a missing state file, migrate an old one,
+replace a corrupt one, change permissions, or leave recovery files. Symlinks,
+non-regular files, oversized files, malformed JSON, and future schema versions
+fail closed and remain untouched.
 
-- read a proven atomic state snapshot while the Telegram service continues; or
-- fail clearly when the exclusive state lock is held.
-
-It must not stop, signal, or compete with the running service. A corrupt or
-future-version state file fails closed and remains untouched.
+It does not stop, signal, or compete with the running service.
 
 ### Deliberate Limits
 
@@ -145,8 +145,8 @@ Engram's tmux mechanics easier to diagnose and prove.
 Both headless shapes run with the permissions of the local OS user and can see
 that user's tmux panes. The Telegram service intentionally sends selected pane
 content and files across configured external boundaries. The local inspection
-command must make no network request and must sanitize terminal controls before
-writing to stdout.
+command makes no network request and sanitizes terminal controls before writing
+to stdout.
 
 Neither mode protects against compromise of the owning OS account. Do not run
 Engram under an account whose tmux sessions it should not observe.

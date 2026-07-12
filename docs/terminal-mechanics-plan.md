@@ -1,13 +1,13 @@
 # Terminal Mechanics Extraction Plan
 
-Status: proposed sequence; implementation requires later reviewed PRs.
+Status: implemented sequence and continuing review gate.
 
-This plan implements the narrow boundary described in
+This plan records how the narrow boundary described in
 [`terminal-mechanics-boundary.md`](terminal-mechanics-boundary.md). It preserves
 Telegram as Engram's only product surface and
 [`protocol-posture.md`](protocol-posture.md) as the limit on protocol work.
 
-## Stage 0: Characterize Before Extracting
+## Stage 0: Characterize Before Extracting (complete)
 
 Goal: identify the existing tmux-shaped rules without changing ownership or
 runtime behavior.
@@ -34,7 +34,7 @@ Exit criteria:
 Stop if the candidate boundary is primarily an interface over `internal/app`
 rather than ownership of tmux truth.
 
-## Stage 1: Extract One Vertical Slice
+## Stage 1: Extract One Vertical Slice (complete)
 
 Goal: prove the boundary with immutable pane identity and one typed effect.
 
@@ -57,7 +57,7 @@ Exit criteria:
 
 Rollback the slice if it adds more translation than clarity.
 
-## Stage 2: Complete Only The Earned Boundary
+## Stage 2: Complete Only The Earned Boundary (complete)
 
 Goal: move the remaining mechanics that share the same truth and failure model.
 
@@ -83,7 +83,7 @@ Exit criteria for every move:
 
 There is no requirement to move every candidate.
 
-## Stage 3: Add A Read-Only Architecture Probe
+## Stage 3: Add A Read-Only Architecture Probe (complete)
 
 Goal: demonstrate that terminal mechanics can be observed without constructing
 Telegram, not to create another control surface.
@@ -118,7 +118,7 @@ Exit criteria:
 
 Stop if read-only inspection requires generic routes or frontend abstractions.
 
-## Stage 4: Stop And Reassess
+## Stage 4: Stop And Reassess (complete)
 
 After the extraction and probe, measure:
 
@@ -136,6 +136,14 @@ A future carrier proposal is a fresh product decision. It must show a real
 phone-first, low-dwell workflow before changing Engram's Telegram requirement or
 extracting shared delivery concepts.
 
+The reassessment kept the private mechanics boundary because it now enforces
+identity immediately around pane effects and has two real callers: Telegram
+orchestration and local inspection. It kept scheduling, lifecycle state,
+provenance, attention parsing, and every anchor concept with their existing
+owners. No generic interface, persistent state, background process, credential,
+or network boundary was added. The inspector remained read-only and the tmux
+leaf gained only one bounded literal capture operation.
+
 ## Cross-Stage Gates
 
 Every implementation PR must answer:
@@ -149,7 +157,7 @@ Every implementation PR must answer:
 - Does the package use only Go's standard library?
 - Could deleting the new abstraction make Engram clearer?
 
-## Suggested PR Sequence
+## Review Sequence
 
 1. Characterization tests and ownership inventory.
 2. Pane identity plus one typed input slice.
@@ -158,5 +166,7 @@ Every implementation PR must answer:
 4. Read-only no-egress architecture probe.
 5. Reassessment and deletion pass.
 
-Each PR remains independently reversible. Do not combine state migration,
-package extraction, and a new user-facing surface in one diff.
+These slices may be reviewed as commits in one implementation PR when their
+combined diff remains coherent. They must remain independently understandable
+and reversible. Do not combine state migration with package extraction or a new
+user-facing surface; this implementation requires no state migration.

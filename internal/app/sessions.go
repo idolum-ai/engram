@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/mechanics"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/tmux"
@@ -29,7 +30,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 	}
 	ts, err := a.Store.AllocateSession(sessionName, windowID, paneID, title)
 	if err != nil {
-		_ = a.Tmux.KillWindow(tmuxCtx, windowID)
+		_, _ = a.terminalMechanics().CloseWindow(tmuxCtx, mechanics.Binding{PaneID: paneID, WindowID: windowID})
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "session state allocation failed"}
 	}
@@ -41,9 +42,15 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionStateFailed, Message: "session state update failed"}
 	}
 	ts = updated
-	if err := a.Tmux.SendCommand(tmuxCtx, paneID, input); err != nil {
+	pane, err := a.terminalMechanics().SendCommand(tmuxCtx, terminalBinding(ts), input)
+	if err != nil {
+		a.recordIdentityLoss(ctx, ts, err)
 		a.reply(ctx, msg, "tmux send error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "initial tmux input failed"}
+	}
+	if err := a.recordValidatedPane(ts, pane); err != nil {
+		a.reply(ctx, msg, "state error: "+err.Error())
+		return actionResult{Outcome: actionStateFailed, Message: "initial session state update failed"}
 	}
 	resp, err := a.sendAnchor(ctx, msg.Chat.ID, a.renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, a.anchorMarkup(ts))
 	anchorReady := false
@@ -247,11 +254,11 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	if _, err := a.Tmux.ValidatePane(tctx, ts.TmuxPaneID, ts.TmuxWindowID); err != nil {
-		a.markSessionLost(ctx, ts, err)
-		return actionResult{Outcome: actionTmuxFailed, Message: "close failed: session identity is no longer valid"}
-	}
-	if err := a.Tmux.KillWindow(tctx, ts.TmuxWindowID); err != nil {
+	if _, err := a.terminalMechanics().CloseWindow(tctx, terminalBinding(ts)); err != nil {
+		a.recordIdentityLoss(ctx, ts, err)
+		if tmux.IsIdentityLoss(err) {
+			return actionResult{Outcome: actionTmuxFailed, Message: "close failed: session identity is no longer valid"}
+		}
 		_ = a.audit("tmux.close", "failed", map[string]any{"session_id": id, "window_id": ts.TmuxWindowID, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "status:\nClose failed; the tmux window remains open.\n\nrecommendation:\nCheck the session with /sessions and retry when tmux is available.", true)
 		return actionResult{Outcome: actionTmuxFailed, Message: "close failed: " + err.Error()}
@@ -291,36 +298,6 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
 	a.updateAnchorLocal(ctx, ts.ID, "status:\nThe tracked tmux pane no longer matches this session. Engram stopped watching it.\n\nrecommendation:\nUse /sessions and attach the intended pane again.", true)
 	a.reconcileAnchorPresentation(ctx, ts.ID)
-}
-
-func (a *App) validateSessionPane(ctx context.Context, ts state.TerminalSession) error {
-	pane, err := a.Tmux.ValidatePane(ctx, ts.TmuxPaneID, ts.TmuxWindowID)
-	if err != nil {
-		if tmux.IsIdentityLoss(err) {
-			a.markSessionLost(ctx, ts, err)
-		} else {
-			_ = a.audit("tmux.identity", "unavailable", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": err.Error()})
-		}
-		return err
-	}
-	if ts.State == state.TerminalLost {
-		if _, _, stateErr := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
-			s.State = state.TerminalRunning
-			s.WatchEnabled = true
-			s.LastKnownCWD = pane.CurrentPath
-		}); stateErr != nil {
-			_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
-			return fmt.Errorf("recover session state: %w", stateErr)
-		}
-		_ = a.audit("tmux.identity", "recovered", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID})
-	} else if pane.CurrentPath != "" && pane.CurrentPath != ts.LastKnownCWD {
-		if _, _, stateErr := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
-			s.LastKnownCWD = pane.CurrentPath
-		}); stateErr != nil {
-			_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
-		}
-	}
-	return nil
 }
 
 func (a *App) sessions(ctx context.Context, msg telegram.Message) {

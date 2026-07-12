@@ -22,6 +22,11 @@ Notable user-visible and operational changes are recorded here.
   bounded local state and redacted audit logs.
 - Support Linux systemd user services and foreground macOS operation. Haiku and
   Chromium remain optional, with their data boundaries documented separately.
+- Add read-only `engram inspect` diagnostics for local status, tracked watches,
+  and bounded literal frames without Telegram configuration or network access.
+- Isolate pane-bound identity, input, capture, scrollback, and close operations
+  behind a private tmux mechanics boundary while keeping Telegram anchors and
+  routing in the application layer.
 
 ### Distribution
 

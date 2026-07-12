@@ -37,19 +37,13 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		return
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
-	if err := a.validateSessionPane(tctx, current); err != nil {
-		cancel()
-		lock.Unlock()
-		a.conversationNotice(ctx, requested, "I couldn't read that window because its tmux pane is unavailable.")
-		return
-	}
 	if !acquireSlot(tctx, a.captureSlots) {
 		cancel()
 		lock.Unlock()
 		a.conversationNotice(ctx, requested, "I couldn't read that window before the request timed out.")
 		return
 	}
-	capture, err := a.Tmux.CaptureStyled(tctx, current.TmuxPaneID, terminalshot.TargetRows)
+	capture, err := a.captureStyled(tctx, current, terminalshot.TargetRows)
 	releaseSlot(a.captureSlots)
 	cancel()
 	lock.Unlock()

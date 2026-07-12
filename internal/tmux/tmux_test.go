@@ -34,6 +34,21 @@ type styledCaptureRunner struct {
 	joined string
 }
 
+type sequenceRunner struct {
+	calls   [][]string
+	outputs []string
+}
+
+func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(r.outputs) == 0 {
+		return "", fmt.Errorf("unexpected tmux call: %v", args)
+	}
+	out := r.outputs[0]
+	r.outputs = r.outputs[1:]
+	return out, nil
+}
+
 func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
@@ -188,6 +203,34 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 		!reflect.DeepEqual(captureCall[11:21], []string{";", "capture-pane", "-J", "-S", "-27", "-E", "36", "-t", "%7", "-b"}) ||
 		!strings.HasPrefix(captureCall[21], "engram-joined-") {
 		t.Fatalf("capture-pane coordinates = %#v", captureCall)
+	}
+}
+
+func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
+	runner := &sequenceRunner{outputs: []string{"80\t24\n", "one\ntwo\n"}}
+	got, err := New(runner).CaptureLiteral(context.Background(), "%7", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "one\ntwo" {
+		t.Fatalf("CaptureLiteral = %q", got)
+	}
+	want := [][]string{
+		{"display-message", "-p", "-t", "%7", "#{pane_width}\t#{pane_height}"},
+		{"capture-pane", "-p", "-N", "-S", "-40", "-E", "23", "-t", "%7"},
+	}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	}
+}
+
+func TestCaptureLiteralRejectsOversizedPaneBeforeCapture(t *testing.T) {
+	runner := &sequenceRunner{outputs: []string{"401\t24\n"}}
+	if _, err := New(runner).CaptureLiteral(context.Background(), "%7", 64); err == nil || !strings.Contains(err.Error(), "pane width") {
+		t.Fatalf("CaptureLiteral error = %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0][0] != "display-message" {
+		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 

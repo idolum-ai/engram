@@ -64,6 +64,16 @@ runtime state.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the local
   service surface without calling Telegram, Anthropic, or starting polling.
 - `dry-start` may create and open local state; `preflight` must not.
+- `engram inspect status`, `engram inspect sessions`, and
+  `engram inspect frame <watch-id>` require no Telegram or presentation
+  configuration, make no network request, and open no listener or worker.
+- Inspection selects state from `ENGRAM_HOME`, defaulting to `~/.engram`, and
+  reads a complete atomic snapshot without writer locking or mutation.
+- Inspection rejects symlinked, non-regular, oversized, corrupt, and
+  future-version state without recovery or replacement. Frame output validates
+  immutable pane/window identity and is capped at 64 sanitized rows and 128 KiB.
+- Inspection cannot mutate state or tmux, select arbitrary tmux targets, expose
+  files or scrollback, invoke a renderer, or become a reply route.
 
 ## Local Quality Gates
 

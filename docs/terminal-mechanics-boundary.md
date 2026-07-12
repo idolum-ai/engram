@@ -1,6 +1,6 @@
 # Terminal Mechanics Boundary
 
-Status: design proposal; no runtime behavior is committed by this document.
+Status: implemented architecture.
 
 ## Decision
 
@@ -14,7 +14,7 @@ attention. The extraction exists to make those mechanics easier to test and
 harder to accidentally couple to delivery. It is not a step toward replacing
 Telegram with a local terminal application.
 
-The proposed shape is:
+The implemented shape is:
 
 ```text
 Telegram orchestration -> private terminal mechanics -> tmux
@@ -65,15 +65,18 @@ rather than predicted here.
 
 ## Private Mechanics
 
-A plausible private package owns:
+The private mechanics package owns:
 
 - immutable `%pane_id` and `@window_id` bindings;
-- watch provenance and pane lifecycle validation;
-- existing-session selection and attach/new distinctions;
-- bounded `CaptureStyled` frames with shared physical/logical coordinates;
-- command-plus-Enter, literal-text, and allowlisted-key operations;
-- cwd and rename operations whose truth comes from tmux;
-- attention-record parsing, validation, and deduplication.
+- effect-time pane and window identity validation;
+- bounded styled, literal, visible, and scrollback capture operations;
+- command-plus-Enter, literal-text, and validated-key operations;
+- destructive window close after identity validation.
+
+Validated operations return current pane metadata, including cwd, for
+application-owned recovery and observation state. Created-versus-attached
+provenance remains application state. Attention-record parsing remains in its
+existing terminal-native `internal/upstream` package.
 
 It returns bounded domain values and typed failures. It does not receive a
 generic `Execute(string)` callback, arbitrary tmux target, Telegram credential,
@@ -101,9 +104,8 @@ concerns.
 
 ## Local Read Probe
 
-After the boundary exists, a tiny read-only command may prove that terminal
-mechanics are genuinely independent of Telegram construction. Its maximum
-surface is:
+The tiny read-only inspection command proves that terminal mechanics are
+independent of Telegram construction. Its complete surface is:
 
 - local status of tmux availability and Engram state readability;
 - tracked watches with immutable identity and provenance;
@@ -136,12 +138,12 @@ Telegram service are documented in
   representation would weaken the one-anchor discipline.
 - **Dynamic adapters or plugins:** Engram is a precise product, not an ecosystem.
 
-These are rejected by this proposal, not reserved as implementation stages.
+These are rejected by this architecture, not reserved as implementation stages.
 Reconsidering one requires a new user need and design decision.
 
 ## Telegram Optionality
 
-This proposal does not claim that Telegram is optional. Removing a required
+This architecture does not claim that Telegram is optional. Removing a required
 credential while leaving only a local diagnostic would be technically true and
 productly misleading: local tmux already exists.
 

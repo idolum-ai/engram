@@ -476,6 +476,9 @@ func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) 
 	if len(args) > 0 && args[0] == "new-window" {
 		return "@1\t%1\n", nil
 	}
+	if len(args) > 0 && args[0] == "display-message" {
+		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+	}
 	return "", nil
 }
 
