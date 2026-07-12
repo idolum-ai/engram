@@ -30,6 +30,11 @@ privacy model must stay small and explicit.
 
 - Documentation must explain that Telegram receives commands, replies,
   summaries, captures, logs, and files sent through bot commands.
+- A configured `TELEGRAM_API_BASE` replaces Telegram's public Bot API host for
+  both method and file traffic. That endpoint receives the bot token and all
+  Telegram-bound Engram data. HTTPS is strongly recommended; HTTP provides no
+  transport confidentiality and is intended only for explicitly trusted local
+  deployments.
 - Documentation must explain that Anthropic receives the plain text of the same
   `CaptureStyled` frame, capped at 64 rows, used by Chromium. Guide anchors call it
   automatically; `🗣️` invokes it on demand from snapshot mode.

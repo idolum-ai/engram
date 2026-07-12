@@ -19,6 +19,13 @@ import (
 	"unicode/utf8"
 )
 
+func TestNewAtDerivesMethodAndFileEndpoints(t *testing.T) {
+	client := NewAt("TOKEN", "http://127.0.0.1:8081/telegram/")
+	if client.BaseURL != "http://127.0.0.1:8081/telegram/botTOKEN" || client.FileBase != "http://127.0.0.1:8081/telegram/file/botTOKEN" {
+		t.Fatalf("custom Telegram endpoints = %q, %q", client.BaseURL, client.FileBase)
+	}
+}
+
 func TestSessionListMarkupNilWhenNoSessions(t *testing.T) {
 	t.Parallel()
 

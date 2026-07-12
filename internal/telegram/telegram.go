@@ -43,9 +43,14 @@ type Client struct {
 }
 
 func New(token string) *Client {
+	return NewAt(token, "https://api.telegram.org")
+}
+
+func NewAt(token, apiBase string) *Client {
+	apiBase = strings.TrimRight(apiBase, "/")
 	return &Client{
-		BaseURL:  "https://api.telegram.org/bot" + token,
-		FileBase: "https://api.telegram.org/file/bot" + token,
+		BaseURL:  apiBase + "/bot" + token,
+		FileBase: apiBase + "/file/bot" + token,
 		Token:    token,
 		HTTPClient: &http.Client{
 			Timeout: 70 * time.Second,

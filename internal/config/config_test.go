@@ -158,6 +158,9 @@ ENGRAM_SNAPSHOT_THEME=contrast-dark
 	if cfg.TelegramAllowedUserID != 123 || cfg.TelegramChatID != 123 {
 		t.Fatalf("ids = %d %d", cfg.TelegramAllowedUserID, cfg.TelegramChatID)
 	}
+	if cfg.EffectiveTelegramAPIBase() != DefaultTelegramAPIBase {
+		t.Fatalf("Telegram API base = %q", cfg.EffectiveTelegramAPIBase())
+	}
 	if cfg.Home == "" || cfg.Workdir == "" || cfg.AttachmentSoftMaxBytes != DefaultSoftMaxSize {
 		t.Fatalf("defaults not applied: %#v", cfg)
 	}
@@ -169,6 +172,48 @@ ENGRAM_SNAPSHOT_THEME=contrast-dark
 	}
 	if cfg.SnapshotTheme != "contrast-dark" {
 		t.Fatalf("SnapshotTheme = %q, want contrast-dark", cfg.SnapshotTheme)
+	}
+}
+
+func TestLoadAcceptsCustomTelegramAPIBase(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_API_BASE=http://127.0.0.1:8081/telegram/
+TELEGRAM_ALLOWED_USER_ID=123
+ENGRAM_ANCHOR_MODE=snapshot
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EffectiveTelegramAPIBase(); got != "http://127.0.0.1:8081/telegram" {
+		t.Fatalf("Telegram API base = %q", got)
+	}
+}
+
+func TestLoadRejectsUnsafeTelegramAPIBase(t *testing.T) {
+	for _, apiBase := range []string{
+		"api.telegram.test",
+		"ftp://telegram.test",
+		"https://user:pass@telegram.test",
+		"https://telegram.test?token=secret",
+		"https://telegram.test/#fragment",
+	} {
+		t.Run(apiBase, func(t *testing.T) {
+			dir := t.TempDir()
+			env := filepath.Join(dir, ".env")
+			body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_API_BASE=" + apiBase + "\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_ANCHOR_MODE=snapshot\n"
+			if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(env); err == nil {
+				t.Fatalf("Load accepted TELEGRAM_API_BASE=%q", apiBase)
+			}
+		})
 	}
 }
 

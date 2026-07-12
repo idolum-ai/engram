@@ -109,7 +109,7 @@ func New(cfg config.Config) (*App, error) {
 	return &App{
 		Config:         cfg,
 		Store:          store,
-		Telegram:       telegram.New(cfg.TelegramBotToken),
+		Telegram:       telegram.NewAt(cfg.TelegramBotToken, cfg.EffectiveTelegramAPIBase()),
 		Anthropic:      anthropicClient,
 		Tmux:           tmux.New(tmux.ExecRunner{}),
 		Snapshots:      snapshotRenderer,
