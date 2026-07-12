@@ -230,6 +230,7 @@ func TestUnauthorizedAndStaleCallbacksAreAlwaysAnswered(t *testing.T) {
 
 func TestUnauthorizedOrdinaryMessagesCannotReachDeviceCapabilities(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("TMPDIR", filepath.Join(dir, "tmp"))
 	auditPath := filepath.Join(dir, "audit.jsonl")
 	store, err := state.Open(filepath.Join(dir, "state.json"), auditPath)
