@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.1.0] - 2026-07-12
+
 ### Product
 
 - Operate existing or Engram-created tmux windows from one authorized Telegram
