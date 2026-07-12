@@ -74,6 +74,10 @@ func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
 		return nil, err
 	}
+	telegramClient, err := telegram.NewAt(cfg.TelegramBotToken, cfg.EffectiveTelegramAPIBase())
+	if err != nil {
+		return nil, fmt.Errorf("configure Telegram client: %w", err)
+	}
 	snapshotRenderer := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme)
 	_, snapshotErr := snapshotRenderer.Probe(context.Background())
 	snapshotReady := snapshotErr == nil
@@ -109,7 +113,7 @@ func New(cfg config.Config) (*App, error) {
 	return &App{
 		Config:         cfg,
 		Store:          store,
-		Telegram:       telegram.New(cfg.TelegramBotToken),
+		Telegram:       telegramClient,
 		Anthropic:      anthropicClient,
 		Tmux:           tmux.New(tmux.ExecRunner{}),
 		Snapshots:      snapshotRenderer,

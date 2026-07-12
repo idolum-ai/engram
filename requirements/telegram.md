@@ -1,5 +1,14 @@
 # Telegram Requirements
 
+## API Endpoint
+
+- The Telegram Bot API server root defaults to `https://api.telegram.org` and
+  may be replaced with `TELEGRAM_API_BASE` at process startup.
+- Method calls use `<base>/bot<token>/<method>` and file downloads use
+  `<base>/file/bot<token>/<path>` after removing trailing slashes from the base.
+- The base must be an absolute HTTP(S) URL without userinfo, query, or fragment.
+- Endpoint changes require a service restart; they are not a Telegram command.
+
 Telegram is Engram's only user interface.
 
 ## Admission And Commands

@@ -10,6 +10,10 @@ runtime state.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
+- `TELEGRAM_API_BASE` selects the Telegram Bot API server root and defaults to
+  `https://api.telegram.org`. It must be an absolute HTTP(S) URL without
+  userinfo, query, or fragment; an optional path prefix and trailing slash are
+  supported. Engram derives both bot-method and file endpoints from this root.
 - `ENGRAM_ANCHOR_MODE` selects the startup presentation and fallback when no
   valid persisted mode exists. State schema v8 persists runtime mode changes,
   upstream-signal reply aliases, bounded record IDs, retry deadlines, delivery

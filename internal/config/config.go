@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,16 +12,18 @@ import (
 )
 
 const (
-	DefaultModel       = "claude-haiku-4-5-20251001"
-	DefaultModelAlias  = "claude-haiku-4-5"
-	DefaultSoftMaxSize = int64(16_777_216)
-	AnchorModeGuide    = "guide"
-	AnchorModeSnapshot = "snapshot"
+	DefaultModel           = "claude-haiku-4-5-20251001"
+	DefaultModelAlias      = "claude-haiku-4-5"
+	DefaultSoftMaxSize     = int64(16_777_216)
+	DefaultTelegramAPIBase = "https://api.telegram.org"
+	AnchorModeGuide        = "guide"
+	AnchorModeSnapshot     = "snapshot"
 )
 
 type Config struct {
 	EnvPath                    string
 	TelegramBotToken           string
+	TelegramAPIBase            string
 	TelegramAllowedUserID      int64
 	TelegramChatID             int64
 	LLMProvider                string
@@ -68,6 +71,7 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		EnvPath:                    path,
 		TelegramBotToken:           values["TELEGRAM_BOT_TOKEN"],
+		TelegramAPIBase:            firstNonEmpty(values["TELEGRAM_API_BASE"], DefaultTelegramAPIBase),
 		LLMProvider:                firstNonEmpty(values["LLM_PROVIDER"], "anthropic"),
 		AnthropicAPIKey:            values["ANTHROPIC_API_KEY"],
 		AnthropicModel:             firstNonEmpty(values["ANTHROPIC_MODEL"], DefaultModel),
@@ -133,6 +137,9 @@ func (c Config) Validate() error {
 	if c.TelegramPollTimeoutSeconds <= 0 {
 		return fmt.Errorf("TELEGRAM_POLL_TIMEOUT_SECONDS must be positive")
 	}
+	if err := validateTelegramAPIBase(c.EffectiveTelegramAPIBase()); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -165,12 +172,26 @@ func (c Config) SnapshotAnchors() bool { return c.EffectiveAnchorMode() == Ancho
 
 func (c Config) HaikuConfigured() bool { return strings.TrimSpace(c.AnthropicAPIKey) != "" }
 
-func (c Config) StatePath() string       { return filepath.Join(c.Home, "state.json") }
-func (c Config) AuditPath() string       { return filepath.Join(c.Home, "audit.jsonl") }
-func (c Config) LockDir() string         { return filepath.Join(c.Home, "locks") }
-func (c Config) AttachmentDir() string   { return filepath.Join(c.ArtifactDir(), "attachments") }
-func (c Config) ArtifactDir() string     { return artifactRoot() }
-func (c Config) TelegramAPIBase() string { return "https://api.telegram.org/bot" + c.TelegramBotToken }
+func (c Config) EffectiveTelegramAPIBase() string {
+	return strings.TrimRight(firstNonEmpty(strings.TrimSpace(c.TelegramAPIBase), DefaultTelegramAPIBase), "/")
+}
+
+func (c Config) StatePath() string     { return filepath.Join(c.Home, "state.json") }
+func (c Config) AuditPath() string     { return filepath.Join(c.Home, "audit.jsonl") }
+func (c Config) LockDir() string       { return filepath.Join(c.Home, "locks") }
+func (c Config) AttachmentDir() string { return filepath.Join(c.ArtifactDir(), "attachments") }
+func (c Config) ArtifactDir() string   { return artifactRoot() }
+
+func validateTelegramAPIBase(value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return fmt.Errorf("TELEGRAM_API_BASE must be an absolute HTTP(S) URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(value, "#") {
+		return fmt.Errorf("TELEGRAM_API_BASE must not contain userinfo, a query, or a fragment")
+	}
+	return nil
+}
 
 func artifactRoot() string {
 	if runtimeDir, ok := privateRuntimeBase(os.Getenv("XDG_RUNTIME_DIR")); ok {

@@ -43,9 +43,25 @@ type Client struct {
 }
 
 func New(token string) *Client {
+	base := &url.URL{Scheme: "https", Host: "api.telegram.org"}
+	return newClient(token, base)
+}
+
+func NewAt(token, apiBase string) (*Client, error) {
+	base, err := url.Parse(apiBase)
+	if err != nil || !base.IsAbs() || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") ||
+		base.User != nil || base.RawQuery != "" || base.ForceQuery || strings.Contains(apiBase, "#") {
+		return nil, fmt.Errorf("invalid Telegram API base URL")
+	}
+	return newClient(token, base), nil
+}
+
+func newClient(token string, base *url.URL) *Client {
+	methodBase := base.JoinPath("bot" + token)
+	fileBase := base.JoinPath("file", "bot"+token)
 	return &Client{
-		BaseURL:  "https://api.telegram.org/bot" + token,
-		FileBase: "https://api.telegram.org/file/bot" + token,
+		BaseURL:  methodBase.String(),
+		FileBase: fileBase.String(),
 		Token:    token,
 		HTTPClient: &http.Client{
 			Timeout: 70 * time.Second,

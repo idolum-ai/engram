@@ -4,6 +4,11 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Configuration
+
+- Add `TELEGRAM_API_BASE` for routing Bot API methods and file downloads through
+  a configurable HTTP(S) Telegram API server root.
+
 ## [v0.1.0] - 2026-07-12
 
 ### Product
