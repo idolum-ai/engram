@@ -117,6 +117,10 @@ and architecture test, not a second Engram interface.
 If a useful probe requires generic routing, frontend state, mutation, or a
 resident process, do not build it.
 
+The intended operator experience and its distinction from today's unattended
+Telegram service are documented in
+[`headless-operation.md`](headless-operation.md).
+
 ## Rejected Directions
 
 - **Local TUI:** tmux already provides the better local terminal interface. A

@@ -499,6 +499,9 @@ described in
 [`docs/terminal-mechanics-boundary.md`](docs/terminal-mechanics-boundary.md),
 with the deliberately narrow extraction sequence in
 [`docs/terminal-mechanics-plan.md`](docs/terminal-mechanics-plan.md).
+[`docs/headless-operation.md`](docs/headless-operation.md) distinguishes the
+current unattended Telegram service from the proposed no-network inspection
+command and documents the operating boundary of each.
 [`docs/protocol-posture.md`](docs/protocol-posture.md) explains why Engram should
 standardize its truth and attention invariants without becoming a general wire
 protocol.
