@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,9 +21,45 @@ import (
 )
 
 func TestNewAtDerivesMethodAndFileEndpoints(t *testing.T) {
-	client := NewAt("TOKEN", "http://127.0.0.1:8081/telegram/")
+	client, err := NewAt("TOKEN", "http://127.0.0.1:8081/telegram/")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if client.BaseURL != "http://127.0.0.1:8081/telegram/botTOKEN" || client.FileBase != "http://127.0.0.1:8081/telegram/file/botTOKEN" {
 		t.Fatalf("custom Telegram endpoints = %q, %q", client.BaseURL, client.FileBase)
+	}
+}
+
+func TestCustomAPIBaseRoutesMethodsAndFilesThroughPrefix(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/telegram/botTOKEN/getUpdates":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ok":true,"result":[]}`)
+		case "/telegram/file/botTOKEN/documents/result.txt":
+			_, _ = io.WriteString(w, "artifact")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewAt("TOKEN", server.URL+"/telegram/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.HTTPClient = server.Client()
+	if _, err := client.GetUpdates(context.Background(), 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "result.txt")
+	if _, err := client.DownloadFile(context.Background(), "documents/result.txt", destination, 1024); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(paths, "|"), "/telegram/botTOKEN/getUpdates|/telegram/file/botTOKEN/documents/result.txt"; got != want {
+		t.Fatalf("request paths = %q, want %q", got, want)
 	}
 }
 

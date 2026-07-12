@@ -187,7 +187,7 @@ func validateTelegramAPIBase(value string) error {
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
 		return fmt.Errorf("TELEGRAM_API_BASE must be an absolute HTTP(S) URL")
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(value, "#") {
 		return fmt.Errorf("TELEGRAM_API_BASE must not contain userinfo, a query, or a fragment")
 	}
 	return nil

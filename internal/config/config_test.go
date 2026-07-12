@@ -201,7 +201,9 @@ func TestLoadRejectsUnsafeTelegramAPIBase(t *testing.T) {
 		"ftp://telegram.test",
 		"https://user:pass@telegram.test",
 		"https://telegram.test?token=secret",
+		"https://telegram.test?",
 		"https://telegram.test/#fragment",
+		"https://telegram.test/#",
 	} {
 		t.Run(apiBase, func(t *testing.T) {
 			dir := t.TempDir()
