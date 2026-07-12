@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.2.0] - 2026-07-12
+
 ### Configuration
 
 - Add `TELEGRAM_API_BASE` for routing Bot API methods and file downloads through
