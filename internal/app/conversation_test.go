@@ -26,6 +26,7 @@ func TestConversationUsesSnapshotFrameAndRepliesToCanonicalAnchor(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	session = bindTestSession(t, store, session.ID)
 	session, _, err = store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
@@ -216,6 +217,7 @@ func conversationTestSession(t *testing.T, format string) (*state.Store, state.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	session = bindTestSession(t, store, session.ID)
 	session, _, err = store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77

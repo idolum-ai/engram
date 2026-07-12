@@ -68,6 +68,9 @@ func run(args []string) int {
 		}
 		if err := (inspect.Inspector{Home: home, Runner: tmux.ExecRunner{}}).Run(context.Background(), args[1:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "inspect:", err)
+			if inspect.IsUsageError(err) {
+				return 2
+			}
 			return 1
 		}
 		return 0

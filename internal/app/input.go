@@ -69,12 +69,18 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 		return actionResult{Outcome: actionStateFailed, Message: err.Error()}
 	}
 	_ = a.audit("tmux.send", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter})
-	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+	expected := ts
+	expected.State = state.TerminalRunning
+	_, found, applied, err := a.updateSessionIfCurrent(expected, func(s *state.TerminalSession) {
 		s.LastActivityAt = time.Now().UTC()
-	}); err != nil {
+	})
+	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": mode, "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "state update error after tmux input: "+err.Error(), true)
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux input: " + err.Error()}
+	}
+	if !found || !applied {
+		return actionResult{Outcome: actionStateFailed, Message: "session no longer current after tmux input"}
 	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent"}
@@ -126,12 +132,18 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 	if err := a.recordValidatedPane(ts, pane); err != nil {
 		return actionResult{Outcome: actionStateFailed, Message: err.Error()}
 	}
-	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+	expected := ts
+	expected.State = state.TerminalRunning
+	_, found, applied, err := a.updateSessionIfCurrent(expected, func(s *state.TerminalSession) {
 		s.LastActivityAt = time.Now().UTC()
-	}); err != nil {
+	})
+	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": "keys", "error": err.Error()})
 		a.updateAnchorLocal(ctx, id, "state update error after tmux keys: "+err.Error(), true)
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux keys: " + err.Error()}
+	}
+	if !found || !applied {
+		return actionResult{Outcome: actionStateFailed, Message: "session no longer current after tmux keys"}
 	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))}

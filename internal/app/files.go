@@ -57,11 +57,13 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	name := "raw"
-	path := filepath.Join(a.Config.ArtifactDir(), fmt.Sprintf("engram-%s-%d-%s.txt", name, ts.ID, time.Now().UTC().Format("20060102T150405Z")))
 	if full {
 		name = "dump"
-		path = filepath.Join(a.Config.ArtifactDir(), fmt.Sprintf("engram-%s-%d-%s.txt", name, ts.ID, time.Now().UTC().Format("20060102T150405Z")))
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	}
+	filename := fmt.Sprintf("engram-%s-%d-%s.txt", name, ts.ID, time.Now().UTC().Format("20060102T150405Z"))
+	var path string
+	if full {
+		file, path, err := createPredictableArtifact(a.Config.ArtifactDir(), filename)
 		if err != nil {
 			a.reply(ctx, msg, "write error: "+err.Error())
 			return
@@ -100,8 +102,17 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 			a.reply(ctx, msg, fmt.Sprintf("capture rejected: visible pane exceeds Telegram's %d-byte cloud Bot API limit", telegramCloudUploadMax))
 			return
 		}
-		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		file, createdPath, err := createPredictableArtifact(a.Config.ArtifactDir(), filename)
+		if err != nil {
 			a.reply(ctx, msg, "write error: "+err.Error())
+			return
+		}
+		path = createdPath
+		_, writeErr := io.WriteString(file, text)
+		closeErr := file.Close()
+		if writeErr != nil || closeErr != nil {
+			_ = os.Remove(path)
+			a.reply(ctx, msg, "write error: "+firstError(writeErr, closeErr).Error())
 			return
 		}
 	}
@@ -230,7 +241,7 @@ func (a *App) downloadAttachment(ctx context.Context, msg telegram.Message, doc 
 
 func (a *App) largeAttachmentMessage(size int64) string {
 	space := diskFree(a.Config.ArtifactDir())
-	return fmt.Sprintf("attachment too large: %d bytes exceeds soft limit %d bytes\nhard limit: %d bytes\navailable /tmp/engram space: %d bytes\nresend with caption `/attachment_bypass sha256:<hash>` to authorize the exact file", size, minInt64(a.Config.AttachmentSoftMaxBytes, a.attachmentHardMax()), a.attachmentHardMax(), space)
+	return fmt.Sprintf("attachment too large: %d bytes exceeds soft limit %d bytes\nhard limit: %d bytes\navailable artifact space: %d bytes\nresend with caption `/attachment_bypass sha256:<hash>` to authorize the exact file", size, minInt64(a.Config.AttachmentSoftMaxBytes, a.attachmentHardMax()), a.attachmentHardMax(), space)
 }
 
 func (a *App) attachments(ctx context.Context, msg telegram.Message) {
@@ -341,14 +352,41 @@ func (a *App) logs(ctx context.Context, msg telegram.Message) {
 		return
 	}
 	text := redact.Secrets(string(b), a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
-	path := filepath.Join(a.Config.ArtifactDir(), "engram-logs-"+time.Now().UTC().Format("20060102T150405Z")+".jsonl")
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+	file, path, err := createPredictableArtifact(a.Config.ArtifactDir(), "engram-logs-"+time.Now().UTC().Format("20060102T150405Z")+".jsonl")
+	if err != nil {
 		a.reply(ctx, msg, "log write error: "+err.Error())
+		return
+	}
+	_, writeErr := io.WriteString(file, text)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+		a.reply(ctx, msg, "log write error: "+firstError(writeErr, closeErr).Error())
 		return
 	}
 	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, "Engram logs"); err != nil {
 		a.reply(ctx, msg, "log upload error: "+err.Error())
 	}
+}
+
+func createPredictableArtifact(dir, filename string) (*os.File, string, error) {
+	ext := filepath.Ext(filename)
+	stem := strings.TrimSuffix(filename, ext)
+	for collision := 0; collision < 10_000; collision++ {
+		candidate := filename
+		if collision > 0 {
+			candidate = fmt.Sprintf("%s-%d%s", stem, collision+1, ext)
+		}
+		path := filepath.Join(dir, candidate)
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			return file, path, nil
+		}
+		if !os.IsExist(err) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("too many artifact name collisions for %s", filename)
 }
 
 func tailAuditLog(path string, maxBytes int64) ([]byte, error) {

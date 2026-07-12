@@ -51,6 +51,7 @@ type TerminalSession struct {
 	TmuxSessionName          string         `json:"tmux_session_name"`
 	TmuxWindowID             string         `json:"tmux_window_id"`
 	TmuxPaneID               string         `json:"tmux_pane_id"`
+	TmuxServerID             string         `json:"tmux_server_id,omitempty"`
 	Origin                   TerminalOrigin `json:"origin,omitempty"`
 	Title                    string         `json:"title"`
 	LastKnownCWD             string         `json:"last_known_cwd,omitempty"`
@@ -152,7 +153,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion    = 7
+	currentStateVersion    = 8
 	maxTerminalSessions    = 200
 	maxAttachments         = 200
 	maxAttachmentBypasses  = 100
@@ -168,18 +169,24 @@ const (
 // ReadSnapshot reads and normalizes persisted state without creating,
 // replacing, pruning, chmodding, or otherwise modifying it.
 func ReadSnapshot(path string) (State, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return State{}, fmt.Errorf("inspect state: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return State{}, fmt.Errorf("inspect state: %s is not a regular file", path)
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return State{}, fmt.Errorf("inspect state: %w", err)
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return State{}, fmt.Errorf("inspect state: stat opened file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return State{}, fmt.Errorf("inspect state: %s is not a regular file", path)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return State{}, fmt.Errorf("inspect state: %s must not be accessible by group or other users", path)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Geteuid() {
+		return State{}, fmt.Errorf("inspect state: %s is not owned by the current user", path)
+	}
 	b, err := io.ReadAll(io.LimitReader(f, maxReadOnlyStateBytes+1))
 	if err != nil {
 		return State{}, fmt.Errorf("inspect state: %w", err)
@@ -624,6 +631,17 @@ func (s *Store) FindByPane(paneID string) (TerminalSession, bool) {
 	defer s.mu.Unlock()
 	for _, ts := range s.state.TerminalSessions {
 		if ts.TmuxPaneID == paneID && ts.State != TerminalClosed {
+			return cloneTerminalSession(ts), true
+		}
+	}
+	return TerminalSession{}, false
+}
+
+func (s *Store) FindByBinding(paneID, windowID, serverID string) (TerminalSession, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ts := range s.state.TerminalSessions {
+		if ts.TmuxPaneID == paneID && ts.TmuxWindowID == windowID && ts.TmuxServerID == serverID && ts.State != TerminalClosed {
 			return cloneTerminalSession(ts), true
 		}
 	}

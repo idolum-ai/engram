@@ -49,6 +49,9 @@ failure are in scope.
 - Revoke and replace the bot token or Anthropic key immediately if exposed.
 - Do not track `.env` files, state, logs, PEM files, generated captures, or
   downloaded attachments.
+- Treat Engram's private runtime root as sensitive. Engram prefers a valid
+  private `XDG_RUNTIME_DIR` and otherwise uses a UID-specific directory under
+  the system temporary directory.
 - Review exact paths before using `/download` and review every artifact before
   sharing it.
 - Run `make secrets` before pushing.

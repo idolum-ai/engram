@@ -27,6 +27,11 @@ Notable user-visible and operational changes are recorded here.
 - Isolate pane-bound identity, input, capture, scrollback, and close operations
   behind a private tmux mechanics boundary while keeping Telegram anchors and
   routing in the application layer.
+- Bind watches to a tmux server incarnation, make destructive close atomic with
+  identity validation, and require explicit reattachment after legacy state or
+  a server restart.
+- Use a private per-user runtime root for attachments and generated artifacts,
+  with owner, mode, symlink, and exclusive-creation checks.
 
 ### Distribution
 

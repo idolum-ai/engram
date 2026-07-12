@@ -60,8 +60,8 @@ privacy model must stay small and explicit.
   metadata, and the selected anchor mode. Raw terminal captures and upstream
   payloads are retained only in process memory and are omitted from persisted
   state.
-- `audit.jsonl`, lock metadata, tmux history, and `/tmp/engram` artifacts must
-  be treated as sensitive.
+- `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
+  treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
   Unauthorized audit and update-journal records must not retain the rejected
   sender's user or chat identifiers.
@@ -70,13 +70,23 @@ privacy model must stay small and explicit.
 ## Local Effects
 
 - Local `engram inspect` commands construct no Telegram, Anthropic, or Chromium
-  client, perform no network request, and sanitize terminal control sequences
-  before writing bounded output to stdout.
+  client and perform no direct network request. They remove terminal and Unicode
+  presentation controls before writing bounded output to stdout, but do not
+  redact literal pane content. User-configured tmux hooks remain tmux-side
+  effects outside this guarantee.
 - Read-only inspection follows neither state-file symlinks nor pane-authored
   paths and never accepts Telegram identifiers or arbitrary tmux targets.
 
 - Telegram messages can cause shell input in tmux.
-- Attachments are saved under `/tmp/engram/attachments`.
+- Runtime artifacts use `$XDG_RUNTIME_DIR/engram` only when the runtime
+  directory is absolute, writable, owned by the process UID, mode `0700`, and
+  has no symlink path components. Otherwise they use the canonical system
+  temporary directory under a UID-specific `engram-<uid>` root.
+- Runtime and attachment roots must be directories owned by the process UID
+  with mode `0700`; startup must reject preexisting symlinks, non-directories,
+  unsafe permissions, and foreign ownership.
+- Attachments are saved under the private runtime root's `attachments`
+  directory.
 - Large attachments require a hash-confirmed bypass and remain subject to a
   hard limit derived from the configured soft limit, free disk, and Telegram's
   20 MiB cloud Bot API download ceiling.
@@ -96,6 +106,9 @@ privacy model must stay small and explicit.
   bounded background workers and a bounded queue so polling remains responsive.
 - Generated `/raw` and `/dump` artifacts must not exceed the same 50 MiB cloud
   upload ceiling.
+- Predictably named captures and logs must use exclusive creation. A
+  preexisting file or symlink must never be followed or truncated; collisions
+  use a deterministic suffix in the private artifact root.
 - Snapshot HTML, isolated browser profiles, and PNGs must use private temporary
   paths and be removed after upload or failure.
 

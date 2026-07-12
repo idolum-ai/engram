@@ -4,6 +4,7 @@ package inspect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,17 @@ type Inspector struct {
 	Runner tmux.Runner
 }
 
+type UsageError struct {
+	Message string
+}
+
+func (e UsageError) Error() string { return e.Message }
+
+func IsUsageError(err error) bool {
+	var usage UsageError
+	return errors.As(err, &usage)
+}
+
 func HomeFromEnvironment() (string, error) {
 	home := config.ExpandPath(strings.TrimSpace(os.Getenv("ENGRAM_HOME")))
 	if home == "" {
@@ -44,8 +56,13 @@ func (i Inspector) Run(ctx context.Context, args []string, out io.Writer) error 
 	if out == nil {
 		return fmt.Errorf("missing output writer")
 	}
-	if len(args) == 0 {
-		return fmt.Errorf("usage: engram inspect <status|sessions|frame>")
+	if len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h") {
+		_, err := io.WriteString(out, inspectUsage)
+		return err
+	}
+	command, id, err := parseCommand(args)
+	if err != nil {
+		return err
 	}
 	home := strings.TrimSpace(i.Home)
 	if home == "" {
@@ -56,28 +73,44 @@ func (i Inspector) Run(ctx context.Context, args []string, out io.Writer) error 
 		return err
 	}
 	manager := tmux.New(i.Runner)
-	switch args[0] {
+	switch command {
 	case "status":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: engram inspect status")
-		}
 		return writeStatus(ctx, out, home, snapshot, manager)
 	case "sessions":
-		if len(args) != 1 {
-			return fmt.Errorf("usage: engram inspect sessions")
-		}
 		return writeSessions(out, snapshot)
 	case "frame":
+		return writeFrame(ctx, out, snapshot, manager, id)
+	}
+	return UsageError{Message: "unknown inspect command"}
+}
+
+const inspectUsage = `Usage:
+  engram inspect status
+  engram inspect sessions
+  engram inspect frame <watch-id>
+`
+
+func parseCommand(args []string) (string, int, error) {
+	if len(args) == 0 {
+		return "", 0, UsageError{Message: "usage: engram inspect <status|sessions|frame>"}
+	}
+	switch args[0] {
+	case "status", "sessions":
+		if len(args) != 1 {
+			return "", 0, UsageError{Message: "usage: engram inspect " + args[0]}
+		}
+		return args[0], 0, nil
+	case "frame":
 		if len(args) != 2 {
-			return fmt.Errorf("usage: engram inspect frame <watch-id>")
+			return "", 0, UsageError{Message: "usage: engram inspect frame <watch-id>"}
 		}
 		id, err := strconv.Atoi(args[1])
 		if err != nil || id <= 0 {
-			return fmt.Errorf("watch ID must be a positive integer")
+			return "", 0, UsageError{Message: "watch ID must be a positive integer"}
 		}
-		return writeFrame(ctx, out, snapshot, manager, id)
+		return args[0], id, nil
 	default:
-		return fmt.Errorf("unknown inspect command %q; use status, sessions, or frame", args[0])
+		return "", 0, UsageError{Message: fmt.Sprintf("unknown inspect command %q; use status, sessions, or frame", args[0])}
 	}
 }
 
@@ -86,6 +119,10 @@ func writeStatus(ctx context.Context, out io.Writer, home string, snapshot state
 	defer cancel()
 	panes, err := manager.ListPanes(tctx)
 	if err != nil {
+		if _, writeErr := fmt.Fprintf(out, "Engram inspect\nhome: %s\nstate: readable\nschema: %d\nwatches: %d\ntmux: unavailable\n",
+			cleanLine(home), snapshot.Version, len(snapshot.TerminalSessions)); writeErr != nil {
+			return writeErr
+		}
 		return fmt.Errorf("inspect tmux: %w", err)
 	}
 	_, err = fmt.Fprintf(out, "Engram inspect\nhome: %s\nstate: readable\nschema: %d\nwatches: %d\ntmux: available (%d panes)\n",
@@ -132,13 +169,17 @@ func writeFrame(ctx context.Context, out io.Writer, snapshot state.State, manage
 	pane, text, err := mechanics.New(manager).CaptureLiteral(tctx, mechanics.Binding{
 		PaneID:   session.TmuxPaneID,
 		WindowID: session.TmuxWindowID,
+		ServerID: session.TmuxServerID,
 	}, frameRows)
 	if err != nil {
 		return fmt.Errorf("inspect frame: %w", err)
 	}
-	text = limitUTF8(text, maxFrameBytes)
-	if _, err := fmt.Fprintf(out, "watch: %d\npane: %s\nwindow: %s\ncwd: %s\n---\n",
-		session.ID, cleanLine(pane.ID), cleanLine(pane.WindowID), valueOrDash(cleanLine(pane.CurrentPath))); err != nil {
+	header := fmt.Sprintf("watch: %d\npane: %s\nwindow: %s\ncwd: %s\n---\n",
+		session.ID, cleanLine(pane.ID), cleanLine(pane.WindowID), valueOrDash(cleanLine(pane.CurrentPath)))
+	text = cleanDisplayText(text)
+	remaining := maxFrameBytes - len(header) - 1
+	text = limitUTF8(text, max(remaining, 0))
+	if _, err := io.WriteString(out, header); err != nil {
 		return err
 	}
 	if text != "" {
@@ -162,7 +203,7 @@ func findSession(sessions []state.TerminalSession, id int) (state.TerminalSessio
 func cleanLine(value string) string {
 	var out strings.Builder
 	for _, r := range strings.TrimSpace(value) {
-		if unicode.IsControl(r) {
+		if unsafeDisplayRune(r) {
 			out.WriteByte(' ')
 			continue
 		}
@@ -172,6 +213,26 @@ func cleanLine(value string) string {
 		}
 	}
 	return strings.Join(strings.Fields(out.String()), " ")
+}
+
+func cleanDisplayText(value string) string {
+	var out strings.Builder
+	out.Grow(len(value))
+	for _, r := range value {
+		switch {
+		case r == '\n' || r == '\t':
+			out.WriteRune(r)
+		case unsafeDisplayRune(r):
+			continue
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+func unsafeDisplayRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r)
 }
 
 func valueOrDash(value string) string {

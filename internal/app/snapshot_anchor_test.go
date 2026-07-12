@@ -37,6 +37,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		t.Fatal(err)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.TmuxServerID = appTestServerID
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
 		s.AnchorFormat = "text"
@@ -131,6 +132,7 @@ func TestFailedSnapshotMigrationIsThrottledBeforeRendering(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.TmuxServerID = appTestServerID
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
 		s.AnchorFormat = "text"
@@ -269,6 +271,7 @@ func TestGuideModeRotatesSnapshotAnchorBackToText(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.TmuxServerID = appTestServerID
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
 		s.AnchorFormat = "snapshot"
@@ -321,6 +324,7 @@ func TestSnapshotAnchorReplacesUnavailableTextAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.TmuxServerID = appTestServerID
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
 		s.AnchorFormat = "text"
@@ -389,6 +393,7 @@ func TestSnapshotRefreshBacksOffPendingRetirementBeforeRendering(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.TmuxServerID = appTestServerID
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 88
 		s.AnchorFormat = "snapshot"

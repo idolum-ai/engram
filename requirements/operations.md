@@ -11,9 +11,9 @@ runtime state.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
 - `ENGRAM_ANCHOR_MODE` selects the startup presentation and fallback when no
-  valid persisted mode exists. State schema v7 persists runtime mode changes,
-  upstream-signal reply aliases, bounded record IDs, retry deadlines, and
-  delivery timing.
+  valid persisted mode exists. State schema v8 persists runtime mode changes,
+  upstream-signal reply aliases, bounded record IDs, retry deadlines, delivery
+  timing, and the tmux server incarnation for each watch.
 - The effective startup mode must be available: `guide` requires an Anthropic
   Haiku configuration; `snapshot` requires a successful bounded, ephemeral
   Chromium render. Engram does not call Anthropic merely to probe credentials.
@@ -38,7 +38,7 @@ runtime state.
   the user service.
 - `make uninstall-service` removes the systemd user unit, and `make uninstall`
   removes the binary. Neither operation deletes tmux sessions, configuration,
-  state, logs, or `/tmp/engram` artifacts.
+  state, logs, or artifacts in Engram's private runtime root.
 - Login lingering is an explicit optional host-policy choice, not an automatic
   installation step.
 
@@ -54,8 +54,8 @@ runtime state.
 ## Diagnostics
 
 - `/status` shows version, uptime, session count, anchor mode, snapshot renderer
-  capability, state path, audit path, attachment path, free `/tmp` space, poll
-  time, and whether Haiku is enabled.
+  capability, state path, audit path, attachment path, free artifact-filesystem
+  space, poll time, and whether Haiku is enabled.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.

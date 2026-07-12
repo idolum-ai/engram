@@ -70,4 +70,17 @@ func TestCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if buffers, err := runner.Run(ctx, "list-buffers", "-F", "#{buffer_name}"); err == nil && strings.Contains(buffers, "engram-") {
 		t.Fatalf("capture buffers leaked: %q", buffers)
 	}
+	serverID, err := manager.EnsureServerID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.KillWindowIfBindingMatches(ctx, window.PaneID, "@999", serverID); err == nil || !IsIdentityLoss(err) {
+		t.Fatalf("atomic close accepted wrong window: %v", err)
+	}
+	if _, err := manager.InspectPane(ctx, window.PaneID); err != nil {
+		t.Fatalf("mismatched close changed pane: %v", err)
+	}
+	if err := manager.KillWindowIfBindingMatches(ctx, window.PaneID, window.ID, serverID); err != nil {
+		t.Fatalf("atomic close of matching window: %v", err)
+	}
 }

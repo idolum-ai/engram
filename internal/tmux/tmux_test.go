@@ -371,9 +371,9 @@ func TestIsIdentityLoss(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{err: fmt.Errorf("tmux display-message: exit status 1: can't find pane: %%8"), want: true},
-		{err: fmt.Errorf("tmux pane identity mismatch: got pane %%8 window @9"), want: true},
-		{err: fmt.Errorf("invalid tmux pane ID %q", "8"), want: true},
+		{err: &IdentityError{Reason: "gone", Err: fmt.Errorf("can't find pane")}, want: true},
+		{err: fmt.Errorf("wrapped: %w", &IdentityError{Reason: "mismatch"}), want: true},
+		{err: fmt.Errorf("tmux display-message: exit status 1: can't find pane: %%8"), want: false},
 		{err: context.Canceled, want: false},
 		{err: context.DeadlineExceeded, want: false},
 		{err: errors.New("tmux server temporarily unavailable"), want: false},
@@ -382,6 +382,23 @@ func TestIsIdentityLoss(t *testing.T) {
 		if got := IsIdentityLoss(test.err); got != test.want {
 			t.Errorf("IsIdentityLoss(%q) = %v, want %v", test.err, got, test.want)
 		}
+	}
+}
+
+func TestKillWindowChecksCompleteBindingInOneTmuxCall(t *testing.T) {
+	runner := &fakeRunner{}
+	err := New(runner).KillWindowIfBindingMatches(context.Background(), "%3", "@2", "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" || runner.calls[0][3] != "%3" ||
+		!strings.Contains(runner.calls[0][4], "@engram_server_id") || runner.calls[0][5] != "kill-window -t @2" {
+		t.Fatalf("close calls = %#v", runner.calls)
+	}
+
+	runner = &fakeRunner{out: identityMismatchMarker + "\n"}
+	if err := New(runner).KillWindowIfBindingMatches(context.Background(), "%3", "@2", "0123456789abcdef0123456789abcdef"); err == nil || !IsIdentityLoss(err) {
+		t.Fatalf("mismatch error = %v", err)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 type Binding struct {
 	PaneID   string
 	WindowID string
+	ServerID string
 }
 
 // Controller validates immutable identity immediately before every pane-bound
@@ -27,7 +28,7 @@ func New(manager tmux.Manager) Controller {
 }
 
 func (c Controller) Validate(ctx context.Context, binding Binding) (tmux.Pane, error) {
-	return c.tmux.ValidatePane(ctx, binding.PaneID, binding.WindowID)
+	return c.tmux.ValidateBinding(ctx, binding.PaneID, binding.WindowID, binding.ServerID)
 }
 
 func (c Controller) SendCommand(ctx context.Context, binding Binding, text string) (tmux.Pane, error) {
@@ -117,12 +118,8 @@ func (c Controller) DumpScrollback(ctx context.Context, binding Binding, dst io.
 }
 
 func (c Controller) CloseWindow(ctx context.Context, binding Binding) (tmux.Pane, error) {
-	pane, err := c.Validate(ctx, binding)
-	if err != nil {
+	if err := c.tmux.KillWindowIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID); err != nil {
 		return tmux.Pane{}, err
 	}
-	if err := c.tmux.KillWindow(ctx, binding.WindowID); err != nil {
-		return tmux.Pane{}, err
-	}
-	return pane, nil
+	return tmux.Pane{ID: binding.PaneID, WindowID: binding.WindowID}, nil
 }
