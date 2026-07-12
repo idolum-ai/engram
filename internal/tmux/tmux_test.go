@@ -115,6 +115,34 @@ func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	}
 }
 
+func TestNumericSessionNamesUseExplicitSessionTargets(t *testing.T) {
+	t.Run("existing session", func(t *testing.T) {
+		f := &fakeRunner{}
+		if err := New(f).EnsureSession(context.Background(), "0", "/tmp"); err != nil {
+			t.Fatal(err)
+		}
+		want := [][]string{{"has-session", "-t", "0:"}}
+		if !reflect.DeepEqual(f.calls, want) {
+			t.Fatalf("calls = %#v, want %#v", f.calls, want)
+		}
+	})
+
+	t.Run("new window", func(t *testing.T) {
+		f := &fakeRunner{out: "@9\t%9\n"}
+		windowID, paneID, err := New(f).NewWindow(context.Background(), "0", "/tmp", "probe")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if windowID != "@9" || paneID != "%9" {
+			t.Fatalf("window=%q pane=%q", windowID, paneID)
+		}
+		want := []string{"new-window", "-P", "-F", "#{window_id}\t#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "0:"}
+		if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0], want) {
+			t.Fatalf("calls = %#v, want %#v", f.calls, want)
+		}
+	})
+}
+
 func TestListWindowsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
 		out: "main\t0\t@1\tcode\t1\t%2\t/home/me\tbash\n",

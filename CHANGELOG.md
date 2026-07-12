@@ -4,6 +4,12 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Fixed
+
+- Treat numeric tmux session names as sessions when creating windows, so `/new`
+  no longer fails by interpreting a name such as `0` as an occupied window
+  index.
+
 ## [v0.2.0] - 2026-07-12
 
 ### Configuration

@@ -7,6 +7,8 @@ tmux is the source of terminal truth.
 - If `ENGRAM_TMUX_SESSION` is configured, Engram uses it and creates it if
   missing. Otherwise Engram uses the first existing session, or creates
   `engram-<chat-id>` when no session exists.
+- Session names are passed to tmux as explicit session targets. Numeric names
+  such as `0` must not be interpreted as window indexes.
 
 ## Windows And Attachments
 

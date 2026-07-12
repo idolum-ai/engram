@@ -84,3 +84,33 @@ func TestCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 		t.Fatalf("atomic close of matching window: %v", err)
 	}
 }
+
+func TestNewWindowTargetsNumericSessionName(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-numeric-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+	if _, err := runner.Run(ctx, "new-session", "-d", "-s", "0", "cat"); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	_, paneID, err := manager.NewWindow(ctx, "0", t.TempDir(), "engram-numeric")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pane, err := manager.InspectPane(ctx, paneID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pane.SessionName != "0" {
+		t.Fatalf("new pane session = %q, want numeric session 0", pane.SessionName)
+	}
+}

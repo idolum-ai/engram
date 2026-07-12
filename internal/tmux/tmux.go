@@ -117,7 +117,7 @@ func New(r Runner) Manager {
 }
 
 func (m Manager) EnsureSession(ctx context.Context, name, workdir string) error {
-	if _, err := m.Runner.Run(ctx, "has-session", "-t", name); err == nil {
+	if _, err := m.Runner.Run(ctx, "has-session", "-t", sessionTarget(name)); err == nil {
 		return nil
 	}
 	_, err := m.Runner.Run(ctx, "new-session", "-d", "-s", name, "-c", workdir)
@@ -126,7 +126,7 @@ func (m Manager) EnsureSession(ctx context.Context, name, workdir string) error 
 
 func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) (windowID, paneID string, err error) {
 	format := "#{window_id}\t#{pane_id}"
-	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", session)
+	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", sessionTarget(session))
 	if err != nil {
 		return "", "", err
 	}
@@ -136,6 +136,10 @@ func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) 
 	}
 	return parts[0], parts[1], nil
 }
+
+// A trailing colon makes tmux parse the target as a session, even when its
+// name is numeric and could otherwise be interpreted as a window index.
+func sessionTarget(name string) string { return name + ":" }
 
 func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
 	out, err := m.Runner.Run(ctx, "list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_windows}\t#{session_attached}")
