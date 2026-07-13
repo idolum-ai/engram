@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.3.0] - 2026-07-13
+
 ### Fixed
 
 - Treat numeric tmux session names as sessions when creating windows, so `/new`
