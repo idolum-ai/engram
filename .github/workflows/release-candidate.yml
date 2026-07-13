@@ -76,7 +76,7 @@ jobs:
         run: make check
 
       - name: Real tmux integration
-        run: ENGRAM_TMUX_INTEGRATION=1 go test ./internal/tmux -run TestCaptureStyledJoinsMarkerInNarrowRealPane -count=1
+        run: ENGRAM_TMUX_INTEGRATION=1 go test ./internal/tmux -run '^TestTmuxIntegration' -count=1
 
       - name: Package candidate
         env:

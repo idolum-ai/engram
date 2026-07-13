@@ -39,6 +39,26 @@ type sequenceRunner struct {
 	outputs []string
 }
 
+type ensureRaceRunner struct {
+	calls     [][]string
+	listCalls int
+}
+
+func (r *ensureRaceRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if args[0] == "list-sessions" {
+		r.listCalls++
+		if r.listCalls > 1 {
+			return "0\t$7\t1\t0\n", nil
+		}
+		return "", nil
+	}
+	if args[0] == "new-session" {
+		return "", errors.New("duplicate session: 0")
+	}
+	return "", fmt.Errorf("unexpected tmux call: %v", args)
+}
+
 func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(r.outputs) == 0 {
@@ -113,6 +133,69 @@ func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ListSessions = %#v, want %#v", got, want)
 	}
+}
+
+func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
+	t.Run("existing session", func(t *testing.T) {
+		f := &fakeRunner{out: "0\t$4\t1\t0\n"}
+		id, err := New(f).EnsureSession(context.Background(), "0", "/tmp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id != "$4" {
+			t.Fatalf("session ID = %q", id)
+		}
+		want := [][]string{{"list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_windows}\t#{session_attached}"}}
+		if !reflect.DeepEqual(f.calls, want) {
+			t.Fatalf("calls = %#v, want %#v", f.calls, want)
+		}
+	})
+
+	t.Run("new window", func(t *testing.T) {
+		f := &fakeRunner{out: "@9\t%9\n"}
+		windowID, paneID, err := New(f).NewWindow(context.Background(), "$4", "/tmp", "probe")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if windowID != "@9" || paneID != "%9" {
+			t.Fatalf("window=%q pane=%q", windowID, paneID)
+		}
+		want := []string{"new-window", "-P", "-F", "#{window_id}\t#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "$4:"}
+		if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0], want) {
+			t.Fatalf("calls = %#v, want %#v", f.calls, want)
+		}
+	})
+
+	t.Run("creation race reconciles exact postcondition", func(t *testing.T) {
+		runner := &ensureRaceRunner{}
+		id, err := New(runner).EnsureSession(context.Background(), "0", "/tmp")
+		if err != nil || id != "$7" {
+			t.Fatalf("session ID = %q, error = %v", id, err)
+		}
+		if len(runner.calls) != 3 || runner.calls[1][0] != "new-session" {
+			t.Fatalf("calls = %#v", runner.calls)
+		}
+	})
+
+	t.Run("canonicalized name is rejected and removed", func(t *testing.T) {
+		runner := &sequenceRunner{outputs: []string{"", "$2\tfoo_bar\n", ""}}
+		if _, err := New(runner).EnsureSession(context.Background(), "foo:bar", "/tmp"); err == nil || !strings.Contains(err.Error(), "canonicalized") {
+			t.Fatalf("EnsureSession error = %v", err)
+		}
+		if len(runner.calls) != 3 || !reflect.DeepEqual(runner.calls[2], []string{"kill-session", "-t", "$2"}) {
+			t.Fatalf("calls = %#v", runner.calls)
+		}
+	})
+
+	t.Run("reject mutable session target", func(t *testing.T) {
+		f := &fakeRunner{out: "@9\t%9\n"}
+		if _, _, err := New(f).NewWindow(context.Background(), "0", "/tmp", "probe"); err == nil {
+			t.Fatal("NewWindow accepted a session name instead of an immutable ID")
+		}
+		if len(f.calls) != 0 {
+			t.Fatalf("invalid session ID invoked tmux: %#v", f.calls)
+		}
+	})
 }
 
 func TestListWindowsParsesTmuxOutput(t *testing.T) {

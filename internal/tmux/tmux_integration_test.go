@@ -24,14 +24,14 @@ func (r socketRunner) Run(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
-func TestCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
+func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
 		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
 	}
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	setIntegrationTmuxTmpDir(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-test-%d", os.Getpid())}
@@ -83,4 +83,55 @@ func TestCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if err := manager.KillWindowIfBindingMatches(ctx, window.PaneID, window.ID, serverID); err != nil {
 		t.Fatalf("atomic close of matching window: %v", err)
 	}
+}
+
+func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxTmpDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-numeric-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+	if _, err := runner.Run(ctx, "new-session", "-d", "-s", "01", "cat"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"foo", "=foo", "$0"} {
+		if _, err := runner.Run(ctx, "new-session", "-d", "-s", name, "cat"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := New(runner)
+	for _, name := range []string{"0", "=foo", "$0"} {
+		sessionID, err := manager.EnsureSession(ctx, name, t.TempDir())
+		if err != nil {
+			t.Fatalf("ensure session %q: %v", name, err)
+		}
+		_, paneID, err := manager.NewWindow(ctx, sessionID, t.TempDir(), "engram-exact")
+		if err != nil {
+			t.Fatalf("new window in %q: %v", name, err)
+		}
+		pane, err := manager.InspectPane(ctx, paneID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pane.SessionName != name {
+			t.Fatalf("new pane session = %q, want exact session %q", pane.SessionName, name)
+		}
+	}
+}
+
+func setIntegrationTmuxTmpDir(t *testing.T) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "et-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("TMUX_TMPDIR", dir)
 }

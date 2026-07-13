@@ -137,6 +137,9 @@ func (c Config) Validate() error {
 	if c.TelegramPollTimeoutSeconds <= 0 {
 		return fmt.Errorf("TELEGRAM_POLL_TIMEOUT_SECONDS must be positive")
 	}
+	if strings.ContainsAny(strings.TrimSpace(c.TmuxSession), ":.") {
+		return fmt.Errorf("ENGRAM_TMUX_SESSION must not contain ':' or '.'")
+	}
 	if err := validateTelegramAPIBase(c.EffectiveTelegramAPIBase()); err != nil {
 		return err
 	}
