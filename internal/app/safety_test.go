@@ -65,7 +65,7 @@ func TestPaneIdentityMismatchMarksSessionLostBeforeInput(t *testing.T) {
 	if !ok || got.State != state.TerminalLost || got.WatchEnabled {
 		t.Fatalf("session after identity mismatch = %#v ok=%v", got, ok)
 	}
-	if len(runner.calls) != 2 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" {
+	if len(runner.calls) != 1 || runner.calls[0][0] != "display-message" {
 		t.Fatalf("tmux calls = %#v, want identity check only", runner.calls)
 	}
 }
@@ -484,7 +484,7 @@ func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) 
 		return framedTmuxRecord("@1", "%1"), nil
 	}
 	if len(args) > 0 && args[0] == "display-message" {
-		return framedTmuxRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	}
 	return "", nil
 }
@@ -504,7 +504,7 @@ func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 		if r.onIdentity != nil {
 			r.onIdentity()
 		}
-		return framedTmuxRecord("$1", r.identityWindow, "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+		return framedTmuxBindingRecord("$1", r.identityWindow, "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	}
 	if len(args) > 0 && args[0] == "capture-pane" && r.captureErr != nil {
 		return "", r.captureErr

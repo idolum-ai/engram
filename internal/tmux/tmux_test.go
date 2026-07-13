@@ -52,6 +52,19 @@ type ensureRaceRunner struct {
 	listCalls int
 }
 
+type missingServerRunner struct{ calls [][]string }
+
+func (r *missingServerRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(r.calls) == 1 {
+		return "", &commandError{args: args, err: errors.New("exit status 1"), stderr: "no server running on /tmp/tmux/default"}
+	}
+	if args[0] == "new-session" {
+		return tmuxRecord("$4", "main"), nil
+	}
+	return "", fmt.Errorf("unexpected tmux call: %v", args)
+}
+
 func (r *ensureRaceRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if args[0] == "list-sessions" {
@@ -204,6 +217,27 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 			t.Fatalf("invalid session ID invoked tmux: %#v", f.calls)
 		}
 	})
+
+	t.Run("malformed session list fails before creation", func(t *testing.T) {
+		f := &fakeRunner{out: tmuxRecord("no server running", "bad-id", "1", "0")}
+		if _, err := New(f).EnsureSession(context.Background(), "main", "/tmp"); err == nil {
+			t.Fatal("EnsureSession accepted malformed session metadata")
+		}
+		if len(f.calls) != 1 || f.calls[0][0] != "list-sessions" {
+			t.Fatalf("malformed metadata caused a tmux mutation: %#v", f.calls)
+		}
+	})
+
+	t.Run("missing server execution error permits creation", func(t *testing.T) {
+		runner := &missingServerRunner{}
+		id, err := New(runner).EnsureSession(context.Background(), "main", "/tmp")
+		if err != nil || id != "$4" {
+			t.Fatalf("EnsureSession ID=%q error=%v", id, err)
+		}
+		if len(runner.calls) != 2 || runner.calls[1][0] != "new-session" {
+			t.Fatalf("calls = %#v", runner.calls)
+		}
+	})
 }
 
 func TestListWindowsParsesTmuxOutput(t *testing.T) {
@@ -250,22 +284,23 @@ func TestResolveTargetUsesTmuxTarget(t *testing.T) {
 
 func TestMetadataRecordsPreserveValuesAndRejectPartialIdentity(t *testing.T) {
 	t.Run("delimiter-like and Unicode values", func(t *testing.T) {
-		out := tmuxRecord("$7", "main:one_\t雪", "12", "@8", "build: tab\t雪", "1", "%9", "/tmp/a:b_\t雪", "bash")
+		out := tmuxRecord("$7", "main:one_\t雪", "12", "@8", "", "1", "%9", "/tmp/a:b_\t雪\nline", "")
 		windows, err := parseWindows(out)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(windows) != 1 || windows[0].SessionName != "main:one_\t雪" || windows[0].Name != "build: tab\t雪" || windows[0].CurrentPath != "/tmp/a:b_\t雪" {
+		if len(windows) != 1 || windows[0].SessionName != "main:one_\t雪" || windows[0].Name != "" || windows[0].CurrentPath != "/tmp/a:b_\t雪\nline" || windows[0].CurrentCmd != "" {
 			t.Fatalf("windows = %#v", windows)
 		}
 	})
 
 	for name, output := range map[string]string{
-		"legacy delimiters": "$7_main_0_@8_build_1_%9_/tmp_bash\n",
-		"missing field":     tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp"),
-		"short value":       "5:$7",
-		"trailing bytes":    tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp", "bash") + "x",
-		"blank record":      tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp", "bash") + "\n",
+		"legacy delimiters":  "$7_main_0_@8_build_1_%9_/tmp_bash\n",
+		"missing field":      tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp"),
+		"short value":        "5:$7",
+		"missing terminator": strings.TrimSuffix(tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp", "bash"), "\n"),
+		"trailing bytes":     tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp", "bash") + "x",
+		"blank record":       tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp", "bash") + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseWindows(output); err == nil {

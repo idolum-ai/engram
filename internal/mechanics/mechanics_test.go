@@ -3,7 +3,6 @@ package mechanics
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -31,13 +30,13 @@ func (r *callRunner) Run(_ context.Context, args ...string) (string, error) {
 	case "show-options":
 		return testServerID + "\n", nil
 	case "display-message":
-		return framedRecord("$1", "@2", "%3", "work", "0", "0", "1", "/tmp/project", "bash"), nil
+		return framedRecord(testServerID, "$1", "@2", "%3", "work", "0", "0", "1", "/tmp/project", "bash"), nil
 	case "if-shell":
 		if strings.Contains(args[4], "@9") {
 			return "ENGRAM_IDENTITY_MISMATCH\n", nil
 		}
 		return "", nil
-	case "send-keys", "kill-window":
+	case "set-buffer", "send-keys", "kill-window":
 		return "", nil
 	default:
 		return "", fmt.Errorf("unexpected tmux call: %v", args)
@@ -84,13 +83,8 @@ func TestSendTextValidatesImmutableIdentityBeforeEffect(t *testing.T) {
 	if pane.ID != "%3" || pane.WindowID != "@2" || pane.CurrentPath != "/tmp/project" {
 		t.Fatalf("pane = %#v", pane)
 	}
-	want := [][]string{
-		{"show-options", "-gqv", "@engram_server_id"},
-		{"display-message", "-p", "-t", "%3", "#{n:session_id}:#{session_id}#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}#{n:session_name}:#{session_name}#{n:window_index}:#{window_index}#{n:pane_index}:#{pane_index}#{n:pane_active}:#{pane_active}#{n:pane_current_path}:#{pane_current_path}#{n:pane_current_command}:#{pane_current_command}"},
-		{"send-keys", "-t", "%3", "-l", "--", "echo ok"},
-	}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "echo ok" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") {
+		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 
@@ -101,7 +95,7 @@ func TestIdentityMismatchPreventsInput(t *testing.T) {
 	if err == nil || !tmux.IsIdentityLoss(err) {
 		t.Fatalf("error = %v", err)
 	}
-	if len(runner.calls) != 2 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" {
+	if len(runner.calls) != 1 || runner.calls[0][0] != "display-message" {
 		t.Fatalf("calls after mismatch = %#v", runner.calls)
 	}
 }
@@ -117,10 +111,10 @@ func TestCommandKeepsLiteralAndEnterDistinct(t *testing.T) {
 	if len(runner.calls) != 4 {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
-	if got := strings.Join(runner.calls[2], " "); got != "send-keys -t %3 -l -- printf 'a b'" {
-		t.Fatalf("literal call = %q", got)
+	if runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "printf 'a b'" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") {
+		t.Fatalf("literal calls = %#v", runner.calls)
 	}
-	if got := runner.calls[3]; !reflect.DeepEqual(got, []string{"send-keys", "-t", "%3", "Enter"}) {
+	if got := runner.calls[3]; got[0] != "if-shell" || !strings.Contains(got[5], "send-keys -t %3 'Enter'") {
 		t.Fatalf("enter call = %#v", got)
 	}
 }

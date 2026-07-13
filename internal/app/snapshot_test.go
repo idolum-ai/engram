@@ -213,7 +213,7 @@ func (snapshotTmuxRunner) Run(_ context.Context, args ...string) (string, error)
 		if strings.Contains(format, "pane_width") {
 			return framedTmuxRecord("71", "37", "build pane", "/tmp"), nil
 		}
-		return framedTmuxRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	case "capture-pane":
 		return "", nil
 	case "show-buffer":

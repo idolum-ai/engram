@@ -12,3 +12,7 @@ func framedTmuxRecord(values ...string) string {
 	}
 	return out.String() + "\n"
 }
+
+func framedTmuxBindingRecord(values ...string) string {
+	return framedTmuxRecord(append([]string{appTestServerID}, values...)...)
+}

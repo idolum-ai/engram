@@ -36,7 +36,7 @@ func (c Controller) SendCommand(ctx context.Context, binding Binding, text strin
 	if err != nil {
 		return tmux.Pane{}, err
 	}
-	if err := c.tmux.SendCommand(ctx, binding.PaneID, text); err != nil {
+	if err := c.tmux.SendCommandIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, text); err != nil {
 		return tmux.Pane{}, err
 	}
 	return pane, nil
@@ -47,7 +47,7 @@ func (c Controller) SendText(ctx context.Context, binding Binding, text string) 
 	if err != nil {
 		return tmux.Pane{}, err
 	}
-	if err := c.tmux.SendText(ctx, binding.PaneID, text); err != nil {
+	if err := c.tmux.SendTextIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, text); err != nil {
 		return tmux.Pane{}, err
 	}
 	return pane, nil
@@ -61,7 +61,7 @@ func (c Controller) SendKeys(ctx context.Context, binding Binding, keys []string
 	if err != nil {
 		return tmux.Pane{}, err
 	}
-	if err := c.tmux.SendKeys(ctx, binding.PaneID, keys); err != nil {
+	if err := c.tmux.SendKeysIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, keys); err != nil {
 		return tmux.Pane{}, err
 	}
 	return pane, nil

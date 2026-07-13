@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -32,9 +31,8 @@ func TestKeyCallbackSendsCtrlC(t *testing.T) {
 	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
-	want := []string{"send-keys", "-t", "%1", "C-c"}
-	if len(runner.calls) != 3 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" || !reflect.DeepEqual(runner.calls[2], want) {
-		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
+	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || !strings.Contains(runner.calls[1][5], "send-keys -t %1 'C-c'") {
+		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
 	ts, ok := app.Store.FindSession(1)
 	if !ok || ts.LastActivityAt.IsZero() {
@@ -69,7 +67,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 	if status != "callback_ok" {
 		t.Fatalf("handleCallback status = %q", status)
 	}
-	want := []string{"show-options", "display-message", "send-keys", "show-options", "display-message", "send-keys"}
+	want := []string{"display-message", "if-shell", "display-message", "if-shell"}
 	if len(runner.calls) != len(want) {
 		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
@@ -196,7 +194,7 @@ func (r *anchorKeyRunner) Run(ctx context.Context, args ...string) (string, erro
 		return appTestServerID + "\n", nil
 	}
 	if len(args) > 0 && args[0] == "display-message" {
-		return framedTmuxRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	}
 	return "", nil
 }

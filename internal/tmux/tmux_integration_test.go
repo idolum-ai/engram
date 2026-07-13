@@ -84,6 +84,24 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	validated, err := manager.ValidateBinding(ctx, window.PaneID, window.ID, serverID)
+	if err != nil || validated.ID != window.PaneID || validated.WindowID != window.ID {
+		t.Fatalf("single-call binding validation: pane=%#v error=%v", validated, err)
+	}
+	if err := manager.SendCommandIfBindingMatches(ctx, window.PaneID, window.ID, serverID, "atomic input"); err != nil {
+		t.Fatalf("binding-guarded input: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	atomicCapture, err := manager.CaptureLiteral(ctx, window.PaneID, 64)
+	if err != nil || !strings.Contains(atomicCapture, "atomic input") {
+		t.Fatalf("binding-guarded input capture=%q error=%v", atomicCapture, err)
+	}
+	if err := manager.SendTextIfBindingMatches(ctx, window.PaneID, "@999", serverID, "must not route"); err == nil || !IsIdentityLoss(err) {
+		t.Fatalf("binding-guarded input accepted wrong window: %v", err)
+	}
+	if buffers, err := runner.Run(ctx, "list-buffers", "-F", "#{buffer_name}"); err == nil && strings.Contains(buffers, "engram-input-") {
+		t.Fatalf("conditional input buffer leaked: %q", buffers)
+	}
 	if err := manager.KillWindowIfBindingMatches(ctx, window.PaneID, "@999", serverID); err == nil || !IsIdentityLoss(err) {
 		t.Fatalf("atomic close accepted wrong window: %v", err)
 	}
@@ -108,7 +126,10 @@ func TestTmuxIntegrationMetadataFramingPreservesComplexValues(t *testing.T) {
 	runner := socketRunner{socket: fmt.Sprintf("engram-metadata-test-%d", os.Getpid())}
 	_, _ = runner.Run(context.Background(), "kill-server")
 	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
-	workdir := t.TempDir()
+	workdir := t.TempDir() + "/path_under_score_雪\nline"
+	if err := os.Mkdir(workdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := runner.Run(ctx, "new-session", "-d", "-s", "meta_under_score", "-c", workdir, "cat"); err != nil {
 		t.Fatal(err)
 	}

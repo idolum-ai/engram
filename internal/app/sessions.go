@@ -101,15 +101,20 @@ func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, stri
 func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target string) actionResult {
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	serverID, err := a.Tmux.EnsureServerID(tmuxCtx)
+	if err != nil {
+		a.reply(ctx, msg, "tmux identity error: "+err.Error())
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux server identity unavailable"}
+	}
 	window, err := a.Tmux.ResolveTarget(tmuxCtx, strings.TrimSpace(target))
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux target not found"}
 	}
-	serverID, err := a.Tmux.EnsureServerID(tmuxCtx)
-	if err != nil {
-		a.reply(ctx, msg, "tmux identity error: "+err.Error())
-		return actionResult{Outcome: actionTmuxFailed, Message: "tmux server identity unavailable"}
+	currentServerID, err := a.Tmux.CurrentServerID(tmuxCtx)
+	if err != nil || currentServerID != serverID {
+		a.reply(ctx, msg, "tmux changed while attaching; run /sessions and try again")
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux changed while attaching"}
 	}
 	if existing, ok := a.Store.FindByBinding(window.PaneID, window.ID, serverID); ok {
 		a.reply(ctx, msg, fmt.Sprintf("%s is already tracked as [%d]", window.PaneID, existing.ID))
