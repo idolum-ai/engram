@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -321,6 +322,22 @@ ENGRAM_ANCHOR_MODE=automatic
 	}
 	if _, err := Load(env); err == nil {
 		t.Fatal("Load accepted unknown anchor mode")
+	}
+}
+
+func TestLoadRejectsTmuxSessionSeparators(t *testing.T) {
+	for _, name := range []string{"foo:bar", "foo.bar"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			env := filepath.Join(dir, ".env")
+			body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_ANCHOR_MODE=snapshot\nENGRAM_TMUX_SESSION=" + name + "\n"
+			if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "ENGRAM_TMUX_SESSION") {
+				t.Fatalf("Load(%q) error = %v", name, err)
+			}
+		})
 	}
 }
 

@@ -116,17 +116,50 @@ func New(r Runner) Manager {
 	return Manager{Runner: r}
 }
 
-func (m Manager) EnsureSession(ctx context.Context, name, workdir string) error {
-	if _, err := m.Runner.Run(ctx, "has-session", "-t", sessionTarget(name)); err == nil {
-		return nil
+func (m Manager) EnsureSession(ctx context.Context, name, workdir string) (string, error) {
+	if id, ok := m.findSessionID(ctx, name); ok {
+		return id, nil
 	}
-	_, err := m.Runner.Run(ctx, "new-session", "-d", "-s", name, "-c", workdir)
-	return err
+	format := "#{session_id}\t#{session_name}"
+	out, createErr := m.Runner.Run(ctx, "new-session", "-d", "-P", "-F", format, "-s", name, "-c", workdir)
+	if createErr != nil {
+		if id, ok := m.findSessionID(ctx, name); ok {
+			return id, nil
+		}
+		return "", createErr
+	}
+	parts := strings.SplitN(strings.TrimSpace(out), "\t", 2)
+	if len(parts) != 2 || !validSessionID(parts[0]) {
+		return "", fmt.Errorf("unexpected tmux new-session output %q", out)
+	}
+	if parts[1] != name {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		_, _ = m.Runner.Run(cleanupCtx, "kill-session", "-t", parts[0])
+		cancel()
+		return "", fmt.Errorf("tmux canonicalized session name %q as %q", name, parts[1])
+	}
+	return parts[0], nil
 }
 
-func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) (windowID, paneID string, err error) {
+func (m Manager) findSessionID(ctx context.Context, name string) (string, bool) {
+	sessions, err := m.ListSessions(ctx)
+	if err != nil {
+		return "", false
+	}
+	for _, session := range sessions {
+		if session.Name == name && validSessionID(session.ID) {
+			return session.ID, true
+		}
+	}
+	return "", false
+}
+
+func (m Manager) NewWindow(ctx context.Context, sessionID, workdir, title string) (windowID, paneID string, err error) {
+	if !validSessionID(sessionID) {
+		return "", "", fmt.Errorf("invalid tmux session ID %q", sessionID)
+	}
 	format := "#{window_id}\t#{pane_id}"
-	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", sessionTarget(session))
+	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", sessionID+":")
 	if err != nil {
 		return "", "", err
 	}
@@ -136,10 +169,6 @@ func (m Manager) NewWindow(ctx context.Context, session, workdir, title string) 
 	}
 	return parts[0], parts[1], nil
 }
-
-// A trailing colon makes tmux parse the target as a session, even when its
-// name is numeric and could otherwise be interpreted as a window index.
-func sessionTarget(name string) string { return name + ":" }
 
 func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
 	out, err := m.Runner.Run(ctx, "list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_windows}\t#{session_attached}")
@@ -584,6 +613,8 @@ func validImmutableID(id string, prefix byte) bool {
 	_, err := strconv.ParseUint(id[1:], 10, 64)
 	return err == nil
 }
+
+func validSessionID(id string) bool { return validImmutableID(id, '$') }
 
 func semanticCapture(s string) string {
 	clean := stripTerminalControls(s)

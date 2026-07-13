@@ -17,7 +17,7 @@ import (
 func (a *App) newSession(ctx context.Context, msg telegram.Message, input string) actionResult {
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
-	sessionName, err := a.targetTmuxSession(tmuxCtx, msg.Chat.ID)
+	sessionName, sessionID, err := a.targetTmuxSession(tmuxCtx, msg.Chat.ID)
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux session unavailable"}
@@ -28,7 +28,7 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux server identity unavailable"}
 	}
 	title := tmux.WindowTitle(0, input)
-	windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionName, a.Config.Workdir, title)
+	windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionID, a.Config.Workdir, title)
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux window creation failed"}
@@ -83,17 +83,19 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("created [%d]", ts.ID)}
 }
 
-func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, error) {
+func (a *App) targetTmuxSession(ctx context.Context, chatID int64) (string, string, error) {
 	if strings.TrimSpace(a.Config.TmuxSession) != "" {
 		name := strings.TrimSpace(a.Config.TmuxSession)
-		return name, a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
+		id, err := a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
+		return name, id, err
 	}
 	sessions, err := a.Tmux.ListSessions(ctx)
 	if err == nil && len(sessions) > 0 {
-		return sessions[0].Name, nil
+		return sessions[0].Name, sessions[0].ID, nil
 	}
 	name := tmux.SessionName(chatID)
-	return name, a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
+	id, err := a.Tmux.EnsureSession(ctx, name, a.Config.Workdir)
+	return name, id, err
 }
 
 func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target string) actionResult {

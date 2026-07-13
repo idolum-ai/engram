@@ -474,6 +474,9 @@ type safetyRunner struct {
 type newSessionRunner struct{}
 
 func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "list-sessions" {
+		return "main\t$1\t1\t0\n", nil
+	}
 	if len(args) > 0 && args[0] == "show-options" {
 		return appTestServerID + "\n", nil
 	}
