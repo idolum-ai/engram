@@ -17,6 +17,10 @@ tmux is the source of terminal truth.
 
 - A top-level non-command Telegram message creates a new tmux window.
 - `/attach <target>` tracks an existing target's active pane.
+- Tmux metadata uses byte-length-framed fields rather than printable or control
+  delimiters. Session, window, pane, and capture records must reject malformed,
+  partial, trailing, or invalid immutable-identity data; Engram never pads a
+  record or persists an empty identity after a successful attach.
 - `/sessions` shows native tmux sessions and immutable pane identities with
   attach buttons for untracked panes and explicit reattach buttons when a
   persisted watch belongs to an older tmux server incarnation.

@@ -139,6 +139,9 @@ exports a bounded recent tail, not an unbounded full audit file.
 - Cancellation, timeout, or a generic tmux capture failure does not prove that
   a pane disappeared. Mark a session lost only when tmux explicitly reports the
   pane missing or its immutable pane/window identity no longer matches.
+- Malformed tmux metadata fails the current operation without synthesizing
+  missing fields. In particular, `/attach` succeeds only after complete
+  immutable session, window, and pane identities have been parsed.
 - A later user action may restore a lost session when the same immutable pane
   and window identity validates successfully. Recovery must be audited and
   followed by a fresh capture.

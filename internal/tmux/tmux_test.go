@@ -11,6 +11,14 @@ import (
 	"testing"
 )
 
+func tmuxRecord(values ...string) string {
+	var out strings.Builder
+	for _, value := range values {
+		fmt.Fprintf(&out, "%d:%s", len(value), value)
+	}
+	return out.String() + "\n"
+}
+
 type fakeRunner struct {
 	calls [][]string
 	out   string
@@ -49,7 +57,7 @@ func (r *ensureRaceRunner) Run(_ context.Context, args ...string) (string, error
 	if args[0] == "list-sessions" {
 		r.listCalls++
 		if r.listCalls > 1 {
-			return "0\t$7\t1\t0\n", nil
+			return tmuxRecord("0", "$7", "1", "0"), nil
 		}
 		return "", nil
 	}
@@ -72,7 +80,7 @@ func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) 
 func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
-		return "71\t37\tbuild\t/home/me\n", nil
+		return tmuxRecord("71", "37", "build", "/home/me"), nil
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
 		if strings.Contains(args[len(args)-1], "physical") {
@@ -119,7 +127,7 @@ func TestSendCommandSendsLiteralThenEnter(t *testing.T) {
 
 func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
-		out: "main\t$1\t3\t1\nother\t$2\t1\t0\n",
+		out: tmuxRecord("main", "$1", "3", "1") + tmuxRecord("other", "$2", "1", "0"),
 	}
 	m := New(f)
 	got, err := m.ListSessions(context.Background())
@@ -137,7 +145,7 @@ func TestListSessionsParsesTmuxOutput(t *testing.T) {
 
 func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 	t.Run("existing session", func(t *testing.T) {
-		f := &fakeRunner{out: "0\t$4\t1\t0\n"}
+		f := &fakeRunner{out: tmuxRecord("0", "$4", "1", "0")}
 		id, err := New(f).EnsureSession(context.Background(), "0", "/tmp")
 		if err != nil {
 			t.Fatal(err)
@@ -145,14 +153,14 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 		if id != "$4" {
 			t.Fatalf("session ID = %q", id)
 		}
-		want := [][]string{{"list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_windows}\t#{session_attached}"}}
+		want := [][]string{{"list-sessions", "-F", "#{n:session_name}:#{session_name}#{n:session_id}:#{session_id}#{n:session_windows}:#{session_windows}#{n:session_attached}:#{session_attached}"}}
 		if !reflect.DeepEqual(f.calls, want) {
 			t.Fatalf("calls = %#v, want %#v", f.calls, want)
 		}
 	})
 
 	t.Run("new window", func(t *testing.T) {
-		f := &fakeRunner{out: "@9\t%9\n"}
+		f := &fakeRunner{out: tmuxRecord("@9", "%9")}
 		windowID, paneID, err := New(f).NewWindow(context.Background(), "$4", "/tmp", "probe")
 		if err != nil {
 			t.Fatal(err)
@@ -160,7 +168,7 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 		if windowID != "@9" || paneID != "%9" {
 			t.Fatalf("window=%q pane=%q", windowID, paneID)
 		}
-		want := []string{"new-window", "-P", "-F", "#{window_id}\t#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "$4:"}
+		want := []string{"new-window", "-P", "-F", "#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "$4:"}
 		if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0], want) {
 			t.Fatalf("calls = %#v, want %#v", f.calls, want)
 		}
@@ -178,7 +186,7 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 	})
 
 	t.Run("canonicalized name is rejected and removed", func(t *testing.T) {
-		runner := &sequenceRunner{outputs: []string{"", "$2\tfoo_bar\n", ""}}
+		runner := &sequenceRunner{outputs: []string{"", tmuxRecord("$2", "foo_bar"), ""}}
 		if _, err := New(runner).EnsureSession(context.Background(), "foo:bar", "/tmp"); err == nil || !strings.Contains(err.Error(), "canonicalized") {
 			t.Fatalf("EnsureSession error = %v", err)
 		}
@@ -188,7 +196,7 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 	})
 
 	t.Run("reject mutable session target", func(t *testing.T) {
-		f := &fakeRunner{out: "@9\t%9\n"}
+		f := &fakeRunner{out: tmuxRecord("@9", "%9")}
 		if _, _, err := New(f).NewWindow(context.Background(), "0", "/tmp", "probe"); err == nil {
 			t.Fatal("NewWindow accepted a session name instead of an immutable ID")
 		}
@@ -200,7 +208,7 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 
 func TestListWindowsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
-		out: "main\t0\t@1\tcode\t1\t%2\t/home/me\tbash\n",
+		out: tmuxRecord("$7", "main", "0", "@1", "code", "1", "%2", "/home/me", "bash"),
 	}
 	m := New(f)
 	got, err := m.ListWindows(context.Background())
@@ -208,6 +216,7 @@ func TestListWindowsParsesTmuxOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []Window{{
+		SessionID:   "$7",
 		SessionName: "main",
 		Index:       "0",
 		ID:          "@1",
@@ -224,7 +233,7 @@ func TestListWindowsParsesTmuxOutput(t *testing.T) {
 
 func TestResolveTargetUsesTmuxTarget(t *testing.T) {
 	f := &fakeRunner{
-		out: "main\t0\t@1\tcode\t1\t%2\t/home/me\tbash\n",
+		out: tmuxRecord("$7", "main", "0", "@1", "code", "1", "%2", "/home/me", "bash"),
 	}
 	m := New(f)
 	got, err := m.ResolveTarget(context.Background(), "main:0")
@@ -236,6 +245,33 @@ func TestResolveTargetUsesTmuxTarget(t *testing.T) {
 	}
 	if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0][0:4], []string{"display-message", "-p", "-t", "main:0"}) {
 		t.Fatalf("calls = %#v", f.calls)
+	}
+}
+
+func TestMetadataRecordsPreserveValuesAndRejectPartialIdentity(t *testing.T) {
+	t.Run("delimiter-like and Unicode values", func(t *testing.T) {
+		out := tmuxRecord("$7", "main:one_\t雪", "12", "@8", "build: tab\t雪", "1", "%9", "/tmp/a:b_\t雪", "bash")
+		windows, err := parseWindows(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(windows) != 1 || windows[0].SessionName != "main:one_\t雪" || windows[0].Name != "build: tab\t雪" || windows[0].CurrentPath != "/tmp/a:b_\t雪" {
+			t.Fatalf("windows = %#v", windows)
+		}
+	})
+
+	for name, output := range map[string]string{
+		"legacy delimiters": "$7_main_0_@8_build_1_%9_/tmp_bash\n",
+		"missing field":     tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp"),
+		"short value":       "5:$7",
+		"trailing bytes":    tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp", "bash") + "x",
+		"blank record":      tmuxRecord("$7", "main", "0", "@8", "build", "1", "%9", "/tmp", "bash") + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseWindows(output); err == nil {
+				t.Fatalf("parseWindows accepted %q", output)
+			}
+		})
 	}
 }
 
@@ -290,7 +326,7 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 }
 
 func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
-	runner := &sequenceRunner{outputs: []string{"80\t24\n", "one\ntwo\n"}}
+	runner := &sequenceRunner{outputs: []string{tmuxRecord("80", "24"), "one\ntwo\n"}}
 	got, err := New(runner).CaptureLiteral(context.Background(), "%7", 64)
 	if err != nil {
 		t.Fatal(err)
@@ -299,7 +335,7 @@ func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
 		t.Fatalf("CaptureLiteral = %q", got)
 	}
 	want := [][]string{
-		{"display-message", "-p", "-t", "%7", "#{pane_width}\t#{pane_height}"},
+		{"display-message", "-p", "-t", "%7", "#{n:pane_width}:#{pane_width}#{n:pane_height}:#{pane_height}"},
 		{"capture-pane", "-p", "-N", "-S", "-40", "-E", "23", "-t", "%7"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {
@@ -308,7 +344,7 @@ func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
 }
 
 func TestCaptureLiteralRejectsOversizedPaneBeforeCapture(t *testing.T) {
-	runner := &sequenceRunner{outputs: []string{"401\t24\n"}}
+	runner := &sequenceRunner{outputs: []string{tmuxRecord("401", "24")}}
 	if _, err := New(runner).CaptureLiteral(context.Background(), "%7", 64); err == nil || !strings.Contains(err.Error(), "pane width") {
 		t.Fatalf("CaptureLiteral error = %v", err)
 	}
@@ -365,10 +401,8 @@ func TestDumpScrollbackRequiresStreamingRunner(t *testing.T) {
 }
 
 func TestListPanesParsesImmutableIdentity(t *testing.T) {
-	f := &fakeRunner{out: strings.Join([]string{
-		"$1\t@2\t%3\tmain\t0\t1\t1\t/home/me\tbash\n",
-		"$1\t@4\t%5\tmain\t2\t0\t0\t/tmp\tvim\n",
-	}, "")}
+	f := &fakeRunner{out: tmuxRecord("$1", "@2", "%3", "main", "0", "1", "1", "/home/me", "bash") +
+		tmuxRecord("$1", "@4", "%5", "main", "2", "0", "0", "/tmp", "vim")}
 	got, err := New(f).ListPanes(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +414,7 @@ func TestListPanesParsesImmutableIdentity(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ListPanes = %#v, want %#v", got, want)
 	}
-	format := "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"
+	format := paneRecordFormat
 	wantCalls := [][]string{{"list-panes", "-a", "-F", format}}
 	if !reflect.DeepEqual(f.calls, wantCalls) {
 		t.Fatalf("calls = %#v, want %#v", f.calls, wantCalls)
@@ -388,8 +422,8 @@ func TestListPanesParsesImmutableIdentity(t *testing.T) {
 }
 
 func TestInspectAndValidatePaneIdentity(t *testing.T) {
-	const output = "$1\t@2\t%3\tmain\t0\t1\t1\t/home/me\tbash\n"
-	format := "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"
+	output := tmuxRecord("$1", "@2", "%3", "main", "0", "1", "1", "/home/me", "bash")
+	format := paneRecordFormat
 
 	t.Run("inspect", func(t *testing.T) {
 		f := &fakeRunner{out: output}
@@ -486,7 +520,7 @@ func TestKillWindowChecksCompleteBindingInOneTmuxCall(t *testing.T) {
 }
 
 func TestListPanesRejectsMalformedIdentity(t *testing.T) {
-	f := &fakeRunner{out: "$1\tmain:0\t%3\tmain\t0\t0\t1\t/tmp\tbash\n"}
+	f := &fakeRunner{out: tmuxRecord("$1", "main:0", "%3", "main", "0", "0", "1", "/tmp", "bash")}
 	if _, err := New(f).ListPanes(context.Background()); err == nil {
 		t.Fatal("ListPanes accepted mutable window identity")
 	}

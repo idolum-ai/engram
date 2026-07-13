@@ -15,6 +15,14 @@ type callRunner struct {
 	calls [][]string
 }
 
+func framedRecord(values ...string) string {
+	var out strings.Builder
+	for _, value := range values {
+		fmt.Fprintf(&out, "%d:%s", len(value), value)
+	}
+	return out.String() + "\n"
+}
+
 const testServerID = "0123456789abcdef0123456789abcdef"
 
 func (r *callRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -23,7 +31,7 @@ func (r *callRunner) Run(_ context.Context, args ...string) (string, error) {
 	case "show-options":
 		return testServerID + "\n", nil
 	case "display-message":
-		return "$1\t@2\t%3\twork\t0\t0\t1\t/tmp/project\tbash\n", nil
+		return framedRecord("$1", "@2", "%3", "work", "0", "0", "1", "/tmp/project", "bash"), nil
 	case "if-shell":
 		if strings.Contains(args[4], "@9") {
 			return "ENGRAM_IDENTITY_MISMATCH\n", nil
@@ -78,7 +86,7 @@ func TestSendTextValidatesImmutableIdentityBeforeEffect(t *testing.T) {
 	}
 	want := [][]string{
 		{"show-options", "-gqv", "@engram_server_id"},
-		{"display-message", "-p", "-t", "%3", "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"},
+		{"display-message", "-p", "-t", "%3", "#{n:session_id}:#{session_id}#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}#{n:session_name}:#{session_name}#{n:window_index}:#{window_index}#{n:pane_index}:#{pane_index}#{n:pane_active}:#{pane_active}#{n:pane_current_path}:#{pane_current_path}#{n:pane_current_command}:#{pane_current_command}"},
 		{"send-keys", "-t", "%3", "-l", "--", "echo ok"},
 	}
 	if !reflect.DeepEqual(runner.calls, want) {

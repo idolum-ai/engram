@@ -45,6 +45,16 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !validImmutableID(window.SessionID, '$') || !validImmutableID(window.ID, '@') || !validImmutableID(window.PaneID, '%') {
+		t.Fatalf("resolved mutable or empty identity before use: %#v", window)
+	}
+	panes, err := manager.ListPanes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != 1 || panes[0].SessionID != window.SessionID || panes[0].WindowID != window.ID || panes[0].ID != window.PaneID {
+		t.Fatalf("pane identity does not match target: window=%#v panes=%#v", window, panes)
+	}
 	record := "[engram:upstream] 0123456789abcdef0123456789abcdef narrow works"
 	if err := manager.SendText(ctx, window.PaneID, record); err != nil {
 		t.Fatal(err)
@@ -82,6 +92,37 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	}
 	if err := manager.KillWindowIfBindingMatches(ctx, window.PaneID, window.ID, serverID); err != nil {
 		t.Fatalf("atomic close of matching window: %v", err)
+	}
+}
+
+func TestTmuxIntegrationMetadataFramingPreservesComplexValues(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxTmpDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-metadata-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+	workdir := t.TempDir()
+	if _, err := runner.Run(ctx, "new-session", "-d", "-s", "meta_under_score", "-c", workdir, "cat"); err != nil {
+		t.Fatal(err)
+	}
+	windowName := "build: under_score 雪"
+	if _, err := runner.Run(ctx, "rename-window", "-t", "meta_under_score:0", windowName); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	window, err := manager.ResolveTarget(ctx, "meta_under_score:0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if window.SessionName != "meta_under_score" || window.Name != windowName || window.CurrentPath != workdir || !validImmutableID(window.SessionID, '$') || !validImmutableID(window.ID, '@') || !validImmutableID(window.PaneID, '%') {
+		t.Fatalf("complex metadata = %#v", window)
 	}
 }
 

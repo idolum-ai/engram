@@ -143,7 +143,7 @@ func (r *lifecycleRaceRunner) Run(_ context.Context, args ...string) (string, er
 	case "show-options":
 		return lifecycleServerID + "\n", nil
 	case "display-message":
-		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+		return framedTmuxRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	case "send-keys":
 		if r.onSend != nil {
 			hook := r.onSend

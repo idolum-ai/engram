@@ -225,7 +225,7 @@ func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, erro
 		return appTestServerID + "\n", nil
 	}
 	if len(args) > 0 && args[0] == "display-message" {
-		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+		return framedTmuxRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	}
 	return "", nil
 }
