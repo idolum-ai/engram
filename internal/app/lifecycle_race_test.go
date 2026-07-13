@@ -143,7 +143,7 @@ func (r *lifecycleRaceRunner) Run(_ context.Context, args ...string) (string, er
 	case "show-options":
 		return lifecycleServerID + "\n", nil
 	case "display-message":
-		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	case "send-keys":
 		if r.onSend != nil {
 			hook := r.onSend
@@ -151,6 +151,11 @@ func (r *lifecycleRaceRunner) Run(_ context.Context, args ...string) (string, er
 			hook()
 		}
 	case "if-shell":
+		if r.onSend != nil && len(args) > 5 && (strings.Contains(args[5], "paste-buffer") || strings.Contains(args[5], "send-keys")) {
+			hook := r.onSend
+			r.onSend = nil
+			hook()
+		}
 		if r.onKill != nil {
 			hook := r.onKill
 			r.onKill = nil

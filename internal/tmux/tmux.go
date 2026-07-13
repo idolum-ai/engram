@@ -28,6 +28,18 @@ type StreamRunner interface {
 
 type ExecRunner struct{}
 
+type commandError struct {
+	args   []string
+	err    error
+	stderr string
+}
+
+func (e *commandError) Error() string {
+	return fmt.Sprintf("tmux %s: %v: %s", strings.Join(e.args, " "), e.err, strings.TrimSpace(e.stderr))
+}
+
+func (e *commandError) Unwrap() error { return e.err }
+
 func (ExecRunner) Run(ctx context.Context, args ...string) (string, error) {
 	var out bytes.Buffer
 	err := (ExecRunner{}).RunToWriter(ctx, &out, args...)
@@ -41,7 +53,7 @@ func (ExecRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string
 	cmd.Stderr = &errOut
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("tmux %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errOut.String()))
+		return &commandError{args: append([]string(nil), args...), err: err, stderr: errOut.String()}
 	}
 	return nil
 }
@@ -60,6 +72,7 @@ type Session struct {
 }
 
 type Window struct {
+	SessionID   string
 	SessionName string
 	Index       string
 	ID          string
@@ -94,7 +107,8 @@ type StyledCapture struct {
 	CurrentPath string
 }
 
-const paneFormat = "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"
+const paneRecordFormat = "#{n:session_id}:#{session_id}#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}#{n:session_name}:#{session_name}#{n:window_index}:#{window_index}#{n:pane_index}:#{pane_index}#{n:pane_active}:#{pane_active}#{n:pane_current_path}:#{pane_current_path}#{n:pane_current_command}:#{pane_current_command}"
+
 const serverIDOption = "@engram_server_id"
 const identityMismatchMarker = "ENGRAM_IDENTITY_MISMATCH"
 
@@ -117,21 +131,30 @@ func New(r Runner) Manager {
 }
 
 func (m Manager) EnsureSession(ctx context.Context, name, workdir string) (string, error) {
-	if id, ok := m.findSessionID(ctx, name); ok {
+	id, found, lookupErr := m.findSessionID(ctx, name)
+	if lookupErr == nil && found {
 		return id, nil
 	}
-	format := "#{session_id}\t#{session_name}"
+	if lookupErr != nil && !missingTmuxServer(lookupErr) {
+		return "", lookupErr
+	}
+	format := recordFormat("session_id", "session_name")
 	out, createErr := m.Runner.Run(ctx, "new-session", "-d", "-P", "-F", format, "-s", name, "-c", workdir)
 	if createErr != nil {
-		if id, ok := m.findSessionID(ctx, name); ok {
+		id, found, reconcileErr := m.findSessionID(ctx, name)
+		if reconcileErr == nil && found {
 			return id, nil
+		}
+		if reconcileErr != nil {
+			return "", errors.Join(createErr, fmt.Errorf("reconcile tmux session: %w", reconcileErr))
 		}
 		return "", createErr
 	}
-	parts := strings.SplitN(strings.TrimSpace(out), "\t", 2)
-	if len(parts) != 2 || !validSessionID(parts[0]) {
+	records, parseErr := parseRecords(out, 2)
+	if parseErr != nil || len(records) != 1 || !validSessionID(records[0][0]) {
 		return "", fmt.Errorf("unexpected tmux new-session output %q", out)
 	}
+	parts := records[0]
 	if parts[1] != name {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		_, _ = m.Runner.Run(cleanupCtx, "kill-session", "-t", parts[0])
@@ -141,77 +164,77 @@ func (m Manager) EnsureSession(ctx context.Context, name, workdir string) (strin
 	return parts[0], nil
 }
 
-func (m Manager) findSessionID(ctx context.Context, name string) (string, bool) {
+func (m Manager) findSessionID(ctx context.Context, name string) (string, bool, error) {
 	sessions, err := m.ListSessions(ctx)
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	for _, session := range sessions {
 		if session.Name == name && validSessionID(session.ID) {
-			return session.ID, true
+			return session.ID, true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
 func (m Manager) NewWindow(ctx context.Context, sessionID, workdir, title string) (windowID, paneID string, err error) {
 	if !validSessionID(sessionID) {
 		return "", "", fmt.Errorf("invalid tmux session ID %q", sessionID)
 	}
-	format := "#{window_id}\t#{pane_id}"
+	format := recordFormat("window_id", "pane_id")
 	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", sessionID+":")
 	if err != nil {
 		return "", "", err
 	}
-	parts := strings.Split(strings.TrimSpace(out), "\t")
-	if len(parts) != 2 {
+	records, parseErr := parseRecords(out, 2)
+	if parseErr != nil || len(records) != 1 {
 		return "", "", fmt.Errorf("unexpected tmux new-window output %q", out)
+	}
+	parts := records[0]
+	if !validImmutableID(parts[0], '@') || !validImmutableID(parts[1], '%') {
+		return "", "", fmt.Errorf("unexpected tmux new-window identity %q", out)
 	}
 	return parts[0], parts[1], nil
 }
 
 func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
-	out, err := m.Runner.Run(ctx, "list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_windows}\t#{session_attached}")
+	out, err := m.Runner.Run(ctx, "list-sessions", "-F", recordFormat("session_name", "session_id", "session_windows", "session_attached"))
 	if err != nil {
 		return nil, err
 	}
-	var sessions []Session
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
+	records, err := parseRecords(out, 4)
+	if err != nil {
+		return nil, fmt.Errorf("parse tmux sessions: %w", err)
+	}
+	sessions := make([]Session, 0, len(records))
+	for _, parts := range records {
+		if parts[0] == "" || !validSessionID(parts[1]) || !validNonnegative(parts[2]) || !validNonnegative(parts[3]) {
+			return nil, fmt.Errorf("unexpected tmux session record %q", parts)
 		}
-		parts := strings.Split(line, "\t")
-		session := Session{Name: parts[0]}
-		if len(parts) > 1 {
-			session.ID = parts[1]
-		}
-		if len(parts) > 2 {
-			session.Windows = parts[2]
-		}
-		if len(parts) > 3 {
-			session.Attached = parts[3]
-		}
-		sessions = append(sessions, session)
+		sessions = append(sessions, Session{Name: parts[0], ID: parts[1], Windows: parts[2], Attached: parts[3]})
 	}
 	return sessions, nil
 }
 
 func (m Manager) ListWindows(ctx context.Context) ([]Window, error) {
-	format := "#{session_name}\t#{window_index}\t#{window_id}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}"
+	format := recordFormat("session_id", "session_name", "window_index", "window_id", "window_name", "window_active", "pane_id", "pane_current_path", "pane_current_command")
 	out, err := m.Runner.Run(ctx, "list-windows", "-a", "-F", format)
 	if err != nil {
 		return nil, err
 	}
-	return parseWindows(out), nil
+	return parseWindows(out)
 }
 
 func (m Manager) ResolveTarget(ctx context.Context, target string) (Window, error) {
-	format := "#{session_name}\t#{window_index}\t#{window_id}\t#{window_name}\t#{window_active}\t#{pane_id}\t#{pane_current_path}\t#{pane_current_command}"
+	format := recordFormat("session_id", "session_name", "window_index", "window_id", "window_name", "window_active", "pane_id", "pane_current_path", "pane_current_command")
 	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", target, format)
 	if err != nil {
 		return Window{}, err
 	}
-	windows := parseWindows(out)
+	windows, err := parseWindows(out)
+	if err != nil {
+		return Window{}, err
+	}
 	if len(windows) != 1 {
 		return Window{}, fmt.Errorf("unexpected tmux target output %q", out)
 	}
@@ -219,7 +242,7 @@ func (m Manager) ResolveTarget(ctx context.Context, target string) (Window, erro
 }
 
 func (m Manager) ListPanes(ctx context.Context) ([]Pane, error) {
-	out, err := m.Runner.Run(ctx, "list-panes", "-a", "-F", paneFormat)
+	out, err := m.Runner.Run(ctx, "list-panes", "-a", "-F", paneRecordFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +250,7 @@ func (m Manager) ListPanes(ctx context.Context) ([]Pane, error) {
 }
 
 func (m Manager) InspectPane(ctx context.Context, target string) (Pane, error) {
-	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", target, paneFormat)
+	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", target, paneRecordFormat)
 	if err != nil {
 		return Pane{}, err
 	}
@@ -309,14 +332,37 @@ func (m Manager) ValidateBinding(ctx context.Context, paneID, windowID, serverID
 	if !validServerID(serverID) {
 		return Pane{}, &IdentityError{Reason: "missing or invalid persisted tmux server incarnation"}
 	}
-	current, err := m.CurrentServerID(ctx)
+	if !validImmutableID(paneID, '%') {
+		return Pane{}, &IdentityError{Reason: fmt.Sprintf("invalid tmux pane ID %q", paneID)}
+	}
+	if !validImmutableID(windowID, '@') {
+		return Pane{}, &IdentityError{Reason: fmt.Sprintf("invalid tmux window ID %q", windowID)}
+	}
+	format := recordFormat(serverIDOption, "session_id", "window_id", "pane_id", "session_name", "window_index", "pane_index", "pane_active", "pane_current_path", "pane_current_command")
+	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, format)
+	if err != nil {
+		if missingTmuxTarget(err) {
+			return Pane{}, &IdentityError{Reason: "tmux pane identity is gone", Err: err}
+		}
+		return Pane{}, err
+	}
+	records, err := parseRecords(out, 10)
+	if err != nil || len(records) != 1 {
+		return Pane{}, fmt.Errorf("unexpected tmux binding output %q", out)
+	}
+	parts := records[0]
+	if parts[0] != serverID {
+		return Pane{}, &IdentityError{Reason: "tmux server incarnation mismatch"}
+	}
+	panes, err := panesFromRecords([][]string{parts[1:]})
 	if err != nil {
 		return Pane{}, err
 	}
-	if current != serverID {
-		return Pane{}, &IdentityError{Reason: "tmux server incarnation mismatch"}
+	pane := panes[0]
+	if pane.ID != paneID || pane.WindowID != windowID {
+		return Pane{}, &IdentityError{Reason: fmt.Sprintf("tmux pane identity mismatch: got pane %q window %q, want pane %q window %q", pane.ID, pane.WindowID, paneID, windowID)}
 	}
-	return m.ValidatePane(ctx, paneID, windowID)
+	return pane, nil
 }
 
 // IsIdentityLoss reports errors that prove a persisted immutable pane/window
@@ -330,6 +376,14 @@ func IsIdentityLoss(err error) bool {
 func missingTmuxTarget(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "can't find pane:") || strings.Contains(message, "can't find window:")
+}
+
+func missingTmuxServer(err error) bool {
+	var commandErr *commandError
+	if !errors.As(err, &commandErr) {
+		return false
+	}
+	return strings.Contains(strings.ToLower(commandErr.stderr), "no server running")
 }
 
 func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {
@@ -360,6 +414,84 @@ func (m Manager) SendKeys(ctx context.Context, paneID string, keys []string) err
 	return err
 }
 
+// SendCommandIfBindingMatches keeps each input effect behind a tmux-side
+// identity condition. A restart between the literal text and Enter can leave
+// text unsubmitted, but it cannot redirect either effect into a new server.
+func (m Manager) SendCommandIfBindingMatches(ctx context.Context, paneID, windowID, serverID, text string) error {
+	if err := m.SendTextIfBindingMatches(ctx, paneID, windowID, serverID, text); err != nil {
+		return err
+	}
+	if commandSubmitDelay > 0 {
+		timer := time.NewTimer(commandSubmitDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return m.SendKeysIfBindingMatches(ctx, paneID, windowID, serverID, []string{"Enter"})
+}
+
+func (m Manager) SendTextIfBindingMatches(ctx context.Context, paneID, windowID, serverID, text string) error {
+	if err := validateBindingIDs(paneID, windowID, serverID); err != nil {
+		return err
+	}
+	nonce, err := captureNonce()
+	if err != nil {
+		return err
+	}
+	buffer := "engram-input-" + nonce
+	if _, err := m.Runner.Run(ctx, "set-buffer", "-b", buffer, "--", text); err != nil {
+		return err
+	}
+	command := "paste-buffer -r -d -b " + buffer + " -t " + paneID
+	if err := m.runIfBindingMatches(ctx, paneID, windowID, serverID, command); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		_, _ = m.Runner.Run(cleanupCtx, "delete-buffer", "-b", buffer)
+		cancel()
+		return err
+	}
+	return nil
+}
+
+func (m Manager) SendKeysIfBindingMatches(ctx context.Context, paneID, windowID, serverID string, keys []string) error {
+	if err := validateBindingIDs(paneID, windowID, serverID); err != nil {
+		return err
+	}
+	if err := ValidKeys(keys); err != nil {
+		return err
+	}
+	parts := []string{"send-keys", "-t", paneID}
+	for _, key := range keys {
+		parts = append(parts, ShellQuote(key))
+	}
+	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(parts, " "))
+}
+
+func (m Manager) runIfBindingMatches(ctx context.Context, paneID, windowID, serverID, command string) error {
+	condition := bindingCondition(windowID, serverID)
+	falseCommand := "display-message -p " + identityMismatchMarker
+	out, err := m.Runner.Run(ctx, "if-shell", "-F", "-t", paneID, condition, command, falseCommand)
+	if err != nil {
+		if missingTmuxTarget(err) {
+			return &IdentityError{Reason: "tmux pane identity is gone", Err: err}
+		}
+		return err
+	}
+	if strings.TrimSpace(out) == identityMismatchMarker {
+		return &IdentityError{Reason: "tmux binding changed before input"}
+	}
+	return nil
+}
+
+func validateBindingIDs(paneID, windowID, serverID string) error {
+	if !validImmutableID(paneID, '%') || !validImmutableID(windowID, '@') || !validServerID(serverID) {
+		return &IdentityError{Reason: "invalid tmux binding for input"}
+	}
+	return nil
+}
+
 // CaptureVisibleRaw preserves physical wrapped lines, attributes, trailing
 // spaces, and tmux's final newline.
 func (m Manager) CaptureVisibleRaw(ctx context.Context, paneID string) (string, error) {
@@ -372,14 +504,15 @@ func (m Manager) CaptureLiteral(ctx context.Context, paneID string, targetRows i
 	if targetRows <= 0 || targetRows > 400 {
 		return "", fmt.Errorf("target rows must be between 1 and 400")
 	}
-	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_width}\t#{pane_height}")
+	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, recordFormat("pane_width", "pane_height"))
 	if err != nil {
 		return "", err
 	}
-	parts := strings.Split(strings.TrimSpace(meta), "\t")
-	if len(parts) != 2 {
+	records, parseErr := parseRecords(meta, 2)
+	if parseErr != nil || len(records) != 1 {
 		return "", fmt.Errorf("unexpected tmux literal metadata")
 	}
+	parts := records[0]
 	columns, err := strconv.Atoi(parts[0])
 	if err != nil || columns <= 0 || columns > 400 {
 		return "", fmt.Errorf("invalid tmux pane width %q", parts[0])
@@ -401,14 +534,15 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	if targetRows <= 0 || targetRows > 400 {
 		return StyledCapture{}, fmt.Errorf("target rows must be between 1 and 400")
 	}
-	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_width}\t#{pane_height}\t#{pane_title}\t#{pane_current_path}")
+	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, recordFormat("pane_width", "pane_height", "pane_title", "pane_current_path"))
 	if err != nil {
 		return StyledCapture{}, err
 	}
-	parts := strings.SplitN(strings.TrimSuffix(meta, "\n"), "\t", 4)
-	if len(parts) != 4 {
+	records, parseErr := parseRecords(meta, 4)
+	if parseErr != nil || len(records) != 1 {
 		return StyledCapture{}, fmt.Errorf("unexpected tmux snapshot metadata")
 	}
+	parts := records[0]
 	columns, err := strconv.Atoi(parts[0])
 	if err != nil || columns <= 0 || columns > 400 {
 		return StyledCapture{}, fmt.Errorf("invalid tmux pane width %q", parts[0])
@@ -507,7 +641,7 @@ func (m Manager) KillWindowIfBindingMatches(ctx context.Context, paneID, windowI
 	if !validImmutableID(paneID, '%') || !validImmutableID(windowID, '@') || !validServerID(serverID) {
 		return &IdentityError{Reason: "invalid tmux binding for close"}
 	}
-	condition := fmt.Sprintf("#{&&:#{==:#{%s},%s},#{==:#{window_id},%s}}", serverIDOption, serverID, windowID)
+	condition := bindingCondition(windowID, serverID)
 	trueCommand := "kill-window -t " + windowID
 	falseCommand := "display-message -p " + identityMismatchMarker
 	out, err := m.Runner.Run(ctx, "if-shell", "-F", "-t", paneID, condition, trueCommand, falseCommand)
@@ -521,6 +655,10 @@ func (m Manager) KillWindowIfBindingMatches(ctx context.Context, paneID, windowI
 		return &IdentityError{Reason: "tmux binding changed before close"}
 	}
 	return nil
+}
+
+func bindingCondition(windowID, serverID string) string {
+	return fmt.Sprintf("#{&&:#{==:#{%s},%s},#{==:#{window_id},%s}}", serverIDOption, serverID, windowID)
 }
 
 func SessionName(chatID int64) string {
@@ -551,44 +689,49 @@ func AttachedTitle(w Window) string {
 	return title
 }
 
-func parseWindows(out string) []Window {
-	var windows []Window
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		for len(parts) < 8 {
-			parts = append(parts, "")
+func parseWindows(out string) ([]Window, error) {
+	records, err := parseRecords(out, 9)
+	if err != nil {
+		return nil, fmt.Errorf("parse tmux windows: %w", err)
+	}
+	windows := make([]Window, 0, len(records))
+	for _, parts := range records {
+		if !validSessionID(parts[0]) || parts[1] == "" || !validNonnegative(parts[2]) || !validImmutableID(parts[3], '@') || (parts[5] != "0" && parts[5] != "1") || !validImmutableID(parts[6], '%') {
+			return nil, fmt.Errorf("unexpected tmux window record %q", parts)
 		}
 		windows = append(windows, Window{
-			SessionName: parts[0],
-			Index:       parts[1],
-			ID:          parts[2],
-			Name:        parts[3],
-			Active:      parts[4],
-			PaneID:      parts[5],
-			CurrentPath: parts[6],
-			CurrentCmd:  parts[7],
+			SessionID:   parts[0],
+			SessionName: parts[1],
+			Index:       parts[2],
+			ID:          parts[3],
+			Name:        parts[4],
+			Active:      parts[5],
+			PaneID:      parts[6],
+			CurrentPath: parts[7],
+			CurrentCmd:  parts[8],
 		})
 	}
-	return windows
+	return windows, nil
 }
 
 func parsePanes(out string) ([]Pane, error) {
-	var panes []Pane
-	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 9)
+	records, err := parseRecords(out, 9)
+	if err != nil {
+		return nil, fmt.Errorf("parse tmux panes: %w", err)
+	}
+	return panesFromRecords(records)
+}
+
+func panesFromRecords(records [][]string) ([]Pane, error) {
+	panes := make([]Pane, 0, len(records))
+	for _, parts := range records {
 		if len(parts) != 9 {
-			return nil, fmt.Errorf("unexpected tmux pane output line %q", line)
+			return nil, fmt.Errorf("unexpected tmux pane field count %d", len(parts))
 		}
 		if !validImmutableID(parts[0], '$') || !validImmutableID(parts[1], '@') || !validImmutableID(parts[2], '%') {
-			return nil, fmt.Errorf("unexpected tmux pane identity in line %q", line)
+			return nil, fmt.Errorf("unexpected tmux pane identity in record %q", parts)
 		}
-		if parts[6] != "0" && parts[6] != "1" {
+		if parts[3] == "" || !validNonnegative(parts[4]) || !validNonnegative(parts[5]) || (parts[6] != "0" && parts[6] != "1") {
 			return nil, fmt.Errorf("unexpected tmux pane active value %q", parts[6])
 		}
 		panes = append(panes, Pane{
@@ -604,6 +747,73 @@ func parsePanes(out string) ([]Pane, error) {
 		})
 	}
 	return panes, nil
+}
+
+// recordFormat emits self-delimiting tmux metadata. Tmux's n: modifier counts
+// the rendered UTF-8 bytes, so field values cannot collide with separators.
+func recordFormat(fields ...string) string {
+	var format strings.Builder
+	for _, field := range fields {
+		format.WriteString("#{n:")
+		format.WriteString(field)
+		format.WriteString("}:#{")
+		format.WriteString(field)
+		format.WriteByte('}')
+	}
+	return format.String()
+}
+
+func parseRecords(out string, fieldCount int) ([][]string, error) {
+	if out == "" {
+		return nil, nil
+	}
+	remaining := out
+	var records [][]string
+	for remaining != "" {
+		fields, consumed, err := parseRecord(remaining, fieldCount)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, fields)
+		remaining = remaining[consumed:]
+		if remaining == "" || remaining[0] != '\n' {
+			return nil, fmt.Errorf("record is not newline terminated")
+		}
+		remaining = remaining[1:]
+	}
+	return records, nil
+}
+
+func parseRecord(input string, fieldCount int) ([]string, int, error) {
+	remaining := input
+	fields := make([]string, 0, fieldCount)
+	for i := 0; i < fieldCount; i++ {
+		separator := strings.IndexByte(remaining, ':')
+		if separator <= 0 {
+			return nil, 0, fmt.Errorf("field %d has no byte length", i)
+		}
+		length, err := strconv.ParseUint(remaining[:separator], 10, 64)
+		if err != nil || length > uint64(len(remaining)-separator-1) {
+			return nil, 0, fmt.Errorf("field %d has invalid byte length", i)
+		}
+		valueStart := separator + 1
+		valueEnd := valueStart + int(length)
+		value := remaining[valueStart:valueEnd]
+		if !utf8.ValidString(value) {
+			return nil, 0, fmt.Errorf("field %d is not UTF-8", i)
+		}
+		fields = append(fields, value)
+		remaining = remaining[valueEnd:]
+	}
+	return fields, len(input) - len(remaining), nil
+}
+
+func validNonnegative(value string) bool {
+	if value == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(value, 10, 64)
+	return err == nil
 }
 
 func validImmutableID(id string, prefix byte) bool {

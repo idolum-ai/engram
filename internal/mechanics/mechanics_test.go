@@ -3,7 +3,6 @@ package mechanics
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +14,14 @@ type callRunner struct {
 	calls [][]string
 }
 
+func framedRecord(values ...string) string {
+	var out strings.Builder
+	for _, value := range values {
+		fmt.Fprintf(&out, "%d:%s", len(value), value)
+	}
+	return out.String() + "\n"
+}
+
 const testServerID = "0123456789abcdef0123456789abcdef"
 
 func (r *callRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -23,13 +30,13 @@ func (r *callRunner) Run(_ context.Context, args ...string) (string, error) {
 	case "show-options":
 		return testServerID + "\n", nil
 	case "display-message":
-		return "$1\t@2\t%3\twork\t0\t0\t1\t/tmp/project\tbash\n", nil
+		return framedRecord(testServerID, "$1", "@2", "%3", "work", "0", "0", "1", "/tmp/project", "bash"), nil
 	case "if-shell":
 		if strings.Contains(args[4], "@9") {
 			return "ENGRAM_IDENTITY_MISMATCH\n", nil
 		}
 		return "", nil
-	case "send-keys", "kill-window":
+	case "set-buffer", "send-keys", "kill-window":
 		return "", nil
 	default:
 		return "", fmt.Errorf("unexpected tmux call: %v", args)
@@ -76,13 +83,8 @@ func TestSendTextValidatesImmutableIdentityBeforeEffect(t *testing.T) {
 	if pane.ID != "%3" || pane.WindowID != "@2" || pane.CurrentPath != "/tmp/project" {
 		t.Fatalf("pane = %#v", pane)
 	}
-	want := [][]string{
-		{"show-options", "-gqv", "@engram_server_id"},
-		{"display-message", "-p", "-t", "%3", "#{session_id}\t#{window_id}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_active}\t#{pane_current_path}\t#{pane_current_command}"},
-		{"send-keys", "-t", "%3", "-l", "--", "echo ok"},
-	}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "echo ok" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") {
+		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 
@@ -93,7 +95,7 @@ func TestIdentityMismatchPreventsInput(t *testing.T) {
 	if err == nil || !tmux.IsIdentityLoss(err) {
 		t.Fatalf("error = %v", err)
 	}
-	if len(runner.calls) != 2 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" {
+	if len(runner.calls) != 1 || runner.calls[0][0] != "display-message" {
 		t.Fatalf("calls after mismatch = %#v", runner.calls)
 	}
 }
@@ -109,10 +111,10 @@ func TestCommandKeepsLiteralAndEnterDistinct(t *testing.T) {
 	if len(runner.calls) != 4 {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
-	if got := strings.Join(runner.calls[2], " "); got != "send-keys -t %3 -l -- printf 'a b'" {
-		t.Fatalf("literal call = %q", got)
+	if runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "printf 'a b'" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") {
+		t.Fatalf("literal calls = %#v", runner.calls)
 	}
-	if got := runner.calls[3]; !reflect.DeepEqual(got, []string{"send-keys", "-t", "%3", "Enter"}) {
+	if got := runner.calls[3]; got[0] != "if-shell" || !strings.Contains(got[5], "send-keys -t %3 'Enter'") {
 		t.Fatalf("enter call = %#v", got)
 	}
 }

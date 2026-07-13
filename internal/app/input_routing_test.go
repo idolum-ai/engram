@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -140,12 +139,8 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 	if status != "anchor_reply_ok" {
 		t.Fatalf("handleUpdate status = %q, want anchor_reply_ok", status)
 	}
-	want := [][]string{
-		{"send-keys", "-t", "%1", "-l", "--", "/clear"},
-		{"send-keys", "-t", "%1", "Enter"},
-	}
-	if len(runner.calls) != 4 || runner.calls[0][0] != "show-options" || runner.calls[1][0] != "display-message" || !reflect.DeepEqual(runner.calls[2:], want) {
-		t.Fatalf("tmux calls = %#v, want validation then %#v", runner.calls, want)
+	if len(runner.calls) != 4 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "/clear" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") || runner.calls[3][0] != "if-shell" || !strings.Contains(runner.calls[3][5], "'Enter'") {
+		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
 	got, ok := store.FindSession(ts.ID)
 	if !ok || got.LastActivityAt.IsZero() {
@@ -225,7 +220,7 @@ func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, erro
 		return appTestServerID + "\n", nil
 	}
 	if len(args) > 0 && args[0] == "display-message" {
-		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	}
 	return "", nil
 }

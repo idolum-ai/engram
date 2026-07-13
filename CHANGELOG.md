@@ -9,6 +9,12 @@ Notable user-visible and operational changes are recorded here.
 - Treat numeric tmux session names as sessions when creating windows, so `/new`
   no longer fails by interpreting a name such as `0` as an occupied window
   index.
+- Preserve immutable session, window, and pane IDs when attaching to real tmux
+  targets by replacing delimiter-based metadata parsing with strict
+  byte-length-framed records. This makes tmux 3.2 or newer an explicit runtime
+  requirement.
+- Guard each text and key effect inside tmux with the persisted server/window
+  identity so a server restart cannot redirect input to a reused pane ID.
 
 ## [v0.2.0] - 2026-07-12
 

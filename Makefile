@@ -65,7 +65,7 @@ test:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test ./...
 
 test-race:
-	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test -race ./internal/state ./internal/lockfile ./internal/telegram ./internal/tmux
+	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test -race ./...
 
 vet:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go vet ./...
@@ -74,7 +74,7 @@ darwin-compile:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOOS=darwin GOARCH=amd64 go test -exec=/bin/true ./...
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOOS=darwin GOARCH=arm64 go test -exec=/bin/true ./...
 
-check: test vet darwin-compile build release-smoke architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke
+check: test test-race vet darwin-compile build release-smoke architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke
 
 architecture:
 	bash scripts/check-architecture.sh

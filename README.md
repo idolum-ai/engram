@@ -36,7 +36,7 @@ You need:
 
 - Linux or macOS
 - Go 1.22 or newer
-- tmux, Git, Make, and curl
+- tmux 3.2 or newer, Git, Make, and curl
 - A Telegram account
 - For **Haiku mode**, an Anthropic API key with access to Claude Haiku 4.5;
   Chromium is optional and enables the `🖼️` button

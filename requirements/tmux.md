@@ -2,6 +2,8 @@
 
 tmux is the source of terminal truth.
 
+Engram requires tmux 3.2 or newer for byte-length metadata formats.
+
 ## Session Selection
 
 - If `ENGRAM_TMUX_SESSION` is configured, Engram uses it and creates it if
@@ -17,15 +19,22 @@ tmux is the source of terminal truth.
 
 - A top-level non-command Telegram message creates a new tmux window.
 - `/attach <target>` tracks an existing target's active pane.
+- Tmux metadata uses byte-length-framed fields rather than printable or control
+  delimiters. Session, window, pane, and capture records must reject malformed,
+  partial, trailing, or invalid immutable-identity data; Engram never pads a
+  record or persists an empty identity after a successful attach.
 - `/sessions` shows native tmux sessions and immutable pane identities with
   attach buttons for untracked panes and explicit reattach buttons when a
   persisted watch belongs to an older tmux server incarnation.
 - Attach callbacks carry `%pane_id`, not mutable indexes.
 - Each watch stores a random tmux server incarnation in addition to immutable
   pane/window IDs. Before input, capture, or cwd lookup, Engram verifies all
-  three identities. Destructive close evaluates and kills in one tmux command
-  queue so a concurrent pane move cannot redirect it. A mismatch marks the
-  session lost; transient command failure does not.
+  three identities. Server incarnation and pane metadata are sampled in one
+  tmux call; attach also brackets target resolution with server-incarnation
+  reads so a restart cannot combine identities from two servers. Destructive
+  close evaluates and kills in one tmux command queue so a concurrent pane move
+  cannot redirect it. A mismatch marks the session lost; transient command
+  failure does not.
 - Pane-bound input, capture, scrollback, and destructive close cross the private
   terminal-mechanics boundary, which has no Telegram, state, or presentation
   dependency and validates immutable identity immediately before the operation.
@@ -39,6 +48,10 @@ tmux is the source of terminal truth.
 - Replies to the canonical anchor send literal text and Enter to its pane.
   The latest conversational and screenshot replies are aliases to the same
   pane. Retired anchors and stale alternate replies do not route input.
+- Every literal-text and key effect executes behind a tmux-side server/window
+  identity condition. Literal text crosses that command boundary through a
+  random temporary tmux buffer; if tmux restarts between text and Enter, the
+  second effect fails closed instead of reaching a reused pane ID.
 - A reply beginning `//` removes one slash and sends the resulting slash-led
   input downstream. `/text` omits Enter; `/key` sends validated tmux key names.
 - Live anchors include `Esc`, `Escx2`, `^C`, `^D`, and `Enter`. `Escx2` waits

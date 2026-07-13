@@ -211,9 +211,9 @@ func (snapshotTmuxRunner) Run(_ context.Context, args ...string) (string, error)
 	case "display-message":
 		format := args[len(args)-1]
 		if strings.Contains(format, "pane_width") {
-			return "71\t37\tbuild pane\t/tmp\n", nil
+			return framedTmuxRecord("71", "37", "build pane", "/tmp"), nil
 		}
-		return "$1\t@1\t%1\tmain\t0\t0\t1\t/tmp\tbash\n", nil
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	case "capture-pane":
 		return "", nil
 	case "show-buffer":
