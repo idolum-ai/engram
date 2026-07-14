@@ -296,6 +296,7 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 		if !found || !applied {
 			return actionResult{Outcome: actionStateFailed, Message: "session changed while untracking"}
 		}
+		a.resetConversationEpoch(id)
 		a.updateAnchorLocal(ctx, id, "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed.", true)
 		a.reconcileAnchorPresentation(ctx, id)
 		_ = a.audit("tmux.untrack", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "origin": ts.Origin})
@@ -324,6 +325,7 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 	if !found || !applied {
 		return actionResult{Outcome: actionStateFailed, Message: "session no longer tracked after close"}
 	}
+	a.resetConversationEpoch(id)
 	a.updateAnchorLocal(ctx, id, "status:\nThe Engram-created tmux window was closed.", true)
 	a.reconcileAnchorPresentation(ctx, id)
 	return actionResult{Outcome: actionOK, Message: "closed"}
@@ -355,6 +357,7 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 	if !found || !applied {
 		return
 	}
+	a.resetConversationEpoch(ts.ID)
 	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
 	a.updateAnchorLocal(ctx, ts.ID, "status:\nThe tracked tmux pane no longer matches this session. Engram stopped watching it.\n\nrecommendation:\nUse /sessions and attach the intended pane again.", true)
 	a.reconcileAnchorPresentation(ctx, ts.ID)

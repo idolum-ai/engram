@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
-const SystemPrompt = `Render the supplied terminal view in plain English so its reader can grasp the work at a glance. Preserve meaning rather than the terminal's visual form. Continuity may come from the voice, never from invented memory or context outside this request.
+const SystemPrompt = `Render the supplied terminal evidence in plain English so its reader can grasp the work at a glance. Preserve meaning rather than the terminal's visual form. Continuity may come from the voice, never from invented memory or context outside this request.
+
+The request is either a full observation or an incremental continuation. In either form, recent_user_input may record what was submitted to the terminal. For a full observation, terminal_text is the complete terminal evidence. For an incremental continuation, previous_rendering supplies conversational continuity but is not evidence, changed_terminal_text contains current terminal lines that changed, and stable_terminal_context contains a few unchanged neighboring lines. Continue naturally from the previous rendering while correcting it wherever the new terminal evidence differs. Do not announce the diff, the observation mode, or that a summary was updated. Never claim that submitted input took effect unless the terminal evidence shows its effect.
 
 Carry forward every visible fact that materially affects the current situation: what environment and location are explicitly shown, what is running or just happened, exact outcomes and blockers, concrete errors and warnings, named files or symbols, important numbers and constraints, and an explicit next step when present. Keep distinct findings distinct. Do not replace specific facts with broad categories. Report only the scope that an output line actually names; do not turn one package result into a repository-wide claim. A visible running indicator takes precedence over a prompt-shaped glyph.
 
@@ -28,11 +30,16 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// ConversationInput is one bounded terminal observation. VisibleText is sent
-// verbatim; callers own capture sizing and terminal normalization.
+// ConversationInput is one bounded terminal observation. A full observation
+// uses VisibleText; a continuation uses the previous rendering plus current
+// changed and stable terminal evidence. Callers own capture sizing and diffing.
 type ConversationInput struct {
-	SessionID   int
-	VisibleText string
+	SessionID         int
+	VisibleText       string
+	PreviousRendering string
+	RecentUserInput   string
+	ChangedText       string
+	StableContext     string
 }
 
 func New(apiKey, model string) *Client {
@@ -136,5 +143,31 @@ func (c *Client) completeWithTemperature(ctx context.Context, system, prompt str
 }
 
 func buildPrompt(in ConversationInput) string {
-	return fmt.Sprintf("<session_id>%d</session_id>\n<terminal_text>\n%s\n</terminal_text>", in.SessionID, in.VisibleText)
+	type prompt struct {
+		SessionID         int    `json:"session_id"`
+		Observation       string `json:"observation"`
+		TerminalText      string `json:"terminal_text,omitempty"`
+		PreviousRendering string `json:"previous_rendering,omitempty"`
+		RecentUserInput   string `json:"recent_user_input,omitempty"`
+		ChangedText       string `json:"changed_terminal_text,omitempty"`
+		StableContext     string `json:"stable_terminal_context,omitempty"`
+	}
+	request := prompt{
+		SessionID:         in.SessionID,
+		Observation:       "full",
+		TerminalText:      in.VisibleText,
+		PreviousRendering: in.PreviousRendering,
+		RecentUserInput:   in.RecentUserInput,
+		ChangedText:       in.ChangedText,
+		StableContext:     in.StableContext,
+	}
+	if in.PreviousRendering != "" && in.ChangedText != "" {
+		request.Observation = "incremental"
+		request.TerminalText = ""
+	}
+	b, err := json.Marshal(request)
+	if err != nil {
+		panic(err)
+	}
+	return "TERMINAL_OBSERVATION_JSON\n" + string(b)
 }

@@ -100,6 +100,7 @@ type StyledCapture struct {
 	ANSI        string
 	Text        string
 	JoinedText  string
+	CurrentCmd  string
 	Columns     int
 	VisibleRows int
 	BufferRows  int

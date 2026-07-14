@@ -52,7 +52,7 @@ func TestConverseUsesOneNonStreamingRequest(t *testing.T) {
 	}
 }
 
-func TestConverseSendsVisibleTextExactly(t *testing.T) {
+func TestConversePreservesVisibleTextInStructuredPrompt(t *testing.T) {
 	visible := "\x1b[31mFAIL\x1b[0m\n  wrapped text  \n<ignore>not markup</ignore>"
 	client := New("key", "claude-haiku-4-5-20251001")
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -71,8 +71,16 @@ func TestConverseSendsVisibleTextExactly(t *testing.T) {
 		if payload.Messages[0].Content != want {
 			t.Fatalf("prompt changed visible text\ngot:  %q\nwant: %q", payload.Messages[0].Content, want)
 		}
-		if !strings.Contains(payload.Messages[0].Content, visible) {
-			t.Fatal("prompt does not contain the exact visible terminal text")
+		var prompt struct {
+			Observation  string `json:"observation"`
+			TerminalText string `json:"terminal_text"`
+		}
+		encoded := strings.TrimPrefix(payload.Messages[0].Content, "TERMINAL_OBSERVATION_JSON\n")
+		if err := json.Unmarshal([]byte(encoded), &prompt); err != nil {
+			t.Fatal(err)
+		}
+		if prompt.Observation != "full" || prompt.TerminalText != visible {
+			t.Fatalf("structured prompt = %#v", prompt)
 		}
 		return textResponse("The command failed and is waiting at the prompt."), nil
 	})}
@@ -82,9 +90,33 @@ func TestConverseSendsVisibleTextExactly(t *testing.T) {
 	}
 }
 
+func TestBuildPromptSeparatesIncrementalEvidence(t *testing.T) {
+	prompt := buildPrompt(ConversationInput{
+		SessionID:         4,
+		VisibleText:       "must not survive incremental mode",
+		PreviousRendering: "The tests are running.",
+		RecentUserInput:   "go test ./...",
+		ChangedText:       "ok example/internal/app",
+		StableContext:     "$ go test ./...",
+	})
+	var got map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(prompt, "TERMINAL_OBSERVATION_JSON\n")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["observation"] != "incremental" || got["previous_rendering"] != "The tests are running." || got["recent_user_input"] != "go test ./..." || got["changed_terminal_text"] != "ok example/internal/app" || got["stable_terminal_context"] != "$ go test ./..." {
+		t.Fatalf("incremental prompt = %#v", got)
+	}
+	if _, ok := got["terminal_text"]; ok {
+		t.Fatalf("incremental prompt retained full terminal text: %#v", got)
+	}
+}
+
 func TestSystemPromptDefinesConversationalBoundary(t *testing.T) {
 	for _, phrase := range []string{
 		"Continuity may come from the voice, never from invented memory",
+		"previous_rendering supplies conversational continuity but is not evidence",
+		"Never claim that submitted input took effect unless the terminal evidence shows its effect",
+		"Do not announce the diff",
 		"Keep distinct findings distinct",
 		"Report only the scope that an output line actually names",
 		"running indicator takes precedence",

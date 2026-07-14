@@ -1,0 +1,33 @@
+[
+  {
+    "name": "test run completes",
+    "previous_rendering": "We are running the full Go test suite. The app package is still in progress.",
+    "recent_user_input": "go test ./...",
+    "changed_terminal_text": "ok example.test/engram/app 5.214s\nPASS",
+    "stable_terminal_context": "$ go test ./...\n~/engram main",
+    "reference": "The full Go test suite has passed, including the app package.",
+    "concepts": [
+      ["test suite has passed", "tests passed", "test suite passed"],
+      ["app package"]
+    ],
+    "forbidden": ["still running", "failed", "tap refresh", "Engram feature"],
+    "contradicts": ["did not pass", "has not passed"]
+  },
+  {
+    "name": "review finds one blocker",
+    "previous_rendering": "We are reviewing a change to terminal reply routing. The review is still running.",
+    "recent_user_input": "review the current changes",
+    "changed_terminal_text": "Finding: stale replies can still reach the pane after anchor rotation.\ninternal/app/input.go:84\nReview complete: 1 blocker",
+    "stable_terminal_context": "branch feature/reply-routing\nworking tree modified",
+    "reference": "The review is complete and found one blocker: stale replies can still reach the pane after anchor rotation, at internal/app/input.go:84. The working tree remains modified on feature/reply-routing.",
+    "concepts": [
+      ["review is complete", "review complete"],
+      ["one blocker", "1 blocker"],
+      ["stale replies"],
+      ["internal/app/input.go:84"],
+      ["working tree remains modified", "working tree modified"]
+    ],
+    "forbidden": ["review is still running", "no blockers", "tap refresh", "send input"],
+    "contradicts": ["zero blockers", "review passed"]
+  }
+]

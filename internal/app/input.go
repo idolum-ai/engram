@@ -82,6 +82,9 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 	if !found || !applied {
 		return actionResult{Outcome: actionStateFailed, Message: "session no longer current after tmux input"}
 	}
+	if enter {
+		a.noteConversationInput(id, text)
+	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent"}
 }

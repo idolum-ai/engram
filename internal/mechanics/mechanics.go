@@ -76,6 +76,9 @@ func (c Controller) CaptureStyled(ctx context.Context, binding Binding, targetRo
 	if err != nil {
 		return tmux.Pane{}, tmux.StyledCapture{}, err
 	}
+	// The foreground command comes from the identity validation immediately
+	// preceding this capture. Presentation uses it only as a continuity guard.
+	capture.CurrentCmd = pane.CurrentCmd
 	return pane, capture, nil
 }
 

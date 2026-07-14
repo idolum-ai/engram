@@ -7,7 +7,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/terminalshot"
@@ -76,7 +75,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			return
 		}
 	}
-	summary, guideErr := a.conversationalSummary(ctx, ts.ID, presentationText)
+	summary, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
 	if a.snapshotAnchors() {
 		return
 	}
@@ -143,16 +142,22 @@ func headUTF8(text string, maxBytes int) string {
 	return text[:end]
 }
 
-func (a *App) conversationalSummary(ctx context.Context, sessionID int, capture string) (string, error) {
+func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, error) {
+	lock := a.conversationMutex(session.ID)
+	lock.Lock()
+	defer lock.Unlock()
+	turn := a.prepareConversationTurn(session, capture, presentationText)
 	if !acquireSlot(ctx, a.haikuSlots) {
 		return "", ctx.Err()
 	}
-	summary, err := a.Anthropic.Converse(ctx, anthropic.ConversationInput{SessionID: sessionID, VisibleText: capture})
+	summary, err := a.Anthropic.Converse(ctx, turn.input)
 	releaseSlot(a.haikuSlots)
 	if err != nil {
 		return "", err
 	}
-	return a.redactText(summary), nil
+	summary = a.redactText(summary)
+	a.commitConversationTurn(session.ID, turn, summary)
+	return summary, nil
 }
 
 func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, final bool) {
@@ -268,6 +273,7 @@ func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
 }
 
 func (a *App) queueManualRefresh(id int) {
+	a.resetConversationEpoch(id)
 	if !a.snapshotAnchors() {
 		a.queueRefresh(id, true, 0)
 		return

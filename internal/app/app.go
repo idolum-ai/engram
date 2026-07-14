@@ -25,42 +25,45 @@ import (
 )
 
 type App struct {
-	Config         config.Config
-	Store          *state.Store
-	Telegram       *telegram.Client
-	Anthropic      *anthropic.Client
-	Tmux           tmux.Manager
-	Snapshots      snapshotRenderer
-	modeMu         sync.RWMutex
-	mode           string
-	haikuAvailable bool
-	snapshotReady  bool
-	lock           *lockfile.Lock
-	startedAt      time.Time
-	quitCode       int
-	stopCh         chan struct{}
-	runCtx         context.Context
-	refreshWG      sync.WaitGroup
-	schedulerWG    sync.WaitGroup
-	transferWG     sync.WaitGroup
-	captureSlots   chan struct{}
-	haikuSlots     chan struct{}
-	renderSlots    chan struct{}
-	transferSlots  chan struct{}
-	transferQueue  chan struct{}
-	summaryMu      sync.Mutex
-	summaryQueued  map[int]bool
-	summaryRunning map[int]bool
-	summaryForce   map[int]bool
-	summaryDue     map[int]time.Time
-	manualRefresh  map[int]bool
-	closeConfirmMu sync.Mutex
-	closeConfirms  map[string]closeConfirmation
-	sessionLocks   sync.Map
-	anchorLocks    sync.Map
-	signalRetries  sync.Map
-	sleepHook      func(time.Duration)
-	refreshHook    func(context.Context, int, bool)
+	Config             config.Config
+	Store              *state.Store
+	Telegram           *telegram.Client
+	Anthropic          *anthropic.Client
+	Tmux               tmux.Manager
+	Snapshots          snapshotRenderer
+	modeMu             sync.RWMutex
+	mode               string
+	haikuAvailable     bool
+	snapshotReady      bool
+	lock               *lockfile.Lock
+	startedAt          time.Time
+	quitCode           int
+	stopCh             chan struct{}
+	runCtx             context.Context
+	refreshWG          sync.WaitGroup
+	schedulerWG        sync.WaitGroup
+	transferWG         sync.WaitGroup
+	captureSlots       chan struct{}
+	haikuSlots         chan struct{}
+	renderSlots        chan struct{}
+	transferSlots      chan struct{}
+	transferQueue      chan struct{}
+	summaryMu          sync.Mutex
+	summaryQueued      map[int]bool
+	summaryRunning     map[int]bool
+	summaryForce       map[int]bool
+	summaryDue         map[int]time.Time
+	manualRefresh      map[int]bool
+	conversationMu     sync.Mutex
+	conversationEpochs map[int]conversationEpoch
+	conversationLocks  sync.Map
+	closeConfirmMu     sync.Mutex
+	closeConfirms      map[string]closeConfirmation
+	sessionLocks       sync.Map
+	anchorLocks        sync.Map
+	signalRetries      sync.Map
+	sleepHook          func(time.Duration)
+	refreshHook        func(context.Context, int, bool)
 }
 
 const summaryQuietPeriod = 2 * time.Second
@@ -111,29 +114,30 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 	return &App{
-		Config:         cfg,
-		Store:          store,
-		Telegram:       telegramClient,
-		Anthropic:      anthropicClient,
-		Tmux:           tmux.New(tmux.ExecRunner{}),
-		Snapshots:      snapshotRenderer,
-		mode:           mode,
-		haikuAvailable: anthropicClient != nil,
-		snapshotReady:  snapshotReady,
-		lock:           l,
-		startedAt:      time.Now().UTC(),
-		stopCh:         make(chan struct{}),
-		captureSlots:   make(chan struct{}, maxConcurrentCaptures),
-		haikuSlots:     make(chan struct{}, maxConcurrentHaikuRequests),
-		renderSlots:    make(chan struct{}, maxConcurrentSnapshotRenders),
-		transferSlots:  make(chan struct{}, maxConcurrentTransfers),
-		transferQueue:  make(chan struct{}, maxQueuedTransfers),
-		summaryQueued:  map[int]bool{},
-		summaryRunning: map[int]bool{},
-		summaryForce:   map[int]bool{},
-		summaryDue:     map[int]time.Time{},
-		manualRefresh:  map[int]bool{},
-		closeConfirms:  map[string]closeConfirmation{},
+		Config:             cfg,
+		Store:              store,
+		Telegram:           telegramClient,
+		Anthropic:          anthropicClient,
+		Tmux:               tmux.New(tmux.ExecRunner{}),
+		Snapshots:          snapshotRenderer,
+		mode:               mode,
+		haikuAvailable:     anthropicClient != nil,
+		snapshotReady:      snapshotReady,
+		lock:               l,
+		startedAt:          time.Now().UTC(),
+		stopCh:             make(chan struct{}),
+		captureSlots:       make(chan struct{}, maxConcurrentCaptures),
+		haikuSlots:         make(chan struct{}, maxConcurrentHaikuRequests),
+		renderSlots:        make(chan struct{}, maxConcurrentSnapshotRenders),
+		transferSlots:      make(chan struct{}, maxConcurrentTransfers),
+		transferQueue:      make(chan struct{}, maxQueuedTransfers),
+		summaryQueued:      map[int]bool{},
+		summaryRunning:     map[int]bool{},
+		summaryForce:       map[int]bool{},
+		summaryDue:         map[int]time.Time{},
+		manualRefresh:      map[int]bool{},
+		conversationEpochs: map[int]conversationEpoch{},
+		closeConfirms:      map[string]closeConfirmation{},
 	}, nil
 }
 

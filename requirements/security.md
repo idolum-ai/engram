@@ -38,8 +38,15 @@ privacy model must stay small and explicit.
 - Documentation must explain that Anthropic receives the plain text of the same
   `CaptureStyled` frame, capped at 64 rows, used by Chromium. Guide anchors call it
   automatically; `🗣️` invokes it on demand from snapshot mode.
-- Bounded terminal text sent to Anthropic is not credential-redacted. Engram
-  sends one request with no model history, structured report, or retry.
+- Bounded terminal text sent to Anthropic is not credential-redacted. A later
+  request may instead contain process-local continuity made from the previous
+  rendering, deterministic changed lines, bounded unchanged context, and the
+  latest submitted input only when that exact text is visible in an aligned
+  terminal frame. Hidden input is not forwarded from Engram's memory. Engram
+  sends one request with no model API history, structured report, or retry.
+  Continuity is isolated per tracked window,
+  never persisted, and discarded at terminal identity or foreground-program
+  boundaries.
 - Terminal captures are untrusted data for the guide. Pane-authored text cannot
   instruct Haiku or acquire authority merely by addressing Engram or the user.
 - Incoming attachments are downloaded from Telegram but are not sent to

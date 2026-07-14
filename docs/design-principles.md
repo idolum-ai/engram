@@ -82,17 +82,23 @@ targeting and capped at 64 rows. Presentation changes; observation does not.
 This shared boundary keeps comparisons honest and prevents either mode from
 quietly seeing more of the machine.
 
-Guide mode sends the frame's joined logical text to Haiku once, after removing
-recognized upstream records. Haiku speaks like a
+Guide mode begins by sending the frame's joined logical text to Haiku once,
+after removing recognized upstream records. Later observations of the same
+tmux binding and foreground program may carry only a deterministic terminal
+delta, a few unchanged neighboring lines, the latest visibly echoed submitted
+input, and the previous rendering. Haiku speaks like a
 technically fluent person briefly returning to the topic: compact, natural,
 and focused on what the terminal content means. Its voice stands beside the
 reader, using direct orientation grounded only in visibly named tools,
 collaborative "we" for shared work, and short one-idea paragraphs for phone
 readability; "you" is reserved for actions only the reader can take.
-It has no model conversation
-history or structured response, no second request, and no hidden context beyond
-that frame. Continuity comes from tone and current machine state, not stored
-model memory or context shared across windows.
+It has no model conversation history or structured response and makes no
+second request. Its small process-local continuity is isolated per window and
+never becomes terminal truth: the previous rendering provides voice, while the
+new terminal evidence can correct it. A different tmux server, window, pane,
+foreground command, pane size, weakly aligned frame, manual refresh, or service
+restart begins again from the full bounded frame. Continuity never crosses
+windows and is never persisted.
 
 Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
 literal and deterministic, at the cost of greater visual density and local

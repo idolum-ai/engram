@@ -446,7 +446,13 @@ observes immediately.
 
 In Haiku mode, Engram sends the shared bounded frame to Haiku once and edits the
 canonical text anchor with compact, collaborative prose broken into short
-phone-readable paragraphs. If Chromium passed
+phone-readable paragraphs. While the same program remains in the same tmux
+pane, later renderings use a deterministic terminal delta, the latest visibly
+echoed submitted input, and the previous prose to continue naturally without
+sharing context between windows. A program, pane, size, service, or
+manual-refresh boundary
+starts again from the full frame. This continuity is memory-only and still uses
+one non-streaming Haiku request per rendering. If Chromium passed
 startup readiness, `🖼️` replies with an iPhone-sized image of that frame.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its
@@ -539,6 +545,14 @@ run:
 ```sh
 ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
   -run TestLiveHaikuConversationEvaluation -count=1
+```
+
+The incremental fixtures exercise conversational continuation from a previous
+rendering plus deterministic terminal changes:
+
+```sh
+ENGRAM_LIVE_HAIKU_INCREMENTAL_EVAL=1 go test -v ./internal/anthropic \
+  -run TestLiveHaikuIncrementalConversationEvaluation -count=1
 ```
 
 Compare a challenger prompt with the production prompt using the tournament.

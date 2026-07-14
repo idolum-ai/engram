@@ -53,7 +53,7 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	summary, err := a.conversationalSummary(ctx, current.ID, presentationText)
+	summary, err := a.conversationalSummary(ctx, current, capture, presentationText)
 	if err != nil {
 		_ = a.Store.NoteHaiku(err.Error())
 		_ = a.audit("terminal.conversation", "haiku_failed", map[string]any{"session_id": current.ID, "error": err.Error()})

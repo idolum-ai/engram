@@ -66,12 +66,23 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   semantics over the same coordinates. The physical and joined captures execute
   in one tmux command batch so signal parsing, guide text, references, and
   snapshot pixels do not come from separately timed observations.
-- Guide mode sends that frame's joined logical text, with upstream records
-  removed, to Haiku in one non-streaming request,
-  with no model history or structured response and no second request. It
-  renders the result as compact conversational prose with short, single-idea
-  paragraphs. Shared work uses a collaborative "we" voice; "you" is reserved
-  for actions that belong to the reader alone.
+- Guide mode sends the first frame's joined logical text, with upstream records
+  removed, to Haiku in one non-streaming request. While the immutable tmux
+  server/window/pane binding, foreground command, and pane dimensions remain
+  unchanged, Engram may instead send the previous rendering, latest submitted
+  input when its exact text is visible in an aligned frame, current lines
+  selected by a deterministic line diff, and a bounded set of unchanged
+  neighboring lines. The terminal delta is evidence; the previous rendering
+  supplies conversational continuity but is not truth.
+- A different binding, foreground command, pane size, weak line alignment,
+  manual refresh, or service restart rebases guide mode from the full bounded
+  frame. Continuity is process-local and isolated per tracked window. It is not
+  persisted and is never shared across windows.
+- Every guide rendering still uses exactly one non-streaming Haiku request,
+  with no model API history, structured response, or second request. It renders
+  compact conversational prose with short, single-idea paragraphs. Shared work
+  uses a collaborative "we" voice; "you" is reserved for actions that belong
+  to the reader alone.
 - Haiku names a tool, project, account, or person only when the terminal text
   visibly establishes that identity. Model identifiers are never user identities.
 - Snapshot mode renders the same frame through Chromium into a full-bleed
