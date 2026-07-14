@@ -16,8 +16,11 @@ const closeConfirmationTTL = 2 * time.Minute
 const maxCloseConfirmations = 32
 
 type closeConfirmation struct {
-	SessionID int
-	ExpiresAt time.Time
+	SessionID    int
+	TmuxServerID string
+	TmuxWindowID string
+	TmuxPaneID   string
+	ExpiresAt    time.Time
 }
 
 func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) string {
@@ -152,12 +155,11 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "bad session id")
 			return "failed_bad_callback_id"
 		}
-		ts, ok := a.Store.FindSession(id)
-		if !ok {
-			a.answerCallback(ctx, cb.ID, "session not found")
-			return "callback_user_error"
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
 		}
-		token, err := a.issueCloseConfirmation(id)
+		token, err := a.issueCloseConfirmation(ts)
 		if err != nil {
 			a.answerCallback(ctx, cb.ID, "could not create confirmation")
 			return "callback_state_failed"
@@ -177,7 +179,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "confirmation expired")
 			return "callback_user_error"
 		}
-		result := a.closeSession(ctx, confirmation.SessionID)
+		result := a.closeSessionExpected(ctx, confirmation.SessionID, &confirmation)
 		if !a.answerCallback(ctx, cb.ID, result.Message) {
 			return "callback_telegram_failed"
 		}
@@ -245,7 +247,7 @@ func closeConfirmationMarkup(token string) *telegram.InlineKeyboardMarkup {
 	}}}
 }
 
-func (a *App) issueCloseConfirmation(sessionID int) (string, error) {
+func (a *App) issueCloseConfirmation(session state.TerminalSession) (string, error) {
 	random := make([]byte, 8)
 	if _, err := rand.Read(random); err != nil {
 		return "", err
@@ -273,7 +275,11 @@ func (a *App) issueCloseConfirmation(sessionID int) (string, error) {
 		}
 		delete(a.closeConfirms, oldestKey)
 	}
-	a.closeConfirms[token] = closeConfirmation{SessionID: sessionID, ExpiresAt: now.Add(closeConfirmationTTL)}
+	a.closeConfirms[token] = closeConfirmation{
+		SessionID: session.ID, TmuxServerID: session.TmuxServerID,
+		TmuxWindowID: session.TmuxWindowID, TmuxPaneID: session.TmuxPaneID,
+		ExpiresAt: now.Add(closeConfirmationTTL),
+	}
 	return token, nil
 }
 

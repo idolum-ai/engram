@@ -48,3 +48,13 @@ func recordStaleMessage(session *state.TerminalSession, messageID int) {
 	}
 	session.StaleAlternateMessageIDs = stale
 }
+
+func retireAlternateReplyTargets(session *state.TerminalSession) {
+	messageIDs := []int{session.SummaryMessageID, session.SnapshotMessageID, session.UpstreamMessageID}
+	session.SummaryMessageID = 0
+	session.SnapshotMessageID = 0
+	session.UpstreamMessageID = 0
+	for _, messageID := range messageIDs {
+		recordStaleMessage(session, messageID)
+	}
+}

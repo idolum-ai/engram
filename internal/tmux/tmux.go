@@ -100,6 +100,12 @@ type StyledCapture struct {
 	ANSI        string
 	Text        string
 	JoinedText  string
+	ServerID    string
+	WindowID    string
+	PaneID      string
+	CurrentCmd  string
+	AlternateOn string
+	PaneInMode  string
 	Columns     int
 	VisibleRows int
 	BufferRows  int
@@ -493,14 +499,19 @@ func validateBindingIDs(paneID, windowID, serverID string) error {
 }
 
 // CaptureVisibleRaw preserves physical wrapped lines, attributes, trailing
-// spaces, and tmux's final newline.
-func (m Manager) CaptureVisibleRaw(ctx context.Context, paneID string) (string, error) {
-	return m.Runner.Run(ctx, "capture-pane", "-p", "-e", "-N", "-t", paneID)
+// spaces, and tmux's final newline while conditioning the capture on the full
+// immutable binding in the same tmux command queue.
+func (m Manager) CaptureVisibleRaw(ctx context.Context, paneID, windowID, serverID string) (string, error) {
+	command := "capture-pane -p -e -N -t " + paneID
+	return m.captureIfBindingMatches(ctx, paneID, windowID, serverID, command)
 }
 
 // CaptureLiteral returns a bounded plain-text frame without creating tmux
 // paste buffers or preserving terminal control sequences.
-func (m Manager) CaptureLiteral(ctx context.Context, paneID string, targetRows int) (string, error) {
+func (m Manager) CaptureLiteral(ctx context.Context, paneID, windowID, serverID string, targetRows int) (string, error) {
+	if err := validateBindingIDs(paneID, windowID, serverID); err != nil {
+		return "", err
+	}
 	if targetRows <= 0 || targetRows > 400 {
 		return "", fmt.Errorf("target rows must be between 1 and 400")
 	}
@@ -523,34 +534,50 @@ func (m Manager) CaptureLiteral(ctx context.Context, paneID string, targetRows i
 	}
 	start := visibleRows - targetRows
 	end := visibleRows - 1
-	out, err := m.Runner.Run(ctx, "capture-pane", "-p", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID)
+	command := strings.Join([]string{"capture-pane", "-p", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID}, " ")
+	out, err := m.captureIfBindingMatches(ctx, paneID, windowID, serverID, command)
 	if err != nil {
 		return "", err
 	}
 	return semanticCapture(out), nil
 }
 
+func (m Manager) captureIfBindingMatches(ctx context.Context, paneID, windowID, serverID, command string) (string, error) {
+	if err := validateBindingIDs(paneID, windowID, serverID); err != nil {
+		return "", err
+	}
+	nonce, err := captureNonce()
+	if err != nil {
+		return "", err
+	}
+	marker := identityMismatchMarker + "-" + nonce
+	out, err := m.Runner.Run(ctx, "if-shell", "-F", "-t", paneID, bindingCondition(windowID, serverID), command, "display-message -p "+marker)
+	if err != nil {
+		if missingTmuxTarget(err) {
+			return "", &IdentityError{Reason: "tmux pane identity is gone", Err: err}
+		}
+		return "", err
+	}
+	if strings.TrimSpace(out) == marker {
+		return "", &IdentityError{Reason: "tmux binding changed while capturing"}
+	}
+	return out, nil
+}
+
 func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows int) (StyledCapture, error) {
 	if targetRows <= 0 || targetRows > 400 {
 		return StyledCapture{}, fmt.Errorf("target rows must be between 1 and 400")
 	}
-	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, recordFormat("pane_width", "pane_height", "pane_title", "pane_current_path"))
+	metaFormat := recordFormat(serverIDOption, "window_id", "pane_id", "pane_width", "pane_height", "pane_title", "pane_current_path", "pane_current_command", "alternate_on", "pane_in_mode")
+	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, metaFormat)
 	if err != nil {
 		return StyledCapture{}, err
 	}
-	records, parseErr := parseRecords(meta, 4)
-	if parseErr != nil || len(records) != 1 {
-		return StyledCapture{}, fmt.Errorf("unexpected tmux snapshot metadata")
+	before, err := parseCaptureMetadata(meta)
+	if err != nil {
+		return StyledCapture{}, err
 	}
-	parts := records[0]
-	columns, err := strconv.Atoi(parts[0])
-	if err != nil || columns <= 0 || columns > 400 {
-		return StyledCapture{}, fmt.Errorf("invalid tmux pane width %q", parts[0])
-	}
-	visibleRows, err := strconv.Atoi(parts[1])
-	if err != nil || visibleRows <= 0 || visibleRows > 400 {
-		return StyledCapture{}, fmt.Errorf("invalid tmux pane height %q", parts[1])
-	}
+	columns, visibleRows := before.Columns, before.VisibleRows
 	start := visibleRows - targetRows
 	end := visibleRows - 1
 	nonce, err := captureNonce()
@@ -559,15 +586,26 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}
 	physicalBuffer := "engram-physical-" + nonce
 	joinedBuffer := "engram-joined-" + nonce
-	_, err = m.Runner.Run(ctx,
+	afterText, err := m.Runner.Run(ctx,
 		"capture-pane", "-e", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID, "-b", physicalBuffer,
 		";", "capture-pane", "-J", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID, "-b", joinedBuffer,
+		";", "display-message", "-p", "-t", paneID, metaFormat,
 	)
 	if err != nil {
 		m.cleanupCaptureBuffers(ctx, physicalBuffer, joinedBuffer)
 		return StyledCapture{}, err
 	}
 	defer m.cleanupCaptureBuffers(ctx, physicalBuffer, joinedBuffer)
+	after, err := parseCaptureMetadata(afterText)
+	if err != nil {
+		return StyledCapture{}, err
+	}
+	if !sameCaptureIdentity(before, after) {
+		return StyledCapture{}, &IdentityError{Reason: "tmux pane identity changed while capturing"}
+	}
+	if !sameCaptureBoundary(before, after) {
+		return StyledCapture{}, fmt.Errorf("tmux pane changed while capturing")
+	}
 	ansi, err := m.Runner.Run(ctx, "show-buffer", "-b", physicalBuffer)
 	if err != nil {
 		return StyledCapture{}, err
@@ -587,13 +625,69 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		ANSI:        ansi,
 		Text:        semanticCapture(ansi),
 		JoinedText:  semanticCapture(joined),
+		ServerID:    after.ServerID,
+		WindowID:    after.WindowID,
+		PaneID:      after.PaneID,
+		CurrentCmd:  after.CurrentCmd,
+		AlternateOn: after.AlternateOn,
+		PaneInMode:  after.PaneInMode,
 		Columns:     columns,
 		VisibleRows: visibleRows,
 		BufferRows:  bufferRows,
-		Title:       parts[2],
-		CurrentPath: parts[3],
+		Title:       after.Title,
+		CurrentPath: after.CurrentPath,
 	}, nil
 }
+
+type captureMetadata struct {
+	ServerID    string
+	WindowID    string
+	PaneID      string
+	Columns     int
+	VisibleRows int
+	Title       string
+	CurrentPath string
+	CurrentCmd  string
+	AlternateOn string
+	PaneInMode  string
+}
+
+func parseCaptureMetadata(out string) (captureMetadata, error) {
+	records, err := parseRecords(out, 10)
+	if err != nil || len(records) != 1 {
+		return captureMetadata{}, fmt.Errorf("unexpected tmux snapshot metadata")
+	}
+	parts := records[0]
+	if !validServerID(parts[0]) || !validImmutableID(parts[1], '@') || !validImmutableID(parts[2], '%') {
+		return captureMetadata{}, fmt.Errorf("invalid tmux snapshot identity")
+	}
+	columns, err := strconv.Atoi(parts[3])
+	if err != nil || columns <= 0 || columns > 400 {
+		return captureMetadata{}, fmt.Errorf("invalid tmux pane width %q", parts[3])
+	}
+	visibleRows, err := strconv.Atoi(parts[4])
+	if err != nil || visibleRows <= 0 || visibleRows > 400 {
+		return captureMetadata{}, fmt.Errorf("invalid tmux pane height %q", parts[4])
+	}
+	if !validTmuxFlag(parts[8]) || !validTmuxFlag(parts[9]) {
+		return captureMetadata{}, fmt.Errorf("invalid tmux pane mode metadata")
+	}
+	return captureMetadata{
+		ServerID: parts[0], WindowID: parts[1], PaneID: parts[2], Columns: columns, VisibleRows: visibleRows,
+		Title: parts[5], CurrentPath: parts[6], CurrentCmd: parts[7], AlternateOn: parts[8], PaneInMode: parts[9],
+	}, nil
+}
+
+func sameCaptureBoundary(before, after captureMetadata) bool {
+	return sameCaptureIdentity(before, after) && before.Columns == after.Columns && before.VisibleRows == after.VisibleRows && before.CurrentCmd == after.CurrentCmd &&
+		before.AlternateOn == after.AlternateOn && before.PaneInMode == after.PaneInMode
+}
+
+func sameCaptureIdentity(before, after captureMetadata) bool {
+	return before.ServerID == after.ServerID && before.WindowID == after.WindowID && before.PaneID == after.PaneID
+}
+
+func validTmuxFlag(value string) bool { return value == "0" || value == "1" }
 
 func captureNonce() (string, error) {
 	var nonce [16]byte
@@ -619,15 +713,79 @@ func (m Manager) cleanupCaptureBuffers(ctx context.Context, names ...string) {
 // DumpScrollback streams a physical, ANSI-preserving capture to dst. It does
 // not join wrapped lines or buffer tmux stdout in Engram. The runner must
 // implement StreamRunner so this memory behavior is explicit.
-func (m Manager) DumpScrollback(ctx context.Context, paneID string, dst io.Writer) error {
+func (m Manager) DumpScrollback(ctx context.Context, paneID, windowID, serverID string, dst io.Writer) error {
 	if dst == nil {
 		return fmt.Errorf("missing scrollback destination")
+	}
+	if err := validateBindingIDs(paneID, windowID, serverID); err != nil {
+		return err
 	}
 	runner, ok := m.Runner.(StreamRunner)
 	if !ok {
 		return fmt.Errorf("tmux runner does not support streaming")
 	}
-	return runner.RunToWriter(ctx, dst, "capture-pane", "-p", "-e", "-N", "-S", "-", "-E", "-", "-t", paneID)
+	nonce, err := captureNonce()
+	if err != nil {
+		return err
+	}
+	marker := identityMismatchMarker + "-" + nonce
+	guard := &identityGuardWriter{dst: dst, marker: marker}
+	command := "capture-pane -p -e -N -S - -E - -t " + paneID
+	err = runner.RunToWriter(ctx, guard, "if-shell", "-F", "-t", paneID, bindingCondition(windowID, serverID), command, "display-message -p "+marker)
+	if err != nil {
+		if missingTmuxTarget(err) {
+			return &IdentityError{Reason: "tmux pane identity is gone", Err: err}
+		}
+		return err
+	}
+	return guard.finish()
+}
+
+type identityGuardWriter struct {
+	dst     io.Writer
+	marker  string
+	prefix  []byte
+	decided bool
+}
+
+func (w *identityGuardWriter) Write(data []byte) (int, error) {
+	if w.decided {
+		return w.dst.Write(data)
+	}
+	w.prefix = append(w.prefix, data...)
+	if len(w.prefix) <= len(w.marker)+1 {
+		return len(data), nil
+	}
+	w.decided = true
+	if err := writeAll(w.dst, w.prefix); err != nil {
+		return 0, err
+	}
+	w.prefix = nil
+	return len(data), nil
+}
+
+func (w *identityGuardWriter) finish() error {
+	if w.decided {
+		return nil
+	}
+	if strings.TrimSpace(string(w.prefix)) == w.marker {
+		return &IdentityError{Reason: "tmux binding changed while capturing"}
+	}
+	return writeAll(w.dst, w.prefix)
+}
+
+func writeAll(dst io.Writer, data []byte) error {
+	for len(data) > 0 {
+		written, err := dst.Write(data)
+		if err != nil {
+			return err
+		}
+		if written <= 0 {
+			return io.ErrShortWrite
+		}
+		data = data[written:]
+	}
+	return nil
 }
 
 func (m Manager) KillWindow(ctx context.Context, windowID string) error {

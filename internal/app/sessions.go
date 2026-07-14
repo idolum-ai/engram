@@ -121,8 +121,35 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("already tracked as [%d]", existing.ID)}
 	}
 	if existing, ok := a.Store.FindByPane(window.PaneID); ok {
+		disclosureLock := a.disclosureMutex(existing.ID)
+		disclosureLock.Lock()
+		defer disclosureLock.Unlock()
 		lock := a.sessionMutex(existing.ID)
 		lock.Lock()
+		anchorLock := a.anchorMutex(existing.ID)
+		anchorLock.Lock()
+		freshWindow, revalidateErr := a.revalidateAttachTarget(ctx, target, serverID, window)
+		if revalidateErr != nil {
+			anchorLock.Unlock()
+			lock.Unlock()
+			a.reply(ctx, msg, "tmux changed while attaching; run /sessions and try again")
+			return actionResult{Outcome: actionTmuxFailed, Message: "tmux changed while attaching"}
+		}
+		window = freshWindow
+		lockedCurrent, current := a.Store.FindSession(existing.ID)
+		if !current || !sameTerminalBinding(lockedCurrent, existing) || lockedCurrent.AnchorMessageID != existing.AnchorMessageID {
+			anchorLock.Unlock()
+			lock.Unlock()
+			a.reply(ctx, msg, "state changed while attaching; run /sessions and try again")
+			return actionResult{Outcome: actionStateFailed, Message: "session changed while attaching"}
+		}
+		existing = lockedCurrent
+		if err := a.neutralizeAnchorForReattachLocked(ctx, existing); err != nil {
+			anchorLock.Unlock()
+			lock.Unlock()
+			a.reply(ctx, msg, "could not make the old anchor inactive; try again")
+			return actionResult{Outcome: actionTelegramFailed, Message: "could not retire old session view"}
+		}
 		updated, found, applied, updateErr := a.updateSessionIfCurrent(existing, func(s *state.TerminalSession) {
 			s.TmuxSessionName = window.SessionName
 			s.TmuxWindowID = window.ID
@@ -133,14 +160,31 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 			s.WatchEnabled = true
 			s.LastKnownCWD = window.CurrentPath
 			s.LastRawCaptureHash = ""
+			s.LastRawCapture = ""
 			s.LastSnapshotCaptureHash = ""
+			s.LastSnapshotAttemptAt = time.Time{}
 			s.LastRenderHash = ""
+			s.LastSummary = ""
+			s.SeenUpstreamSignalIDs = nil
+			s.LastUpstreamSignalAt = time.Time{}
+			s.UpstreamRetryAt = time.Time{}
+			retireAlternateReplyTargets(s)
 		})
-		lock.Unlock()
-		if updateErr != nil || !found || !applied {
+		committed := found && applied && (updateErr == nil || state.PersistenceReachedReplacement(updateErr))
+		if updateErr != nil && committed {
+			_ = a.audit("state.session", "durability_uncertain", map[string]any{"session_id": existing.ID, "operation": "reattach", "error": updateErr.Error()})
+		}
+		if !committed {
+			a.restoreAnchorAfterFailedReattachLocked(ctx, existing)
+			anchorLock.Unlock()
+			lock.Unlock()
 			a.reply(ctx, msg, "state changed while attaching; run /sessions and try again")
 			return actionResult{Outcome: actionStateFailed, Message: "session changed while attaching"}
 		}
+		a.signalRetries.Delete(updated.ID)
+		a.resetConversationEpochLocked(updated.ID)
+		anchorLock.Unlock()
+		lock.Unlock()
 		a.reply(ctx, msg, fmt.Sprintf("reattached %s as [%d]", window.PaneID, updated.ID))
 		a.reconcileAnchorPresentation(ctx, updated.ID)
 		a.queueRefresh(updated.ID, true, 0)
@@ -184,6 +228,58 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("attached [%d]", ts.ID)}
+}
+
+func (a *App) revalidateAttachTarget(ctx context.Context, target, serverID string, expected tmux.Window) (tmux.Window, error) {
+	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
+	defer cancel()
+	before, err := a.Tmux.CurrentServerID(tmuxCtx)
+	if err != nil || before != serverID {
+		return tmux.Window{}, fmt.Errorf("tmux server changed")
+	}
+	window, err := a.Tmux.ResolveTarget(tmuxCtx, strings.TrimSpace(target))
+	if err != nil {
+		return tmux.Window{}, err
+	}
+	after, err := a.Tmux.CurrentServerID(tmuxCtx)
+	if err != nil || after != before || window.ID != expected.ID || window.PaneID != expected.PaneID {
+		return tmux.Window{}, fmt.Errorf("tmux target changed")
+	}
+	return window, nil
+}
+
+func (a *App) neutralizeAnchorForReattachLocked(ctx context.Context, session state.TerminalSession) error {
+	if session.AnchorMessageID == 0 || a.Telegram == nil {
+		return nil
+	}
+	text := fmt.Sprintf("[%d] %s\nreattaching to a new tmux binding", session.ID, firstNonEmpty(session.Title, "session"))
+	var err error
+	if session.AnchorFormat == "snapshot" {
+		_, err = a.Telegram.EditCaption(ctx, session.AnchorChatID, session.AnchorMessageID, text, telegram.ClearMarkup())
+	} else {
+		_, err = a.editAnchor(ctx, session.AnchorChatID, session.AnchorMessageID, text, telegram.ClearMarkup())
+	}
+	if telegram.IsMessageNotModified(err) {
+		return nil
+	}
+	return err
+}
+
+func (a *App) restoreAnchorAfterFailedReattachLocked(ctx context.Context, session state.TerminalSession) {
+	if session.AnchorMessageID == 0 || a.Telegram == nil {
+		return
+	}
+	text := a.renderLocal(session, firstNonEmpty(session.LastSummary, "waiting for terminal output"))
+	markup := a.anchorMarkup(session)
+	var err error
+	if session.AnchorFormat == "snapshot" {
+		_, err = a.Telegram.EditCaption(ctx, session.AnchorChatID, session.AnchorMessageID, text, markup)
+	} else {
+		_, err = a.editAnchor(ctx, session.AnchorChatID, session.AnchorMessageID, text, markup)
+	}
+	if err != nil && !telegram.IsMessageNotModified(err) {
+		_ = a.audit("telegram.anchor_reattach", "restore_failed", map[string]any{"session_id": session.ID, "error": err.Error()})
+	}
 }
 
 func (a *App) rename(ctx context.Context, id int, name string, msg telegram.Message) actionResult {
@@ -276,26 +372,48 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 }
 
 func (a *App) closeSession(ctx context.Context, id int) actionResult {
+	return a.closeSessionExpected(ctx, id, nil)
+}
+
+func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *closeConfirmation) actionResult {
+	disclosureLock := a.disclosureMutex(id)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	lock := a.sessionMutex(id)
 	lock.Lock()
-	defer lock.Unlock()
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
+		lock.Unlock()
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
+	if confirmation != nil && (confirmation.SessionID != ts.ID || confirmation.TmuxServerID != ts.TmuxServerID || confirmation.TmuxWindowID != ts.TmuxWindowID || confirmation.TmuxPaneID != ts.TmuxPaneID) {
+		lock.Unlock()
+		return actionResult{Outcome: actionUserError, Message: "confirmation is stale; use the current session anchor"}
+	}
 	if ts.Origin != state.TerminalOriginCreated {
+		anchorLock := a.anchorMutex(id)
+		anchorLock.Lock()
 		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 			s.State = state.TerminalClosed
 			s.WatchEnabled = false
 			s.LastSummary = "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed."
 		})
+		committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
 		if err != nil {
-			_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
-			return actionResult{Outcome: actionStateFailed, Message: "state update failed while untracking"}
+			outcome := "failed"
+			if committed {
+				outcome = "durability_uncertain"
+			}
+			_ = a.audit("state.session", outcome, map[string]any{"session_id": id, "operation": "untrack", "error": err.Error()})
 		}
-		if !found || !applied {
+		if !committed {
+			anchorLock.Unlock()
+			lock.Unlock()
 			return actionResult{Outcome: actionStateFailed, Message: "session changed while untracking"}
 		}
+		a.resetConversationEpochLocked(id)
+		anchorLock.Unlock()
+		lock.Unlock()
 		a.updateAnchorLocal(ctx, id, "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed.", true)
 		a.reconcileAnchorPresentation(ctx, id)
 		_ = a.audit("tmux.untrack", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "origin": ts.Origin})
@@ -304,6 +422,7 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	if _, err := a.terminalMechanics().CloseWindow(tctx, terminalBinding(ts)); err != nil {
+		lock.Unlock()
 		a.recordIdentityLoss(ctx, ts, err)
 		if tmux.IsIdentityLoss(err) {
 			return actionResult{Outcome: actionTmuxFailed, Message: "close failed: session identity is no longer valid"}
@@ -312,18 +431,29 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 		a.updateAnchorLocal(ctx, id, "status:\nClose failed; the tmux window remains open.\n\nrecommendation:\nCheck the session with /sessions and retry when tmux is available.", true)
 		return actionResult{Outcome: actionTmuxFailed, Message: "close failed: " + err.Error()}
 	}
+	anchorLock := a.anchorMutex(id)
+	anchorLock.Lock()
 	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
 		s.LastSummary = "status:\nThe Engram-created tmux window was closed."
 	})
+	committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
 	if err != nil {
-		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
-		return actionResult{Outcome: actionStateFailed, Message: "state update failed after close"}
+		outcome := "failed"
+		if committed {
+			outcome = "durability_uncertain"
+		}
+		_ = a.audit("state.session", outcome, map[string]any{"session_id": id, "operation": "close", "error": err.Error()})
 	}
-	if !found || !applied {
+	if !committed {
+		anchorLock.Unlock()
+		lock.Unlock()
 		return actionResult{Outcome: actionStateFailed, Message: "session no longer tracked after close"}
 	}
+	a.resetConversationEpochLocked(id)
+	anchorLock.Unlock()
+	lock.Unlock()
 	a.updateAnchorLocal(ctx, id, "status:\nThe Engram-created tmux window was closed.", true)
 	a.reconcileAnchorPresentation(ctx, id)
 	return actionResult{Outcome: actionOK, Message: "closed"}
@@ -344,17 +474,26 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 	if cause != nil {
 		message = cause.Error()
 	}
+	anchorLock := a.anchorMutex(ts.ID)
+	anchorLock.Lock()
 	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.State = state.TerminalLost
 		s.WatchEnabled = false
 	})
+	committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
 	if err != nil {
-		_ = a.audit("state.session", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
+		outcome := "failed"
+		if committed {
+			outcome = "durability_uncertain"
+		}
+		_ = a.audit("state.session", outcome, map[string]any{"session_id": ts.ID, "operation": "mark_lost", "error": err.Error()})
+	}
+	if !committed {
+		anchorLock.Unlock()
 		return
 	}
-	if !found || !applied {
-		return
-	}
+	a.resetConversationEpochLocked(ts.ID)
+	anchorLock.Unlock()
 	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
 	a.updateAnchorLocal(ctx, ts.ID, "status:\nThe tracked tmux pane no longer matches this session. Engram stopped watching it.\n\nrecommendation:\nUse /sessions and attach the intended pane again.", true)
 	a.reconcileAnchorPresentation(ctx, ts.ID)

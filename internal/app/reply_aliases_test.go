@@ -1,6 +1,7 @@
 package app
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/idolum-ai/engram/internal/state"
@@ -26,5 +27,25 @@ func TestRecordAlternateMessageKeepsOnlyLatestAndBoundsStaleIDs(t *testing.T) {
 	}
 	if len(session.StaleAlternateMessageIDs) != maxStaleAlternateMessages {
 		t.Fatalf("stale alias count = %d", len(session.StaleAlternateMessageIDs))
+	}
+}
+
+func TestRetireAlternateReplyTargetsMakesEveryAliasStale(t *testing.T) {
+	session := state.TerminalSession{
+		AnchorMessageID:          10,
+		SummaryMessageID:         20,
+		SnapshotMessageID:        30,
+		UpstreamMessageID:        40,
+		StaleAlternateMessageIDs: []int{19},
+	}
+
+	retireAlternateReplyTargets(&session)
+
+	if session.SummaryMessageID != 0 || session.SnapshotMessageID != 0 || session.UpstreamMessageID != 0 {
+		t.Fatalf("current aliases survived retirement: %#v", session)
+	}
+	want := []int{19, 20, 30, 40}
+	if !reflect.DeepEqual(session.StaleAlternateMessageIDs, want) {
+		t.Fatalf("stale aliases = %#v, want %#v", session.StaleAlternateMessageIDs, want)
 	}
 }

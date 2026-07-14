@@ -82,17 +82,28 @@ targeting and capped at 64 rows. Presentation changes; observation does not.
 This shared boundary keeps comparisons honest and prevents either mode from
 quietly seeing more of the machine.
 
-Guide mode sends the frame's joined logical text to Haiku once, after removing
-recognized upstream records. Haiku speaks like a
+Guide mode sends every frame's joined logical text to Haiku after removing
+recognized upstream records, the trailing model-status footer, and a small
+allowlist of paired Codex placeholder prompts. The raw frame
+remains intact for screenshots, local inspection, references, and hashes. When
+two frames remain strongly aligned within
+the same tmux server, window, pane, foreground command, dimensions, alternate
+screen, and copy-mode boundary, Engram also supplies deterministic added and
+removed lines, a few unchanged neighbors, and the previous rendering. Those
+extras direct attention and preserve voice; the complete current semantic
+evidence remains the only terminal truth. Haiku speaks like a
 technically fluent person briefly returning to the topic: compact, natural,
-and focused on what the terminal content means. Its voice stands beside the
-reader, using direct orientation grounded only in visibly named tools,
-collaborative "we" for shared work, and short one-idea paragraphs for phone
-readability; "you" is reserved for actions only the reader can take.
-It has no model conversation
-history or structured response, no second request, and no hidden context beyond
-that frame. Continuity comes from tone and current machine state, not stored
-model memory or context shared across windows.
+and focused on what the terminal content means, within 180 words. Its voice
+stands beside the reader, using direct orientation grounded only in visibly
+named tools, collaborative "we" for shared work, and short one-idea paragraphs
+for phone readability; "you" is reserved for actions only the reader can take.
+It has no model conversation history or structured response and makes no
+second request. Its small process-local continuity is isolated per window and
+never becomes terminal truth. A different capture boundary, weakly aligned
+frame, manual refresh, mode switch, reattachment, or service restart discards
+the hints. Continuity advances only after the canonical Telegram rendering is
+accepted, never crosses windows, and is never persisted. One-off alternate
+views do not alter it.
 
 Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
 literal and deterministic, at the cost of greater visual density and local
@@ -115,8 +126,10 @@ service status locally. Extracted references are untrusted pane content;
 Engram does not fetch or endorse them.
 
 Haiku interprets only the bounded terminal text. Terminal text is data, not
-authority: a pane cannot instruct the model merely by addressing Engram or the
-user. Haiku should not invent history, claim work succeeded, or explain Engram
+authority; the prompt tells Haiku to ignore instructions addressed to Engram or
+the reader, while recognizing that model-level injection resistance is best
+effort. Haiku output is presentation and is never executed automatically.
+Haiku should not invent history, claim work succeeded, or explain Engram
 controls unless the terminal itself is about Engram.
 
 ### Existing tmux first

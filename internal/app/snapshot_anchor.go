@@ -97,12 +97,14 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	}
 	defer os.Remove(pngPath)
 
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	anchorLock := a.anchorMutex(id)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	latest, ok := a.Store.FindSession(id)
-	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != current.TmuxPaneID || latest.TmuxWindowID != current.TmuxWindowID {
+	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, current) {
 		return
 	}
 	caption := a.snapshotAnchorCaption(latest, presentationCapture)
@@ -125,7 +127,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		oldFormat := firstNonEmpty(latest.AnchorFormat, "text")
 		replaced := false
 		updated, _, stateErr := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-			if session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && session.State == state.TerminalRunning && session.WatchEnabled {
+			if a.snapshotAnchors() && session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
 				session.AnchorChatID = msg.Chat.ID
 				session.AnchorMessageID = msg.MessageID
 				session.AnchorFormat = "snapshot"
@@ -140,10 +142,14 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 				replaced = true
 			}
 		})
-		if stateErr != nil || !replaced {
+		committed := replaced && (stateErr == nil || state.PersistenceReachedReplacement(stateErr))
+		if !committed {
 			a.deactivateProspectiveSnapshotAnchor(ctx, msg.Chat.ID, msg.MessageID)
 			_ = a.audit("state.snapshot_anchor", "replacement_failed", map[string]any{"session_id": id, "error": firstNonEmpty(errorText(stateErr), "superseded")})
 			return
+		}
+		if stateErr != nil {
+			_ = a.audit("state.snapshot_anchor", "durability_uncertain", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
 		if anchorShouldBePinned(updated) {
 			a.ensureCurrentAnchorPinnedLocked(ctx, updated)
@@ -152,16 +158,22 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 
+	updated := false
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == latest.AnchorMessageID {
+		if a.snapshotAnchors() && session.AnchorMessageID == latest.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
 			session.AnchorFormat = "snapshot"
 			session.LastSnapshotCaptureHash = captureHash
 			session.LastRenderHash = sha(captureHash + "\x00" + caption)
 			session.LastKnownCWD = capture.CurrentPath
 			session.LastAnchorEditAt = time.Now().UTC()
+			updated = true
 		}
 	}); err != nil {
 		_ = a.audit("state.snapshot_anchor", "failed", map[string]any{"session_id": id, "error": err.Error()})
+		return
+	}
+	if !updated {
+		_ = a.audit("terminal.snapshot_anchor", "superseded", map[string]any{"session_id": id})
 		return
 	}
 	_ = a.audit("terminal.snapshot_anchor", "updated", map[string]any{"session_id": id, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
@@ -223,16 +235,20 @@ func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.Te
 	}
 }
 
-func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.TerminalSession, rendered, renderHash string) {
+func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.TerminalSession, rendered, renderHash string, guard func() bool) {
 	oldID := ts.AnchorMessageID
 	msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(ts))
 	if err != nil {
 		_ = a.audit("telegram.anchor_mode", "guide_send_failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return
 	}
+	if guard != nil && !guard() {
+		a.deactivateProspectiveAnchor(ctx, ts.AnchorChatID, msg.MessageID, retiredAnchorText(ts))
+		return
+	}
 	rotated := false
 	updated, _, stateErr := a.Store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == oldID && session.AnchorFormat == "snapshot" && session.RetiringAnchorMessageID == 0 {
+		if session.AnchorMessageID == oldID && session.AnchorFormat == "snapshot" && session.RetiringAnchorMessageID == 0 && !a.snapshotAnchors() {
 			session.AnchorMessageID = msg.MessageID
 			session.AnchorFormat = "text"
 			session.RetiringAnchorMessageID = oldID
@@ -244,10 +260,14 @@ func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.Ter
 			rotated = true
 		}
 	})
-	if stateErr != nil || !rotated {
+	committed := rotated && (stateErr == nil || state.PersistenceReachedReplacement(stateErr))
+	if !committed {
 		a.deactivateProspectiveAnchor(ctx, ts.AnchorChatID, msg.MessageID, retiredAnchorText(ts))
 		_ = a.audit("state.anchor_mode", "guide_rotation_failed", map[string]any{"session_id": ts.ID, "error": firstNonEmpty(errorText(stateErr), "superseded")})
 		return
+	}
+	if stateErr != nil {
+		_ = a.audit("state.anchor_mode", "durability_uncertain", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
 	}
 	if anchorShouldBePinned(updated) {
 		a.ensureCurrentAnchorPinnedLocked(ctx, updated)

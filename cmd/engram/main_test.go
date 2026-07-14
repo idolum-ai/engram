@@ -99,7 +99,7 @@ func TestSnapshotPreflightRejectsNonBrowserExecutable(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "snapshot probe:") {
 		t.Fatalf("snapshot preflight code=%d stderr=%s", code, stderr)
 	}
-	diagnostics := diagnosticsText(config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "terminal"}, "preflight")
+	diagnostics := diagnosticsText(config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotBrowser: executable, SnapshotTheme: "terminal"}, "preflight")
 	for _, want := range []string{"anchor mode: unavailable", "haiku: unavailable", "model: unavailable", "anthropic_api: not_called"} {
 		if !strings.Contains(diagnostics, want) {
 			t.Fatalf("snapshot diagnostics missing %q:\n%s", want, diagnostics)

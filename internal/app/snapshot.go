@@ -52,7 +52,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	lock := a.sessionMutex(requested.ID)
 	lock.Lock()
 	current, ok := a.Store.FindSession(requested.ID)
-	if !ok || current.State == state.TerminalClosed || current.State == state.TerminalLost || current.TmuxPaneID != requested.TmuxPaneID {
+	if !ok || current.State == state.TerminalClosed || current.State == state.TerminalLost || !sameTerminalBinding(current, requested) {
 		lock.Unlock()
 		a.snapshotNotice(ctx, requested.ID, "Could not print the window because the session moved or closed.")
 		return
@@ -98,12 +98,14 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	defer os.Remove(pngPath)
 
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	anchorLock := a.anchorMutex(current.ID)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, current.ID)
 	latest, ok := a.Store.FindSession(current.ID)
-	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || latest.TmuxPaneID != current.TmuxPaneID || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 {
+	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 {
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": current.ID})
 		return
 	}
@@ -114,12 +116,28 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		a.snapshotNotice(ctx, latest.ID, "Rendered the terminal image, but Telegram could not receive it.")
 		return
 	}
+	updated := false
 	if _, _, err := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == latest.AnchorMessageID {
+		if !a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && firstNonEmpty(session.AnchorFormat, "text") == "text" && session.RetiringAnchorMessageID == 0 {
 			recordAlternateMessage(session, "snapshot", message.MessageID)
+			updated = true
 		}
 	}); err != nil {
+		if state.PersistenceReachedReplacement(err) && updated {
+			_ = a.audit("state.snapshot", "durability_uncertain", map[string]any{"session_id": latest.ID, "message_id": message.MessageID, "error": err.Error()})
+			return
+		}
 		_ = a.audit("state.snapshot", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})
+		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
+		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
+		cancel()
+		return
+	}
+	if !updated {
+		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
+		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
+		cancel()
+		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": latest.ID})
 		return
 	}
 	_ = a.audit("terminal.snapshot", "sent", map[string]any{"session_id": latest.ID, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})

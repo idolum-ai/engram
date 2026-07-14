@@ -119,6 +119,49 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	}
 }
 
+func TestSnapshotDeletesReplyWhenBindingChangesDuringTelegramSend(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.AnchorFormat = "text"
+		current.WatchEnabled = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		if req.URL.Path == "/botTOKEN/sendPhoto" {
+			if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+				current.TmuxServerID = "abcdef0123456789abcdef0123456789"
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+		}
+		return snapshotJSONResponse(`true`), nil
+	})}
+	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client, Tmux: tmux.New(snapshotTmuxRunner{}), Snapshots: &fakeSnapshotRenderer{}}
+	a.sendSnapshot(context.Background(), session)
+	got, _ := store.FindSession(session.ID)
+	if len(paths) != 2 || paths[0] != "/botTOKEN/sendPhoto" || paths[1] != "/botTOKEN/deleteMessage" || got.SnapshotMessageID != 0 {
+		t.Fatalf("paths=%#v session=%#v", paths, got)
+	}
+}
+
 func TestOnDemandSnapshotUsesSharedRenderLimit(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
@@ -211,11 +254,11 @@ func (snapshotTmuxRunner) Run(_ context.Context, args ...string) (string, error)
 	case "display-message":
 		format := args[len(args)-1]
 		if strings.Contains(format, "pane_width") {
-			return framedTmuxRecord("71", "37", "build pane", "/tmp"), nil
+			return framedStyledCaptureMetadata("bash"), nil
 		}
 		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	case "capture-pane":
-		return "", nil
+		return framedStyledCaptureMetadata("bash"), nil
 	case "show-buffer":
 		capture := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 64)
 		return pairedCaptureResult(args, capture, capture), nil

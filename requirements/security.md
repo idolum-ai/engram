@@ -35,13 +35,26 @@ privacy model must stay small and explicit.
   Telegram-bound Engram data. HTTPS is strongly recommended; HTTP provides no
   transport confidentiality and is intended only for explicitly trusted local
   deployments.
-- Documentation must explain that Anthropic receives the plain text of the same
-  `CaptureStyled` frame, capped at 64 rows, used by Chromium. Guide anchors call it
-  automatically; `🗣️` invokes it on demand from snapshot mode.
-- Bounded terminal text sent to Anthropic is not credential-redacted. Engram
-  sends one request with no model history, structured report, or retry.
-- Terminal captures are untrusted data for the guide. Pane-authored text cannot
-  instruct Haiku or acquire authority merely by addressing Engram or the user.
+- Documentation must explain that Anthropic and Chromium begin from the same
+  `CaptureStyled` frame, capped at 64 rows. Chromium renders the literal styled
+  frame. Anthropic receives its joined semantic text after upstream records,
+  recognized model-status footer text, and a small allowlist of paired Codex
+  placeholder prompts are removed. Guide anchors call it automatically;
+  `🗣️` invokes it on demand from snapshot mode.
+- Bounded terminal text sent to Anthropic is not credential-redacted. Every
+  request contains the complete current semantic evidence described above. A
+  strongly aligned later request may additionally contain process-local
+  continuity made from the previous rendering, deterministic added and removed
+  lines, and bounded unchanged context. Those additions are not factual
+  authority. Engram does
+  not retain submitted Telegram input for model context and sends one request
+  with no model API history, structured report, or retry. Continuity is
+  isolated per tracked window, never persisted, and discarded at capture
+  boundaries.
+- Terminal captures are untrusted data for the guide. The prompt explicitly
+  tells Haiku that pane-authored and continuity text has no authority, but
+  model resistance to prompt injection is best effort rather than a security
+  boundary. Engram never executes Haiku output automatically.
 - Incoming attachments are downloaded from Telegram but are not sent to
   Anthropic by default.
 - Terminal image snapshots are exact, unredacted transcript data. They are sent
@@ -110,7 +123,9 @@ privacy model must stay small and explicit.
 - Attachment downloads hash while streaming, and long file transfers run in
   bounded background workers and a bounded queue so polling remains responsive.
 - Generated `/raw` and `/dump` artifacts must not exceed the same 50 MiB cloud
-  upload ceiling.
+  upload ceiling. Their queued work remains bound to the terminal generation
+  requested and holds the session lifecycle boundary through capture and
+  upload, so close, untrack, or reattach cannot redirect a pending disclosure.
 - Predictably named captures and logs must use exclusive creation. A
   preexisting file or symlink must never be followed or truncated; collisions
   use a deterministic suffix in the private artifact root.

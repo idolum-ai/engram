@@ -518,7 +518,7 @@ type snapshotReferenceTmuxRunner struct {
 
 func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "capture-pane" {
-		return "", nil
+		return framedStyledCaptureMetadata("bash"), nil
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
 		return pairedCaptureResult(args, r.capture, r.capture), nil

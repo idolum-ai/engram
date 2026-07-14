@@ -42,12 +42,26 @@ func (a *App) switchAnchorMode(ctx context.Context, raw string) actionResult {
 	if mode == a.anchorMode() {
 		return actionResult{Outcome: actionOK, Message: "already using " + mode + " mode"}
 	}
-	if err := a.Store.SetAnchorMode(mode); err != nil {
-		return actionResult{Outcome: actionStateFailed, Message: "could not persist anchor mode: " + err.Error()}
+	sessions := a.Store.Snapshot().TerminalSessions
+	a.presentationMu.Lock()
+	modeErr := a.Store.SetAnchorMode(mode)
+	if modeErr != nil && !state.PersistenceReachedReplacement(modeErr) {
+		a.presentationMu.Unlock()
+		return actionResult{Outcome: actionStateFailed, Message: "could not persist anchor mode: " + modeErr.Error()}
 	}
 	a.setAnchorMode(mode)
-	_ = a.audit("anchor.mode", "changed", map[string]any{"mode": mode})
-	for _, session := range a.Store.Snapshot().TerminalSessions {
+	modeOutcome := "changed"
+	if modeErr != nil {
+		modeOutcome = "durability_uncertain"
+	}
+	_ = a.audit("anchor.mode", modeOutcome, map[string]any{"mode": mode, "error": errorText(modeErr)})
+	for _, session := range sessions {
+		if session.State == state.TerminalRunning && session.WatchEnabled {
+			a.resetConversationEpoch(session.ID)
+		}
+	}
+	a.presentationMu.Unlock()
+	for _, session := range sessions {
 		if session.State == state.TerminalRunning && session.WatchEnabled {
 			a.reconcileAnchorPresentation(ctx, session.ID)
 			a.queueRefresh(session.ID, true, 0)

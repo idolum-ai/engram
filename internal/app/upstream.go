@@ -38,7 +38,7 @@ func (a *App) deliverUpstreamSignal(ctx context.Context, observed state.Terminal
 
 func (a *App) deliverUpstreamSignalLocked(ctx context.Context, observed state.TerminalSession, record upstream.Record) {
 	latest, ok := a.Store.FindSession(observed.ID)
-	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorChatID == 0 || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || latest.TmuxPaneID != observed.TmuxPaneID || latest.TmuxWindowID != observed.TmuxWindowID {
+	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorChatID == 0 || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, observed) {
 		_ = a.audit("terminal.upstream_signal", "superseded", map[string]any{"session_id": observed.ID, "record_id": record.ID})
 		return
 	}
@@ -76,7 +76,7 @@ func (a *App) deliverUpstreamSignalLocked(ctx context.Context, observed state.Te
 	deliveredAt := time.Now().UTC()
 	updated := false
 	_, _, stateErr := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == latest.AnchorMessageID && session.TmuxPaneID == latest.TmuxPaneID && session.State == state.TerminalRunning {
+		if session.AnchorMessageID == latest.AnchorMessageID && sameTerminalBinding(*session, latest) && session.State == state.TerminalRunning {
 			recordAlternateMessage(session, "upstream", message.MessageID)
 			session.RecordSeenUpstreamSignal(record.ID)
 			session.LastUpstreamSignalAt = deliveredAt

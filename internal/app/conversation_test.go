@@ -82,6 +82,9 @@ func TestConversationUsesSnapshotFrameAndRepliesToCanonicalAnchor(t *testing.T) 
 	if updated.SummaryMessageID != 88 {
 		t.Fatalf("summary reply alias = %d, want 88", updated.SummaryMessageID)
 	}
+	if _, ok := app.conversationEpochs[session.ID]; ok {
+		t.Fatal("one-off voice rendering mutated canonical conversation continuity")
+	}
 }
 
 func TestConversationOmitsUpstreamRecordFromModelInput(t *testing.T) {
@@ -117,7 +120,7 @@ type conversationSignalRunner struct{}
 
 func (conversationSignalRunner) Run(ctx context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "capture-pane" {
-		return "", nil
+		return framedStyledCaptureMetadata("bash"), nil
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
 		capture := "ordinary output\n[engram:upstream] " + firstSignalID + " secret signal payload\n"
@@ -179,6 +182,36 @@ func TestConversationReportsSupersededAnchorPolitely(t *testing.T) {
 	app.sendConversation(context.Background(), session)
 	if notice["reply_to_message_id"] != float64(78) || !strings.Contains(notice["text"].(string), "newer view") {
 		t.Fatalf("superseded notice = %#v", notice)
+	}
+}
+
+func TestConversationDeletesReplyWhenBindingChangesDuringTelegramSend(t *testing.T) {
+	store, session := conversationTestSession(t, "snapshot")
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"The build passed."}]}`))}, nil
+	})}
+	var paths []string
+	tg := telegram.New("TOKEN")
+	tg.BaseURL = "https://telegram.test/botTOKEN"
+	tg.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		if strings.HasSuffix(req.URL.Path, "/sendMessage") {
+			if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+				current.TmuxServerID = "abcdef0123456789abcdef0123456789"
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+		}
+		return snapshotJSONResponse(`true`), nil
+	})}
+	a := &App{Store: store, Telegram: tg, Anthropic: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", haikuAvailable: true}
+	a.sendConversation(context.Background(), session)
+	got, _ := store.FindSession(session.ID)
+	if len(paths) != 2 || !strings.HasSuffix(paths[0], "/sendMessage") || !strings.HasSuffix(paths[1], "/deleteMessage") || got.SummaryMessageID != 0 {
+		t.Fatalf("paths=%#v session=%#v", paths, got)
 	}
 }
 
