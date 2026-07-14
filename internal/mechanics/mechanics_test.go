@@ -14,6 +14,14 @@ type callRunner struct {
 	calls [][]string
 }
 
+type captureRunner struct {
+	calls         [][]string
+	captureServer string
+	captureWindow string
+	capturePane   string
+	captureCmd    string
+}
+
 func framedRecord(values ...string) string {
 	var out strings.Builder
 	for _, value := range values {
@@ -37,6 +45,24 @@ func (r *callRunner) Run(_ context.Context, args ...string) (string, error) {
 		}
 		return "", nil
 	case "set-buffer", "send-keys", "kill-window":
+		return "", nil
+	default:
+		return "", fmt.Errorf("unexpected tmux call: %v", args)
+	}
+}
+
+func (r *captureRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if args[0] == "display-message" && !strings.Contains(args[len(args)-1], "pane_width") {
+		return framedRecord(testServerID, "$1", "@2", "%3", "work", "0", "0", "1", "/tmp/project", "bash"), nil
+	}
+	metadata := framedRecord(r.captureServer, r.captureWindow, r.capturePane, "80", "24", "work", "/tmp/project", r.captureCmd, "1", "0")
+	switch args[0] {
+	case "display-message", "capture-pane":
+		return metadata, nil
+	case "show-buffer":
+		return "terminal output\n", nil
+	case "delete-buffer":
 		return "", nil
 	default:
 		return "", fmt.Errorf("unexpected tmux call: %v", args)
@@ -116,5 +142,29 @@ func TestCommandKeepsLiteralAndEnterDistinct(t *testing.T) {
 	}
 	if got := runner.calls[3]; got[0] != "if-shell" || !strings.Contains(got[5], "send-keys -t %3 'Enter'") {
 		t.Fatalf("enter call = %#v", got)
+	}
+}
+
+func TestCaptureStyledRejectsCaptureOutsideValidatedBinding(t *testing.T) {
+	tests := []struct {
+		name   string
+		server string
+		window string
+		pane   string
+		cmd    string
+	}{
+		{name: "server changed", server: "abcdef0123456789abcdef0123456789", window: "@2", pane: "%3", cmd: "bash"},
+		{name: "window changed", server: testServerID, window: "@9", pane: "%3", cmd: "bash"},
+		{name: "pane changed", server: testServerID, window: "@2", pane: "%9", cmd: "bash"},
+		{name: "foreground command changed", server: testServerID, window: "@2", pane: "%3", cmd: "codex"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &captureRunner{captureServer: test.server, captureWindow: test.window, capturePane: test.pane, captureCmd: test.cmd}
+			controller := New(tmux.New(runner))
+			if _, _, err := controller.CaptureStyled(context.Background(), Binding{PaneID: "%3", WindowID: "@2", ServerID: testServerID}, 64); err == nil {
+				t.Fatal("CaptureStyled accepted a frame outside its validated binding")
+			}
+		})
 	}
 }

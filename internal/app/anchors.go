@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
@@ -13,6 +12,8 @@ import (
 const anchorRetirementRetryDelay = 10 * time.Second
 
 func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	lock := a.anchorMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -33,6 +34,8 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 }
 
 func (a *App) reconcileAnchorControls(ctx context.Context, id int) {
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	lock := a.anchorMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -170,7 +173,6 @@ func retiredAnchorText(ts state.TerminalSession) string {
 	return fmt.Sprintf("[%d] %s\ncontinued in the newer live anchor", ts.ID, firstNonEmpty(ts.Title, "session"))
 }
 
-func (a *App) anchorMutex(id int) *sync.Mutex {
-	lock, _ := a.anchorLocks.LoadOrStore(id, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+func (a *App) anchorMutex(id int) *keyedMutexHandle {
+	return a.anchorLocks.handle(id)
 }

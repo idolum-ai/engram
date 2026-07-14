@@ -54,6 +54,19 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 }
 
 func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts state.TerminalSession, full bool) {
+	disclosureLock := a.disclosureMutex(ts.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
+	identityLock := a.sessionMutex(ts.ID)
+	identityLock.Lock()
+	current, ok := a.Store.FindSession(ts.ID)
+	if !ok || current.State != state.TerminalRunning || !current.WatchEnabled || !sameTerminalBinding(current, ts) {
+		identityLock.Unlock()
+		a.reply(ctx, msg, "capture canceled: the session changed while this request was queued")
+		return
+	}
+	ts = current
+	identityLock.Unlock()
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	name := "raw"
@@ -116,9 +129,19 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 			return
 		}
 	}
+	defer os.Remove(path)
+	latest, ok := a.Store.FindSession(ts.ID)
+	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, ts) {
+		a.reply(ctx, msg, "capture canceled: the session changed before upload")
+		return
+	}
 	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, fmt.Sprintf("[%d] %s", ts.ID, name)); err != nil {
 		a.reply(ctx, msg, "upload error: "+err.Error())
 	}
+}
+
+func (a *App) disclosureMutex(id int) *keyedMutexHandle {
+	return a.disclosureLocks.handle(id)
 }
 
 type boundedWriter struct {

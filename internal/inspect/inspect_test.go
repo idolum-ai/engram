@@ -46,7 +46,7 @@ func (r *fakeRunner) Run(_ context.Context, args ...string) (string, error) {
 			return framedRecord("80", "24"), nil
 		}
 		return framedRecord(testServerID, "$1", "@2", "%3", "work", "0", "0", "1", "/tmp/project", "bash"), nil
-	case "capture-pane":
+	case "capture-pane", "if-shell":
 		if r.captureOut != "" {
 			return r.captureOut, nil
 		}
@@ -121,10 +121,10 @@ func TestInspectFrameValidatesIdentityThenCapturesBoundedLiteralText(t *testing.
 	if strings.Contains(out.String(), "\x1b") || !strings.Contains(out.String(), "---\nfailed\nnext step\n") {
 		t.Fatalf("frame output = %q", out.String())
 	}
-	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || !strings.Contains(runner.calls[1][len(runner.calls[1])-1], "pane_width") || runner.calls[2][0] != "capture-pane" {
+	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || !strings.Contains(runner.calls[1][len(runner.calls[1])-1], "pane_width") || runner.calls[2][0] != "if-shell" {
 		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
-	if !containsSequence(runner.calls[2], []string{"-S", "-40", "-E", "23", "-t", "%3"}) {
+	if !strings.Contains(runner.calls[2][5], "-S -40 -E 23 -t %3") {
 		t.Fatalf("capture bounds = %#v", runner.calls[2])
 	}
 }

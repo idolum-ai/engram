@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
@@ -149,6 +150,12 @@ func TestRefreshStopsWhenSessionIsPrunedAfterIdentityValidation(t *testing.T) {
 
 func TestCloseCallbackRequiresSecondConfirmation(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 80
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var paths []string
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
@@ -184,6 +191,52 @@ func TestCloseCallbackRequiresSecondConfirmation(t *testing.T) {
 	wantPaths := []string{"/botTOKEN/sendMessage", "/botTOKEN/answerCallbackQuery"}
 	if !reflect.DeepEqual(paths, wantPaths) {
 		t.Fatalf("Telegram paths = %#v, want %#v", paths, wantPaths)
+	}
+}
+
+func TestCloseCallbackRejectsRetiredAnchor(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 81
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)), Header: make(http.Header)}, nil
+	})}
+	app.Telegram = client
+
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "stale-close", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 80, Chat: telegram.Chat{ID: 100}},
+		Data:    "close:" + strconv.Itoa(id),
+	})
+	if status != "callback_user_error" || len(runner.calls) != 0 || len(app.closeConfirms) != 0 {
+		t.Fatalf("status=%q tmux=%#v confirmations=%d", status, runner.calls, len(app.closeConfirms))
+	}
+}
+
+func TestCloseConfirmationCannotCrossBindingGeneration(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	session, _ := app.Store.FindSession(id)
+	confirmation := closeConfirmation{
+		SessionID: session.ID, TmuxServerID: session.TmuxServerID,
+		TmuxWindowID: session.TmuxWindowID, TmuxPaneID: session.TmuxPaneID,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	if _, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
+		current.TmuxServerID = strings.Repeat("b", 32)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := app.closeSessionExpected(context.Background(), id, &confirmation)
+	got, _ := app.Store.FindSession(id)
+	if result.OK() || !strings.Contains(result.Message, "stale") || got.State != state.TerminalRunning || len(runner.calls) != 0 {
+		t.Fatalf("result=%#v session=%#v tmux=%#v", result, got, runner.calls)
 	}
 }
 
@@ -496,7 +549,7 @@ func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	}
 	if len(args) > 0 && args[0] == "display-message" {
 		if strings.Contains(args[len(args)-1], "pane_width") {
-			return framedTmuxRecord("71", "37", "shell", "/tmp"), nil
+			return framedStyledCaptureMetadata("bash"), nil
 		}
 		if r.identityErr != nil {
 			return "", r.identityErr
@@ -506,8 +559,11 @@ func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 		}
 		return framedTmuxBindingRecord("$1", r.identityWindow, "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	}
-	if len(args) > 0 && args[0] == "capture-pane" && r.captureErr != nil {
-		return "", r.captureErr
+	if len(args) > 0 && args[0] == "capture-pane" {
+		if r.captureErr != nil {
+			return "", r.captureErr
+		}
+		return framedStyledCaptureMetadata("bash"), nil
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
 		return pairedCaptureResult(args, r.capturePhysical, r.captureJoined), nil

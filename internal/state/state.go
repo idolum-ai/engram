@@ -295,7 +295,9 @@ func (s *Store) SetAnchorMode(mode string) error {
 	previous := s.state.AnchorMode
 	s.state.AnchorMode = mode
 	if err := s.saveLocked(); err != nil {
-		s.state.AnchorMode = previous
+		if !PersistenceReachedReplacement(err) {
+			s.state.AnchorMode = previous
+		}
 		return err
 	}
 	return nil

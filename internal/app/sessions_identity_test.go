@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,69 @@ func TestAttachExplicitlyRebindsLegacyIdentityWithoutKillAuthority(t *testing.T)
 	got, ok := store.FindSession(legacy.ID)
 	if !ok || got.TmuxServerID != appTestServerID || got.Origin != state.TerminalOriginAttached || got.State != state.TerminalRunning || !got.WatchEnabled {
 		t.Fatalf("rebound session = %#v ok=%v", got, ok)
+	}
+}
+
+func TestReattachWaitsForAnchorDeliveryAndNeutralizesOldView(t *testing.T) {
+	store, session := legacyBindingStore(t)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxServerID = "abcdef0123456789abcdef0123456789"
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.AnchorFormat = "text"
+		current.State = state.TerminalLost
+		current.SummaryMessageID = 74
+		current.SnapshotMessageID = 75
+		current.UpstreamMessageID = 76
+		current.LastRawCapture = "old frame"
+		current.LastSnapshotAttemptAt = time.Now().UTC()
+		current.SeenUpstreamSignalIDs = []string{"old-signal"}
+		current.LastUpstreamSignalAt = time.Now().UTC()
+		current.UpstreamRetryAt = time.Now().UTC().Add(time.Minute)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		return snapshotJSONResponse(`{"message_id":80,"chat":{"id":100}}`), nil
+	})}
+	app := &App{
+		Config: config.Config{TelegramChatID: 100}, Store: store, Telegram: client,
+		Tmux: tmux.New(identitySessionRunner{}), refreshHook: func(context.Context, int, bool) {},
+		summaryQueued: map[int]bool{}, summaryRunning: map[int]bool{}, summaryForce: map[int]bool{}, sleepHook: func(time.Duration) {},
+	}
+	app.signalRetries.Store(session.ID, time.Now().UTC().Add(time.Minute))
+	held := app.anchorMutex(session.ID)
+	held.Lock()
+	done := make(chan actionResult, 1)
+	go func() {
+		done <- app.attachTarget(context.Background(), telegram.Message{MessageID: 70, Chat: telegram.Chat{ID: 100}}, session.TmuxPaneID)
+	}()
+	select {
+	case result := <-done:
+		t.Fatalf("reattach crossed in-flight anchor delivery: %#v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+	held.Unlock()
+	result := <-done
+	app.refreshWG.Wait()
+	if !result.OK() || len(paths) < 2 || paths[0] != "/botTOKEN/editMessageText" {
+		t.Fatalf("result=%#v paths=%#v", result, paths)
+	}
+	got, _ := store.FindSession(session.ID)
+	if got.TmuxServerID != appTestServerID || got.LastSummary != "" || got.LastRawCapture != "" || !got.LastSnapshotAttemptAt.IsZero() || len(got.SeenUpstreamSignalIDs) != 0 || !got.LastUpstreamSignalAt.IsZero() || !got.UpstreamRetryAt.IsZero() || got.SummaryMessageID != 0 || got.SnapshotMessageID != 0 || got.UpstreamMessageID != 0 || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{74, 75, 76}) {
+		t.Fatalf("reattached session = %#v", got)
+	}
+	if _, ok := app.signalRetries.Load(session.ID); ok {
+		t.Fatal("reattach retained process-local upstream retry deadline")
+	}
+	for _, messageID := range []int{74, 75, 76} {
+		if routed, targetState, ok := store.FindReplyTarget(100, messageID); !ok || targetState != state.ReplyTargetStale || routed.ID != session.ID {
+			t.Fatalf("retired alternate %d target = %#v %q ok=%v", messageID, routed, targetState, ok)
+		}
 	}
 }
 

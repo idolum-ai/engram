@@ -25,45 +25,49 @@ import (
 )
 
 type App struct {
-	Config             config.Config
-	Store              *state.Store
-	Telegram           *telegram.Client
-	Anthropic          *anthropic.Client
-	Tmux               tmux.Manager
-	Snapshots          snapshotRenderer
-	modeMu             sync.RWMutex
-	mode               string
-	haikuAvailable     bool
-	snapshotReady      bool
-	lock               *lockfile.Lock
-	startedAt          time.Time
-	quitCode           int
-	stopCh             chan struct{}
-	runCtx             context.Context
-	refreshWG          sync.WaitGroup
-	schedulerWG        sync.WaitGroup
-	transferWG         sync.WaitGroup
-	captureSlots       chan struct{}
-	haikuSlots         chan struct{}
-	renderSlots        chan struct{}
-	transferSlots      chan struct{}
-	transferQueue      chan struct{}
-	summaryMu          sync.Mutex
-	summaryQueued      map[int]bool
-	summaryRunning     map[int]bool
-	summaryForce       map[int]bool
-	summaryDue         map[int]time.Time
-	manualRefresh      map[int]bool
-	conversationMu     sync.Mutex
-	conversationEpochs map[int]conversationEpoch
-	conversationLocks  sync.Map
-	closeConfirmMu     sync.Mutex
-	closeConfirms      map[string]closeConfirmation
-	sessionLocks       sync.Map
-	anchorLocks        sync.Map
-	signalRetries      sync.Map
-	sleepHook          func(time.Duration)
-	refreshHook        func(context.Context, int, bool)
+	Config               config.Config
+	Store                *state.Store
+	Telegram             *telegram.Client
+	Anthropic            *anthropic.Client
+	Tmux                 tmux.Manager
+	Snapshots            snapshotRenderer
+	modeMu               sync.RWMutex
+	mode                 string
+	presentationMu       sync.RWMutex
+	haikuAvailable       bool
+	snapshotReady        bool
+	lock                 *lockfile.Lock
+	startedAt            time.Time
+	quitCode             int
+	stopCh               chan struct{}
+	runCtx               context.Context
+	refreshWG            sync.WaitGroup
+	schedulerWG          sync.WaitGroup
+	transferWG           sync.WaitGroup
+	captureSlots         chan struct{}
+	haikuSlots           chan struct{}
+	renderSlots          chan struct{}
+	transferSlots        chan struct{}
+	transferQueue        chan struct{}
+	summaryMu            sync.Mutex
+	summaryQueued        map[int]bool
+	summaryRunning       map[int]bool
+	summaryForce         map[int]bool
+	summaryDue           map[int]time.Time
+	manualRefresh        map[int]bool
+	conversationMu       sync.Mutex
+	conversationEpochs   map[int]conversationEpoch
+	conversationRevision uint64
+	conversationGateMu   sync.Mutex
+	conversationGates    map[int]*conversationGate
+	closeConfirmMu       sync.Mutex
+	closeConfirms        map[string]closeConfirmation
+	sessionLocks         keyedMutexSet
+	anchorLocks          keyedMutexSet
+	disclosureLocks      keyedMutexSet
+	signalRetries        sync.Map
+	sleepHook            func(time.Duration)
+	refreshHook          func(context.Context, int, bool)
 }
 
 const summaryQuietPeriod = 2 * time.Second
@@ -137,6 +141,7 @@ func New(cfg config.Config) (*App, error) {
 		summaryDue:         map[int]time.Time{},
 		manualRefresh:      map[int]bool{},
 		conversationEpochs: map[int]conversationEpoch{},
+		conversationGates:  map[int]*conversationGate{},
 		closeConfirms:      map[string]closeConfirmation{},
 	}, nil
 }

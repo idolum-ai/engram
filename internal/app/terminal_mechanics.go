@@ -17,6 +17,10 @@ func terminalBinding(session state.TerminalSession) mechanics.Binding {
 	return mechanics.Binding{PaneID: session.TmuxPaneID, WindowID: session.TmuxWindowID, ServerID: session.TmuxServerID}
 }
 
+func sameTerminalBinding(left, right state.TerminalSession) bool {
+	return left.TmuxPaneID == right.TmuxPaneID && left.TmuxWindowID == right.TmuxWindowID && left.TmuxServerID == right.TmuxServerID
+}
+
 func (a *App) validateSessionPane(ctx context.Context, session state.TerminalSession) error {
 	pane, err := a.terminalMechanics().Validate(ctx, terminalBinding(session))
 	if err != nil {
@@ -56,7 +60,7 @@ func (a *App) recordIdentityLoss(ctx context.Context, session state.TerminalSess
 func (a *App) updateSessionIfCurrent(expected state.TerminalSession, fn func(*state.TerminalSession)) (state.TerminalSession, bool, bool, error) {
 	applied := false
 	updated, found, err := a.Store.UpdateSession(expected.ID, func(current *state.TerminalSession) {
-		if current.TmuxPaneID != expected.TmuxPaneID || current.TmuxWindowID != expected.TmuxWindowID || current.TmuxServerID != expected.TmuxServerID || current.State != expected.State {
+		if !sameTerminalBinding(*current, expected) || current.State != expected.State {
 			return
 		}
 		fn(current)

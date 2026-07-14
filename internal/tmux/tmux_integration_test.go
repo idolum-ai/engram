@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,6 +25,17 @@ func (r socketRunner) Run(ctx context.Context, args ...string) (string, error) {
 	return stdout.String(), nil
 }
 
+func (r socketRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "tmux", append([]string{"-L", r.socket}, args...)...)
+	var stderr bytes.Buffer
+	cmd.Stdout = dst
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("tmux: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
 		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
@@ -41,6 +53,10 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := New(runner)
+	serverID, err := manager.EnsureServerID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	window, err := manager.ResolveTarget(ctx, "signal:0.0")
 	if err != nil {
 		t.Fatal(err)
@@ -70,19 +86,23 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if strings.Contains(capture.Text, record) || !strings.Contains(capture.JoinedText, record) {
 		t.Fatalf("physical=%q joined=%q", capture.Text, capture.JoinedText)
 	}
-	literal, err := manager.CaptureLiteral(ctx, window.PaneID, 64)
+	literal, err := manager.CaptureLiteral(ctx, window.PaneID, window.ID, serverID, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(literal, "\x1b") || !strings.Contains(strings.ReplaceAll(literal, "\n", ""), record) {
 		t.Fatalf("literal capture = %q", literal)
 	}
+	raw, err := manager.CaptureVisibleRaw(ctx, window.PaneID, window.ID, serverID)
+	if err != nil || !strings.Contains(strings.ReplaceAll(raw, "\n", ""), record) {
+		t.Fatalf("binding-guarded raw capture=%q error=%v", raw, err)
+	}
+	var dump strings.Builder
+	if err := manager.DumpScrollback(ctx, window.PaneID, window.ID, serverID, &dump); err != nil || !strings.Contains(strings.ReplaceAll(dump.String(), "\n", ""), record) {
+		t.Fatalf("binding-guarded scrollback capture=%q error=%v", dump.String(), err)
+	}
 	if buffers, err := runner.Run(ctx, "list-buffers", "-F", "#{buffer_name}"); err == nil && strings.Contains(buffers, "engram-") {
 		t.Fatalf("capture buffers leaked: %q", buffers)
-	}
-	serverID, err := manager.EnsureServerID(ctx)
-	if err != nil {
-		t.Fatal(err)
 	}
 	validated, err := manager.ValidateBinding(ctx, window.PaneID, window.ID, serverID)
 	if err != nil || validated.ID != window.PaneID || validated.WindowID != window.ID {
@@ -92,7 +112,7 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 		t.Fatalf("binding-guarded input: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	atomicCapture, err := manager.CaptureLiteral(ctx, window.PaneID, 64)
+	atomicCapture, err := manager.CaptureLiteral(ctx, window.PaneID, window.ID, serverID, 64)
 	if err != nil || !strings.Contains(atomicCapture, "atomic input") {
 		t.Fatalf("binding-guarded input capture=%q error=%v", atomicCapture, err)
 	}

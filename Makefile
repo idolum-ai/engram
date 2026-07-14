@@ -13,6 +13,7 @@ ENGRAM_ENV ?= $(HOME)/.engram/.env
 
 build:
 	mkdir -p bin
+	# Release identity comes from LDFLAGS; do not also embed checkout-specific VCS metadata.
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go build -buildvcs=false -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/engram
 
 release-dist:

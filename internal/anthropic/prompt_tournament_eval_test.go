@@ -18,6 +18,12 @@ type promptCandidate struct {
 	Prompt string
 }
 
+type promptTournamentCase struct {
+	Kind  string
+	Eval  conversationCase
+	Input ConversationInput
+}
+
 var promptCandidates = []promptCandidate{
 	{ID: "production", Prompt: SystemPrompt},
 }
@@ -26,6 +32,7 @@ const evaluationTemperature = conversationalTemperature
 
 type tournamentMeasurement struct {
 	Candidate     string
+	Kind          string
 	Case          string
 	Output        string
 	Distance      float64
@@ -70,6 +77,17 @@ func TestSummarizeTournamentKeepsJudgeDimensionsSeparate(t *testing.T) {
 		if !strings.Contains(summaries[0], want) {
 			t.Fatalf("summary %q missing %q", summaries[0], want)
 		}
+	}
+}
+
+func TestSummarizeTournamentKeepsObservationCohortsSeparate(t *testing.T) {
+	t.Parallel()
+	summaries := summarizeTournamentCohorts([]tournamentMeasurement{
+		{Candidate: "candidate", Kind: "full", Distance: 0.1, Coverage: 1},
+		{Candidate: "candidate", Kind: "continuation", Distance: 0.3, Coverage: 0.8},
+	})
+	if len(summaries) != 2 || !strings.Contains(strings.Join(summaries, "\n"), "kind=full distance=0.100 coverage=1.000") || !strings.Contains(strings.Join(summaries, "\n"), "kind=continuation distance=0.300 coverage=0.800") {
+		t.Fatalf("cohort summaries = %#v", summaries)
 	}
 }
 
@@ -166,7 +184,7 @@ func TestLiveHaikuPromptTournament(t *testing.T) {
 	}
 	judgeClient := New(apiKey, judgeModel)
 	t.Logf("generator=%s judge=%s", model, judgeModel)
-	cases := loadConversationCases(t)
+	cases := loadPromptTournamentCases(t)
 	candidates := append([]promptCandidate(nil), promptCandidates...)
 	path := strings.TrimSpace(os.Getenv("ENGRAM_TOURNAMENT_PROMPT_FILE"))
 	if path == "" {
@@ -181,7 +199,7 @@ func TestLiveHaikuPromptTournament(t *testing.T) {
 	}
 	candidates = append(candidates, promptCandidate{ID: "challenger", Prompt: string(prompt)})
 	candidates = selectTournamentCandidates(t, candidates, os.Getenv("ENGRAM_TOURNAMENT_CANDIDATES"))
-	repeats := 1
+	repeats := 2
 	if raw := strings.TrimSpace(os.Getenv("ENGRAM_TOURNAMENT_REPEATS")); raw != "" {
 		var err error
 		repeats, err = strconv.Atoi(raw)
@@ -194,21 +212,25 @@ func TestLiveHaikuPromptTournament(t *testing.T) {
 	verbose := os.Getenv("ENGRAM_TOURNAMENT_VERBOSE") == "1"
 
 	for repeat := 0; repeat < repeats; repeat++ {
-		for caseIndex, evalCase := range cases {
+		for caseIndex, testCase := range cases {
+			evalCase := testCase.Eval
 			outputs := make(map[string]string, len(candidates))
 			for _, candidate := range candidates {
-				output, err := client.completeWithTemperature(context.Background(), candidate.Prompt, buildPrompt(ConversationInput{
-					SessionID:   repeat*len(cases) + caseIndex + 1,
-					VisibleText: evalCase.TerminalText,
-				}), maxTokens, float64Pointer(evaluationTemperature))
+				input := testCase.Input
+				input.SessionID = repeat*len(cases) + caseIndex + 1
+				output, err := client.completeWithTemperature(context.Background(), candidate.Prompt, buildPrompt(input), maxTokens, float64Pointer(evaluationTemperature))
 				if err != nil {
 					t.Fatalf("%s/%s: %v", evalCase.Name, candidate.ID, err)
 				}
 				measurement := measureTournamentOutput(evalCase, candidate.ID, output)
+				measurement.Kind = testCase.Kind
 				measurements = append(measurements, measurement)
 				outputs[candidate.ID] = output
 				if len(measurement.HardFailures) != 0 {
 					t.Errorf("%s/%s hard regressions: %s", evalCase.Name, candidate.ID, strings.Join(measurement.HardFailures, "; "))
+				}
+				if measurement.Coverage < minimumLiveConceptCoverage || measurement.Distance > maximumLiveSemanticDistance {
+					t.Errorf("%s/%s completeness: coverage=%.2f distance=%.3f", evalCase.Name, candidate.ID, measurement.Coverage, measurement.Distance)
 				}
 				if verbose {
 					t.Logf("repeat=%d case=%q candidate=%s distance=%.3f coverage=%.2f forbidden=%d shape=%.2f\n%s", repeat+1, evalCase.Name, candidate.ID, measurement.Distance, measurement.Coverage, measurement.ForbiddenHits, measurement.ShapePenalty, output)
@@ -239,6 +261,46 @@ func TestLiveHaikuPromptTournament(t *testing.T) {
 	for _, summary := range summarizeTournament(measurements, judgeTotals, len(cases)*repeats) {
 		t.Log(summary)
 	}
+	for _, summary := range summarizeTournamentCohorts(measurements) {
+		t.Log(summary)
+	}
+}
+
+func loadPromptTournamentCases(t *testing.T) []promptTournamentCase {
+	t.Helper()
+	full := loadConversationCases(t)
+	cases := make([]promptTournamentCase, 0, len(full)+3)
+	for _, evalCase := range full {
+		cases = append(cases, promptTournamentCase{Kind: "full", Eval: evalCase, Input: ConversationInput{VisibleText: evalCase.TerminalText}})
+	}
+	for _, fixture := range loadIncrementalConversationCases(t) {
+		cases = append(cases, promptTournamentCase{
+			Kind: "continuation",
+			Eval: fixture.evalCase(),
+			Input: ConversationInput{
+				VisibleText:       fixture.currentTerminalText(),
+				PreviousRendering: fixture.PreviousRendering,
+				ChangedText:       fixture.ChangedText,
+				RemovedText:       fixture.RemovedText,
+				StableContext:     fixture.StableContext,
+			},
+		})
+	}
+	return cases
+}
+
+func TestPromptTournamentIncludesFullAndContinuationTruth(t *testing.T) {
+	cases := loadPromptTournamentCases(t)
+	kinds := map[string]bool{}
+	for _, testCase := range cases {
+		kinds[testCase.Kind] = true
+		if testCase.Input.VisibleText == "" || testCase.Input.VisibleText != testCase.Eval.TerminalText {
+			t.Fatalf("%s/%s does not carry complete current truth", testCase.Kind, testCase.Eval.Name)
+		}
+	}
+	if !kinds["full"] || !kinds["continuation"] {
+		t.Fatalf("tournament kinds = %#v", kinds)
+	}
 }
 
 func selectTournamentCandidates(t *testing.T, candidates []promptCandidate, raw string) []promptCandidate {
@@ -266,15 +328,6 @@ func selectTournamentCandidates(t *testing.T, candidates []promptCandidate, raw 
 
 func measureTournamentOutput(evalCase conversationCase, candidate, output string) tournamentMeasurement {
 	normalized := normalizeEvalText(output)
-	covered := 0
-	for _, aliases := range evalCase.Concepts {
-		for _, alias := range aliases {
-			if strings.Contains(normalized, normalizeEvalText(alias)) {
-				covered++
-				break
-			}
-		}
-	}
 	forbidden := 0
 	for _, phrase := range evalCase.Forbidden {
 		if strings.Contains(normalized, normalizeEvalText(phrase)) {
@@ -286,7 +339,7 @@ func measureTournamentOutput(evalCase conversationCase, candidate, output string
 		Case:          evalCase.Name,
 		Output:        output,
 		Distance:      semanticDistance(evalCase, output),
-		Coverage:      float64(covered) / float64(len(evalCase.Concepts)),
+		Coverage:      conversationConceptCoverage(evalCase, output),
 		ForbiddenHits: forbidden,
 		ShapePenalty:  conversationShapePenalty(output),
 		HardFailures:  hardOutputRegressions(evalCase, output),
@@ -405,6 +458,37 @@ func summarizeTournament(measurements []tournamentMeasurement, judgeTotals map[s
 		agg := aggregates[id]
 		judge := judgeTotals[id]
 		out = append(out, fmt.Sprintf("TOURNAMENT candidate=%s distance=%.3f coverage=%.3f forbidden=%d hard=%d shape=%.3f judge_fidelity=%.2f judge_usefulness=%.2f judge_voice=%.2f judge_readability=%.2f judge_overall=%.2f", id, agg.distance/float64(agg.count), agg.coverage/float64(agg.count), agg.forbidden, agg.hard, agg.shape/float64(agg.count), judge.Fidelity/float64(caseCount), judge.Usefulness/float64(caseCount), judge.Voice/float64(caseCount), judge.Readability/float64(caseCount), judge.Overall/float64(caseCount)))
+	}
+	return out
+}
+
+func summarizeTournamentCohorts(measurements []tournamentMeasurement) []string {
+	type aggregate struct {
+		count              int
+		distance, coverage float64
+	}
+	aggregates := make(map[string]*aggregate)
+	for _, measurement := range measurements {
+		key := measurement.Candidate + "\x00" + measurement.Kind
+		agg := aggregates[key]
+		if agg == nil {
+			agg = &aggregate{}
+			aggregates[key] = agg
+		}
+		agg.count++
+		agg.distance += measurement.Distance
+		agg.coverage += measurement.Coverage
+	}
+	keys := make([]string, 0, len(aggregates))
+	for key := range aggregates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts := strings.SplitN(key, "\x00", 2)
+		agg := aggregates[key]
+		out = append(out, fmt.Sprintf("TOURNAMENT_COHORT candidate=%s kind=%s distance=%.3f coverage=%.3f", parts[0], parts[1], agg.distance/float64(agg.count), agg.coverage/float64(agg.count)))
 	}
 	return out
 }

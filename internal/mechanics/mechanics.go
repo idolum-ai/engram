@@ -76,9 +76,12 @@ func (c Controller) CaptureStyled(ctx context.Context, binding Binding, targetRo
 	if err != nil {
 		return tmux.Pane{}, tmux.StyledCapture{}, err
 	}
-	// The foreground command comes from the identity validation immediately
-	// preceding this capture. Presentation uses it only as a continuity guard.
-	capture.CurrentCmd = pane.CurrentCmd
+	if capture.ServerID != binding.ServerID || capture.WindowID != binding.WindowID || capture.PaneID != binding.PaneID {
+		return tmux.Pane{}, tmux.StyledCapture{}, &tmux.IdentityError{Reason: "tmux binding changed while capturing"}
+	}
+	if capture.CurrentCmd != pane.CurrentCmd {
+		return tmux.Pane{}, tmux.StyledCapture{}, fmt.Errorf("tmux foreground command changed while capturing")
+	}
 	return pane, capture, nil
 }
 
@@ -87,7 +90,7 @@ func (c Controller) CaptureLiteral(ctx context.Context, binding Binding, targetR
 	if err != nil {
 		return tmux.Pane{}, "", err
 	}
-	text, err := c.tmux.CaptureLiteral(ctx, binding.PaneID, targetRows)
+	text, err := c.tmux.CaptureLiteral(ctx, binding.PaneID, binding.WindowID, binding.ServerID, targetRows)
 	if err != nil {
 		return tmux.Pane{}, "", err
 	}
@@ -99,7 +102,7 @@ func (c Controller) CaptureVisibleRaw(ctx context.Context, binding Binding) (tmu
 	if err != nil {
 		return tmux.Pane{}, "", err
 	}
-	text, err := c.tmux.CaptureVisibleRaw(ctx, binding.PaneID)
+	text, err := c.tmux.CaptureVisibleRaw(ctx, binding.PaneID, binding.WindowID, binding.ServerID)
 	if err != nil {
 		return tmux.Pane{}, "", err
 	}
@@ -114,7 +117,7 @@ func (c Controller) DumpScrollback(ctx context.Context, binding Binding, dst io.
 	if err != nil {
 		return tmux.Pane{}, err
 	}
-	if err := c.tmux.DumpScrollback(ctx, binding.PaneID, dst); err != nil {
+	if err := c.tmux.DumpScrollback(ctx, binding.PaneID, binding.WindowID, binding.ServerID, dst); err != nil {
 		return tmux.Pane{}, err
 	}
 	return pane, nil

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
@@ -82,9 +81,6 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 	if !found || !applied {
 		return actionResult{Outcome: actionStateFailed, Message: "session no longer current after tmux input"}
 	}
-	if enter {
-		a.noteConversationInput(id, text)
-	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent"}
 }
@@ -152,9 +148,8 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 	return actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))}
 }
 
-func (a *App) sessionMutex(id int) *sync.Mutex {
-	lock, _ := a.sessionLocks.LoadOrStore(id, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+func (a *App) sessionMutex(id int) *keyedMutexHandle {
+	return a.sessionLocks.handle(id)
 }
 
 func flattenKeyPreview(groups [][]string) string {

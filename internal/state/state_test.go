@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -245,6 +246,15 @@ func TestUpdateSessionRollsBackWhenReplacementDidNotOccur(t *testing.T) {
 	got, _ := store.FindSession(session.ID)
 	if got.Title != "original" || got.UpstreamMessageID != 0 {
 		t.Fatalf("in-memory state did not roll back: %#v", got)
+	}
+}
+
+func TestPersistenceReachedReplacementDistinguishesAtomicWriteOutcomes(t *testing.T) {
+	if PersistenceReachedReplacement(&atomicWriteError{Err: errors.New("directory sync failed")}) {
+		t.Fatal("pre-replacement write error reported a committed replacement")
+	}
+	if !PersistenceReachedReplacement(&atomicWriteError{Err: errors.New("directory sync failed"), Replaced: true}) {
+		t.Fatal("post-replacement sync error did not report a committed replacement")
 	}
 }
 

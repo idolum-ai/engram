@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -18,6 +19,9 @@ type conversationCase struct {
 	Forbidden    []string   `json:"forbidden"`
 	Contradicts  []string   `json:"contradicts,omitempty"`
 }
+
+const minimumLiveConceptCoverage = 1.0
+const maximumLiveSemanticDistance = 0.7
 
 func TestConversationFixturesAndScoring(t *testing.T) {
 	t.Parallel()
@@ -59,6 +63,14 @@ func TestHardOutputRegressionsRejectWrongNumber(t *testing.T) {
 	failures := hardOutputRegressions(evalCase, "Six concrete issues remain, including callback authorization and the JSONL record.")
 	if !containsFailure(failures, "unsupported number claim") {
 		t.Fatalf("failures = %v, want unsupported number claim", failures)
+	}
+}
+
+func TestHardOutputRegressionsRejectNumberWordAgainstDigitEvidence(t *testing.T) {
+	evalCase := conversationCase{TerminalText: "Review complete: 0 blockers"}
+	failures := hardOutputRegressions(evalCase, "The review found seven blockers.")
+	if !containsFailure(failures, "unsupported number claim seven") {
+		t.Fatalf("failures = %v, want unsupported number word", failures)
 	}
 }
 
@@ -113,18 +125,38 @@ func TestLiveHaikuConversationEvaluation(t *testing.T) {
 			t.Fatalf("ENGRAM_LIVE_HAIKU_EVAL_CASE did not match a fixture: %s", name)
 		}
 	}
-	for index, evalCase := range cases {
-		input := ConversationInput{SessionID: index + 1, VisibleText: evalCase.TerminalText}
-		output, err := client.Converse(context.Background(), input)
-		if err != nil {
-			t.Fatalf("%s production request: %v", evalCase.Name, err)
+	repeats := liveEvaluationRepeats(t)
+	for repeat := 0; repeat < repeats; repeat++ {
+		for index, evalCase := range cases {
+			input := ConversationInput{SessionID: repeat*len(cases) + index + 1, VisibleText: evalCase.TerminalText}
+			output, err := client.Converse(context.Background(), input)
+			if err != nil {
+				t.Fatalf("repeat %d %s production request: %v", repeat+1, evalCase.Name, err)
+			}
+			if failures := hardOutputRegressions(evalCase, output); len(failures) != 0 {
+				t.Errorf("repeat %d %s production hard regressions: %s\n  output: %s", repeat+1, evalCase.Name, strings.Join(failures, "; "), output)
+			}
+			distance := semanticDistance(evalCase, output)
+			coverage := conversationConceptCoverage(evalCase, output)
+			if coverage < minimumLiveConceptCoverage || distance > maximumLiveSemanticDistance {
+				t.Errorf("repeat %d %s production completeness: coverage=%.2f distance=%.3f\n  output: %s", repeat+1, evalCase.Name, coverage, distance, output)
+			}
+			t.Logf("repeat %d %s: production distance=%.3f coverage=%.2f\n  output: %s", repeat+1, evalCase.Name, distance, coverage, output)
 		}
-		if failures := hardOutputRegressions(evalCase, output); len(failures) != 0 {
-			t.Errorf("%s production hard regressions: %s\n  output: %s", evalCase.Name, strings.Join(failures, "; "), output)
-		}
-		distance := semanticDistance(evalCase, output)
-		t.Logf("%s: production distance=%.3f\n  output: %s", evalCase.Name, distance, output)
 	}
+}
+
+func liveEvaluationRepeats(t *testing.T) int {
+	t.Helper()
+	raw := strings.TrimSpace(os.Getenv("ENGRAM_LIVE_HAIKU_REPEATS"))
+	if raw == "" {
+		return 2
+	}
+	repeats, err := strconv.Atoi(raw)
+	if err != nil || repeats < 1 || repeats > 5 {
+		t.Fatal("ENGRAM_LIVE_HAIKU_REPEATS must be between 1 and 5")
+	}
+	return repeats
 }
 
 func loadConversationCases(t *testing.T) []conversationCase {
@@ -145,16 +177,7 @@ func loadConversationCases(t *testing.T) []conversationCase {
 // natural paraphrase; lower scores are better.
 func semanticDistance(evalCase conversationCase, output string) float64 {
 	normalized := normalizeEvalText(output)
-	covered := 0
-	for _, aliases := range evalCase.Concepts {
-		for _, alias := range aliases {
-			if strings.Contains(normalized, normalizeEvalText(alias)) {
-				covered++
-				break
-			}
-		}
-	}
-	conceptScore := float64(covered) / float64(len(evalCase.Concepts))
+	conceptScore := conversationConceptCoverage(evalCase, output)
 	lexicalScore := tokenF1(evalCase.Reference, output)
 	distance := 1 - (0.75*conceptScore + 0.25*lexicalScore)
 	for _, phrase := range evalCase.Forbidden {
@@ -173,6 +196,23 @@ func semanticDistance(evalCase conversationCase, output string) float64 {
 		return 1
 	}
 	return distance
+}
+
+func conversationConceptCoverage(evalCase conversationCase, output string) float64 {
+	if len(evalCase.Concepts) == 0 {
+		return 0
+	}
+	normalized := normalizeEvalText(output)
+	covered := 0
+	for _, aliases := range evalCase.Concepts {
+		for _, alias := range aliases {
+			if strings.Contains(normalized, normalizeEvalText(alias)) {
+				covered++
+				break
+			}
+		}
+	}
+	return float64(covered) / float64(len(evalCase.Concepts))
 }
 
 func hardOutputRegressions(evalCase conversationCase, output string) []string {
@@ -203,13 +243,13 @@ func unsupportedNumberClaims(source, output string) []string {
 	for _, number := range numericClaimPattern.FindAllString(source, -1) {
 		sourceNumbers[number] = true
 	}
-	checkNumberWords := false
-	for _, word := range evalWords(source) {
+	sourceWords := evalWords(source)
+	for _, word := range sourceWords {
 		if number, ok := numberWords[word]; ok {
 			sourceNumbers[number] = true
-			checkNumberWords = true
 		}
 	}
+	sourceCounts := countedSubjects(sourceWords)
 	seen := make(map[string]bool)
 	var failures []string
 	for _, number := range numericClaimPattern.FindAllString(output, -1) {
@@ -218,16 +258,52 @@ func unsupportedNumberClaims(source, output string) []string {
 			seen[number] = true
 		}
 	}
-	if checkNumberWords {
-		for _, word := range evalWords(output) {
-			number, ok := numberWords[word]
-			if ok && !sourceNumbers[number] && !seen[number] {
-				failures = append(failures, "unsupported number claim "+word)
-				seen[number] = true
+	outputWords := evalWords(output)
+	for index, word := range outputWords {
+		number, ok := numberWords[word]
+		if !ok || index+1 >= len(outputWords) {
+			continue
+		}
+		limit := index + 4
+		if limit > len(outputWords) {
+			limit = len(outputWords)
+		}
+		for _, candidate := range outputWords[index+1 : limit] {
+			subject := countSubject(candidate)
+			allowed, constrained := sourceCounts[subject]
+			if constrained && !allowed[number] && !seen[number+" "+subject] {
+				failures = append(failures, "unsupported number claim "+word+" "+subject)
+				seen[number+" "+subject] = true
+				break
 			}
 		}
 	}
 	return failures
+}
+
+func countedSubjects(words []string) map[string]map[string]bool {
+	counts := make(map[string]map[string]bool)
+	for index := 0; index+1 < len(words); index++ {
+		number := ""
+		if _, err := strconv.ParseFloat(words[index], 64); err == nil {
+			number = words[index]
+		} else {
+			number = numberWords[words[index]]
+		}
+		if number == "" {
+			continue
+		}
+		subject := countSubject(words[index+1])
+		if counts[subject] == nil {
+			counts[subject] = make(map[string]bool)
+		}
+		counts[subject][number] = true
+	}
+	return counts
+}
+
+func countSubject(word string) string {
+	return strings.TrimSuffix(word, "s")
 }
 
 var numericClaimPattern = regexp.MustCompile(`\d+(?:\.\d+)?`)

@@ -96,6 +96,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   origin to attached, so Engram cannot close a newly adopted window. Valid
   legacy state otherwise migrates forward; retired interpretation fields are
   ignored and disappear on save.
+- Reattachment clears every binding-scoped capture, snapshot cadence, upstream
+  deduplication, persisted retry, and process-local retry value before the new
+  pane can produce presentation or attention.
 - A lock keyed by Telegram settings prevents duplicate pollers.
 - Upstream-signal record-ID deduplication is bounded per terminal. Successful
   persistence suppresses a visible record across restart; a crash between
@@ -109,6 +112,11 @@ exports a bounded recent tail, not an unbounded full audit file.
 
 - If Haiku fails, retain the canonical anchor and report the failure without
   inventing a conversational rendering.
+- A guide refresh stages the current capture for deterministic reference
+  rendering, but advances its capture hash, persisted summary, and in-memory
+  conversational continuity only after Telegram accepts the canonical edit and
+  the same immutable tmux binding remains current. A failed edit therefore
+  remains eligible for polling retry.
 - A failed mode-migration send leaves the old anchor canonical. A failed
   predecessor retirement or pin transition remains eligible for retry.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
@@ -127,6 +135,15 @@ exports a bounded recent tail, not an unbounded full audit file.
 - An acknowledged one-off conversational request ends with either its reply or
   one bounded failure notice. A concurrent anchor or mode change supersedes the
   request visibly rather than delivering it against a different live anchor.
+- Reattachment serializes with anchor delivery. Before the stored tmux binding
+  changes, an existing canonical message is synchronously reduced to a neutral,
+  control-free reattachment state; if Telegram cannot do that, reattachment
+  does not proceed. The fresh binding then receives a fresh capture.
+- Every external disclosure rechecks its terminal generation after bounded
+  queueing. A guide request holds the presentation mode and session binding
+  stable from its final check through the Anthropic call. Raw and scrollback
+  transfers hold the session binding stable through capture and Telegram
+  upload. Lifecycle changes wait or make queued work cancel cleanly.
 - Entering `snapshot` mode converts a text anchor to photo media in place so its
   message identity, pin, reply routing, and controls remain canonical. Returning
   to `guide` mode uses one persisted send-before-retire rotation because Telegram

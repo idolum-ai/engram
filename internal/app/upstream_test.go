@@ -38,6 +38,18 @@ func TestObserveUpstreamSignalUsesJoinedFrameAndRecordIdentity(t *testing.T) {
 
 func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+	}); err != nil {
+		t.Fatal(err)
+	}
+	telegramClient := telegram.New("TOKEN")
+	telegramClient.BaseURL = "https://api.telegram.org/botTOKEN"
+	telegramClient.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	a.Telegram = telegramClient
 	runner.capturePhysical = "ordinary output\n[engram:upstream] " + firstSignalID + " build finished\n"
 	runner.captureJoined = runner.capturePhysical
 	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
@@ -51,6 +63,131 @@ func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 	got, _ := a.Store.FindSession(id)
 	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != sha("ordinary output") {
 		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, sha("ordinary output"))
+	}
+}
+
+func TestGuideDeliveryFailureDoesNotAdvanceCaptureOrConversation(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = "text"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.capturePhysical = "project\nbranch\ntests passed\napp ok\nstatus\ncwd\nready\n"
+	runner.captureJoined = runner.capturePhysical
+	modelCalls := 0
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		modelCalls++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"The tests passed and the prompt is ready."}]}`))}, nil
+	})}
+	a.Anthropic = model
+	telegramCalls := 0
+	telegramClient := telegram.New("TOKEN")
+	telegramClient.BaseURL = "https://api.telegram.org/botTOKEN"
+	telegramClient.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		telegramCalls++
+		if telegramCalls == 1 {
+			return telegramTestResponse(t, http.StatusInternalServerError, map[string]any{"ok": false, "error_code": 500, "description": "unavailable"}), nil
+		}
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	a.Telegram = telegramClient
+
+	a.refreshSession(context.Background(), id, true)
+	failed, _ := a.Store.FindSession(id)
+	if failed.LastRawCaptureHash != "" || failed.LastSummary != "" || a.conversationEpochs[id].summary != "" {
+		t.Fatalf("failed delivery advanced state: session=%#v epoch=%#v", failed, a.conversationEpochs[id])
+	}
+	a.refreshSession(context.Background(), id, true)
+	succeeded, _ := a.Store.FindSession(id)
+	if modelCalls != 2 || telegramCalls != 2 || succeeded.LastRawCaptureHash == "" || succeeded.LastSummary == "" || a.conversationEpochs[id].summary == "" {
+		t.Fatalf("retry did not commit: model=%d telegram=%d session=%#v epoch=%#v", modelCalls, telegramCalls, succeeded, a.conversationEpochs[id])
+	}
+}
+
+func TestGuideResultCannotCrossAReattachedServerBinding(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = "text"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.capturePhysical = "old server output\n"
+	runner.captureJoined = runner.capturePhysical
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+			session.TmuxServerID = "abcdef0123456789abcdef0123456789"
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"Old server summary."}]}`))}, nil
+	})}
+	a.Anthropic = model
+	telegramCalls := 0
+	telegramClient := telegram.New("TOKEN")
+	telegramClient.BaseURL = "https://api.telegram.org/botTOKEN"
+	telegramClient.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		telegramCalls++
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	a.Telegram = telegramClient
+
+	a.refreshSession(context.Background(), id, true)
+	got, _ := a.Store.FindSession(id)
+	if telegramCalls != 0 || got.LastSummary != "" || got.LastRawCaptureHash != "" || a.conversationEpochs[id].summary != "" {
+		t.Fatalf("stale result crossed binding: telegram=%d session=%#v epoch=%#v", telegramCalls, got, a.conversationEpochs[id])
+	}
+}
+
+func TestManualResetRejectsAnInFlightHaikuFailure(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = "text"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.capturePhysical = "work in progress\n"
+	runner.captureJoined = runner.capturePhysical
+	modelStarted := make(chan struct{})
+	releaseModel := make(chan struct{})
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		close(modelStarted)
+		<-releaseModel
+		return &http.Response{StatusCode: http.StatusInternalServerError, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"unavailable"}}`))}, nil
+	})}
+	a.Anthropic = model
+	telegramCalls := 0
+	telegramClient := telegram.New("TOKEN")
+	telegramClient.BaseURL = "https://api.telegram.org/botTOKEN"
+	telegramClient.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		telegramCalls++
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	a.Telegram = telegramClient
+	done := make(chan struct{})
+	go func() {
+		a.refreshSession(context.Background(), id, true)
+		close(done)
+	}()
+	<-modelStarted
+	a.resetConversationEpoch(id)
+	close(releaseModel)
+	<-done
+	got, _ := a.Store.FindSession(id)
+	if telegramCalls != 0 || got.LastRawCaptureHash != "" || got.LastSummary != "" {
+		t.Fatalf("reset accepted stale failure: telegram=%d session=%#v", telegramCalls, got)
 	}
 }
 

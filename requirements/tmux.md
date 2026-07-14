@@ -61,23 +61,30 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 
 - Both anchor modes use the same ANSI-preserving `CaptureStyled` result. It
   targets and caps at 64 rows ending at the pane bottom, using available recent
-  scrollback when needed; a concurrent pane resize may shorten that frame.
+  scrollback when needed. Engram samples identity, dimensions, foreground
+  command, alternate-screen state, and copy-mode state immediately before and
+  after the capture and rejects a frame when any sampled boundary changes.
+  These are endpoint observations, not process-generation identity: tmux cannot
+  reveal a same-name restart or an enter-and-exit transition between samples.
+  Full current-frame evidence therefore remains mandatory even when continuity
+  hints are admitted.
 - `CaptureStyled` also carries a logical-text view made with tmux's joined-wrap
   semantics over the same coordinates. The physical and joined captures execute
   in one tmux command batch so signal parsing, guide text, references, and
   snapshot pixels do not come from separately timed observations.
-- Guide mode sends the first frame's joined logical text, with upstream records
-  removed, to Haiku in one non-streaming request. While the immutable tmux
-  server/window/pane binding, foreground command, and pane dimensions remain
-  unchanged, Engram may instead send the previous rendering, latest submitted
-  input when its exact text is visible in an aligned frame, current lines
-  selected by a deterministic line diff, and a bounded set of unchanged
-  neighboring lines. The terminal delta is evidence; the previous rendering
-  supplies conversational continuity but is not truth.
-- A different binding, foreground command, pane size, weak line alignment,
-  manual refresh, or service restart rebases guide mode from the full bounded
-  frame. Continuity is process-local and isolated per tracked window. It is not
-  persisted and is never shared across windows.
+- Guide mode sends every frame's complete joined logical text, with upstream
+  records removed, to Haiku in one non-streaming request. Within a stable and
+  strongly aligned capture boundary, Engram also supplies the previous
+  rendering, deterministic added and removed lines, and bounded unchanged
+  neighbors. These fields direct attention and conversational tone; they never
+  replace or override the complete current terminal evidence. Engram does not
+  remember submitted Telegram input for this purpose.
+- A different binding, foreground command, pane size, alternate-screen state,
+  copy-mode state, weak line alignment, manual refresh, mode switch,
+  reattachment, or service restart discards conversational hints. Continuity
+  is process-local, isolated per tracked window, advanced only after canonical
+  delivery, and never persisted or shared across windows. One-off alternate
+  renderings do not mutate it.
 - Every guide rendering still uses exactly one non-streaming Haiku request,
   with no model API history, structured response, or second request. It renders
   compact conversational prose with short, single-idea paragraphs. Shared work
@@ -87,7 +94,9 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   visibly establishes that identity. Model identifiers are never user identities.
 - Snapshot mode renders the same frame through Chromium into a full-bleed
   430x932 logical-pixel image at 3x density.
-- Terminal content is untrusted data for Haiku, not instructions or authority.
+- Terminal content is untrusted data for Haiku, not intended instructions or
+  authority; prompt-injection resistance is best effort and model output is
+  never executed automatically.
 - A guide anchor includes `🖼️` only when Chromium passed startup readiness. A
   snapshot anchor includes `🗣️` only when Haiku is configured. These produce
   one-off replies and never replace the canonical anchor.
@@ -96,11 +105,15 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   contains at most four valid HTTP(S) URLs. Engram never asks Haiku to generate
   references or fetches an extracted URL.
 - `/raw` preserves the visible pane's physical wrapped lines and attributes.
-  `/dump` streams physical full scrollback to an attachment.
+  `/dump` streams physical full scrollback to an attachment. Both captures are
+  conditionally executed against the stored server, window, and pane identity
+  in the same tmux command queue; a queued request is canceled if that binding
+  changed before its worker began.
 - `/raw` and `/dump` stop before Telegram's 50 MiB upload ceiling.
 - `engram inspect frame <watch-id>` captures at most 64 recent plain-text rows
   without tmux paste buffers, strips terminal controls, and caps stdout at
-  128 KiB. It accepts an Engram watch ID, never an arbitrary tmux target.
+  128 KiB. Its capture is binding-conditional. It accepts an Engram watch ID,
+  never an arbitrary tmux target.
 
 ## Upstream Signals
 

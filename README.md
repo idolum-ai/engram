@@ -163,7 +163,7 @@ below before running commands that may print secrets.
 | `TELEGRAM_ALLOWED_USER_ID` | none | yes | The one Telegram user ID allowed to issue commands. |
 | `TELEGRAM_CHAT_ID` | allowed user ID | no | The one allowed chat. Leave empty for a private DM; group operation is unsupported. |
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
-| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: Haiku `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v7. |
+| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: Haiku `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v8. |
 | `LLM_PROVIDER` | `anthropic` | when enabling Haiku | Must remain `anthropic`; enables guide startup, `🗣️`, and `/mode guide`. |
 | `ANTHROPIC_API_KEY` | none | when enabling Haiku, secret | Credential for one-pass conversational rendering. |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
@@ -214,8 +214,10 @@ the bot channel and must be revoked immediately.
   low-contrast terminal colors to at least a 4.5:1 contrast ratio.
 - **Anthropic Haiku:** Guide anchors send the joined logical text of the same
   frame, with recognized upstream records removed, capped at 64 rows, in one
-  non-streaming request. There is no model
-  history or structured response, no second request, and no expanded context.
+  non-streaming request. Every request contains the complete current frame;
+  aligned requests may also carry prior prose and deterministic changed,
+  removed, and neighboring lines as attention hints. There is no model history
+  or structured response, no second request, and no remembered Telegram input.
   In snapshot mode, tapping `🗣️` makes the same one-off request and
   sends its conversational result as a reply without replacing the photo
   anchor. Captures are not credential-redacted before they are sent.
@@ -446,14 +448,16 @@ observes immediately.
 
 In Haiku mode, Engram sends the shared bounded frame to Haiku once and edits the
 canonical text anchor with compact, collaborative prose broken into short
-phone-readable paragraphs. While the same program remains in the same tmux
-pane, later renderings use a deterministic terminal delta, the latest visibly
-echoed submitted input, and the previous prose to continue naturally without
-sharing context between windows. A program, pane, size, service, or
-manual-refresh boundary
-starts again from the full frame. This continuity is memory-only and still uses
-one non-streaming Haiku request per rendering. If Chromium passed
-startup readiness, `🖼️` replies with an iPhone-sized image of that frame.
+phone-readable paragraphs. Every rendering includes the complete current
+terminal frame. While the same program remains in the same stable tmux capture,
+later renderings may also use deterministic added and removed lines, unchanged
+neighbors, and the previous prose to continue naturally without sharing context
+between windows. Those hints never override the current frame. A capture
+boundary, weak alignment, manual refresh, mode switch, reattachment, service
+restart, or failed canonical delivery discards or withholds continuity. This
+memory-only path still uses one non-streaming Haiku request per rendering. If
+Chromium passed startup readiness, `🖼️` replies with an iPhone-sized image of
+that frame.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its
 media in place only when the styled capture changes, automatically at most once
@@ -539,16 +543,21 @@ protocol.
 The conversational Haiku fixture eval is opt-in because it makes live
 Anthropic calls. It fails each fixture on hard regressions such as injected
 instructions, contradictory negation, unsupported numbers, or truncated
-output. With `ANTHROPIC_API_KEY` and optionally `ANTHROPIC_MODEL` exported,
-run:
+output, and requires every designated material concept. Each fixture runs
+twice by default; `ENGRAM_LIVE_HAIKU_REPEATS=1..5` changes that sample count.
+With `ANTHROPIC_API_KEY` and optionally `ANTHROPIC_MODEL` exported, run:
 
 ```sh
 ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
   -run TestLiveHaikuConversationEvaluation -count=1
 ```
 
-The incremental fixtures exercise conversational continuation from a previous
-rendering plus deterministic terminal changes:
+The four incremental fixtures exercise conversational continuation from a
+complete current frame plus a previous rendering and deterministic terminal
+changes. They cover completion, a newly reported blocker, stale-prose
+correction, and a warning that disappeared. Every case runs twice by default
+and enforces complete designated-concept coverage as well as hard factual
+regressions:
 
 ```sh
 ENGRAM_LIVE_HAIKU_INCREMENTAL_EVAL=1 go test -v ./internal/anthropic \
@@ -560,7 +569,8 @@ Both candidates receive identical inputs at production temperature `0.2`. Candid
 rotates, candidate names are replaced with fresh opaque IDs, and a separate
 judge uses its model-default decoding and scores fidelity, usefulness, voice, and readability from JSON-serialized
 untrusted evidence. Hard fixture regressions fail the run independently of the
-judge:
+judge. The tournament defaults to two repeats, gates material-concept coverage,
+and reports full-frame and continuation cohorts separately:
 
 ```sh
 ENGRAM_LIVE_HAIKU_TOURNAMENT=1 \

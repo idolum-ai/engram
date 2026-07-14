@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/terminalshot"
@@ -14,6 +15,8 @@ import (
 )
 
 const maxStoredVisibleCaptureBytes = 16 * 1024
+
+var errConversationTurnSuperseded = errors.New("conversation turn superseded")
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if a.snapshotAnchors() {
@@ -27,6 +30,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if !force && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
 		return
 	}
+	releaseConversation, acquired := a.acquireConversation(ctx, id)
+	if !acquired {
+		return
+	}
+	defer releaseConversation()
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	identityLock := a.sessionMutex(id)
@@ -75,8 +83,14 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			return
 		}
 	}
-	summary, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
+	summary, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
+	if errors.Is(guideErr, errConversationTurnSuperseded) {
+		return
+	}
 	if a.snapshotAnchors() {
+		return
+	}
+	if !a.conversationTurnCurrent(ts, turn) {
 		return
 	}
 	if guideErr != nil {
@@ -96,22 +110,43 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	lock := a.sessionMutex(id)
 	lock.Lock()
 	latest, found := a.Store.FindSession(id)
-	if !found || latest.State == state.TerminalClosed || latest.State == state.TerminalLost || latest.TmuxPaneID != ts.TmuxPaneID || latest.TmuxWindowID != ts.TmuxWindowID {
+	if !found || latest.State == state.TerminalClosed || latest.State == state.TerminalLost || latest.TmuxServerID != ts.TmuxServerID || latest.TmuxPaneID != ts.TmuxPaneID || latest.TmuxWindowID != ts.TmuxWindowID {
 		lock.Unlock()
 		return
 	}
-	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+	if _, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.LastRawCapture = tailUTF8(presentationText, maxStoredVisibleCaptureBytes)
-		s.LastRawCaptureHash = hash
-		s.LastSummary = summary
-	}); err != nil {
+	}); err != nil || !found || !applied {
 		lock.Unlock()
-		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
-		a.updateAnchorLocal(ctx, id, "state update error after refresh: "+err.Error(), true)
+		if err != nil {
+			_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
+			a.updateAnchorLocal(ctx, id, "state update error after refresh: "+err.Error(), true)
+		}
 		return
 	}
 	lock.Unlock()
-	a.updateAnchorLocal(ctx, id, summary, force)
+	guard := func() bool { return !a.snapshotAnchors() && a.conversationTurnCurrent(ts, turn) }
+	accepted := func() bool {
+		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
+			s.LastRawCaptureHash = hash
+			if guideErr == nil {
+				s.LastSummary = summary
+			}
+		})
+		committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
+		if err != nil {
+			outcome := "failed"
+			if committed {
+				outcome = "durability_uncertain"
+			}
+			_ = a.audit("state.session", outcome, map[string]any{"session_id": id, "error": err.Error()})
+		}
+		if !committed {
+			return false
+		}
+		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
+	}
+	a.updateAnchorLocalGuarded(ctx, id, summary, force, guard, accepted)
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -142,32 +177,73 @@ func headUTF8(text string, maxBytes int) string {
 	return text[:end]
 }
 
-func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, error) {
-	lock := a.conversationMutex(session.ID)
-	lock.Lock()
-	defer lock.Unlock()
+func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, conversationTurn, error) {
 	turn := a.prepareConversationTurn(session, capture, presentationText)
+	if !acquireSlot(ctx, a.haikuSlots) {
+		return "", turn, ctx.Err()
+	}
+	defer releaseSlot(a.haikuSlots)
+	identityLock := a.sessionMutex(session.ID)
+	identityLock.Lock()
+	defer identityLock.Unlock()
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
+	latest, ok := a.Store.FindSession(session.ID)
+	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
+		return "", turn, errConversationTurnSuperseded
+	}
+	summary, err := a.Anthropic.Converse(ctx, turn.input)
+	if err != nil {
+		return "", turn, err
+	}
+	summary = a.redactText(summary)
+	return summary, turn, nil
+}
+
+func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string) (string, error) {
 	if !acquireSlot(ctx, a.haikuSlots) {
 		return "", ctx.Err()
 	}
-	summary, err := a.Anthropic.Converse(ctx, turn.input)
-	releaseSlot(a.haikuSlots)
+	defer releaseSlot(a.haikuSlots)
+	identityLock := a.sessionMutex(session.ID)
+	identityLock.Lock()
+	defer identityLock.Unlock()
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
+	latest, ok := a.Store.FindSession(session.ID)
+	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
+		return "", errConversationTurnSuperseded
+	}
+	summary, err := a.Anthropic.Converse(ctx, anthropic.ConversationInput{SessionID: session.ID, VisibleText: presentationText})
 	if err != nil {
 		return "", err
 	}
-	summary = a.redactText(summary)
-	a.commitConversationTurn(session.ID, turn, summary)
-	return summary, nil
+	return a.redactText(summary), nil
 }
 
-func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, final bool) {
+func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, final bool) bool {
+	return a.updateAnchorLocalGuarded(ctx, id, summary, final, nil, nil)
+}
+
+func (a *App) updateAnchorLocalGuarded(ctx context.Context, id int, summary string, final bool, guard, accepted func() bool) bool {
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	lock := a.anchorMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
+	finish := func() bool {
+		if guard != nil && !guard() {
+			return false
+		}
+		return accepted == nil || accepted()
+	}
 	a.finishAnchorRotationLocked(ctx, id)
+	if guard != nil && !guard() {
+		return false
+	}
 	ts, ok := a.Store.FindSession(id)
 	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
-		return
+		return false
 	}
 	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
 		if !a.snapshotAnchors() || ts.AnchorFormat != "snapshot" {
@@ -177,36 +253,47 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 	}
 	if a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
 		a.updateSnapshotAnchorCaptionLocked(ctx, ts, summary, final)
-		return
+		return false
 	}
 	rendered := a.renderLocal(ts, summary)
 	renderHash := sha(rendered)
 	if !a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
-		a.rotateSnapshotAnchorToTextLocked(ctx, ts, rendered, renderHash)
-		return
+		a.rotateSnapshotAnchorToTextLocked(ctx, ts, rendered, renderHash, guard)
+		updated, found := a.Store.FindSession(id)
+		return found && updated.AnchorFormat == "text" && updated.LastRenderHash == renderHash && finish()
 	}
 	if renderHash == ts.LastRenderHash && !final {
-		return
+		return finish()
 	}
 	if !final && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
-		return
+		return false
 	}
 	markup := a.anchorMarkup(ts)
 	_, err := a.editAnchor(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, markup)
 	if err != nil {
 		if telegram.IsRateLimited(err) {
 			_ = a.audit("telegram.anchor_edit", "rate_limited", map[string]any{"session_id": id, "error": err.Error()})
-			return
+			return false
 		}
 		if !isTelegramAnchorUnavailable(err) {
 			_ = a.audit("telegram.anchor_edit", "failed", map[string]any{"session_id": id, "error": err.Error()})
-			return
+			return false
 		}
 		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, markup)
 		if sendErr == nil {
+			if guard != nil && !guard() {
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				_ = a.Telegram.DeleteMessage(cleanupCtx, msg.Chat.ID, msg.MessageID)
+				cancel()
+				return false
+			}
 			oldID := ts.AnchorMessageID
 			oldFormat := firstNonEmpty(ts.AnchorFormat, "text")
-			updated, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+			applied := false
+			updated, found, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+				if s.AnchorMessageID != oldID || s.RetiringAnchorMessageID != 0 || guard != nil && (s.State != state.TerminalRunning || s.TmuxServerID != ts.TmuxServerID || s.TmuxWindowID != ts.TmuxWindowID || s.TmuxPaneID != ts.TmuxPaneID) {
+					return
+				}
 				s.AnchorChatID = msg.Chat.ID
 				s.AnchorMessageID = msg.MessageID
 				s.AnchorFormat = "text"
@@ -216,26 +303,47 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 				s.AnchorPinKnown = false
 				s.LastRenderHash = renderHash
 				s.LastAnchorEditAt = time.Now().UTC()
+				applied = true
 			})
+			committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
 			if err != nil {
-				_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
-			} else if anchorShouldBePinned(updated) {
+				outcome := "failed"
+				if committed {
+					outcome = "durability_uncertain"
+				}
+				_ = a.audit("state.session", outcome, map[string]any{"session_id": id, "error": err.Error()})
+			}
+			if committed && anchorShouldBePinned(updated) {
 				a.ensureCurrentAnchorPinnedLocked(ctx, updated)
 			}
-			if err == nil {
+			if committed {
 				a.finishAnchorRotationLocked(ctx, id)
+				return finish()
 			}
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			_ = a.Telegram.DeleteMessage(cleanupCtx, msg.Chat.ID, msg.MessageID)
+			cancel()
 		} else {
 			_ = a.audit("telegram.anchor_replacement", "failed", map[string]any{"session_id": id, "error": sendErr.Error()})
 		}
-		return
+		return false
 	}
+	if guard != nil && !guard() {
+		return false
+	}
+	applied := false
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) {
+		if s.AnchorMessageID != ts.AnchorMessageID || s.RetiringAnchorMessageID != 0 || guard != nil && (s.State != state.TerminalRunning || s.TmuxServerID != ts.TmuxServerID || s.TmuxWindowID != ts.TmuxWindowID || s.TmuxPaneID != ts.TmuxPaneID) {
+			return
+		}
 		s.LastRenderHash = renderHash
 		s.LastAnchorEditAt = time.Now().UTC()
+		applied = true
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
+		return false
 	}
+	return applied && finish()
 }
 
 func (a *App) refreshSoon(id int) {

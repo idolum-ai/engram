@@ -36,11 +36,25 @@ type fakeStreamRunner struct {
 	err    error
 }
 
-type styledCaptureRunner struct {
-	calls  [][]string
-	ansi   string
-	joined string
+type identityMismatchRunner struct{}
+
+func (identityMismatchRunner) Run(_ context.Context, args ...string) (string, error) {
+	return strings.TrimPrefix(args[len(args)-1], "display-message -p ") + "\n", nil
 }
+
+func (identityMismatchRunner) RunToWriter(_ context.Context, dst io.Writer, args ...string) error {
+	_, err := io.WriteString(dst, strings.TrimPrefix(args[len(args)-1], "display-message -p ")+"\n")
+	return err
+}
+
+type styledCaptureRunner struct {
+	calls     [][]string
+	ansi      string
+	joined    string
+	afterMeta string
+}
+
+const styledCaptureServerID = "0123456789abcdef0123456789abcdef"
 
 type sequenceRunner struct {
 	calls   [][]string
@@ -93,7 +107,13 @@ func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) 
 func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
-		return tmuxRecord("71", "37", "build", "/home/me"), nil
+		return styledCaptureMetadata("bash", "1", "0"), nil
+	}
+	if len(args) > 0 && args[0] == "capture-pane" {
+		if r.afterMeta != "" {
+			return r.afterMeta, nil
+		}
+		return styledCaptureMetadata("bash", "1", "0"), nil
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
 		if strings.Contains(args[len(args)-1], "physical") {
@@ -102,6 +122,14 @@ func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, er
 		return r.joined, nil
 	}
 	return "", nil
+}
+
+func styledCaptureMetadata(command, alternateOn, paneInMode string) string {
+	return styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "71", "37", command, alternateOn, paneInMode)
+}
+
+func styledCaptureMetadataValues(serverID, windowID, paneID, columns, rows, command, alternateOn, paneInMode string) string {
+	return tmuxRecord(serverID, windowID, paneID, columns, rows, "build", "/home/me", command, alternateOn, paneInMode)
 }
 
 func (f *fakeStreamRunner) Run(ctx context.Context, args ...string) (string, error) {
@@ -314,16 +342,21 @@ func TestCaptureVisibleRawPreservesTmuxOutput(t *testing.T) {
 	wantOutput := "\x1b[31mred\x1b[0m   \nwrapped   \n"
 	f := &fakeRunner{out: wantOutput}
 
-	got, err := New(f).CaptureVisibleRaw(context.Background(), "%7")
+	got, err := New(f).CaptureVisibleRaw(context.Background(), "%7", "@2", styledCaptureServerID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != wantOutput {
 		t.Fatalf("CaptureVisibleRaw = %q, want %q", got, wantOutput)
 	}
-	wantCalls := [][]string{{"capture-pane", "-p", "-e", "-N", "-t", "%7"}}
-	if !reflect.DeepEqual(f.calls, wantCalls) {
-		t.Fatalf("calls = %#v, want %#v", f.calls, wantCalls)
+	if len(f.calls) != 1 || f.calls[0][0] != "if-shell" || f.calls[0][3] != "%7" || f.calls[0][5] != "capture-pane -p -e -N -t %7" {
+		t.Fatalf("calls = %#v", f.calls)
+	}
+}
+
+func TestCaptureVisibleRawRejectsBindingMismatchWithoutReturningMarker(t *testing.T) {
+	if _, err := New(identityMismatchRunner{}).CaptureVisibleRaw(context.Background(), "%7", "@2", styledCaptureServerID); err == nil || !IsIdentityLoss(err) {
+		t.Fatalf("CaptureVisibleRaw mismatch error = %v", err)
 	}
 }
 
@@ -335,7 +368,7 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Columns != 71 || got.VisibleRows != 37 || got.BufferRows != 64 || got.Title != "build" || got.CurrentPath != "/home/me" {
+	if got.ServerID != styledCaptureServerID || got.WindowID != "@2" || got.PaneID != "%7" || got.CurrentCmd != "bash" || got.AlternateOn != "1" || got.PaneInMode != "0" || got.Columns != 71 || got.VisibleRows != 37 || got.BufferRows != 64 || got.Title != "build" || got.CurrentPath != "/home/me" {
 		t.Fatalf("styled capture metadata = %#v", got)
 	}
 	if strings.Count(got.ANSI, "history and visible") != 64 {
@@ -351,36 +384,64 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 		t.Fatalf("styled capture calls = %#v", runner.calls)
 	}
 	captureCall := runner.calls[1]
-	if len(captureCall) != 22 ||
+	if len(captureCall) != 28 ||
 		!reflect.DeepEqual(captureCall[:10], []string{"capture-pane", "-e", "-N", "-S", "-27", "-E", "36", "-t", "%7", "-b"}) ||
 		!strings.HasPrefix(captureCall[10], "engram-physical-") ||
 		!reflect.DeepEqual(captureCall[11:21], []string{";", "capture-pane", "-J", "-S", "-27", "-E", "36", "-t", "%7", "-b"}) ||
-		!strings.HasPrefix(captureCall[21], "engram-joined-") {
+		!strings.HasPrefix(captureCall[21], "engram-joined-") ||
+		!reflect.DeepEqual(captureCall[22:27], []string{";", "display-message", "-p", "-t", "%7"}) ||
+		!strings.Contains(captureCall[27], "pane_current_command") {
 		t.Fatalf("capture-pane coordinates = %#v", captureCall)
+	}
+}
+
+func TestCaptureStyledRejectsBoundaryChange(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		metadata     string
+		identityLoss bool
+	}{
+		"server":     {styledCaptureMetadataValues("abcdef0123456789abcdef0123456789", "@2", "%7", "71", "37", "bash", "1", "0"), true},
+		"window":     {styledCaptureMetadataValues(styledCaptureServerID, "@9", "%7", "71", "37", "bash", "1", "0"), true},
+		"pane":       {styledCaptureMetadataValues(styledCaptureServerID, "@2", "%9", "71", "37", "bash", "1", "0"), true},
+		"dimensions": {styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "72", "37", "bash", "1", "0"), false},
+		"command":    {styledCaptureMetadata("vim", "1", "0"), false},
+		"alternate":  {styledCaptureMetadata("bash", "0", "0"), false},
+		"copy mode":  {styledCaptureMetadata("bash", "1", "1"), false},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			runner := &styledCaptureRunner{afterMeta: test.metadata}
+			_, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
+			if err == nil || !strings.Contains(err.Error(), "changed while capturing") || IsIdentityLoss(err) != test.identityLoss {
+				t.Fatalf("CaptureStyled error = %v", err)
+			}
+			for _, call := range runner.calls {
+				if len(call) > 0 && call[0] == "show-buffer" {
+					t.Fatalf("unstable capture read a buffer: %#v", runner.calls)
+				}
+			}
+		})
 	}
 }
 
 func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
 	runner := &sequenceRunner{outputs: []string{tmuxRecord("80", "24"), "one\ntwo\n"}}
-	got, err := New(runner).CaptureLiteral(context.Background(), "%7", 64)
+	got, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "one\ntwo" {
 		t.Fatalf("CaptureLiteral = %q", got)
 	}
-	want := [][]string{
-		{"display-message", "-p", "-t", "%7", "#{n:pane_width}:#{pane_width}#{n:pane_height}:#{pane_height}"},
-		{"capture-pane", "-p", "-N", "-S", "-40", "-E", "23", "-t", "%7"},
-	}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S -40 -E 23 -t %7" {
+		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 
 func TestCaptureLiteralRejectsOversizedPaneBeforeCapture(t *testing.T) {
 	runner := &sequenceRunner{outputs: []string{tmuxRecord("401", "24")}}
-	if _, err := New(runner).CaptureLiteral(context.Background(), "%7", 64); err == nil || !strings.Contains(err.Error(), "pane width") {
+	if _, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64); err == nil || !strings.Contains(err.Error(), "pane width") {
 		t.Fatalf("CaptureLiteral error = %v", err)
 	}
 	if len(runner.calls) != 1 || runner.calls[0][0] != "display-message" {
@@ -416,20 +477,27 @@ func TestSemanticCaptureCleansTerminalOutput(t *testing.T) {
 func TestDumpScrollbackStreamsRawPhysicalCapture(t *testing.T) {
 	f := &fakeStreamRunner{chunks: []string{"\x1b[32mchunk one", "\nchunk two   \n"}}
 	var dst bytes.Buffer
-	if err := New(f).DumpScrollback(context.Background(), "%10", &dst); err != nil {
+	if err := New(f).DumpScrollback(context.Background(), "%10", "@2", styledCaptureServerID, &dst); err != nil {
 		t.Fatal(err)
 	}
 	if want := "\x1b[32mchunk one\nchunk two   \n"; dst.String() != want {
 		t.Fatalf("dump = %q, want %q", dst.String(), want)
 	}
-	wantCalls := [][]string{{"capture-pane", "-p", "-e", "-N", "-S", "-", "-E", "-", "-t", "%10"}}
-	if !reflect.DeepEqual(f.calls, wantCalls) {
-		t.Fatalf("calls = %#v, want %#v", f.calls, wantCalls)
+	if len(f.calls) != 1 || f.calls[0][0] != "if-shell" || f.calls[0][3] != "%10" || f.calls[0][5] != "capture-pane -p -e -N -S - -E - -t %10" {
+		t.Fatalf("calls = %#v", f.calls)
+	}
+}
+
+func TestDumpScrollbackRejectsBindingMismatchWithoutWritingMarker(t *testing.T) {
+	var dst bytes.Buffer
+	err := New(identityMismatchRunner{}).DumpScrollback(context.Background(), "%10", "@2", styledCaptureServerID, &dst)
+	if err == nil || !IsIdentityLoss(err) || dst.Len() != 0 {
+		t.Fatalf("DumpScrollback mismatch error=%v output=%q", err, dst.String())
 	}
 }
 
 func TestDumpScrollbackRequiresStreamingRunner(t *testing.T) {
-	err := New(&fakeRunner{}).DumpScrollback(context.Background(), "%10", io.Discard)
+	err := New(&fakeRunner{}).DumpScrollback(context.Background(), "%10", "@2", styledCaptureServerID, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "does not support streaming") {
 		t.Fatalf("DumpScrollback error = %v", err)
 	}

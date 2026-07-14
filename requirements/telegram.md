@@ -44,7 +44,9 @@ Telegram is Engram's only user interface.
 
 - Every callback is answered and authorized against configured user, chat, and
   current canonical message. Retired controls are inert.
-- Close uses a random, single-use confirmation token expiring after two minutes.
+- Close controls are accepted only from the current canonical message. Close
+  uses a random, single-use confirmation token expiring after two minutes; the
+  token records the immutable tmux binding and becomes stale after reattachment.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
 - Guide anchors expose refresh, allowed keys, and `🖼️` only when Chromium is
   ready. Snapshot anchors expose refresh, allowed keys, and `🗣️` only when
@@ -58,6 +60,10 @@ Telegram is Engram's only user interface.
   makes the predecessor stale. Replies to known stale alternates must
   not reach tmux and receive a concise normal bot reply; Telegram offers no
   callback-style ephemeral banner for an ordinary message reply.
+- Alternate delivery is committed only while the complete tmux binding, mode,
+  and canonical anchor still match. A prospective alternate that loses this
+  race or cannot persist its reply alias is deleted; an uncertain post-replace
+  persistence result is audited rather than contradicted by deletion.
 - Snapshot anchors edit their media in place for changed frames. Mode migration
   preserves one canonical, routable anchor even where Telegram requires
   retiring a predecessor.

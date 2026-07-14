@@ -10,9 +10,10 @@ import (
 
 type incrementalConversationCase struct {
 	Name              string     `json:"name"`
+	TerminalText      string     `json:"terminal_text"`
 	PreviousRendering string     `json:"previous_rendering"`
-	RecentUserInput   string     `json:"recent_user_input"`
 	ChangedText       string     `json:"changed_terminal_text"`
+	RemovedText       string     `json:"removed_terminal_text,omitempty"`
 	StableContext     string     `json:"stable_terminal_context"`
 	Reference         string     `json:"reference"`
 	Concepts          [][]string `json:"concepts"`
@@ -27,7 +28,7 @@ func TestIncrementalConversationFixtures(t *testing.T) {
 		t.Run(fixture.Name, func(t *testing.T) {
 			t.Parallel()
 			evalCase := fixture.evalCase()
-			if fixture.PreviousRendering == "" || fixture.ChangedText == "" || fixture.Reference == "" || len(fixture.Concepts) == 0 {
+			if fixture.TerminalText == "" || fixture.PreviousRendering == "" || fixture.ChangedText == "" && fixture.RemovedText == "" || fixture.Reference == "" || len(fixture.Concepts) == 0 {
 				t.Fatalf("incomplete fixture: %#v", fixture)
 			}
 			if distance := semanticDistance(evalCase, fixture.Reference); distance > 0.001 {
@@ -53,22 +54,32 @@ func TestLiveHaikuIncrementalConversationEvaluation(t *testing.T) {
 		model = "claude-haiku-4-5-20251001"
 	}
 	client := New(apiKey, model)
-	for index, fixture := range loadIncrementalConversationCases(t) {
-		output, err := client.Converse(context.Background(), ConversationInput{
-			SessionID:         index + 1,
-			PreviousRendering: fixture.PreviousRendering,
-			RecentUserInput:   fixture.RecentUserInput,
-			ChangedText:       fixture.ChangedText,
-			StableContext:     fixture.StableContext,
-		})
-		if err != nil {
-			t.Fatalf("%s production request: %v", fixture.Name, err)
+	fixtures := loadIncrementalConversationCases(t)
+	repeats := liveEvaluationRepeats(t)
+	for repeat := 0; repeat < repeats; repeat++ {
+		for index, fixture := range fixtures {
+			output, err := client.Converse(context.Background(), ConversationInput{
+				SessionID:         repeat*len(fixtures) + index + 1,
+				VisibleText:       fixture.currentTerminalText(),
+				PreviousRendering: fixture.PreviousRendering,
+				ChangedText:       fixture.ChangedText,
+				RemovedText:       fixture.RemovedText,
+				StableContext:     fixture.StableContext,
+			})
+			if err != nil {
+				t.Fatalf("repeat %d %s production request: %v", repeat+1, fixture.Name, err)
+			}
+			evalCase := fixture.evalCase()
+			if failures := hardOutputRegressions(evalCase, output); len(failures) != 0 {
+				t.Errorf("repeat %d %s production hard regressions: %s\n  output: %s", repeat+1, fixture.Name, strings.Join(failures, "; "), output)
+			}
+			distance := semanticDistance(evalCase, output)
+			coverage := conversationConceptCoverage(evalCase, output)
+			if coverage < minimumLiveConceptCoverage || distance > maximumLiveSemanticDistance {
+				t.Errorf("repeat %d %s production completeness: coverage=%.2f distance=%.3f\n  output: %s", repeat+1, fixture.Name, coverage, distance, output)
+			}
+			t.Logf("repeat %d %s: production distance=%.3f coverage=%.2f\n  output: %s", repeat+1, fixture.Name, distance, coverage, output)
 		}
-		evalCase := fixture.evalCase()
-		if failures := hardOutputRegressions(evalCase, output); len(failures) != 0 {
-			t.Errorf("%s production hard regressions: %s\n  output: %s", fixture.Name, strings.Join(failures, "; "), output)
-		}
-		t.Logf("%s: production distance=%.3f\n  output: %s", fixture.Name, semanticDistance(evalCase, output), output)
 	}
 }
 
@@ -91,10 +102,14 @@ func loadIncrementalConversationCases(t *testing.T) []incrementalConversationCas
 func (fixture incrementalConversationCase) evalCase() conversationCase {
 	return conversationCase{
 		Name:         fixture.Name,
-		TerminalText: strings.Join([]string{fixture.PreviousRendering, fixture.RecentUserInput, fixture.ChangedText, fixture.StableContext}, "\n"),
+		TerminalText: fixture.currentTerminalText(),
 		Reference:    fixture.Reference,
 		Concepts:     fixture.Concepts,
 		Forbidden:    fixture.Forbidden,
 		Contradicts:  fixture.Contradicts,
 	}
+}
+
+func (fixture incrementalConversationCase) currentTerminalText() string {
+	return fixture.TerminalText
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
@@ -28,10 +29,16 @@ func (a *App) queueConversation(ts state.TerminalSession) actionResult {
 }
 
 func (a *App) sendConversation(ctx context.Context, requested state.TerminalSession) {
+	releaseConversation, acquired := a.acquireConversation(ctx, requested.ID)
+	if !acquired {
+		a.conversationNotice(ctx, requested, "I couldn't read that window before the request timed out.")
+		return
+	}
+	defer releaseConversation()
 	lock := a.sessionMutex(requested.ID)
 	lock.Lock()
 	current, ok := a.Store.FindSession(requested.ID)
-	if !ok || current.State != state.TerminalRunning || current.TmuxPaneID != requested.TmuxPaneID {
+	if !ok || current.State != state.TerminalRunning || !sameTerminalBinding(current, requested) {
 		lock.Unlock()
 		a.conversationNotice(ctx, requested, "I couldn't read that window because the session moved or closed.")
 		return
@@ -53,20 +60,27 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	summary, err := a.conversationalSummary(ctx, current, capture, presentationText)
+	summary, err := a.snapshotConversationalSummary(ctx, current, requested.AnchorMessageID, presentationText)
 	if err != nil {
+		if errors.Is(err, errConversationTurnSuperseded) {
+			_ = a.audit("terminal.conversation", "superseded", map[string]any{"session_id": current.ID})
+			a.conversationNotice(ctx, requested, "That window changed while I was reading it, so I left the newer view in place.")
+			return
+		}
 		_ = a.Store.NoteHaiku(err.Error())
 		_ = a.audit("terminal.conversation", "haiku_failed", map[string]any{"session_id": current.ID, "error": err.Error()})
 		a.conversationNotice(ctx, requested, "I couldn't finish reading that window. Please try again.")
 		return
 	}
 	_ = a.Store.NoteHaiku("")
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	anchorLock := a.anchorMutex(current.ID)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, current.ID)
 	latest, ok := a.Store.FindSession(current.ID)
-	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || latest.TmuxPaneID != current.TmuxPaneID || latest.AnchorMessageID == 0 || latest.AnchorMessageID != requested.AnchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
+	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.AnchorMessageID != requested.AnchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		_ = a.audit("terminal.conversation", "superseded", map[string]any{"session_id": current.ID})
 		a.conversationNotice(ctx, requested, "That window changed while I was reading it, so I left the newer view in place.")
 		return
@@ -77,12 +91,28 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		a.conversationNotice(ctx, requested, "I read the window, but couldn't deliver the result. Please try again.")
 		return
 	}
+	updated := false
 	if _, _, err := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == latest.AnchorMessageID {
+		if a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && session.AnchorFormat == "snapshot" && session.RetiringAnchorMessageID == 0 {
 			recordAlternateMessage(session, "summary", message.MessageID)
+			updated = true
 		}
 	}); err != nil {
+		if state.PersistenceReachedReplacement(err) && updated {
+			_ = a.audit("state.conversation", "durability_uncertain", map[string]any{"session_id": latest.ID, "message_id": message.MessageID, "error": err.Error()})
+			return
+		}
 		_ = a.audit("state.conversation", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})
+		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), conversationNoticeTimeout)
+		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
+		cancel()
+		return
+	}
+	if !updated {
+		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), conversationNoticeTimeout)
+		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
+		cancel()
+		_ = a.audit("terminal.conversation", "superseded", map[string]any{"session_id": latest.ID})
 		return
 	}
 	_ = a.audit("terminal.conversation", "sent", map[string]any{"session_id": latest.ID})

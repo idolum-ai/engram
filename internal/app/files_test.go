@@ -11,11 +11,131 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
+	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+type fileCaptureRunner struct{ calls int }
+
+func (r *fileCaptureRunner) Run(_ context.Context, _ ...string) (string, error) {
+	r.calls++
+	return "", errors.New("unexpected tmux capture")
+}
+
+type successfulFileCaptureRunner struct{}
+
+func (successfulFileCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
+	switch args[0] {
+	case "display-message":
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+	case "if-shell":
+		return "visible terminal\n", nil
+	default:
+		return "", errors.New("unexpected tmux call")
+	}
+}
+
+func TestQueuedCaptureDoesNotCrossBindingBoundary(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxServerID = appTestServerID
+		current.WatchEnabled = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxServerID = strings.Repeat("b", 32)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var reply string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		reply, _ = payload["text"].(string)
+		return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	runner := &fileCaptureRunner{}
+	app := &App{Config: config.Config{Home: dir, TelegramChatID: 100}, Store: store, Telegram: client, Tmux: tmux.New(runner)}
+
+	app.captureSessionFile(context.Background(), telegram.Message{Chat: telegram.Chat{ID: 100}}, session, false)
+
+	if runner.calls != 0 || !strings.Contains(reply, "session changed") {
+		t.Fatalf("tmux calls=%d reply=%q", runner.calls, reply)
+	}
+}
+
+func TestCaptureUploadDoesNotHoldTerminalInputMutex(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxServerID = appTestServerID
+		current.WatchEnabled = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendDocument" {
+			return nil, errors.New("unexpected Telegram endpoint")
+		}
+		close(started)
+		<-release
+		return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	app := &App{Config: config.Config{Home: dir, TelegramChatID: 100}, Store: store, Telegram: client, Tmux: tmux.New(successfulFileCaptureRunner{})}
+	if err := os.MkdirAll(app.Config.ArtifactDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		app.captureSessionFile(context.Background(), telegram.Message{Chat: telegram.Chat{ID: 100}}, session, false)
+		close(done)
+	}()
+	<-started
+	inputReady := make(chan struct{})
+	go func() {
+		lock := app.sessionMutex(session.ID)
+		lock.Lock()
+		lock.Unlock()
+		close(inputReady)
+	}()
+	select {
+	case <-inputReady:
+	case <-time.After(time.Second):
+		t.Fatal("Telegram upload retained the terminal input mutex")
+	}
+	close(release)
+	<-done
+}
 
 func TestHandleAttachmentEnforcesSoftLimitDuringDownload(t *testing.T) {
 	dir := t.TempDir()
