@@ -114,45 +114,59 @@ func TestReattachWaitsForAnchorDeliveryAndNeutralizesOldView(t *testing.T) {
 }
 
 func TestReattachRevalidatesTargetAfterDisclosureWait(t *testing.T) {
-	store, session := legacyBindingStore(t)
-	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
-		current.AnchorChatID = 100
-		current.AnchorMessageID = 77
-		current.AnchorFormat = "text"
-		current.State = state.TerminalLost
-	}); err != nil {
-		t.Fatal(err)
-	}
-	runner := &reattachWaitRunner{serverID: appTestServerID, initialResolved: make(chan struct{})}
-	var paths []string
-	client := telegram.New("TOKEN")
-	client.BaseURL = "https://api.telegram.org/botTOKEN"
-	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		paths = append(paths, req.URL.Path)
-		return snapshotJSONResponse(`{"message_id":80,"chat":{"id":100}}`), nil
-	})}
-	app := &App{Config: config.Config{TelegramChatID: 100}, Store: store, Telegram: client, Tmux: tmux.New(runner)}
-	held := app.disclosureMutex(session.ID)
-	held.Lock()
-	done := make(chan actionResult, 1)
-	go func() {
-		done <- app.attachTarget(context.Background(), telegram.Message{MessageID: 70, Chat: telegram.Chat{ID: 100}}, session.TmuxPaneID)
-	}()
-	<-runner.initialResolved
-	runner.setServerID("abcdef0123456789abcdef0123456789")
-	held.Unlock()
-	result := <-done
-	if result.OK() || result.Message != "tmux changed while attaching" {
-		t.Fatalf("reattach result = %#v", result)
-	}
-	got, _ := store.FindSession(session.ID)
-	if got.TmuxServerID != "" || got.AnchorMessageID != 77 || got.State != state.TerminalLost {
-		t.Fatalf("stale target changed session = %#v", got)
-	}
-	for _, path := range paths {
-		if strings.Contains(path, "editMessage") {
-			t.Fatalf("stale target neutralized anchor: paths=%#v", paths)
-		}
+	for _, test := range []struct {
+		name   string
+		mutate func(*reattachWaitRunner)
+	}{
+		{name: "server restarted", mutate: func(runner *reattachWaitRunner) {
+			runner.setServerID("abcdef0123456789abcdef0123456789")
+		}},
+		{name: "target remapped", mutate: func(runner *reattachWaitRunner) {
+			runner.setTarget("@9", "%9")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, session := legacyBindingStore(t)
+			if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+				current.AnchorChatID = 100
+				current.AnchorMessageID = 77
+				current.AnchorFormat = "text"
+				current.State = state.TerminalLost
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runner := &reattachWaitRunner{serverID: appTestServerID, windowID: "@1", paneID: "%1", initialResolved: make(chan struct{})}
+			var paths []string
+			client := telegram.New("TOKEN")
+			client.BaseURL = "https://api.telegram.org/botTOKEN"
+			client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				paths = append(paths, req.URL.Path)
+				return snapshotJSONResponse(`{"message_id":80,"chat":{"id":100}}`), nil
+			})}
+			app := &App{Config: config.Config{TelegramChatID: 100}, Store: store, Telegram: client, Tmux: tmux.New(runner)}
+			held := app.disclosureMutex(session.ID)
+			held.Lock()
+			done := make(chan actionResult, 1)
+			go func() {
+				done <- app.attachTarget(context.Background(), telegram.Message{MessageID: 70, Chat: telegram.Chat{ID: 100}}, session.TmuxPaneID)
+			}()
+			<-runner.initialResolved
+			test.mutate(runner)
+			held.Unlock()
+			result := <-done
+			if result.OK() || result.Message != "tmux changed while attaching" {
+				t.Fatalf("reattach result = %#v", result)
+			}
+			got, _ := store.FindSession(session.ID)
+			if got.TmuxServerID != "" || got.AnchorMessageID != 77 || got.State != state.TerminalLost {
+				t.Fatalf("stale target changed session = %#v", got)
+			}
+			for _, path := range paths {
+				if strings.Contains(path, "editMessage") {
+					t.Fatalf("stale target neutralized anchor: paths=%#v", paths)
+				}
+			}
+		})
 	}
 }
 
@@ -255,6 +269,8 @@ type attachRestartRunner struct{ showCalls int }
 type reattachWaitRunner struct {
 	mu              sync.Mutex
 	serverID        string
+	windowID        string
+	paneID          string
 	showCalls       int
 	initialResolved chan struct{}
 	resolvedOnce    sync.Once
@@ -264,6 +280,13 @@ func (r *reattachWaitRunner) setServerID(serverID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.serverID = serverID
+}
+
+func (r *reattachWaitRunner) setTarget(windowID, paneID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.windowID = windowID
+	r.paneID = paneID
 }
 
 func (r *reattachWaitRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -277,7 +300,7 @@ func (r *reattachWaitRunner) Run(_ context.Context, args ...string) (string, err
 		}
 		return r.serverID + "\n", nil
 	case "display-message":
-		return framedTmuxRecord("$1", "main", "0", "@1", "legacy", "1", "%1", "/tmp", "bash"), nil
+		return framedTmuxRecord("$1", "main", "0", r.windowID, "legacy", "1", r.paneID, "/tmp", "bash"), nil
 	default:
 		return "", fmt.Errorf("unexpected tmux call: %v", args)
 	}
