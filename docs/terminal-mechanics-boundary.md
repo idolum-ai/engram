@@ -18,7 +18,7 @@ The implemented shape is:
 
 ```text
 Telegram orchestration -> private terminal mechanics -> tmux
-                       -> presentation (Haiku/Chromium)
+                       -> presentation (guide/Chromium)
                        -> Telegram delivery and anchors
 ```
 
@@ -94,7 +94,7 @@ concerns.
    literal, and scrollback captures condition the capture itself on that full
    binding in one tmux command queue; validation is not a separate authority.
 3. Names and indexes are for display and selection, never effect-time authority.
-4. Input remains independent of Telegram delivery, Haiku, and Chromium.
+4. Input remains independent of Telegram delivery, the guide, and Chromium.
 5. One bounded capture supplies physical ANSI and joined logical text over the
    same coordinates, bracketed by matching tmux identity, dimensions,
    foreground-command, alternate-screen, and copy-mode metadata.
@@ -116,7 +116,7 @@ independent of Telegram construction. Its complete surface is:
 
 The probe opens no listener, constructs no network client, starts no background
 worker, renders no terminal or Unicode presentation controls, issues no tmux
-mutation, leaves state unchanged, and requires no Telegram, Anthropic, or
+mutation, leaves state unchanged, and requires no Telegram, model-provider, or
 Chromium configuration. Literal pane content is not secret-redacted, and the
 owning user's tmux hooks remain possible tmux-side effects. It is a diagnostic
 and architecture test, not a second Engram interface.

@@ -149,7 +149,7 @@ func runDiagnostics(args []string, mode string) int {
 	st, stateErr := readState(cfg.StatePath())
 	snapshotPath, snapshotReady, snapshotErr := probeSnapshot(cfg)
 	anchorMode, err := cfg.ResolveAnchorMode(st.AnchorMode, config.ModeCapabilities{
-		HaikuConfigured: cfg.HaikuConfigured(),
+		GuideConfigured: cfg.GuideConfigured(),
 		SnapshotReady:   snapshotReady,
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func diagnosticsText(cfg config.Config, mode string) string {
 	st, stateErr := readState(cfg.StatePath())
 	snapshotPath, snapshotReady, _ := probeSnapshot(cfg)
 	anchorMode, err := cfg.ResolveAnchorMode(st.AnchorMode, config.ModeCapabilities{
-		HaikuConfigured: cfg.HaikuConfigured(),
+		GuideConfigured: cfg.GuideConfigured(),
 		SnapshotReady:   snapshotReady,
 	})
 	if err != nil {
@@ -206,12 +206,12 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 		stateStatus = "readable"
 	}
 	model := "unavailable"
-	haiku := "unavailable"
-	if cfg.HaikuConfigured() {
-		model = cfg.AnthropicModel
-		haiku = "configured, not probed"
+	guideStatus := "unavailable"
+	if cfg.GuideConfigured() {
+		model = cfg.GuideModel()
+		guideStatus = "configured, not probed"
 	}
-	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nhaiku: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\npolling: not_started\nstatus: ok\n",
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nguide: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nprovider: %s\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\nopenai_api: not_called\npolling: not_started\nstatus: ok\n",
 		mode,
 		version.String(),
 		cfg.EnvPath,
@@ -222,10 +222,11 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 		cfg.Workdir,
 		tmuxPath,
 		anchorMode,
-		haiku,
+		guideStatus,
 		snapshotPath,
 		cfg.TelegramAllowedUserID,
 		cfg.TelegramChatID,
+		cfg.EffectiveLLMProvider(),
 		model,
 		len(st.TerminalSessions),
 		st.LastUpdateID,

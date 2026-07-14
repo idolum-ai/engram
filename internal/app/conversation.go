@@ -14,8 +14,8 @@ const conversationTimeout = 75 * time.Second
 const conversationNoticeTimeout = 15 * time.Second
 
 func (a *App) queueConversation(ts state.TerminalSession) actionResult {
-	if !a.haikuAvailable || a.Anthropic == nil {
-		return actionResult{Outcome: actionStateFailed, Message: "Haiku is unavailable"}
+	if !a.guideAvailable || a.Guide == nil {
+		return actionResult{Outcome: actionStateFailed, Message: "conversational guide is unavailable"}
 	}
 	if !a.queueTransfer(func(ctx context.Context) {
 		conversationCtx, cancel := context.WithTimeout(ctx, conversationTimeout)
@@ -67,12 +67,12 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 			a.conversationNotice(ctx, requested, "That window changed while I was reading it, so I left the newer view in place.")
 			return
 		}
-		_ = a.Store.NoteHaiku(err.Error())
-		_ = a.audit("terminal.conversation", "haiku_failed", map[string]any{"session_id": current.ID, "error": err.Error()})
+		_ = a.Store.NoteGuide(err.Error())
+		_ = a.audit("terminal.conversation", "guide_failed", map[string]any{"session_id": current.ID, "error": err.Error()})
 		a.conversationNotice(ctx, requested, "I couldn't finish reading that window. Please try again.")
 		return
 	}
-	_ = a.Store.NoteHaiku("")
+	_ = a.Store.NoteGuide("")
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
 	anchorLock := a.anchorMutex(current.ID)

@@ -57,7 +57,7 @@ func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"Ordinary output is visible."}]}`))}, nil
 	})}
-	a.Anthropic = model
+	a.Guide = model
 
 	a.refreshSession(context.Background(), id, true)
 	got, _ := a.Store.FindSession(id)
@@ -84,7 +84,7 @@ func TestGuideDeliveryFailureDoesNotAdvanceCaptureOrConversation(t *testing.T) {
 		modelCalls++
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"The tests passed and the prompt is ready."}]}`))}, nil
 	})}
-	a.Anthropic = model
+	a.Guide = model
 	telegramCalls := 0
 	telegramClient := telegram.New("TOKEN")
 	telegramClient.BaseURL = "https://api.telegram.org/botTOKEN"
@@ -130,7 +130,7 @@ func TestGuideResultCannotCrossAReattachedServerBinding(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"Old server summary."}]}`))}, nil
 	})}
-	a.Anthropic = model
+	a.Guide = model
 	telegramCalls := 0
 	telegramClient := telegram.New("TOKEN")
 	telegramClient.BaseURL = "https://api.telegram.org/botTOKEN"
@@ -167,7 +167,7 @@ func TestManualResetRejectsAnInFlightHaikuFailure(t *testing.T) {
 		<-releaseModel
 		return &http.Response{StatusCode: http.StatusInternalServerError, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"unavailable"}}`))}, nil
 	})}
-	a.Anthropic = model
+	a.Guide = model
 	telegramCalls := 0
 	telegramClient := telegram.New("TOKEN")
 	telegramClient.BaseURL = "https://api.telegram.org/botTOKEN"

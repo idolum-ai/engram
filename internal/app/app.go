@@ -15,7 +15,9 @@ import (
 	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/guide"
 	"github.com/idolum-ai/engram/internal/lockfile"
+	"github.com/idolum-ai/engram/internal/openai"
 	"github.com/idolum-ai/engram/internal/redact"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
@@ -28,13 +30,13 @@ type App struct {
 	Config               config.Config
 	Store                *state.Store
 	Telegram             *telegram.Client
-	Anthropic            *anthropic.Client
+	Guide                guide.Renderer
 	Tmux                 tmux.Manager
 	Snapshots            snapshotRenderer
 	modeMu               sync.RWMutex
 	mode                 string
 	presentationMu       sync.RWMutex
-	haikuAvailable       bool
+	guideAvailable       bool
 	snapshotReady        bool
 	lock                 *lockfile.Lock
 	startedAt            time.Time
@@ -45,7 +47,7 @@ type App struct {
 	schedulerWG          sync.WaitGroup
 	transferWG           sync.WaitGroup
 	captureSlots         chan struct{}
-	haikuSlots           chan struct{}
+	guideSlots           chan struct{}
 	renderSlots          chan struct{}
 	transferSlots        chan struct{}
 	transferQueue        chan struct{}
@@ -72,7 +74,7 @@ type App struct {
 
 const summaryQuietPeriod = 2 * time.Second
 const maxConcurrentCaptures = 2
-const maxConcurrentHaikuRequests = 2
+const maxConcurrentGuideRequests = 2
 const maxConcurrentSnapshotRenders = 2
 const maxConcurrentTransfers = 2
 const maxQueuedTransfers = 8
@@ -102,9 +104,9 @@ func New(cfg config.Config) (*App, error) {
 		l.Close()
 		return nil, err
 	}
-	anthropicClient := anthropicClientFor(cfg)
+	guideRenderer := guideRendererFor(cfg)
 	mode, err := cfg.ResolveAnchorMode(store.Snapshot().AnchorMode, config.ModeCapabilities{
-		HaikuConfigured: anthropicClient != nil,
+		GuideConfigured: guideRenderer != nil,
 		SnapshotReady:   snapshotReady,
 	})
 	if err != nil {
@@ -121,17 +123,17 @@ func New(cfg config.Config) (*App, error) {
 		Config:             cfg,
 		Store:              store,
 		Telegram:           telegramClient,
-		Anthropic:          anthropicClient,
+		Guide:              guideRenderer,
 		Tmux:               tmux.New(tmux.ExecRunner{}),
 		Snapshots:          snapshotRenderer,
 		mode:               mode,
-		haikuAvailable:     anthropicClient != nil,
+		guideAvailable:     guideRenderer != nil,
 		snapshotReady:      snapshotReady,
 		lock:               l,
 		startedAt:          time.Now().UTC(),
 		stopCh:             make(chan struct{}),
 		captureSlots:       make(chan struct{}, maxConcurrentCaptures),
-		haikuSlots:         make(chan struct{}, maxConcurrentHaikuRequests),
+		guideSlots:         make(chan struct{}, maxConcurrentGuideRequests),
 		renderSlots:        make(chan struct{}, maxConcurrentSnapshotRenders),
 		transferSlots:      make(chan struct{}, maxConcurrentTransfers),
 		transferQueue:      make(chan struct{}, maxQueuedTransfers),
@@ -146,19 +148,26 @@ func New(cfg config.Config) (*App, error) {
 	}, nil
 }
 
-func anthropicClientFor(cfg config.Config) *anthropic.Client {
-	if !cfg.HaikuConfigured() {
+func guideRendererFor(cfg config.Config) guide.Renderer {
+	if !cfg.GuideConfigured() {
 		return nil
 	}
-	return anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	switch cfg.EffectiveLLMProvider() {
+	case config.LLMProviderAnthropic:
+		return anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	case config.LLMProviderOpenAI:
+		return openai.New(cfg.OpenAIAPIKey, cfg.OpenAIModel)
+	default:
+		return nil
+	}
 }
 
-func modeAvailable(mode string, haiku, snapshot bool) bool {
+func modeAvailable(mode string, guideReady, snapshotReady bool) bool {
 	switch mode {
 	case config.AnchorModeGuide:
-		return haiku
+		return guideReady
 	case config.AnchorModeSnapshot:
-		return snapshot
+		return snapshotReady
 	default:
 		return false
 	}
@@ -549,7 +558,7 @@ func (a *App) audit(eventType, status string, payload any) error {
 func (a *App) redactAuditPayload(payload any) any {
 	switch v := payload.(type) {
 	case string:
-		return redact.Secrets(v, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
+		return redact.Secrets(v, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, value := range v {
@@ -568,7 +577,7 @@ func (a *App) redactAuditPayload(payload any) any {
 }
 
 func (a *App) redactText(text string) string {
-	return redact.Secrets(text, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
+	return redact.Secrets(text, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
 }
 
 func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
@@ -585,16 +594,16 @@ func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
 	space := diskFree(a.Config.ArtifactDir())
-	haiku := "unavailable"
-	if a.haikuAvailable {
-		haiku = "configured, not probed (" + a.Config.AnthropicModel + ")"
+	guideStatus := "unavailable"
+	if a.guideAvailable {
+		guideStatus = "configured, not probed (" + a.Config.EffectiveLLMProvider() + "/" + a.Config.GuideModel() + ")"
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nhaiku: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast haiku: %s\nlast haiku error: %s",
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
 		a.anchorMode(),
-		haiku,
+		guideStatus,
 		a.snapshotStatus(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),

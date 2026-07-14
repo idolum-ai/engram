@@ -70,7 +70,7 @@ func TestLiveConversationEvidenceIgnoresPassiveChrome(t *testing.T) {
 	}
 
 	app, session := conversationEpochTestApp(t, 31)
-	app.Anthropic = anthropic.New(apiKey, model)
+	app.Guide = anthropic.New(apiKey, model)
 	text := "The work has completed and pushed to PR #11.\n\n\u203a excellent! show me the map: what we aimed to find, what rivers we crossed, and what lies ahead\n\nWorking (1s)\n\n\u203a Write tests for @filename\n\n  gpt-5.6-sol high \u00b7 ~ \u00b7 Main [default]"
 	capture := testStyledCapture("codex", text)
 	for attempt := 1; attempt <= 3; attempt++ {

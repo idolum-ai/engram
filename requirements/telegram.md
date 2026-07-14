@@ -20,8 +20,8 @@ Telegram is Engram's only user interface.
   `engram commands` derive from the registry. Every public slash command handled
   by the app has metadata.
 - Replies beginning `//` are escaped pane input, not Engram commands.
-- `/mode` reports the current and available presentations, distinguishing
-  configured Haiku from locally probed Chromium. `/mode guide` or `/mode
+- `/mode` reports the current and available presentations, distinguishing the
+  configured guide provider from locally probed Chromium. `/mode guide` or `/mode
   snapshot` begins migration only when the target capability is available, and
   the selected mode persists across restart.
 
@@ -37,7 +37,7 @@ Telegram is Engram's only user interface.
   created only when Telegram says the canonical message is uneditable.
 - Bot API errors are typed and sanitized; `retry_after` is honored with bounded,
   context-aware retry.
-- Haiku prose is not trusted as Telegram markup. Engram escapes raw HTML and
+- Model prose is not trusted as Telegram markup. Engram escapes raw HTML and
   converts only its supported Markdown subset.
 
 ## Callbacks And Alternate Views
@@ -50,8 +50,8 @@ Telegram is Engram's only user interface.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
 - Guide anchors expose refresh, allowed keys, and `🖼️` only when Chromium is
   ready. Snapshot anchors expose refresh, allowed keys, and `🗣️` only when
-  Haiku is configured.
-- `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one Haiku
+  a guide is configured.
+- `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces
   the canonical anchor.

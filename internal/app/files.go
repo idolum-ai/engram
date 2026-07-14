@@ -374,7 +374,7 @@ func (a *App) logs(ctx context.Context, msg telegram.Message) {
 		a.reply(ctx, msg, "log read error: "+err.Error())
 		return
 	}
-	text := redact.Secrets(string(b), a.Config.TelegramBotToken, a.Config.AnthropicAPIKey)
+	text := redact.Secrets(string(b), a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
 	file, path, err := createPredictableArtifact(a.Config.ArtifactDir(), "engram-logs-"+time.Now().UTC().Format("20060102T150405Z")+".jsonl")
 	if err != nil {
 		a.reply(ctx, msg, "log write error: "+err.Error())

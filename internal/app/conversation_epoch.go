@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/idolum-ai/engram/internal/anthropic"
+	"github.com/idolum-ai/engram/internal/guide"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
@@ -39,7 +39,7 @@ type conversationEpoch struct {
 }
 
 type conversationTurn struct {
-	input         anthropic.ConversationInput
+	input         guide.Input
 	frame         conversationFrame
 	resetRevision uint64
 }
@@ -105,7 +105,7 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 	turn := conversationTurn{
 		frame:         frame,
 		resetRevision: epoch.resetRevision,
-		input: anthropic.ConversationInput{
+		input: guide.Input{
 			SessionID:   session.ID,
 			VisibleText: text,
 		},

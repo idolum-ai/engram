@@ -74,7 +74,7 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   snapshot pixels do not come from separately timed observations.
 - Guide mode sends every frame's complete joined logical text, with upstream
   records, the trailing model-status footer, and a small allowlist of paired
-  Codex placeholder prompts removed, to Haiku in one
+  Codex placeholder prompts removed, to the selected guide provider in one
   non-streaming request. This semantic cleanup does not alter raw captures,
   screenshots, references, or hashes. Within a stable and
   strongly aligned capture boundary, Engram also supplies the previous
@@ -88,25 +88,25 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   is process-local, isolated per tracked window, advanced only after canonical
   delivery, and never persisted or shared across windows. One-off alternate
   renderings do not mutate it.
-- Every guide rendering still uses exactly one non-streaming Haiku request,
+- Every guide rendering still uses exactly one non-streaming model request,
   with no model API history, structured response, or second request. It renders
   compact conversational prose with short, single-idea paragraphs. Engram
   deterministically bounds a completed response to at most 180 words before
   delivery. Shared work uses a collaborative "we" voice; "you" is reserved for
   actions that belong to the reader alone.
-- Haiku names a tool, project, account, or person only when the terminal text
+- The guide names a tool, project, account, or person only when the terminal text
   visibly establishes that identity. Model identifiers are never user identities.
 - Snapshot mode renders the same frame through Chromium into a full-bleed
   430x932 logical-pixel image at 3x density.
-- Terminal content is untrusted data for Haiku, not intended instructions or
+- Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.
 - A guide anchor includes `🖼️` only when Chromium passed startup readiness. A
-  snapshot anchor includes `🗣️` only when Haiku is configured. These produce
+  snapshot anchor includes `🗣️` only when a guide is configured. These produce
   one-off replies and never replace the canonical anchor.
 - Both modes append locally extracted references. `paths` contains at most four
   existing absolute or home-relative regular files/directories. `links`
-  contains at most four valid HTTP(S) URLs. Engram never asks Haiku to generate
+  contains at most four valid HTTP(S) URLs. Engram never asks the model to generate
   references or fetches an extracted URL.
 - `/raw` preserves the visible pane's physical wrapped lines and attributes.
   `/dump` streams physical full scrollback to an attachment. Both captures are

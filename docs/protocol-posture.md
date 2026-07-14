@@ -119,7 +119,7 @@ capability and security model, not a silent extension of the attention record.
   migration mechanics.
 - Scheduler cadence, queues, locks, semaphores, and worker counts.
 - Chromium invocation, image dimensions, and temporary files.
-- Anthropic request shape, prompt wording, model ID, and prose formatting beyond
+- Model-provider request shape, prompt wording, model ID, and prose formatting beyond
   the declared bounded-frame privacy boundary.
 - Audit JSON shape unless an operator-facing compatibility promise is made.
 - Local ID allocation and title heuristics.

@@ -21,6 +21,8 @@ func TestPackageImportBoundaries(t *testing.T) {
 			forbidden: []string{
 				"github.com/idolum-ai/engram/internal/app",
 				"github.com/idolum-ai/engram/internal/anthropic",
+				"github.com/idolum-ai/engram/internal/guide",
+				"github.com/idolum-ai/engram/internal/openai",
 				"github.com/idolum-ai/engram/internal/state",
 				"github.com/idolum-ai/engram/internal/tmux",
 			},
@@ -39,6 +41,26 @@ func TestPackageImportBoundaries(t *testing.T) {
 				"github.com/idolum-ai/engram/internal/app",
 				"github.com/idolum-ai/engram/internal/telegram",
 				"github.com/idolum-ai/engram/internal/state",
+				"github.com/idolum-ai/engram/internal/tmux",
+			},
+		},
+		{
+			dir: "internal/openai",
+			forbidden: []string{
+				"github.com/idolum-ai/engram/internal/app",
+				"github.com/idolum-ai/engram/internal/telegram",
+				"github.com/idolum-ai/engram/internal/state",
+				"github.com/idolum-ai/engram/internal/tmux",
+			},
+		},
+		{
+			dir: "internal/guide",
+			forbidden: []string{
+				"github.com/idolum-ai/engram/internal/anthropic",
+				"github.com/idolum-ai/engram/internal/app",
+				"github.com/idolum-ai/engram/internal/openai",
+				"github.com/idolum-ai/engram/internal/state",
+				"github.com/idolum-ai/engram/internal/telegram",
 				"github.com/idolum-ai/engram/internal/tmux",
 			},
 		},
@@ -65,7 +87,9 @@ func TestPackageImportBoundaries(t *testing.T) {
 			forbidden: []string{
 				"github.com/idolum-ai/engram/internal/app",
 				"github.com/idolum-ai/engram/internal/anthropic",
+				"github.com/idolum-ai/engram/internal/guide",
 				"github.com/idolum-ai/engram/internal/inspect",
+				"github.com/idolum-ai/engram/internal/openai",
 				"github.com/idolum-ai/engram/internal/state",
 				"github.com/idolum-ai/engram/internal/telegram",
 				"github.com/idolum-ai/engram/internal/terminalshot",
@@ -76,6 +100,8 @@ func TestPackageImportBoundaries(t *testing.T) {
 			forbidden: []string{
 				"github.com/idolum-ai/engram/internal/app",
 				"github.com/idolum-ai/engram/internal/anthropic",
+				"github.com/idolum-ai/engram/internal/guide",
+				"github.com/idolum-ai/engram/internal/openai",
 				"github.com/idolum-ai/engram/internal/telegram",
 				"github.com/idolum-ai/engram/internal/terminalshot",
 			},

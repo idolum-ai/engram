@@ -6,9 +6,11 @@ import (
 )
 
 func TestSecretsRedactsCommonSecretShapes(t *testing.T) {
+	openAIKey := "sk-proj-" + "1234567890abcdef"
 	raw := strings.Join([]string{
 		`Authorization: Bearer bearer-secret-value`,
 		`ANTHROPIC_API_KEY=sk-ant-secret-value`,
+		`OPENAI_API_KEY=` + openAIKey,
 		`TELEGRAM_BOT_TOKEN=123:telegram-secret`,
 		`{"password":"pw-secret-value","token":"json-token-value"}`,
 		`github_pat_1234567890abcdef`,
@@ -20,6 +22,7 @@ func TestSecretsRedactsCommonSecretShapes(t *testing.T) {
 	for _, leaked := range []string{
 		"bearer-secret-value",
 		"sk-ant-secret-value",
+		openAIKey,
 		"123:telegram-secret",
 		"pw-secret-value",
 		"json-token-value",
@@ -31,7 +34,7 @@ func TestSecretsRedactsCommonSecretShapes(t *testing.T) {
 			t.Fatalf("Secrets leaked %q in:\n%s", leaked, got)
 		}
 	}
-	for _, want := range []string{"<redacted", "Authorization: Bearer <redacted>", "ANTHROPIC_API_KEY=<redacted>"} {
+	for _, want := range []string{"<redacted", "Authorization: Bearer <redacted>", "ANTHROPIC_API_KEY=<redacted>", "OPENAI_API_KEY=<redacted>"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Secrets output missing %q:\n%s", want, got)
 		}

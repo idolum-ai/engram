@@ -255,7 +255,7 @@ ENGRAM_SNAPSHOT_THEME=sepia
 	}
 }
 
-func TestSnapshotAnchorModeDoesNotRequireAnthropic(t *testing.T) {
+func TestSnapshotAnchorModeDoesNotRequireGuideProvider(t *testing.T) {
 	dir := t.TempDir()
 	env := filepath.Join(dir, ".env")
 	if err := os.WriteFile(env, []byte(`
@@ -269,12 +269,12 @@ ENGRAM_ANCHOR_MODE=snapshot
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.SnapshotAnchors() || cfg.AnthropicAPIKey != "" {
+	if !cfg.SnapshotAnchors() || cfg.AnthropicAPIKey != "" || cfg.OpenAIAPIKey != "" || cfg.GuideConfigured() {
 		t.Fatalf("snapshot config = %#v", cfg)
 	}
 }
 
-func TestLoadAllowsDefaultModeWithoutAnthropicForPersistedFallback(t *testing.T) {
+func TestLoadAllowsDefaultModeWithoutGuideForPersistedFallback(t *testing.T) {
 	dir := t.TempDir()
 	env := filepath.Join(dir, ".env")
 	if err := os.WriteFile(env, []byte(`
@@ -287,7 +287,7 @@ TELEGRAM_ALLOWED_USER_ID=123
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.EffectiveAnchorMode() != AnchorModeGuide || cfg.HaikuConfigured() {
+	if cfg.EffectiveAnchorMode() != AnchorModeGuide || cfg.GuideConfigured() {
 		t.Fatalf("default config = %#v", cfg)
 	}
 }
@@ -295,12 +295,12 @@ TELEGRAM_ALLOWED_USER_ID=123
 func TestResolveAnchorModePrefersPersistedThenEnvironmentFallback(t *testing.T) {
 	cfg := Config{AnchorMode: AnchorModeGuide}
 
-	mode, err := cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{HaikuConfigured: true, SnapshotReady: true})
+	mode, err := cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{GuideConfigured: true, SnapshotReady: true})
 	if err != nil || mode != AnchorModeSnapshot {
 		t.Fatalf("persisted resolution mode=%q err=%v", mode, err)
 	}
 
-	mode, err = cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{HaikuConfigured: true})
+	mode, err = cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{GuideConfigured: true})
 	if err != nil || mode != AnchorModeGuide {
 		t.Fatalf("fallback resolution mode=%q err=%v", mode, err)
 	}
@@ -355,6 +355,59 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 	}
 	if _, err := Load(env); err == nil {
 		t.Fatal("Load accepted non-Haiku model")
+	}
+}
+
+func TestLoadConfiguresOpenAILuna(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+LLM_PROVIDER=openai
+OPENAI_API_KEY=openai-key
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.GuideConfigured() || cfg.EffectiveLLMProvider() != LLMProviderOpenAI || cfg.GuideModel() != DefaultOpenAIModel || cfg.OpenAIAPIKey != "openai-key" {
+		t.Fatalf("OpenAI config = %#v", cfg)
+	}
+}
+
+func TestLoadRejectsUnassessedOpenAIModel(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+LLM_PROVIDER=openai
+OPENAI_API_KEY=openai-key
+OPENAI_MODEL=gpt-5.4-nano
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "OPENAI_MODEL") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
+func TestLoadRejectsUnknownLLMProviderEvenWithoutKey(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+LLM_PROVIDER=local
+ENGRAM_ANCHOR_MODE=snapshot
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "LLM_PROVIDER") {
+		t.Fatalf("Load error = %v", err)
 	}
 }
 

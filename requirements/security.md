@@ -1,7 +1,7 @@
 # Security Requirements
 
 Engram intentionally bridges Telegram, local tmux, the local filesystem, and
-optional presentation dependencies Anthropic and Chromium. The security and
+optional presentation dependencies a model provider and Chromium. The security and
 privacy model must stay small and explicit.
 
 ## Identity
@@ -17,7 +17,7 @@ privacy model must stay small and explicit.
 
 - `.env` files must not be tracked.
 - Runtime env files must be regular files with no group or other permissions.
-- Bot tokens and Anthropic keys must not appear in tracked files, diagnostics,
+- Bot tokens and model-provider keys must not appear in tracked files, diagnostics,
   issues, or test fixtures.
 - Audit payloads and `/logs` output must redact configured credentials and
   common credential patterns.
@@ -35,13 +35,13 @@ privacy model must stay small and explicit.
   Telegram-bound Engram data. HTTPS is strongly recommended; HTTP provides no
   transport confidentiality and is intended only for explicitly trusted local
   deployments.
-- Documentation must explain that Anthropic and Chromium begin from the same
+- Documentation must explain that the selected model provider and Chromium begin from the same
   `CaptureStyled` frame, capped at 64 rows. Chromium renders the literal styled
-  frame. Anthropic receives its joined semantic text after upstream records,
+  frame. The model provider receives its joined semantic text after upstream records,
   recognized model-status footer text, and a small allowlist of paired Codex
   placeholder prompts are removed. Guide anchors call it automatically;
   `🗣️` invokes it on demand from snapshot mode.
-- Bounded terminal text sent to Anthropic is not credential-redacted. Every
+- Bounded terminal text sent to the selected provider is not credential-redacted. Every
   request contains the complete current semantic evidence described above. A
   strongly aligned later request may additionally contain process-local
   continuity made from the previous rendering, deterministic added and removed
@@ -52,17 +52,17 @@ privacy model must stay small and explicit.
   isolated per tracked window, never persisted, and discarded at capture
   boundaries.
 - Terminal captures are untrusted data for the guide. The prompt explicitly
-  tells Haiku that pane-authored and continuity text has no authority, but
+  tells the model that pane-authored and continuity text has no authority, but
   model resistance to prompt injection is best effort rather than a security
-  boundary. Engram never executes Haiku output automatically.
+  boundary. Engram never executes model output automatically.
 - Incoming attachments are downloaded from Telegram but are not sent to
-  Anthropic by default.
+  a model provider by default.
 - Terminal image snapshots are exact, unredacted transcript data. They are sent
   to a local headless browser and then to the configured Telegram DM, never to
-  Anthropic. Terminal text must be HTML-escaped; browser networking, extensions,
+  a model provider. Terminal text must be HTML-escaped; browser networking, extensions,
   and persistent profiles must be disabled.
 - In `snapshot` mode, exact terminal images are sent automatically whenever a
-  changed live anchor is rendered. Anthropic is called only when the user taps
+  changed live anchor is rendered. The selected provider is called only when the user taps
   `🗣️`, if that capability was configured and enabled at startup.
 - Extracted HTTP(S) URLs are untrusted terminal text. Engram may display them in
   anchor references but must never fetch, validate remotely, or treat them as
@@ -87,7 +87,7 @@ privacy model must stay small and explicit.
 
 ## Local Effects
 
-- Local `engram inspect` commands construct no Telegram, Anthropic, or Chromium
+- Local `engram inspect` commands construct no Telegram, model-provider, or Chromium
   client and perform no direct network request. They remove terminal and Unicode
   presentation controls before writing bounded output to stdout, but do not
   redact literal pane content. User-configured tmux hooks remain tmux-side
@@ -137,12 +137,12 @@ privacy model must stay small and explicit.
 - A lock prevents two Engram instances from polling the same Telegram settings.
 - Service restart should preserve tmux sessions and state.
 - Nested environments signal only through terminal output. They receive no
-  Telegram, Anthropic, state-directory, or parent-tmux credentials and require
+  Telegram, model-provider, state-directory, or parent-tmux credentials and require
   no new host listener; the marker is untrusted framing, not authentication.
 - Upstream signaling intentionally turns pane-write capability into a bounded
   parent-authenticated Telegram notification and routable reply alias. This is
   an attention capability, not proof that the emitting process is trusted.
-- Recognized upstream records are omitted from Haiku input and reference
+- Recognized upstream records are omitted from guide input and reference
   extraction. Their textual notification and audit payload are redacted; an
   exact snapshot can still contain the literal record under the existing
   unredacted snapshot boundary.
