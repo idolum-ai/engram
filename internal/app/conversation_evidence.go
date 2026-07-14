@@ -2,9 +2,9 @@ package app
 
 import "strings"
 
-// conversationEvidence removes a trailing idle prompt and status footer from
-// model input. They are terminal controls, not evidence about the work. Raw
-// captures remain unchanged for snapshots, references, and local inspection.
+// conversationEvidence removes a model-status footer and its paired known
+// placeholder from model input. Raw captures remain unchanged for snapshots,
+// references, and local inspection.
 func conversationEvidence(text string) string {
 	lines := strings.Split(text, "\n")
 	end := lastNonBlankLine(lines)
@@ -13,7 +13,7 @@ func conversationEvidence(text string) string {
 	}
 
 	end = lastNonBlankLine(lines[:end])
-	if start := trailingIdlePromptStart(lines, end); start >= 0 {
+	if start := trailingPassivePromptStart(lines, end); start >= 0 {
 		end = start - 1
 	}
 	for end >= 0 && strings.TrimSpace(lines[end]) == "" {
@@ -45,12 +45,7 @@ func isPassiveTerminalFooter(line string) bool {
 	return false
 }
 
-func isIdlePromptLine(line string) bool {
-	line = strings.TrimSpace(line)
-	return strings.HasPrefix(line, "\u203a") || strings.HasPrefix(line, ">")
-}
-
-func trailingIdlePromptStart(lines []string, end int) int {
+func trailingPassivePromptStart(lines []string, end int) int {
 	if end < 0 {
 		return -1
 	}
@@ -58,8 +53,23 @@ func trailingIdlePromptStart(lines []string, end int) int {
 	for start > 0 && strings.TrimSpace(lines[start-1]) != "" {
 		start--
 	}
-	if isIdlePromptLine(lines[start]) {
+	first := strings.TrimSpace(lines[start])
+	if !strings.HasPrefix(first, "\u203a") {
+		return -1
+	}
+	lines = append([]string(nil), lines[start:end+1]...)
+	lines[0] = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[0]), "\u203a"))
+	if isPassivePromptSuggestion(strings.ToLower(strings.Join(strings.Fields(strings.Join(lines, " ")), " "))) {
 		return start
 	}
 	return -1
+}
+
+func isPassivePromptSuggestion(text string) bool {
+	switch text {
+	case "find and fix a bug in @filename", "run /review on my current changes", "write tests for @filename":
+		return true
+	default:
+		return false
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const SystemPrompt = `Render the supplied terminal evidence in plain English so its reader can grasp the work at a glance. Preserve meaning rather than the terminal's visual form. Continuity may come from the voice, never from invented memory or context outside this request.
@@ -23,6 +24,7 @@ Use the terminal text as the sole source of truth. Do not infer a hidden cause, 
 Write natural prose from beside the work. Describe commands, events, and results directly instead of claiming that "you" or "the operator" performed them. Use "we" only when ongoing shared work is visibly established, and "you" only for an action the screen clearly leaves to the reader. Use at most 180 words, keeping only the facts needed to understand the present situation. Separate distinct ideas into short phone-readable paragraphs. Include a next step only when the terminal explicitly states one. Otherwise end when the visible situation is clear; do not troubleshoot or propose a cause, dependency, or remedy. Return prose without headings, field labels, lists, a fixed opening, or a closing question.`
 
 const maxTokens = 640
+const maxConversationWords = 180
 const conversationalTemperature = 0.2
 
 type Client struct {
@@ -66,7 +68,32 @@ func (c *Client) Converse(ctx context.Context, in ConversationInput) (string, er
 	if text == "" {
 		return "", fmt.Errorf("anthropic returned no text")
 	}
-	return text, nil
+	return limitWords(text, maxConversationWords), nil
+}
+
+func limitWords(text string, maximum int) string {
+	if maximum <= 0 {
+		return ""
+	}
+	if len(strings.Fields(text)) <= maximum {
+		return text
+	}
+	words := 0
+	inWord := false
+	for index, r := range text {
+		if unicode.IsSpace(r) {
+			if inWord {
+				words++
+				if words == maximum {
+					return strings.TrimSpace(text[:index]) + "..."
+				}
+			}
+			inWord = false
+			continue
+		}
+		inWord = true
+	}
+	return text
 }
 
 func float64Pointer(value float64) *float64 { return &value }

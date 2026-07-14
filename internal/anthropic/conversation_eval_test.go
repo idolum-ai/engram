@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -63,6 +64,14 @@ func TestHardOutputRegressionsRejectWrongNumber(t *testing.T) {
 	failures := hardOutputRegressions(evalCase, "Six concrete issues remain, including callback authorization and the JSONL record.")
 	if !containsFailure(failures, "unsupported number claim") {
 		t.Fatalf("failures = %v, want unsupported number claim", failures)
+	}
+}
+
+func TestHardOutputRegressionsRejectOverlongOutput(t *testing.T) {
+	evalCase := conversationCase{TerminalText: "ordinary output"}
+	failures := hardOutputRegressions(evalCase, strings.Repeat("word ", maxConversationWords+1))
+	if !containsFailure(failures, "maximum is 180") {
+		t.Fatalf("failures = %v, want output length failure", failures)
 	}
 }
 
@@ -229,6 +238,9 @@ func hardOutputRegressions(evalCase conversationCase, output string) []string {
 		}
 	}
 	failures = append(failures, unsupportedNumberClaims(evalCase.TerminalText, output)...)
+	if words := len(strings.Fields(output)); words > maxConversationWords {
+		failures = append(failures, fmt.Sprintf("output has %d words; maximum is %d", words, maxConversationWords))
+	}
 	return failures
 }
 

@@ -73,7 +73,8 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   in one tmux command batch so signal parsing, guide text, references, and
   snapshot pixels do not come from separately timed observations.
 - Guide mode sends every frame's complete joined logical text, with upstream
-  records and passive trailing prompt chrome removed, to Haiku in one
+  records, the trailing model-status footer, and a small allowlist of paired
+  Codex placeholder prompts removed, to Haiku in one
   non-streaming request. This semantic cleanup does not alter raw captures,
   screenshots, references, or hashes. Within a stable and
   strongly aligned capture boundary, Engram also supplies the previous
@@ -89,9 +90,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   renderings do not mutate it.
 - Every guide rendering still uses exactly one non-streaming Haiku request,
   with no model API history, structured response, or second request. It renders
-  compact conversational prose of at most 180 words with short, single-idea
-  paragraphs. Shared work uses a collaborative "we" voice; "you" is reserved
-  for actions that belong to the reader alone.
+  compact conversational prose with short, single-idea paragraphs. Engram
+  deterministically bounds a completed response to at most 180 words before
+  delivery. Shared work uses a collaborative "we" voice; "you" is reserved for
+  actions that belong to the reader alone.
 - Haiku names a tool, project, account, or person only when the terminal text
   visibly establishes that identity. Model identifiers are never user identities.
 - Snapshot mode renders the same frame through Chromium into a full-bleed

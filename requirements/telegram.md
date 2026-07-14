@@ -52,8 +52,9 @@ Telegram is Engram's only user interface.
   ready. Snapshot anchors expose refresh, allowed keys, and `🗣️` only when
   Haiku is configured.
 - `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one Haiku
-  request over the shared bounded frame and replies conversationally to a
-  snapshot anchor. Neither blocks polling or replaces the canonical anchor.
+  request over the shared bounded frame's semantic evidence and replies
+  conversationally to a snapshot anchor. Neither blocks polling or replaces
+  the canonical anchor.
 - The latest conversational reply and latest screenshot reply for each session
   route Telegram replies to that session. The latest upstream-signal reply has
   the same routing behavior. Publishing a newer alternate of the same kind

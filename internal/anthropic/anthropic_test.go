@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -187,6 +188,28 @@ func TestConverseAcceptsEndTurnResponse(t *testing.T) {
 	}
 	if got != "Complete response." {
 		t.Fatalf("Converse() = %q", got)
+	}
+}
+
+func TestConverseBoundsOverlongResponse(t *testing.T) {
+	words := make([]string, maxConversationWords+1)
+	for index := range words {
+		words[index] = fmt.Sprintf("word%d", index+1)
+	}
+	client := New("key", "claude-haiku-4-5-20251001")
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return anthropicResponse(strings.Join(words, " "), "end_turn"), nil
+	})}
+
+	got, err := client.Converse(context.Background(), ConversationInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := len(strings.Fields(got)); count != maxConversationWords {
+		t.Fatalf("bounded response words = %d, want %d", count, maxConversationWords)
+	}
+	if !strings.Contains(got, "word180...") || strings.Contains(got, "word181") {
+		t.Fatalf("bounded response = %q", got)
 	}
 }
 

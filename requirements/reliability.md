@@ -136,9 +136,12 @@ exports a bounded recent tail, not an unbounded full audit file.
   one bounded failure notice. A concurrent anchor or mode change supersedes the
   request visibly rather than delivering it against a different live anchor.
 - Reattachment serializes with anchor delivery. Before the stored tmux binding
-  changes, an existing canonical message is synchronously reduced to a neutral,
-  control-free reattachment state; if Telegram cannot do that, reattachment
-  does not proceed. The fresh binding then receives a fresh capture.
+  changes, Engram re-resolves the requested target and brackets it with the
+  current server identity after waiting for in-flight disclosure work. An
+  existing canonical message is then synchronously reduced to a neutral,
+  control-free reattachment state; if the target moved or Telegram cannot
+  neutralize the anchor, reattachment does not proceed. The fresh binding then
+  receives a fresh capture.
 - Every external disclosure rechecks its terminal generation after bounded
   queueing. A guide request holds the presentation mode and session binding
   stable from its final check through the Anthropic call. Raw and scrollback

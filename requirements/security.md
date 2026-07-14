@@ -35,14 +35,18 @@ privacy model must stay small and explicit.
   Telegram-bound Engram data. HTTPS is strongly recommended; HTTP provides no
   transport confidentiality and is intended only for explicitly trusted local
   deployments.
-- Documentation must explain that Anthropic receives the plain text of the same
-  `CaptureStyled` frame, capped at 64 rows, used by Chromium. Guide anchors call it
-  automatically; `🗣️` invokes it on demand from snapshot mode.
+- Documentation must explain that Anthropic and Chromium begin from the same
+  `CaptureStyled` frame, capped at 64 rows. Chromium renders the literal styled
+  frame. Anthropic receives its joined semantic text after upstream records,
+  recognized model-status footer text, and a small allowlist of paired Codex
+  placeholder prompts are removed. Guide anchors call it automatically;
+  `🗣️` invokes it on demand from snapshot mode.
 - Bounded terminal text sent to Anthropic is not credential-redacted. Every
-  request contains the complete current joined frame. A strongly aligned later
-  request may additionally contain process-local continuity made from the
-  previous rendering, deterministic added and removed lines, and bounded
-  unchanged context. Those additions are not factual authority. Engram does
+  request contains the complete current semantic evidence described above. A
+  strongly aligned later request may additionally contain process-local
+  continuity made from the previous rendering, deterministic added and removed
+  lines, and bounded unchanged context. Those additions are not factual
+  authority. Engram does
   not retain submitted Telegram input for model context and sends one request
   with no model API history, structured report, or retry. Continuity is
   isolated per tracked window, never persisted, and discarded at capture

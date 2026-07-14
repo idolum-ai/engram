@@ -212,12 +212,17 @@ the bot channel and must be revoked immediately.
   PNG after delivery. No snapshot content is sent to Anthropic. The two contrast themes use a
   color-vision-safe ANSI palette, remove opacity-based dim text, and correct
   low-contrast terminal colors to at least a 4.5:1 contrast ratio.
-- **Anthropic Haiku:** Guide anchors send the joined logical text of the same
-  frame, with recognized upstream records removed, capped at 64 rows, in one
-  non-streaming request. Every request contains the complete current frame;
+- **Anthropic Haiku:** Guide anchors start from the same frame as Chromium and
+  send its joined logical text, capped at 64 rows, in one non-streaming request.
+  Recognized upstream records, the trailing model-status footer, and a small
+  allowlist of paired Codex placeholder prompts are omitted from model evidence
+  but remain in screenshots and raw captures. Every request contains the
+  complete current semantic evidence;
   aligned requests may also carry prior prose and deterministic changed,
   removed, and neighboring lines as attention hints. There is no model history
   or structured response, no second request, and no remembered Telegram input.
+  Completed model prose is deterministically bounded to 180 words before
+  delivery.
   In snapshot mode, tapping `🗣️` makes the same one-off request and
   sends its conversational result as a reply without replacing the photo
   anchor. Captures are not credential-redacted before they are sent.
@@ -446,10 +451,11 @@ sessions and up to thirty seconds after five minutes without Engram input. The
 terminal bell does not currently shorten that interval. Manual anchor refresh
 observes immediately.
 
-In Haiku mode, Engram sends the shared bounded frame to Haiku once and edits the
-canonical text anchor with compact, collaborative prose broken into short
-phone-readable paragraphs. Every rendering includes the complete current
-terminal frame. While the same program remains in the same stable tmux capture,
+In Haiku mode, Engram sends the shared bounded frame's semantic evidence to
+Haiku once and edits the canonical text anchor with compact, collaborative prose
+broken into short phone-readable paragraphs. Every rendering includes the
+complete current semantic evidence after the narrow exclusions documented
+above. While the same program remains in the same stable tmux capture,
 later renderings may also use deterministic added and removed lines, unchanged
 neighbors, and the previous prose to continue naturally without sharing context
 between windows. Those hints never override the current frame. A capture
@@ -552,9 +558,9 @@ ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
   -run TestLiveHaikuConversationEvaluation -count=1
 ```
 
-The four incremental fixtures exercise conversational continuation from a
-complete current frame plus a previous rendering and deterministic terminal
-changes. They cover completion, a newly reported blocker, stale-prose
+The four incremental fixtures exercise conversational continuation from
+complete current semantic evidence plus a previous rendering and deterministic
+terminal changes. They cover completion, a newly reported blocker, stale-prose
 correction, and a warning that disappeared. Every case runs twice by default
 and enforces complete designated-concept coverage as well as hard factual
 regressions:

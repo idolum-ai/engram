@@ -128,6 +128,14 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		lock.Lock()
 		anchorLock := a.anchorMutex(existing.ID)
 		anchorLock.Lock()
+		freshWindow, revalidateErr := a.revalidateAttachTarget(ctx, target, serverID, window)
+		if revalidateErr != nil {
+			anchorLock.Unlock()
+			lock.Unlock()
+			a.reply(ctx, msg, "tmux changed while attaching; run /sessions and try again")
+			return actionResult{Outcome: actionTmuxFailed, Message: "tmux changed while attaching"}
+		}
+		window = freshWindow
 		lockedCurrent, current := a.Store.FindSession(existing.ID)
 		if !current || !sameTerminalBinding(lockedCurrent, existing) || lockedCurrent.AnchorMessageID != existing.AnchorMessageID {
 			anchorLock.Unlock()
@@ -220,6 +228,24 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
 	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("attached [%d]", ts.ID)}
+}
+
+func (a *App) revalidateAttachTarget(ctx context.Context, target, serverID string, expected tmux.Window) (tmux.Window, error) {
+	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
+	defer cancel()
+	before, err := a.Tmux.CurrentServerID(tmuxCtx)
+	if err != nil || before != serverID {
+		return tmux.Window{}, fmt.Errorf("tmux server changed")
+	}
+	window, err := a.Tmux.ResolveTarget(tmuxCtx, strings.TrimSpace(target))
+	if err != nil {
+		return tmux.Window{}, err
+	}
+	after, err := a.Tmux.CurrentServerID(tmuxCtx)
+	if err != nil || after != before || window.ID != expected.ID || window.PaneID != expected.PaneID {
+		return tmux.Window{}, fmt.Errorf("tmux target changed")
+	}
+	return window, nil
 }
 
 func (a *App) neutralizeAnchorForReattachLocked(ctx context.Context, session state.TerminalSession) error {
