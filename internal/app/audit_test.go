@@ -21,6 +21,7 @@ func TestAuditRedactsConfiguredSecrets(t *testing.T) {
 		Config: config.Config{
 			TelegramBotToken: "tg-secret-token",
 			AnthropicAPIKey:  "anthropic-secret-key",
+			OpenAIAPIKey:     "openai-secret-key",
 		},
 		Store: store,
 	}
@@ -29,7 +30,7 @@ func TestAuditRedactsConfiguredSecrets(t *testing.T) {
 		"error": "Post \"https://api.telegram.org/bottg-secret-token/editMessageText\": context canceled",
 		"nested": []any{
 			"anthropic-secret-key",
-			map[string]any{"env": "ANTHROPIC_API_KEY=anthropic-secret-key"},
+			map[string]any{"env": "ANTHROPIC_API_KEY=anthropic-secret-key OPENAI_API_KEY=openai-secret-key"},
 		},
 	})
 	if err != nil {
@@ -41,7 +42,7 @@ func TestAuditRedactsConfiguredSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(b)
-	if strings.Contains(got, "tg-secret-token") || strings.Contains(got, "anthropic-secret-key") {
+	if strings.Contains(got, "tg-secret-token") || strings.Contains(got, "anthropic-secret-key") || strings.Contains(got, "openai-secret-key") {
 		t.Fatalf("audit log contains secret: %s", got)
 	}
 	if !strings.Contains(got, "redacted") {

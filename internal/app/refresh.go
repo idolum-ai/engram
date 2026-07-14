@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/idolum-ai/engram/internal/anthropic"
+	"github.com/idolum-ai/engram/internal/guide"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/terminalshot"
@@ -94,8 +94,8 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	if guideErr != nil {
-		if stateErr := a.Store.NoteHaiku(guideErr.Error()); stateErr != nil {
-			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
+		if stateErr := a.Store.NoteGuide(guideErr.Error()); stateErr != nil {
+			_ = a.audit("state.guide", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
 		if ts.LastSummary != "" {
 			summary = ts.LastSummary + "\n\n[summary stale: " + guideErr.Error() + "]"
@@ -103,8 +103,8 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			summary = "summary unavailable: " + guideErr.Error()
 		}
 	} else {
-		if stateErr := a.Store.NoteHaiku(""); stateErr != nil {
-			_ = a.audit("state.haiku", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
+		if stateErr := a.Store.NoteGuide(""); stateErr != nil {
+			_ = a.audit("state.guide", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
 	}
 	lock := a.sessionMutex(id)
@@ -179,10 +179,10 @@ func headUTF8(text string, maxBytes int) string {
 
 func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, conversationTurn, error) {
 	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText))
-	if !acquireSlot(ctx, a.haikuSlots) {
+	if !acquireSlot(ctx, a.guideSlots) {
 		return "", turn, ctx.Err()
 	}
-	defer releaseSlot(a.haikuSlots)
+	defer releaseSlot(a.guideSlots)
 	identityLock := a.sessionMutex(session.ID)
 	identityLock.Lock()
 	defer identityLock.Unlock()
@@ -192,7 +192,7 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
 		return "", turn, errConversationTurnSuperseded
 	}
-	summary, err := a.Anthropic.Converse(ctx, turn.input)
+	summary, err := a.Guide.Converse(ctx, turn.input)
 	if err != nil {
 		return "", turn, err
 	}
@@ -201,10 +201,10 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 }
 
 func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string) (string, error) {
-	if !acquireSlot(ctx, a.haikuSlots) {
+	if !acquireSlot(ctx, a.guideSlots) {
 		return "", ctx.Err()
 	}
-	defer releaseSlot(a.haikuSlots)
+	defer releaseSlot(a.guideSlots)
 	identityLock := a.sessionMutex(session.ID)
 	identityLock.Lock()
 	defer identityLock.Unlock()
@@ -214,7 +214,7 @@ func (a *App) snapshotConversationalSummary(ctx context.Context, session state.T
 	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		return "", errConversationTurnSuperseded
 	}
-	summary, err := a.Anthropic.Converse(ctx, anthropic.ConversationInput{SessionID: session.ID, VisibleText: conversationEvidence(presentationText)})
+	summary, err := a.Guide.Converse(ctx, guide.Input{SessionID: session.ID, VisibleText: conversationEvidence(presentationText)})
 	if err != nil {
 		return "", err
 	}
@@ -596,7 +596,7 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalRunning {
-		return telegram.AnchorMarkup(ts.ID, ts.AnchorFormat != "snapshot" && a.snapshotReady, ts.AnchorFormat == "snapshot" && a.haikuAvailable)
+		return telegram.AnchorMarkup(ts.ID, ts.AnchorFormat != "snapshot" && a.snapshotReady, ts.AnchorFormat == "snapshot" && a.guideAvailable)
 	}
 	return anchorMarkup(ts)
 }

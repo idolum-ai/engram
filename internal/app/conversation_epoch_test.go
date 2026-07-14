@@ -228,7 +228,7 @@ func TestConversationalSummaryBuildsTruthGroundedContinuation(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewBufferString(response))}, nil
 	})}
-	app.Anthropic = client
+	app.Guide = client
 	first := testStyledCapture("codex", "project\nbranch\ntests running\napp pending\nstatus\ncwd\nready")
 	summary, turn, err := app.conversationalSummary(context.Background(), session, first, first.JoinedText)
 	if err != nil || !app.commitConversationTurn(session, turn, summary) {
@@ -250,15 +250,15 @@ func TestConversationalSummaryDoesNotDiscloseSupersededFrame(t *testing.T) {
 	for _, boundary := range []string{"mode", "binding"} {
 		t.Run(boundary, func(t *testing.T) {
 			app, session := conversationEpochTestApp(t, 1)
-			app.haikuSlots = make(chan struct{}, 1)
-			app.haikuSlots <- struct{}{}
+			app.guideSlots = make(chan struct{}, 1)
+			app.guideSlots <- struct{}{}
 			var requests atomic.Int32
 			client := anthropic.New("key", "claude-haiku-4-5-20251001")
 			client.HTTPClient = &http.Client{Transport: conversationEpochRoundTrip(func(*http.Request) (*http.Response, error) {
 				requests.Add(1)
 				return nil, errors.New("request should not be sent")
 			})}
-			app.Anthropic = client
+			app.Guide = client
 			capture := testStyledCapture("codex", "project\nbranch\nworking\nstatus\ncwd\nready")
 			type result struct{ err error }
 			done := make(chan result, 1)
@@ -276,7 +276,7 @@ func TestConversationalSummaryDoesNotDiscloseSupersededFrame(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			<-app.haikuSlots
+			<-app.guideSlots
 			got := <-done
 			if !errors.Is(got.err, errConversationTurnSuperseded) || requests.Load() != 0 {
 				t.Fatalf("summary error=%v requests=%d", got.err, requests.Load())
@@ -299,15 +299,15 @@ func TestSnapshotConversationalSummaryDoesNotDiscloseSupersededFrame(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			app.haikuSlots = make(chan struct{}, 1)
-			app.haikuSlots <- struct{}{}
+			app.guideSlots = make(chan struct{}, 1)
+			app.guideSlots <- struct{}{}
 			var requests atomic.Int32
 			client := anthropic.New("key", "claude-haiku-4-5-20251001")
 			client.HTTPClient = &http.Client{Transport: conversationEpochRoundTrip(func(*http.Request) (*http.Response, error) {
 				requests.Add(1)
 				return nil, errors.New("request should not be sent")
 			})}
-			app.Anthropic = client
+			app.Guide = client
 			done := make(chan error, 1)
 			started := make(chan struct{})
 			go func() {
@@ -323,7 +323,7 @@ func TestSnapshotConversationalSummaryDoesNotDiscloseSupersededFrame(t *testing.
 			}); err != nil {
 				t.Fatal(err)
 			}
-			<-app.haikuSlots
+			<-app.guideSlots
 			if err := <-done; !errors.Is(err, errConversationTurnSuperseded) || requests.Load() != 0 {
 				t.Fatalf("summary error=%v requests=%d", err, requests.Load())
 			}

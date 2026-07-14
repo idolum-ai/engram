@@ -84,7 +84,7 @@ engram inspect frame <watch-id>
 ```
 
 This is "headless" in the smaller sense: a one-shot local command emits bounded
-plain text and exits. It does not poll Telegram, call Anthropic, launch
+plain text and exits. It does not poll Telegram, call a model provider, launch
 Chromium, open a listener, start a worker, or mutate tmux or Engram state.
 
 ### Intended Use
@@ -132,7 +132,7 @@ Local inspection cannot:
 - create, attach, rename, close, refresh, or send input;
 - select an arbitrary tmux pane;
 - print full scrollback, logs, attachments, or files;
-- render Haiku prose or Chromium images;
+- render model prose or Chromium images;
 - expose JSON-RPC, MCP, HTTP, sockets, or a filesystem command queue;
 - act as a second current anchor or reply route.
 

@@ -60,7 +60,7 @@ and a small allowlisted row of terminal controls.
 
 ### Fast input path
 
-Sending input to tmux must remain fast when Haiku, Chromium, or Telegram
+Sending input to tmux must remain fast when a model provider, Chromium, or Telegram
 delivery is delayed or failing. Replying to an anchor and using `/send`,
 `/text`, `/key`, or key buttons should route directly and predictably to the
 intended pane. Presentation work must not block input.
@@ -82,7 +82,7 @@ targeting and capped at 64 rows. Presentation changes; observation does not.
 This shared boundary keeps comparisons honest and prevents either mode from
 quietly seeing more of the machine.
 
-Guide mode sends every frame's joined logical text to Haiku after removing
+Guide mode sends every frame's joined logical text to the selected model after removing
 recognized upstream records, the trailing model-status footer, and a small
 allowlist of paired Codex placeholder prompts. The raw frame
 remains intact for screenshots, local inspection, references, and hashes. When
@@ -91,7 +91,7 @@ the same tmux server, window, pane, foreground command, dimensions, alternate
 screen, and copy-mode boundary, Engram also supplies deterministic added and
 removed lines, a few unchanged neighbors, and the previous rendering. Those
 extras direct attention and preserve voice; the complete current semantic
-evidence remains the only terminal truth. Haiku speaks like a
+evidence remains the only terminal truth. The guide speaks like a
 technically fluent person briefly returning to the topic: compact, natural,
 and focused on what the terminal content means, within 180 words. Its voice
 stands beside the reader, using direct orientation grounded only in visibly
@@ -109,7 +109,7 @@ Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
 literal and deterministic, at the cost of greater visual density and local
 rendering work.
 
-When Haiku is configured and Chromium has passed its local probe, `/mode` may
+When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying
 session. A snapshot
 anchor may offer `🗣️` for a one-off conversational reply; a guide anchor may
@@ -125,11 +125,11 @@ attachment paths, visible paths and URLs, capture hashes, timestamps, and
 service status locally. Extracted references are untrusted pane content;
 Engram does not fetch or endorse them.
 
-Haiku interprets only the bounded terminal text. Terminal text is data, not
-authority; the prompt tells Haiku to ignore instructions addressed to Engram or
+The selected model interprets only the bounded terminal text. Terminal text is data, not
+authority; the prompt tells it to ignore instructions addressed to Engram or
 the reader, while recognizing that model-level injection resistance is best
-effort. Haiku output is presentation and is never executed automatically.
-Haiku should not invent history, claim work succeeded, or explain Engram
+effort. Model output is presentation and is never executed automatically.
+The guide should not invent history, claim work succeeded, or explain Engram
 controls unless the terminal itself is about Engram.
 
 ### Existing tmux first
@@ -165,8 +165,8 @@ credentials.
 ### Small Go, no third-party dependencies
 
 Engram remains a small Go system built with the standard library. tmux and the
-Telegram Bot API are always required. Anthropic Haiku and local Chromium are
-independent, optional presentation capabilities; at least the configured
+Telegram Bot API are always required. A selected conversational provider and
+local Chromium are independent, optional presentation capabilities; at least the configured
 startup mode must be ready. systemd is used only for the Linux service install.
 
 Adding a Go dependency should be treated as a design failure until proven

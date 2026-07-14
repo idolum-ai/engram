@@ -49,12 +49,12 @@ func TestReconcileAnchorControlsAddsAvailableVoiceWithoutRendering(t *testing.T)
 		}
 		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
 	})}
-	app := &App{Store: store, Telegram: client, mode: "snapshot", haikuAvailable: true}
+	app := &App{Store: store, Telegram: client, mode: "snapshot", guideAvailable: true}
 	app.reconcileAnchorControls(context.Background(), session.ID)
 }
 
 func TestAnchorMarkupUsesActualAnchorFormat(t *testing.T) {
-	app := &App{mode: "snapshot", snapshotReady: true, haikuAvailable: true}
+	app := &App{mode: "snapshot", snapshotReady: true, guideAvailable: true}
 	for _, test := range []struct {
 		name       string
 		format     string

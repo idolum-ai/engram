@@ -7,7 +7,7 @@ Engram is a long-running service. Failure must be visible and recoverable.
 - Never silently pretend a Telegram or tmux action succeeded.
 - Preserve state coherently before attempting cosmetic updates.
 - Keep polling alive after transient Telegram errors.
-- Keep tmux sessions alive when Haiku, Chromium, or Telegram delivery fails.
+- Keep tmux sessions alive when a model provider, Chromium, or Telegram delivery fails.
 - Keep polling and tmux input responsive while terminal images render and upload.
 - Keep polling and tmux input responsive while upstream signals refresh or notify.
 - Prefer truthful degraded presentation over missing anchors.
@@ -20,7 +20,7 @@ The audit JSONL must record important machine facts:
 - Telegram command receipt
 - Telegram send/edit failures
 - tmux send success and failure
-- Haiku failures
+- conversational guide failures
 - upstream-signal observation and delivery outcomes
 - state persistence failures that would otherwise hide lost progress
 - command registration success and failure
@@ -110,7 +110,7 @@ exports a bounded recent tail, not an unbounded full audit file.
 
 ## Degradation
 
-- If Haiku fails, retain the canonical anchor and report the failure without
+- If the model provider fails, retain the canonical anchor and report the failure without
   inventing a conversational rendering.
 - A guide refresh stages the current capture for deterministic reference
   rendering, but advances its capture hash, persisted summary, and in-memory
@@ -144,7 +144,7 @@ exports a bounded recent tail, not an unbounded full audit file.
   receives a fresh capture.
 - Every external disclosure rechecks its terminal generation after bounded
   queueing. A guide request holds the presentation mode and session binding
-  stable from its final check through the Anthropic call. Raw and scrollback
+  stable from its final check through the selected provider call. Raw and scrollback
   transfers hold the session binding stable through capture and Telegram
   upload. Lifecycle changes wait or make queued work cancel cleanly.
 - Entering `snapshot` mode converts a text anchor to photo media in place so its

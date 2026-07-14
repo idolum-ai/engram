@@ -18,10 +18,13 @@ runtime state.
   valid persisted mode exists. State schema v8 persists runtime mode changes,
   upstream-signal reply aliases, bounded record IDs, retry deadlines, delivery
   timing, and the tmux server incarnation for each watch.
-- The effective startup mode must be available: `guide` requires an Anthropic
-  Haiku configuration; `snapshot` requires a successful bounded, ephemeral
-  Chromium render. Engram does not call Anthropic merely to probe credentials.
-- Optional dependencies are checked at startup. A configured Haiku client or
+- The effective startup mode must be available: `guide` requires a configured
+  conversational provider; `snapshot` requires a successful bounded, ephemeral
+  Chromium render. Engram does not call a model provider merely to probe credentials.
+- `LLM_PROVIDER` selects exactly one supported guide implementation at startup:
+  `anthropic` with Haiku 4.5 or `openai` with Luna. Only the selected provider's
+  credential is used, and changing providers requires a restart.
+- Optional dependencies are checked at startup. A configured guide client or
   probed renderer enables its corresponding alternate view and `/mode` target.
 - `/mode [guide|snapshot]` persists the selection and begins anchor migration
   without restarting. Its response says switching has begun; each anchor keeps
@@ -59,14 +62,15 @@ runtime state.
 
 - `/status` shows version, uptime, session count, anchor mode, snapshot renderer
   capability, state path, audit path, attachment path, free artifact-filesystem
-  space, poll time, and whether Haiku is enabled.
+  space, poll time, and whether the conversational guide is enabled, including
+  its selected provider and model.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.
 - `engram signal <message>` writes only to its controlling terminal and does
-  not load service configuration or call Telegram, tmux, or Anthropic.
+  not load service configuration or call Telegram, tmux, or a model provider.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the local
-  service surface without calling Telegram, Anthropic, or starting polling.
+  service surface without calling Telegram, a model provider, or starting polling.
 - `dry-start` may create and open local state; `preflight` must not.
 - `engram inspect status`, `engram inspect sessions`, and
   `engram inspect frame <watch-id>` require no Telegram or presentation

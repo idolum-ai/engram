@@ -14,6 +14,7 @@ var patterns = []struct {
 	{regexp.MustCompile(`(?i)\b(password|token|secret|api[_-]?key)["']?\s*:\s*["'][^"']+["']`), `${1}: "<redacted>"`},
 	{regexp.MustCompile(`github_pat_[A-Za-z0-9_]+`), `<redacted:github_token>`},
 	{regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]+`), `<redacted:anthropic_key>`},
+	{regexp.MustCompile(`sk-(?:proj-)?[A-Za-z0-9_-]{16,}`), `<redacted:openai_key>`},
 	{regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`), `<redacted:private_key>`},
 	{regexp.MustCompile(`([?&](?:X-Amz-Signature|signature|token|access_token|api_key)=)[^&\s]+`), `${1}<redacted>`},
 }

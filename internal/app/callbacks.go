@@ -92,7 +92,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if status != "" {
 			return status
 		}
-		if ts.State != state.TerminalRunning || !a.snapshotAnchors() || !a.haikuAvailable || ts.AnchorFormat != "snapshot" || ts.RetiringAnchorMessageID != 0 {
+		if ts.State != state.TerminalRunning || !a.snapshotAnchors() || !a.guideAvailable || ts.AnchorFormat != "snapshot" || ts.RetiringAnchorMessageID != 0 {
 			a.answerCallback(ctx, cb.ID, "voice is unavailable")
 			return "callback_user_error"
 		}

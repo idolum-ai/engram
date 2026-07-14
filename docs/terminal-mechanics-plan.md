@@ -100,7 +100,7 @@ Constraints:
 
 - no mutation, stdin command input, arbitrary tmux target, full scrollback, file
   access, attachment access, logs, renderer, or model;
-- no Telegram, Anthropic, or Chromium configuration;
+- no Telegram, model-provider, or Chromium configuration;
 - no network calls, DNS, listener, resident process, or background worker;
 - bounded sanitized text output only;
 - no new persisted state and no fabricated delivery identity;

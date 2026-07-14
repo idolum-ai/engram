@@ -108,7 +108,7 @@ func TestRenderLocalIncludesDeterministicVisibleReferences(t *testing.T) {
 func TestRenderLocalRedactsDerivedSecretsWithoutMutatingSession(t *testing.T) {
 	t.Parallel()
 	const secret = "secret-value-123"
-	app := &App{Config: config.Config{AnthropicAPIKey: secret}}
+	app := &App{Config: config.Config{OpenAIAPIKey: secret}}
 	session := state.TerminalSession{
 		ID:             1,
 		State:          state.TerminalRunning,

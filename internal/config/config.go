@@ -12,10 +12,13 @@ import (
 )
 
 const (
-	DefaultModel           = "claude-haiku-4-5-20251001"
-	DefaultModelAlias      = "claude-haiku-4-5"
+	DefaultAnthropicModel  = "claude-haiku-4-5-20251001"
+	AnthropicModelAlias    = "claude-haiku-4-5"
+	DefaultOpenAIModel     = "gpt-5.6-luna"
 	DefaultSoftMaxSize     = int64(16_777_216)
 	DefaultTelegramAPIBase = "https://api.telegram.org"
+	LLMProviderAnthropic   = "anthropic"
+	LLMProviderOpenAI      = "openai"
 	AnchorModeGuide        = "guide"
 	AnchorModeSnapshot     = "snapshot"
 )
@@ -29,6 +32,8 @@ type Config struct {
 	LLMProvider                string
 	AnthropicAPIKey            string
 	AnthropicModel             string
+	OpenAIAPIKey               string
+	OpenAIModel                string
 	Home                       string
 	Workdir                    string
 	TmuxSession                string
@@ -40,7 +45,7 @@ type Config struct {
 }
 
 type ModeCapabilities struct {
-	HaikuConfigured bool
+	GuideConfigured bool
 	SnapshotReady   bool
 }
 
@@ -72,9 +77,11 @@ func Load(path string) (Config, error) {
 		EnvPath:                    path,
 		TelegramBotToken:           values["TELEGRAM_BOT_TOKEN"],
 		TelegramAPIBase:            firstNonEmpty(values["TELEGRAM_API_BASE"], DefaultTelegramAPIBase),
-		LLMProvider:                firstNonEmpty(values["LLM_PROVIDER"], "anthropic"),
+		LLMProvider:                strings.ToLower(firstNonEmpty(values["LLM_PROVIDER"], LLMProviderAnthropic)),
 		AnthropicAPIKey:            values["ANTHROPIC_API_KEY"],
-		AnthropicModel:             firstNonEmpty(values["ANTHROPIC_MODEL"], DefaultModel),
+		AnthropicModel:             firstNonEmpty(values["ANTHROPIC_MODEL"], DefaultAnthropicModel),
+		OpenAIAPIKey:               values["OPENAI_API_KEY"],
+		OpenAIModel:                firstNonEmpty(values["OPENAI_MODEL"], DefaultOpenAIModel),
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
@@ -110,13 +117,17 @@ func (c Config) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
 	}
-	if c.HaikuConfigured() {
-		if c.LLMProvider != "anthropic" {
-			return fmt.Errorf("LLM_PROVIDER must be anthropic")
+	switch c.EffectiveLLMProvider() {
+	case LLMProviderAnthropic:
+		if c.GuideConfigured() && c.AnthropicModel != DefaultAnthropicModel && c.AnthropicModel != AnthropicModelAlias {
+			return fmt.Errorf("ANTHROPIC_MODEL must be %s or %s", DefaultAnthropicModel, AnthropicModelAlias)
 		}
-		if c.AnthropicModel != DefaultModel && c.AnthropicModel != DefaultModelAlias {
-			return fmt.Errorf("ANTHROPIC_MODEL must be %s or %s", DefaultModel, DefaultModelAlias)
+	case LLMProviderOpenAI:
+		if c.GuideConfigured() && c.OpenAIModel != DefaultOpenAIModel {
+			return fmt.Errorf("OPENAI_MODEL must be %s", DefaultOpenAIModel)
 		}
+	default:
+		return fmt.Errorf("LLM_PROVIDER must be anthropic or openai")
 	}
 	switch c.EffectiveAnchorMode() {
 	case AnchorModeGuide, AnchorModeSnapshot:
@@ -159,7 +170,7 @@ func (c Config) ResolveAnchorMode(persisted string, capabilities ModeCapabilitie
 	for _, mode := range []string{strings.TrimSpace(persisted), c.EffectiveAnchorMode()} {
 		switch mode {
 		case AnchorModeGuide:
-			if capabilities.HaikuConfigured {
+			if capabilities.GuideConfigured {
 				return mode, nil
 			}
 		case AnchorModeSnapshot:
@@ -168,12 +179,36 @@ func (c Config) ResolveAnchorMode(persisted string, capabilities ModeCapabilitie
 			}
 		}
 	}
-	return "", fmt.Errorf("no available anchor mode (guide requires configured Anthropic Haiku; snapshot requires probed Chromium)")
+	return "", fmt.Errorf("no available anchor mode (guide requires a configured conversational provider; snapshot requires probed Chromium)")
 }
 
 func (c Config) SnapshotAnchors() bool { return c.EffectiveAnchorMode() == AnchorModeSnapshot }
 
-func (c Config) HaikuConfigured() bool { return strings.TrimSpace(c.AnthropicAPIKey) != "" }
+func (c Config) EffectiveLLMProvider() string {
+	return strings.ToLower(firstNonEmpty(strings.TrimSpace(c.LLMProvider), LLMProviderAnthropic))
+}
+
+func (c Config) GuideConfigured() bool {
+	switch c.EffectiveLLMProvider() {
+	case LLMProviderAnthropic:
+		return strings.TrimSpace(c.AnthropicAPIKey) != ""
+	case LLMProviderOpenAI:
+		return strings.TrimSpace(c.OpenAIAPIKey) != ""
+	default:
+		return false
+	}
+}
+
+func (c Config) GuideModel() string {
+	switch c.EffectiveLLMProvider() {
+	case LLMProviderAnthropic:
+		return c.AnthropicModel
+	case LLMProviderOpenAI:
+		return c.OpenAIModel
+	default:
+		return ""
+	}
+}
 
 func (c Config) EffectiveTelegramAPIBase() string {
 	return strings.TrimRight(firstNonEmpty(strings.TrimSpace(c.TelegramAPIBase), DefaultTelegramAPIBase), "/")

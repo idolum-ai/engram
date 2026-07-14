@@ -36,7 +36,7 @@ func TestEmitSignalUsesOnlyControllingTerminal(t *testing.T) {
 	}
 }
 
-func TestPreflightDoesNotCallTelegramOrAnthropic(t *testing.T) {
+func TestPreflightDoesNotCallTelegramOrGuideProvider(t *testing.T) {
 	env := writeTestEnv(t)
 	stdout, stderr, code := captureCommand(t, func() int {
 		return run([]string{"preflight", "--env", env})
@@ -48,6 +48,7 @@ func TestPreflightDoesNotCallTelegramOrAnthropic(t *testing.T) {
 		"Engram preflight",
 		"telegram_api: not_called",
 		"anthropic_api: not_called",
+		"openai_api: not_called",
 		"polling: not_started",
 		"status: ok",
 	} {
@@ -100,7 +101,7 @@ func TestSnapshotPreflightRejectsNonBrowserExecutable(t *testing.T) {
 		t.Fatalf("snapshot preflight code=%d stderr=%s", code, stderr)
 	}
 	diagnostics := diagnosticsText(config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotBrowser: executable, SnapshotTheme: "terminal"}, "preflight")
-	for _, want := range []string{"anchor mode: unavailable", "haiku: unavailable", "model: unavailable", "anthropic_api: not_called"} {
+	for _, want := range []string{"anchor mode: unavailable", "guide: unavailable", "model: unavailable", "anthropic_api: not_called", "openai_api: not_called"} {
 		if !strings.Contains(diagnostics, want) {
 			t.Fatalf("snapshot diagnostics missing %q:\n%s", want, diagnostics)
 		}
@@ -131,8 +132,45 @@ func TestPreflightUsesPersistedModeBeforeEnvironmentFallback(t *testing.T) {
 	if code != 0 || !strings.Contains(stdout, "anchor mode: guide") {
 		t.Fatalf("preflight code=%d stderr=%s stdout=%s", code, stderr, stdout)
 	}
-	if !strings.Contains(stdout, "haiku: configured, not probed") {
-		t.Fatalf("preflight Haiku status was not honest:\n%s", stdout)
+	if !strings.Contains(stdout, "guide: configured, not probed") {
+		t.Fatalf("preflight guide status was not honest:\n%s", stdout)
+	}
+}
+
+func TestPreflightRecognizesOpenAILunaWithoutCallingIt(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	body := strings.Join([]string{
+		"TELEGRAM_BOT_TOKEN=tg-secret-token",
+		"TELEGRAM_ALLOWED_USER_ID=123",
+		"LLM_PROVIDER=openai",
+		"OPENAI_API_KEY=openai-secret-key",
+		"OPENAI_MODEL=gpt-5.6-luna",
+		"ENGRAM_HOME=" + filepath.Join(dir, "home"),
+		"ENGRAM_WORKDIR=" + dir,
+	}, "\n")
+	if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, code := captureCommand(t, func() int {
+		return run([]string{"preflight", "--env", env})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("preflight code=%d stderr=%s", code, stderr)
+	}
+	for _, want := range []string{
+		"guide: configured, not probed",
+		"provider: openai",
+		"model: gpt-5.6-luna",
+		"openai_api: not_called",
+		"status: ok",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("preflight output missing %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "openai-secret-key") {
+		t.Fatalf("preflight leaked OpenAI key:\n%s", stdout)
 	}
 }
 

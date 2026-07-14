@@ -66,10 +66,10 @@ func TestConversationUsesSnapshotFrameAndRepliesToCanonicalAnchor(t *testing.T) 
 	app := &App{
 		Store:          store,
 		Telegram:       tg,
-		Anthropic:      model,
+		Guide:          model,
 		Tmux:           tmux.New(snapshotTmuxRunner{}),
 		mode:           "snapshot",
-		haikuAvailable: true,
+		guideAvailable: true,
 	}
 	app.sendConversation(context.Background(), session)
 	if !strings.Contains(modelPrompt, "green") || strings.Count(modelPrompt, "green") != 64 {
@@ -109,7 +109,7 @@ func TestConversationOmitsUpstreamRecordFromModelInput(t *testing.T) {
 	tg.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
 	})}
-	a := &App{Store: store, Telegram: tg, Anthropic: model, Tmux: tmux.New(conversationSignalRunner{}), mode: "snapshot", haikuAvailable: true}
+	a := &App{Store: store, Telegram: tg, Guide: model, Tmux: tmux.New(conversationSignalRunner{}), mode: "snapshot", guideAvailable: true}
 	a.sendConversation(context.Background(), session)
 	if !strings.Contains(modelPrompt, "ordinary output") || strings.Contains(modelPrompt, "engram:upstream") || strings.Contains(modelPrompt, "secret signal payload") {
 		t.Fatalf("model prompt retained upstream framing or payload: %q", modelPrompt)
@@ -147,7 +147,7 @@ func TestConversationReportsModelFailureToTheAnchor(t *testing.T) {
 		return snapshotJSONResponse(`{"message_id":89,"chat":{"id":100}}`), nil
 	})}
 
-	app := &App{Store: store, Telegram: tg, Anthropic: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", haikuAvailable: true}
+	app := &App{Store: store, Telegram: tg, Guide: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", guideAvailable: true}
 	app.sendConversation(context.Background(), session)
 	if notice["reply_to_message_id"] != float64(77) || !strings.Contains(notice["text"].(string), "couldn't finish") {
 		t.Fatalf("failure notice = %#v", notice)
@@ -178,7 +178,7 @@ func TestConversationReportsSupersededAnchorPolitely(t *testing.T) {
 		return snapshotJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
 	})}
 
-	app := &App{Store: store, Telegram: tg, Anthropic: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", haikuAvailable: true}
+	app := &App{Store: store, Telegram: tg, Guide: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", guideAvailable: true}
 	app.sendConversation(context.Background(), session)
 	if notice["reply_to_message_id"] != float64(78) || !strings.Contains(notice["text"].(string), "newer view") {
 		t.Fatalf("superseded notice = %#v", notice)
@@ -207,7 +207,7 @@ func TestConversationDeletesReplyWhenBindingChangesDuringTelegramSend(t *testing
 		}
 		return snapshotJSONResponse(`true`), nil
 	})}
-	a := &App{Store: store, Telegram: tg, Anthropic: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", haikuAvailable: true}
+	a := &App{Store: store, Telegram: tg, Guide: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", guideAvailable: true}
 	a.sendConversation(context.Background(), session)
 	got, _ := store.FindSession(session.ID)
 	if len(paths) != 2 || !strings.HasSuffix(paths[0], "/sendMessage") || !strings.HasSuffix(paths[1], "/deleteMessage") || got.SummaryMessageID != 0 {
@@ -228,7 +228,7 @@ func TestVoiceCallbackRejectsTextAnchor(t *testing.T) {
 	})}
 	app := &App{
 		Config: config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100},
-		Store:  store, Telegram: tg, mode: "snapshot", haikuAvailable: true,
+		Store:  store, Telegram: tg, mode: "snapshot", guideAvailable: true,
 	}
 	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
 		ID: "voice", From: telegram.User{ID: 42}, Data: "voice:1",

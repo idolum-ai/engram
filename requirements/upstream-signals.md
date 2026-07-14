@@ -52,13 +52,13 @@ second transport or model a deployment hierarchy.
   and must not be cleared through a window-selection side effect.
 - A recognized upstream record immediately attempts one concise Telegram
   notification containing its normalized semantic payload after normal output
-  redaction. Anchor rendering continues independently; Haiku or Chromium
+  redaction. Anchor rendering continues independently; the guide or Chromium
   latency and failure must not suppress the attention attempt.
 - Engram normally replies the notification to the canonical anchor. If Telegram
   reports that reply target missing, Engram sends a standalone notification,
   records it as the current reply alias, and schedules canonical-anchor
   recovery.
-- Engram removes recognized records from Haiku input and deterministic
+- Engram removes recognized records from guide input and deterministic
   path/URL extraction. A literal snapshot may still show the record as part of
   the exact terminal frame under the snapshot privacy boundary.
 - The newest upstream reply is a reply alias for the observed parent pane.
@@ -89,7 +89,7 @@ second transport or model a deployment hierarchy.
 
 ## Security And Privacy
 
-- Telegram credentials, allowed user identifiers, Anthropic credentials,
+- Telegram credentials, allowed user identifiers, model-provider credentials,
   parent state, and the parent tmux socket must not be passed or mounted into a
   child for signaling.
 - Signal payload is untrusted terminal text. Its textual notification and audit

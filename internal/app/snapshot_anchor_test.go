@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/openai"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/terminalshot"
@@ -203,12 +205,15 @@ func TestUpstreamSignalDeliversWhenSnapshotRenderingFails(t *testing.T) {
 	}
 }
 
-func TestSnapshotModeDoesNotInitializeAnthropic(t *testing.T) {
-	if anthropicClientFor(config.Config{AnchorMode: config.AnchorModeSnapshot}) != nil {
-		t.Fatal("snapshot mode initialized Anthropic without a key")
+func TestGuideRendererUsesOnlySelectedConfiguredProvider(t *testing.T) {
+	if guideRendererFor(config.Config{AnchorMode: config.AnchorModeSnapshot}) != nil {
+		t.Fatal("snapshot mode initialized a guide without a key")
 	}
-	if anthropicClientFor(config.Config{AnchorMode: config.AnchorModeSnapshot, AnthropicAPIKey: "key", AnthropicModel: config.DefaultModel}) == nil {
-		t.Fatal("snapshot mode did not initialize optional Anthropic voice support")
+	if _, ok := guideRendererFor(config.Config{LLMProvider: config.LLMProviderAnthropic, AnthropicAPIKey: "key", AnthropicModel: config.DefaultAnthropicModel}).(*anthropic.Client); !ok {
+		t.Fatal("Anthropic selection did not initialize Haiku")
+	}
+	if _, ok := guideRendererFor(config.Config{LLMProvider: config.LLMProviderOpenAI, OpenAIAPIKey: "key", OpenAIModel: config.DefaultOpenAIModel}).(*openai.Client); !ok {
+		t.Fatal("OpenAI selection did not initialize Luna")
 	}
 }
 
@@ -244,7 +249,7 @@ func TestNewPrefersAvailablePersistedModeOverEnvironmentMode(t *testing.T) {
 		TelegramAllowedUserID: 42,
 		TelegramChatID:        42,
 		AnthropicAPIKey:       "key",
-		AnthropicModel:        config.DefaultModel,
+		AnthropicModel:        config.DefaultAnthropicModel,
 		AnchorMode:            config.AnchorModeSnapshot,
 		Home:                  dir,
 		Workdir:               dir,

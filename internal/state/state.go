@@ -746,7 +746,9 @@ func (s *Store) ConsumeAttachmentBypass(chatID, userID int64, sha256 string) err
 	return nil
 }
 
-func (s *Store) NoteHaiku(errText string) error {
+// NoteGuide retains the legacy JSON field names so existing state files remain
+// readable while recording the selected conversational provider's health.
+func (s *Store) NoteGuide(errText string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.LastHaikuAt = time.Now().UTC()

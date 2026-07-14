@@ -17,7 +17,7 @@ func TestSwitchAnchorModePersistsOnlyAvailableMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := &App{Store: store, mode: config.AnchorModeGuide, haikuAvailable: true, snapshotReady: true}
+	app := &App{Store: store, mode: config.AnchorModeGuide, guideAvailable: true, snapshotReady: true}
 	result := app.switchAnchorMode(context.Background(), "chromium")
 	if !result.OK() || app.anchorMode() != config.AnchorModeSnapshot || store.Snapshot().AnchorMode != config.AnchorModeSnapshot {
 		t.Fatalf("switch result=%#v mode=%q state=%q", result, app.anchorMode(), store.Snapshot().AnchorMode)
@@ -36,11 +36,16 @@ func TestSwitchAnchorModePersistsOnlyAvailableMode(t *testing.T) {
 	}
 }
 
-func TestModeTextDistinguishesConfiguredHaikuFromReadyChromium(t *testing.T) {
-	app := &App{mode: config.AnchorModeGuide, haikuAvailable: true, snapshotReady: true}
+func TestModeTextDistinguishesConfiguredGuideFromReadyChromium(t *testing.T) {
+	app := &App{
+		Config:         config.Config{LLMProvider: config.LLMProviderAnthropic, AnthropicModel: config.DefaultAnthropicModel},
+		mode:           config.AnchorModeGuide,
+		guideAvailable: true,
+		snapshotReady:  true,
+	}
 	got := app.modeText()
 	for _, want := range []string{
-		"guide (Haiku configured, not probed)",
+		"guide (anthropic/claude-haiku-4-5-20251001 configured, not probed)",
 		"snapshot (Chromium probed and ready)",
 	} {
 		if !strings.Contains(got, want) {
@@ -58,13 +63,13 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 		t.Fatalf("guide actions = %#v", got)
 	}
 	app.setAnchorMode(config.AnchorModeSnapshot)
-	app.haikuAvailable = true
+	app.guideAvailable = true
 	ts.AnchorFormat = "snapshot"
 	snapshot := app.anchorMarkup(ts)
 	if got := snapshot.InlineKeyboard[0]; len(got) != 2 || got[1].CallbackData != "voice:7" {
 		t.Fatalf("snapshot actions = %#v", got)
 	}
-	app.haikuAvailable = false
+	app.guideAvailable = false
 	if got := app.anchorMarkup(ts).InlineKeyboard[0]; len(got) != 1 {
 		t.Fatalf("unavailable alternate leaked into markup: %#v", got)
 	}
