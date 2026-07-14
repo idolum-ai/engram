@@ -4,6 +4,31 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.4.0] - 2026-07-14
+
+### Conversational guide
+
+- Continue guide renderings naturally across strongly aligned captures while
+  keeping the complete current terminal frame as the sole factual authority.
+  Continuity remains process-local, isolated per window, and discarded across
+  program, pane, mode, refresh, reattachment, or service-restart boundaries.
+- Keep placeholder prompts, model-status footers, and upstream signal records
+  out of conversational evidence without changing screenshots, raw captures,
+  references, or capture hashes.
+
+### Configuration
+
+- Add OpenAI Luna as an opt-in conversational guide selected with
+  `LLM_PROVIDER=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL=gpt-5.6-luna`.
+  Anthropic Haiku 4.5 remains the default and existing configuration stays
+  compatible.
+- Give Haiku and Luna the same bounded evidence, prompt, non-streaming request,
+  and deterministic 180-word response limit. Provider changes require a service
+  restart and only the selected provider receives terminal evidence.
+- Report the selected guide provider and model in diagnostics and `/status`,
+  and extend audit and presentation redaction to configured OpenAI credentials
+  and common OpenAI key shapes.
+
 ## [v0.3.0] - 2026-07-13
 
 ### Fixed
