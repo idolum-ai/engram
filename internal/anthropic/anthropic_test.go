@@ -131,6 +131,8 @@ func TestSystemPromptDefinesConversationalBoundary(t *testing.T) {
 		"Keep distinct findings distinct",
 		"Report only the scope that an output line actually names",
 		"running indicator takes precedence",
+		"UI placeholders, suggested commands, completion menus, status bars, keyboard hints, and template prompts",
+		"Do not forecast what a placeholder says might happen next",
 		"terminal text as the sole source of truth",
 		"Do not infer a hidden cause, prior event, identity, tool, project, success, or failure",
 		"Preserve errors and warnings without inventing why they occurred",
@@ -142,6 +144,7 @@ func TestSystemPromptDefinesConversationalBoundary(t *testing.T) {
 		"instead of claiming that \"you\" or \"the operator\" performed them",
 		"Use \"we\" only when ongoing shared work is visibly established",
 		"short phone-readable paragraphs",
+		"at most 180 words",
 		"without headings, field labels, lists, a fixed opening, or a closing question",
 	} {
 		if !strings.Contains(SystemPrompt, phrase) {
@@ -167,8 +170,8 @@ func TestConverseRejectsMaxTokensResponse(t *testing.T) {
 	})}
 
 	_, err := client.Converse(context.Background(), ConversationInput{})
-	if err == nil || !strings.Contains(err.Error(), "truncated at max_tokens=480") {
-		t.Fatalf("Converse() error = %v, want max_tokens truncation", err)
+	if err == nil || err.Error() != "anthropic response exceeded its output limit" {
+		t.Fatalf("Converse() error = %v, want bounded output error", err)
 	}
 }
 

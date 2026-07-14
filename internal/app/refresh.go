@@ -178,7 +178,7 @@ func headUTF8(text string, maxBytes int) string {
 }
 
 func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, conversationTurn, error) {
-	turn := a.prepareConversationTurn(session, capture, presentationText)
+	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText))
 	if !acquireSlot(ctx, a.haikuSlots) {
 		return "", turn, ctx.Err()
 	}
@@ -214,7 +214,7 @@ func (a *App) snapshotConversationalSummary(ctx context.Context, session state.T
 	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		return "", errConversationTurnSuperseded
 	}
-	summary, err := a.Anthropic.Converse(ctx, anthropic.ConversationInput{SessionID: session.ID, VisibleText: presentationText})
+	summary, err := a.Anthropic.Converse(ctx, anthropic.ConversationInput{SessionID: session.ID, VisibleText: conversationEvidence(presentationText)})
 	if err != nil {
 		return "", err
 	}

@@ -83,17 +83,19 @@ This shared boundary keeps comparisons honest and prevents either mode from
 quietly seeing more of the machine.
 
 Guide mode sends every frame's joined logical text to Haiku after removing
-recognized upstream records. When two frames remain strongly aligned within
+recognized upstream records and passive trailing prompt chrome. The raw frame
+remains intact for screenshots, local inspection, references, and hashes. When
+two frames remain strongly aligned within
 the same tmux server, window, pane, foreground command, dimensions, alternate
 screen, and copy-mode boundary, Engram also supplies deterministic added and
 removed lines, a few unchanged neighbors, and the previous rendering. Those
 extras direct attention and preserve voice; the complete current frame remains
 the only terminal truth. Haiku speaks like a
 technically fluent person briefly returning to the topic: compact, natural,
-and focused on what the terminal content means. Its voice stands beside the
-reader, using direct orientation grounded only in visibly named tools,
-collaborative "we" for shared work, and short one-idea paragraphs for phone
-readability; "you" is reserved for actions only the reader can take.
+and focused on what the terminal content means, within 180 words. Its voice
+stands beside the reader, using direct orientation grounded only in visibly
+named tools, collaborative "we" for shared work, and short one-idea paragraphs
+for phone readability; "you" is reserved for actions only the reader can take.
 It has no model conversation history or structured response and makes no
 second request. Its small process-local continuity is isolated per window and
 never becomes terminal truth. A different capture boundary, weakly aligned
