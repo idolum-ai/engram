@@ -82,6 +82,7 @@ func TestExtractVisibleURLsRedactsComponentsAndRejectsSensitiveAuthority(t *test
 	capture := strings.Join([]string{
 		"https://example.test/callback#auth=session-secret&view=fast",
 		"https://example.test/#/callback?access_token=oauth-secret&state=x",
+		"https://example.test/#/return?access_token=oauth-secret&return=%2Fdashboard",
 		"https://example.test/callback?MY_TOKEN=terminal-secret&view=fast",
 		"https://example.test/#/callback?BUILD_SECRET=terminal-secret&state=x",
 		"https://example.test/#/TOKEN=terminal-secret",
@@ -103,6 +104,7 @@ func TestExtractVisibleURLsRedactsComponentsAndRejectsSensitiveAuthority(t *test
 	want := []string{
 		"https://example.test/callback#auth=REDACTED&view=fast",
 		"https://example.test/#/callback?access_token=REDACTED&state=x",
+		"https://example.test/#/return?access_token=REDACTED&return=%2Fdashboard",
 		"https://example.test/callback?MY_TOKEN=REDACTED&view=fast",
 		"https://example.test/#/callback?BUILD_SECRET=REDACTED&state=x",
 		"https://example.test/#/TOKEN=REDACTED",
