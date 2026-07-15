@@ -11,7 +11,7 @@ import (
 func TestExtractVisibleURLsValidatesTrimsAndDeduplicates(t *testing.T) {
 	t.Parallel()
 	capture := strings.Join([]string{
-		"docs: https://example.com/guide?q=tmux&mode=phone.",
+		"docs: https://example.com/guide?q=tmux&mode=phone",
 		"again (https://example.com/guide?q=tmux&mode=phone)",
 		"upper HTTPS://EXAMPLE.ORG/status",
 		"sanitize https://example.net/build?mode=fast&access_token=secret-value",
@@ -49,6 +49,86 @@ func TestExtractVisibleURLsPreservesDistinctGitHubFormsInAppearanceOrder(t *test
 	}
 }
 
+func TestExtractVisibleURLsKeepsBalancedSuffixesAndFragmentsAndRejectsMalformedQueries(t *testing.T) {
+	t.Parallel()
+	wikiURL := "https://en.wikipedia.org/wiki/Function_(mathematics)"
+	fragmentURL := "https://example.test/docs#deployment"
+	capture := strings.Join([]string{
+		"reference " + wikiURL,
+		"section (" + fragmentURL + ")",
+		"reject https://example.test/cb?auth=session-secret;ignored=x&mode=fast",
+	}, "\n")
+
+	want := []string{wikiURL, fragmentURL}
+	if got := extractVisibleURLs(capture, 4); !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible URLs = %#v, want balanced and fragment URLs %#v", got, want)
+	}
+}
+
+func TestExtractVisibleURLsPreservesTerminalPunctuation(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"https://en.wikipedia.org/wiki/Yahoo!",
+		"https://example.test/report.",
+	}
+	if got := extractVisibleURLs(strings.Join(want, "\n"), 4); !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible URLs = %#v, want terminal punctuation preserved %#v", got, want)
+	}
+}
+
+func TestExtractVisibleURLsRedactsComponentsAndRejectsSensitiveAuthority(t *testing.T) {
+	t.Parallel()
+	secret := "configured-secret-value"
+	capture := strings.Join([]string{
+		"https://example.test/callback#auth=session-secret&view=fast",
+		"https://example.test/#/callback?access_token=oauth-secret&state=x",
+		"https://example.test/callback?MY_TOKEN=terminal-secret&view=fast",
+		"https://example.test/#/callback?BUILD_SECRET=terminal-secret&state=x",
+		"https://example.test/#/TOKEN=terminal-secret",
+		"https://example.test/#/route;id=1",
+		"https://example.test/TOKEN=terminal-secret",
+		"https://example.test/a%2Fb/" + secret,
+		"https://example.test/docs#section;subsection",
+		"https://example.test/docs#section;v=1",
+		"https://example.test/docs#auth=oauth-secret;state=x",
+		"https://example.test/docs#auth=first%3Bsecond&state=x",
+		"https://example.test/artifacts/" + secret + "?mode=fast",
+		"https://" + secret + ".example.test/report",
+		"https://sk-ant-secret-token.example.test/report",
+		"https://TOKEN=terminal-secret.example.test/report",
+		"https://example.test/?" + secret + "=x",
+		"https://example.test/?sk-proj-" + "1234567890abcdef=x",
+		"https://example.test/#" + secret + "=x",
+	}, "\n")
+	want := []string{
+		"https://example.test/callback#auth=REDACTED&view=fast",
+		"https://example.test/#/callback?access_token=REDACTED&state=x",
+		"https://example.test/callback?MY_TOKEN=REDACTED&view=fast",
+		"https://example.test/#/callback?BUILD_SECRET=REDACTED&state=x",
+		"https://example.test/#/TOKEN=REDACTED",
+		"https://example.test/#/route;id=1",
+		"https://example.test/TOKEN=REDACTED",
+		"https://example.test/a%2Fb/REDACTED",
+		"https://example.test/docs#section;subsection",
+		"https://example.test/docs#section;v=1",
+		"https://example.test/docs#auth=REDACTED;state=x",
+		"https://example.test/docs#auth=REDACTED&state=x",
+		"https://example.test/artifacts/REDACTED?mode=fast",
+	}
+	if got := extractVisibleURLs(capture, 20, secret); !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible URLs = %#v, want component-safe URLs %#v", got, want)
+	}
+}
+
+func TestExtractVisibleURLsRemovesUnmatchedWrapperBeforePunctuation(t *testing.T) {
+	t.Parallel()
+	url := "https://example.test/docs#deployment"
+	want := []string{url + "."}
+	if got := extractVisibleURLs("section ("+url+").", 4); !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible URLs = %#v, want unmatched wrapper removed %#v", got, want)
+	}
+}
+
 func TestURLRangesCannotBecomeVisiblePaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -69,6 +149,20 @@ func TestURLRangesCannotBecomeVisiblePaths(t *testing.T) {
 	}
 	if got := extractVisibleURLs(credentialURL, 4); len(got) != 0 {
 		t.Fatalf("credential-bearing URL was exposed: %#v", got)
+	}
+}
+
+func TestRenderVisibleReferencesRedactsCredentialShapedPaths(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	path := filepath.Join(root, "TOKEN=terminal-secret")
+	if err := os.WriteFile(path, []byte("artifact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := renderVisibleReferences(path)
+	if strings.Contains(got, "terminal-secret") || !strings.Contains(got, "TOKEN=<redacted>") {
+		t.Fatalf("rendered path was not redacted: %q", got)
 	}
 }
 

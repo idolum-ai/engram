@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/idolum-ai/engram/internal/redact"
 )
 
 const (
@@ -25,18 +27,19 @@ type textRange struct {
 	end   int
 }
 
-func renderVisibleReferences(capture string) string {
-	return renderReferences(extractVisibleReferences(capture, maxVisiblePaths, maxVisibleURLs), true, maxGuideReferenceBytes)
+func renderVisibleReferences(capture string, secrets ...string) string {
+	refs := redactVisibleReferencePaths(extractVisibleReferences(capture, maxVisiblePaths, maxVisibleURLs, secrets...), secrets...)
+	return renderReferences(refs, true, maxGuideReferenceBytes)
 }
 
-func renderSnapshotReferences(capture string, maxBytes int) string {
+func renderSnapshotReferences(capture string, maxBytes int, secrets ...string) string {
 	if maxBytes <= 0 {
 		return ""
 	}
 	if maxBytes > maxSnapshotReferenceBytes {
 		maxBytes = maxSnapshotReferenceBytes
 	}
-	refs := extractVisibleReferences(capture, maxVisiblePaths, maxVisibleURLs)
+	refs := redactVisibleReferencePaths(extractVisibleReferences(capture, maxVisiblePaths, maxVisibleURLs, secrets...), secrets...)
 	if len(refs.Paths) == 0 || len(refs.URLs) == 0 {
 		return renderReferences(refs, false, maxBytes)
 	}
@@ -54,6 +57,13 @@ func renderSnapshotReferences(capture string, maxBytes int) string {
 		return paths
 	}
 	return paths + "\n\n" + links
+}
+
+func redactVisibleReferencePaths(refs visibleReferences, secrets ...string) visibleReferences {
+	for index, path := range refs.Paths {
+		refs.Paths[index] = redact.Secrets(path, secrets...)
+	}
+	return refs
 }
 
 func renderReferences(refs visibleReferences, fencePaths bool, maxBytes int) string {
@@ -102,8 +112,8 @@ func renderReferences(refs visibleReferences, fencePaths bool, maxBytes int) str
 	return b.String()
 }
 
-func extractVisibleReferences(capture string, pathLimit, urlLimit int) visibleReferences {
-	urls, ranges := scanVisibleURLs(capture, urlLimit)
+func extractVisibleReferences(capture string, pathLimit, urlLimit int, secrets ...string) visibleReferences {
+	urls, ranges := scanVisibleURLs(capture, urlLimit, secrets...)
 	return visibleReferences{
 		Paths: extractVisiblePathsOutsideRanges(capture, pathLimit, ranges),
 		URLs:  urls,
@@ -114,8 +124,8 @@ func extractVisiblePaths(capture string, limit int) []string {
 	return extractVisibleReferences(capture, limit, 0).Paths
 }
 
-func extractVisibleURLs(capture string, limit int) []string {
-	return extractVisibleReferences(capture, 0, limit).URLs
+func extractVisibleURLs(capture string, limit int, secrets ...string) []string {
+	return extractVisibleReferences(capture, 0, limit, secrets...).URLs
 }
 
 func extractVisiblePathsOutsideRanges(capture string, limit int, excluded []textRange) []string {
@@ -145,7 +155,7 @@ func extractVisiblePathsOutsideRanges(capture string, limit int, excluded []text
 	return paths
 }
 
-func scanVisibleURLs(capture string, limit int) ([]string, []textRange) {
+func scanVisibleURLs(capture string, limit int, secrets ...string) ([]string, []textRange) {
 	seen := map[string]bool{}
 	urls := make([]string, 0)
 	ranges := make([]textRange, 0)
@@ -165,14 +175,10 @@ func scanVisibleURLs(capture string, limit int) ([]string, []textRange) {
 		for end < len(capture) && !isURLTerminator(capture[end]) {
 			end++
 		}
-		trimmedEnd := end
-		for trimmedEnd > start && strings.ContainsRune(".,;:!?)]}", rune(capture[trimmedEnd-1])) {
-			trimmedEnd--
-		}
-		candidate := capture[start:trimmedEnd]
+		candidate := trimUnmatchedURLClosers(capture[start:end])
 		if validVisibleURL(candidate) {
 			ranges = append(ranges, textRange{start: start, end: end})
-			safeURL, safe := sanitizeVisibleURL(candidate)
+			safeURL, safe := sanitizeVisibleURL(candidate, secrets...)
 			if safe && limit > 0 && len(urls) < limit && len(safeURL) <= maxVisibleReferenceBytes && !seen[safeURL] {
 				seen[safeURL] = true
 				urls = append(urls, safeURL)
@@ -203,31 +209,252 @@ func nearestIndex(offset, left, right int) int {
 }
 
 func validVisibleURL(candidate string) bool {
-	parsed, err := url.ParseRequestURI(candidate)
+	parsed, err := url.Parse(candidate)
 	if err != nil || parsed.Host == "" {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")
 }
 
-func sanitizeVisibleURL(candidate string) (string, bool) {
-	parsed, err := url.ParseRequestURI(candidate)
+func sanitizeVisibleURL(candidate string, secrets ...string) (string, bool) {
+	parsed, err := url.Parse(candidate)
 	if err != nil || parsed.Host == "" || parsed.User != nil || !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
 		return "", false
 	}
-	query := parsed.Query()
+	if redact.URLSafeComponentSecrets(parsed.Host, secrets...) != parsed.Host {
+		return "", false
+	}
 	changed := false
-	for key := range query {
+	if safePath, safeRawPath, pathChanged, safe := redactEscapedURLPath(parsed.EscapedPath(), secrets...); !safe {
+		return "", false
+	} else if pathChanged {
+		parsed.Path = safePath
+		parsed.RawPath = safeRawPath
+		changed = true
+	}
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return "", false
+	}
+	queryChanged := false
+	for key, values := range query {
+		if redact.URLSafeComponentSecrets(key, secrets...) != key {
+			return "", false
+		}
 		if sensitiveURLParameter(key) {
 			query.Set(key, "REDACTED")
-			changed = true
+			queryChanged = true
+			continue
 		}
+		for index, value := range values {
+			if safeValue := redact.URLSafeComponentSecrets(value, secrets...); safeValue != value {
+				values[index] = safeValue
+				queryChanged = true
+			}
+		}
+	}
+	if queryChanged {
+		parsed.RawQuery = query.Encode()
+		changed = true
+	}
+	if safeFragment, fragmentChanged, safe := sanitizeURLFragment(parsed.EscapedFragment(), secrets...); !safe {
+		return "", false
+	} else if fragmentChanged {
+		decodedFragment, err := url.PathUnescape(safeFragment)
+		if err != nil {
+			return "", false
+		}
+		parsed.Fragment = decodedFragment
+		parsed.RawFragment = safeFragment
+		changed = true
 	}
 	if !changed {
 		return candidate, true
 	}
-	parsed.RawQuery = query.Encode()
 	return parsed.String(), true
+}
+
+func redactEscapedURLPath(escapedPath string, secrets ...string) (string, string, bool, bool) {
+	segments := strings.Split(escapedPath, "/")
+	changed := false
+	for index, segment := range segments {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil {
+			return "", "", false, false
+		}
+		if safe := redact.URLSafeComponentSecrets(decoded, secrets...); safe != decoded {
+			segments[index] = url.PathEscape(safe)
+			changed = true
+		}
+	}
+	if !changed {
+		return "", "", false, true
+	}
+	safeRawPath := strings.Join(segments, "/")
+	safePath, err := url.PathUnescape(safeRawPath)
+	if err != nil {
+		return "", "", false, false
+	}
+	return safePath, safeRawPath, true, true
+}
+
+func sanitizeURLFragment(fragment string, secrets ...string) (string, bool, bool) {
+	prefix := ""
+	prefixChanged := false
+	routed := false
+	valuesText := fragment
+	if queryAt := strings.IndexByte(fragment, '?'); queryAt >= 0 {
+		routed = true
+		originalPrefix := fragment[:queryAt]
+		_, safePrefix, prefixChangedNow, safe := redactEscapedURLPath(originalPrefix, secrets...)
+		if !safe {
+			return "", false, false
+		}
+		if !prefixChangedNow {
+			safePrefix = originalPrefix
+		}
+		prefix = safePrefix + "?"
+		prefixChanged = prefixChangedNow
+		valuesText = fragment[queryAt+1:]
+	} else if strings.HasPrefix(fragment, "/") || !strings.Contains(fragment, "=") {
+		_, safeFragment, fragmentChanged, safe := redactEscapedURLPath(fragment, secrets...)
+		if !safe {
+			return "", false, false
+		}
+		if !fragmentChanged {
+			return fragment, false, true
+		}
+		return safeFragment, true, true
+	}
+	values, err := url.ParseQuery(valuesText)
+	if err != nil {
+		if !routed {
+			return sanitizeOpaqueURLFragment(fragment, secrets...)
+		}
+		return "", false, false
+	}
+	changed := prefixChanged
+	for key, current := range values {
+		if redact.URLSafeComponentSecrets(key, secrets...) != key {
+			return "", false, false
+		}
+		if sensitiveURLParameter(key) {
+			values.Set(key, "REDACTED")
+			changed = true
+			continue
+		}
+		for index, value := range current {
+			if safeValue := redact.URLSafeComponentSecrets(value, secrets...); safeValue != value {
+				current[index] = safeValue
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return fragment, false, true
+	}
+	return prefix + values.Encode(), true, true
+}
+
+func sanitizeOpaqueURLFragment(fragment string, secrets ...string) (string, bool, bool) {
+	var b strings.Builder
+	changed := false
+	for rest := fragment; ; {
+		separatorAt := strings.IndexAny(rest, "&;")
+		part := rest
+		separator := byte(0)
+		if separatorAt >= 0 {
+			part = rest[:separatorAt]
+			separator = rest[separatorAt]
+		}
+		safePart, partChanged, safe := sanitizeOpaqueURLFragmentPart(part, secrets...)
+		if !safe {
+			return "", false, false
+		}
+		b.WriteString(safePart)
+		changed = changed || partChanged
+		if separatorAt < 0 {
+			break
+		}
+		b.WriteByte(separator)
+		rest = rest[separatorAt+1:]
+	}
+	if !changed {
+		return fragment, false, true
+	}
+	return b.String(), true, true
+}
+
+func sanitizeOpaqueURLFragmentPart(part string, secrets ...string) (string, bool, bool) {
+	equalsAt := strings.IndexByte(part, '=')
+	if equalsAt < 0 {
+		safe := redact.URLSafeComponentSecrets(part, secrets...)
+		return safe, safe != part, true
+	}
+	rawKey, rawValue := part[:equalsAt], part[equalsAt+1:]
+	key, err := url.QueryUnescape(rawKey)
+	if err != nil || redact.URLSafeComponentSecrets(key, secrets...) != key {
+		return "", false, false
+	}
+	value, err := url.QueryUnescape(rawValue)
+	if err != nil {
+		return "", false, false
+	}
+	safeValue := redact.URLSafeComponentSecrets(value, secrets...)
+	if sensitiveURLParameter(key) {
+		safeValue = "REDACTED"
+	}
+	if safeValue == value {
+		return part, false, true
+	}
+	return rawKey + "=" + url.QueryEscape(safeValue), true, true
+}
+
+func trimUnmatchedURLClosers(candidate string) string {
+	counts := map[byte]int{}
+	for index := 0; index < len(candidate); index++ {
+		switch candidate[index] {
+		case '(', '[', '{':
+			counts[candidate[index]]++
+		case ')':
+			counts['(']--
+		case ']':
+			counts['[']--
+		case '}':
+			counts['{']--
+		}
+	}
+	suffixAt := len(candidate)
+	for suffixAt > 0 && strings.ContainsRune(".,;:!?", rune(candidate[suffixAt-1])) {
+		suffixAt--
+	}
+	prefix, suffix := candidate[:suffixAt], candidate[suffixAt:]
+	for prefix != "" {
+		last := prefix[len(prefix)-1]
+		switch last {
+		case ')':
+			if counts['('] >= 0 {
+				return prefix + suffix
+			}
+			counts['(']++
+			prefix = prefix[:len(prefix)-1]
+		case ']':
+			if counts['['] >= 0 {
+				return prefix + suffix
+			}
+			counts['[']++
+			prefix = prefix[:len(prefix)-1]
+		case '}':
+			if counts['{'] >= 0 {
+				return prefix + suffix
+			}
+			counts['{']++
+			prefix = prefix[:len(prefix)-1]
+		default:
+			return prefix + suffix
+		}
+	}
+	return suffix
 }
 
 func sensitiveURLParameter(key string) bool {
@@ -235,9 +462,13 @@ func sensitiveURLParameter(key string) bool {
 	switch normalized {
 	case "api_key", "apikey", "auth", "authorization", "client_secret", "credential", "id_token", "key", "password", "passwd", "refresh_token", "secret", "sig", "signature", "token", "access_token", "x_amz_credential", "x_amz_signature", "x_amz_security_token":
 		return true
-	default:
-		return false
 	}
+	for _, marker := range []string{"api_key", "apikey", "password", "secret", "token"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isURLPrefixChar(ch byte) bool {

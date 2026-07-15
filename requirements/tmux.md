@@ -73,11 +73,13 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   in one tmux command batch so signal parsing, guide text, references, and
   snapshot pixels do not come from separately timed observations.
 - Deterministic reference extraction uses the joined logical-text view after
-  terminal-authored upstream records have been removed. URL candidates retain
-  their exact scheme, host, path, and appearance order unless credential-like
-  query values require structural redaction. Engram does not canonicalize,
-  rank, or otherwise translate URLs for particular hosts. At most the first
-  four distinct visible HTTP(S) URLs are shown.
+  terminal-authored upstream records have been removed. Unmatched closing
+  wrappers are removed; other terminal punctuation is retained. URL candidates
+  preserve their scheme, host, path, fragment, and appearance order subject to
+  structural and best-effort credential redaction. Malformed query strings fail
+  closed, and a URL whose authority would require redaction is omitted. Engram
+  does not canonicalize, rank, or otherwise translate URLs for particular hosts.
+  At most the first four distinct visible HTTP(S) URLs are shown.
 - Guide anchors fence local paths for copying. Snapshot captions keep references
   plain, and links stay outside code fences so Telegram can make them directly
   navigable. Presentation tests must keep this distinction explicit rather than
@@ -85,8 +87,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - Guide mode sends every frame's complete joined logical text, with upstream
   records, the trailing model-status footer, and a small allowlist of paired
   Codex placeholder prompts removed, to the selected guide provider in one
-  non-streaming request. This semantic cleanup does not alter raw captures,
-  screenshots, references, or hashes. Within a stable and
+  non-streaming request. The guide-only footer and placeholder cleanup does not
+  alter raw captures, screenshots, references, or hashes; upstream-record
+  removal happens earlier and intentionally excludes those records from every
+  presentation view. Within a stable and
   strongly aligned capture boundary, Engram also supplies the previous
   rendering, deterministic added and removed lines, and bounded unchanged
   neighbors. These fields direct attention and conversational tone; they never

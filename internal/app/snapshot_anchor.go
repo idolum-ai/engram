@@ -67,7 +67,8 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	captureHash := snapshotAnchorHash(current, capture, a.Config.SnapshotTheme)
+	caption := a.snapshotAnchorCaption(current, capture, presentationText)
+	captureHash := snapshotAnchorHash(current, capture, presentationText, caption, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
 		return
 	}
@@ -105,7 +106,13 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, current) {
 		return
 	}
-	caption := a.snapshotAnchorCaption(latest, capture, presentationText)
+	// The image was rendered with current.Title. A concurrent rename must retry
+	// the whole render instead of persisting a hash for mismatched media.
+	if latest.Title != current.Title {
+		return
+	}
+	caption = a.snapshotAnchorCaption(latest, capture, presentationText)
+	captureHash = snapshotAnchorHash(latest, capture, presentationText, caption, a.Config.SnapshotTheme)
 	markup := a.anchorMarkup(latest)
 	_, editErr := a.Telegram.EditPhoto(ctx, latest.AnchorChatID, latest.AnchorMessageID, pngPath, caption, markup)
 	if telegram.IsMessageNotModified(editErr) {
@@ -186,8 +193,8 @@ func (a *App) finishSnapshotMigration(ctx context.Context, id int) bool {
 	return ok && ts.RetiringAnchorMessageID == 0
 }
 
-func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, theme string) string {
-	return sha(strings.Join([]string{capture.ANSI, capture.Title, capture.CurrentPath, fmt.Sprint(capture.Columns), fmt.Sprint(capture.VisibleRows), fmt.Sprint(capture.BufferRows), ts.Title, theme}, "\x00"))
+func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, presentationText, caption, theme string) string {
+	return sha(strings.Join([]string{capture.ANSI, presentationText, capture.Title, capture.CurrentPath, fmt.Sprint(capture.Columns), fmt.Sprint(capture.VisibleRows), fmt.Sprint(capture.BufferRows), ts.Title, caption, theme}, "\x00"))
 }
 
 func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture, referenceText string) string {
@@ -195,8 +202,8 @@ func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.Style
 	title := a.redactText(firstNonEmpty(ts.Title, capture.Title, "terminal"))
 	cwd := a.redactText(capture.CurrentPath)
 	caption := fmt.Sprintf("[%d] %s · %s\n%s\n%d buffer rows · %dx%d visible", ts.ID, ts.State, title, cwd, capture.BufferRows, capture.Columns, capture.VisibleRows)
-	if references := renderSnapshotReferences(referenceText, safeCaptionBytes-len(caption)-2); references != "" {
-		caption += "\n\n" + a.redactText(references)
+	if references := renderSnapshotReferences(referenceText, safeCaptionBytes-len(caption)-2, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey); references != "" {
+		caption += "\n\n" + references
 	}
 	return caption
 }
