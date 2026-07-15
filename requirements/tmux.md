@@ -72,6 +72,16 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   semantics over the same coordinates. The physical and joined captures execute
   in one tmux command batch so signal parsing, guide text, references, and
   snapshot pixels do not come from separately timed observations.
+- Deterministic reference extraction uses the joined logical-text view after
+  terminal-authored upstream records have been removed. URL candidates retain
+  their exact scheme, host, path, and appearance order unless credential-like
+  query values require structural redaction. Engram does not canonicalize,
+  rank, or otherwise translate URLs for particular hosts. At most the first
+  four distinct visible HTTP(S) URLs are shown.
+- Guide anchors fence local paths for copying. Snapshot captions keep references
+  plain, and links stay outside code fences so Telegram can make them directly
+  navigable. Presentation tests must keep this distinction explicit rather than
+  treating it as an incidental renderer detail.
 - Guide mode sends every frame's complete joined logical text, with upstream
   records, the trailing model-status footer, and a small allowlist of paired
   Codex placeholder prompts removed, to the selected guide provider in one

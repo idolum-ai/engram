@@ -30,6 +30,25 @@ func TestExtractVisibleURLsValidatesTrimsAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestExtractVisibleURLsPreservesDistinctGitHubFormsInAppearanceOrder(t *testing.T) {
+	t.Parallel()
+	publicURL := "https://github.com/idolum-ai/kenogram/pull/19"
+	apiURL := "https://api.github.com/repos/idolum-ai/kenogram/pulls/19"
+	capture := strings.Join([]string{
+		"created " + publicURL,
+		"checked " + apiURL,
+		"repeated " + publicURL,
+	}, "\n")
+
+	want := []string{publicURL, apiURL}
+	if got := extractVisibleURLs(capture, 4); !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible URLs = %#v, want exact first-seen forms %#v", got, want)
+	}
+	if got := extractVisibleURLs(capture, 1); !reflect.DeepEqual(got, want[:1]) {
+		t.Fatalf("bounded visible URLs = %#v, want first visible URL %#v", got, want[:1])
+	}
+}
+
 func TestURLRangesCannotBecomeVisiblePaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -53,18 +72,27 @@ func TestURLRangesCannotBecomeVisiblePaths(t *testing.T) {
 	}
 }
 
-func TestSnapshotReferencesAreBoundedAndUnfenced(t *testing.T) {
+func TestReferenceRenderingFencesPathsOnlyWhenRequestedAndKeepsLinksPlain(t *testing.T) {
 	t.Parallel()
 	refs := visibleReferences{
 		Paths: []string{"/tmp/report.pdf"},
 		URLs:  []string{"https://example.com/report"},
 	}
-	got := renderReferences(refs, false, 100)
-	if strings.Contains(got, "```") || !strings.Contains(got, "paths:\n/tmp/report.pdf") || !strings.Contains(got, "links:\nhttps://example.com/report") {
-		t.Fatalf("snapshot references = %q", got)
+	plain := renderReferences(refs, false, 100)
+	if strings.Contains(plain, "```") || !strings.Contains(plain, "paths:\n/tmp/report.pdf") || !strings.Contains(plain, "links:\nhttps://example.com/report") {
+		t.Fatalf("plain references = %q", plain)
 	}
-	if len(got) > 100 {
-		t.Fatalf("snapshot references exceeded budget: %d", len(got))
+	if len(plain) > 100 {
+		t.Fatalf("plain references exceeded budget: %d", len(plain))
+	}
+
+	fenced := renderReferences(refs, true, 120)
+	if !strings.Contains(fenced, "paths:\n```\n/tmp/report.pdf\n```") || !strings.Contains(fenced, "links:\nhttps://example.com/report") {
+		t.Fatalf("fenced references = %q", fenced)
+	}
+	linkSection := fenced[strings.Index(fenced, "links:"):]
+	if strings.Contains(linkSection, "```") {
+		t.Fatalf("clickable links were fenced: %q", fenced)
 	}
 }
 

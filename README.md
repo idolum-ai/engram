@@ -493,7 +493,9 @@ absolute or home-relative files and directories under `paths`, and syntactically
 valid HTTP(S) URLs under `links`. Engram never fetches or endorses an extracted
 URL; it is untrusted terminal text surfaced for convenient navigation. URLs
 with embedded user credentials are omitted, and recognized credential query
-parameters are redacted before delivery.
+parameters are redacted before delivery. Otherwise their first-seen terminal
+spelling and order are preserved; Engram does not rewrite or prefer links for
+particular services.
 
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or

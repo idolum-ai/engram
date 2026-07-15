@@ -67,8 +67,6 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	presentationCapture := capture
-	presentationCapture.Text = presentationText
 	captureHash := snapshotAnchorHash(current, capture, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
 		return
@@ -107,7 +105,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, current) {
 		return
 	}
-	caption := a.snapshotAnchorCaption(latest, presentationCapture)
+	caption := a.snapshotAnchorCaption(latest, capture, presentationText)
 	markup := a.anchorMarkup(latest)
 	_, editErr := a.Telegram.EditPhoto(ctx, latest.AnchorChatID, latest.AnchorMessageID, pngPath, caption, markup)
 	if telegram.IsMessageNotModified(editErr) {
@@ -192,12 +190,12 @@ func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, th
 	return sha(strings.Join([]string{capture.ANSI, capture.Title, capture.CurrentPath, fmt.Sprint(capture.Columns), fmt.Sprint(capture.VisibleRows), fmt.Sprint(capture.BufferRows), ts.Title, theme}, "\x00"))
 }
 
-func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture) string {
+func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture, referenceText string) string {
 	const safeCaptionBytes = 960
 	title := a.redactText(firstNonEmpty(ts.Title, capture.Title, "terminal"))
 	cwd := a.redactText(capture.CurrentPath)
 	caption := fmt.Sprintf("[%d] %s · %s\n%s\n%d buffer rows · %dx%d visible", ts.ID, ts.State, title, cwd, capture.BufferRows, capture.Columns, capture.VisibleRows)
-	if references := renderSnapshotReferences(capture.Text, safeCaptionBytes-len(caption)-2); references != "" {
+	if references := renderSnapshotReferences(referenceText, safeCaptionBytes-len(caption)-2); references != "" {
 		caption += "\n\n" + a.redactText(references)
 	}
 	return caption

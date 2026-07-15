@@ -29,7 +29,8 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		t.Fatal(err)
 	}
 	visibleURL := "https://example.test/build/7"
-	captureText := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 61) + artifact + "\n" + visibleURL + "\n[engram:upstream] " + firstSignalID + " build needs review https://signal.invalid/hidden\n"
+	physicalCapture := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 60) + artifact + "\nhttps://example.test/build/\n7\n[engram:upstream] " + firstSignalID + " build needs review https://signal.invalid/hidden\n"
+	joinedCapture := strings.Repeat("green\n", 60) + artifact + "\n" + visibleURL + "\n[engram:upstream] " + firstSignalID + " build needs review https://signal.invalid/hidden\n"
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +83,9 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		if !strings.Contains(caption, "paths:\n"+artifact) || !strings.Contains(caption, "links:\n"+visibleURL) {
 			return nil, errors.New("snapshot anchor omitted visible references")
 		}
+		if strings.Contains(caption, "```") || media["parse_mode"] != nil {
+			return nil, errors.New("snapshot references must remain a plain clickable caption")
+		}
 		if strings.Contains(caption, "signal.invalid") {
 			return nil, errors.New("snapshot references parsed an upstream payload")
 		}
@@ -96,7 +100,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		Config:        config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "contrast-dark", TelegramChatID: 100, Home: dir},
 		Store:         store,
 		Telegram:      client,
-		Tmux:          tmux.New(snapshotReferenceTmuxRunner{capture: captureText}),
+		Tmux:          tmux.New(snapshotReferenceTmuxRunner{physical: physicalCapture, joined: joinedCapture}),
 		Snapshots:     renderer,
 		captureSlots:  make(chan struct{}, 1),
 		renderSlots:   make(chan struct{}, 1),
@@ -120,6 +124,30 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
 	if requests != 2 || renderer.renders != 2 {
 		t.Fatalf("manual refresh requests=%d renders=%d", requests, renderer.renders)
+	}
+}
+
+func TestSnapshotAnchorCaptionUsesExplicitPresentationTextWithoutURLRewrite(t *testing.T) {
+	t.Parallel()
+	publicURL := "https://github.com/idolum-ai/kenogram/pull/19"
+	apiURL := "https://api.github.com/repos/idolum-ai/kenogram/pulls/19"
+	capture := tmux.StyledCapture{
+		Text:        "physical command " + apiURL,
+		JoinedText:  "joined output " + publicURL,
+		Title:       "review",
+		CurrentPath: "/tmp",
+		Columns:     80,
+		VisibleRows: 24,
+		BufferRows:  64,
+	}
+	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: "review"}
+
+	caption := (&App{}).snapshotAnchorCaption(session, capture, capture.JoinedText)
+	if !strings.Contains(caption, "links:\n"+publicURL) {
+		t.Fatalf("snapshot caption omitted exact presentation URL: %q", caption)
+	}
+	if strings.Contains(caption, apiURL) {
+		t.Fatalf("snapshot caption used physical capture URL instead of explicit presentation text: %q", caption)
 	}
 }
 
@@ -518,7 +546,9 @@ func (r *failingSnapshotRenderer) Render(context.Context, terminalshot.Input, st
 }
 
 type snapshotReferenceTmuxRunner struct {
-	capture string
+	capture  string
+	physical string
+	joined   string
 }
 
 func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (string, error) {
@@ -526,7 +556,9 @@ func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (s
 		return framedStyledCaptureMetadata("bash"), nil
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
-		return pairedCaptureResult(args, r.capture, r.capture), nil
+		physical := firstNonEmpty(r.physical, r.capture)
+		joined := firstNonEmpty(r.joined, r.capture)
+		return pairedCaptureResult(args, physical, joined), nil
 	}
 	return (snapshotTmuxRunner{}).Run(ctx, args...)
 }
