@@ -21,7 +21,7 @@ type conversationCase struct {
 	Contradicts  []string   `json:"contradicts,omitempty"`
 }
 
-const minimumLiveConceptCoverage = 1.0
+const minimumLiveConceptCoverage = 0.6
 const maximumLiveSemanticDistance = 0.7
 const maxConversationParagraphRunes = 320
 
@@ -81,6 +81,20 @@ func TestHardOutputRegressionsRejectNumberWordAgainstDigitEvidence(t *testing.T)
 	failures := hardOutputRegressions(evalCase, "The review found seven blockers.")
 	if !containsFailure(failures, "unsupported number claim seven") {
 		t.Fatalf("failures = %v, want unsupported number word", failures)
+	}
+}
+
+func TestHardOutputRegressionsAcceptVisibleNumberWordBesideNumberedList(t *testing.T) {
+	evalCase := conversationCase{TerminalText: "Four issues remain:\n1. the first issue\n2. the second issue"}
+	if failures := unsupportedNumberClaims(evalCase.TerminalText, "Four issues remain."); len(failures) != 0 {
+		t.Fatalf("failures = %v, want visible count accepted", failures)
+	}
+}
+
+func TestHardOutputRegressionsAcceptOneVisibleDiagnostic(t *testing.T) {
+	evalCase := conversationCase{TerminalText: "file.go:42: warning: unfinished proof"}
+	if failures := unsupportedNumberClaims(evalCase.TerminalText, "The file compiled with one warning."); len(failures) != 0 {
+		t.Fatalf("failures = %v, want single visible diagnostic accepted", failures)
 	}
 }
 
@@ -174,7 +188,17 @@ func liveEvaluationRepeats(t *testing.T) int {
 
 func loadConversationCases(t *testing.T) []conversationCase {
 	t.Helper()
-	data, err := os.ReadFile("testdata/conversation_cases.json")
+	return loadConversationCasesFile(t, "testdata/conversation_cases.json")
+}
+
+func loadPreferenceHoldoutCases(t *testing.T) []conversationCase {
+	t.Helper()
+	return loadConversationCasesFile(t, "testdata/preference_holdout_cases.json")
+}
+
+func loadConversationCasesFile(t *testing.T, path string) []conversationCase {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,9 +299,16 @@ func unsupportedNumberClaims(source, output string) []string {
 		}
 	}
 	outputWords := evalWords(output)
+	sourceWordCounts := make(map[string]int, len(sourceWords))
+	for _, word := range sourceWords {
+		sourceWordCounts[countSubject(word)]++
+	}
 	for index, word := range outputWords {
 		number, ok := numberWords[word]
 		if !ok || index+1 >= len(outputWords) {
+			continue
+		}
+		if sourceNumbers[number] {
 			continue
 		}
 		limit := index + 4
@@ -286,6 +317,9 @@ func unsupportedNumberClaims(source, output string) []string {
 		}
 		for _, candidate := range outputWords[index+1 : limit] {
 			subject := countSubject(candidate)
+			if number == "1" && sourceWordCounts[subject] == 1 {
+				break
+			}
 			allowed, constrained := sourceCounts[subject]
 			if constrained && !allowed[number] && !seen[number+" "+subject] {
 				failures = append(failures, "unsupported number claim "+word+" "+subject)

@@ -444,6 +444,8 @@ snapshot replies. The latest upstream-signal notification is another reply
 route to the same outer pane. Replacing any alternate of the same kind makes
 its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
+The anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, `Enter`,
+and a separate `← ↑ ↓ →` directional row.
 
 ### Nested environments
 
@@ -455,10 +457,11 @@ engram signal "Tests finished; two failures need attention."
 ```
 
 The command establishes a fresh terminal row, then writes one bounded
-`[engram:upstream] <record-id> ...` record and a terminal bell. Engram also
+`[engram:upstream] <record-id> v1:<bytes>:<payload>` record and a terminal bell. Engram also
 recognizes that exact record after up to eight presentation spaces added by a
-terminal host such as Codex, including a bounded same-indent continuation when
-the host wraps the payload into physical rows. It makes no
+terminal host such as Codex. A versioned byte length lets Engram reconstruct a
+bounded same-indent continuation when the host wraps the payload into physical
+rows without consuming adjacent output. It makes no
 network request and reads no service configuration. The outer Engram finds the
 record through its normal tmux capture loop and immediately attempts a redacted
 terminal-signal notification; the guide and Chromium continue independently. At
@@ -616,9 +619,13 @@ rotates, candidate names are replaced with fresh opaque IDs, and a separate
 judge uses its model-default decoding and scores fidelity, usefulness, voice,
 and readability from JSON-serialized untrusted evidence. The fixture's human
 reference guides information priority and style but never overrides terminal
-truth. Hard fixture regressions fail independently of the judge. The tournament
-defaults to two repeats, gates material-concept coverage, and reports full-frame
-and continuation cohorts separately. A comma-separated
+truth. The three human-preference fixtures live in a separate held-out file and
+none of their terminal or reference prose appears in the production prompt.
+Hard production regressions fail independently of the judge. Semantic distance
+and concept coverage remain visible diagnostics; acceptance requires the
+production candidate to average at least 4/5 for blinded fidelity, usefulness,
+and overall quality. The tournament defaults to two repeats and reports full-frame,
+held-out preference, and continuation cohorts separately. A comma-separated
 `ENGRAM_TOURNAMENT_CASES` list selects exact fixture names for focused iteration:
 
 ```sh
@@ -626,6 +633,17 @@ ENGRAM_LIVE_HAIKU_TOURNAMENT=1 \
 ENGRAM_TOURNAMENT_JUDGE_MODEL=claude-sonnet-4-6 \
 ENGRAM_TOURNAMENT_PROMPT_FILE=/tmp/challenger-prompt.txt \
 go test -v ./internal/anthropic -run TestLiveHaikuPromptTournament -count=1
+```
+
+The judge itself has an opt-in adversarial probe that places conflicting
+instructions in terminal, preferred-outcome, and candidate strings and requires
+the grounded candidate to score higher:
+
+```sh
+ENGRAM_LIVE_TOURNAMENT_JUDGE_INJECTION=1 \
+ENGRAM_TOURNAMENT_JUDGE_MODEL=claude-sonnet-4-6 \
+go test -v ./internal/anthropic \
+  -run TestLiveTournamentJudgeResistsInjectedEvidence -count=1
 ```
 
 The Luna adapter has a smaller opt-in compatibility check that exercises the

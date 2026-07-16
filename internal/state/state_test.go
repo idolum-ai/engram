@@ -258,6 +258,26 @@ func TestPersistenceReachedReplacementDistinguishesAtomicWriteOutcomes(t *testin
 	}
 }
 
+func TestAddAttachmentRollsBackBeforeReplacementAndKeepsCommittedState(t *testing.T) {
+	store := &Store{state: newState()}
+	attachment := Attachment{StoredPath: "/tmp/voice.ogg"}
+	preReplace := &atomicWriteError{Err: errors.New("write failed")}
+	if err := store.addAttachmentLocked(attachment, func() error { return preReplace }); !errors.Is(err, preReplace) {
+		t.Fatalf("pre-replacement error = %v", err)
+	}
+	if len(store.state.Attachments) != 0 {
+		t.Fatalf("pre-replacement failure retained attachment: %#v", store.state.Attachments)
+	}
+
+	postReplace := &atomicWriteError{Err: errors.New("directory sync failed"), Replaced: true}
+	if err := store.addAttachmentLocked(attachment, func() error { return postReplace }); !errors.Is(err, postReplace) {
+		t.Fatalf("post-replacement error = %v", err)
+	}
+	if len(store.state.Attachments) != 1 || store.state.Attachments[0].StoredPath != attachment.StoredPath {
+		t.Fatalf("post-replacement failure lost committed attachment: %#v", store.state.Attachments)
+	}
+}
+
 func TestStateV6MigratesUpstreamDefaultsAndPersistsV7(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")

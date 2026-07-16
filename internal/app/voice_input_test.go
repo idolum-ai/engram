@@ -160,6 +160,85 @@ func TestVoiceTranscriptionFailureSendsNoInputAndRemovesTemporaryFile(t *testing
 	}
 }
 
+func TestClosedVoiceReplyIsRejectedBeforeDownloadOrTranscription(t *testing.T) {
+	app, runner, transcriber, telegramCalls := newVoiceInputTestApp(t)
+	if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
+		s.State = state.TerminalClosed
+		s.WatchEnabled = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status := app.handleUpdate(context.Background(), voiceReplyUpdate(108, 77))
+	if status != "voice_reply_user_error" {
+		t.Fatalf("status = %q", status)
+	}
+	app.transferWG.Wait()
+	if transcriber.calls != 0 || len(runner.calls) != 0 {
+		t.Fatalf("closed voice reached provider/tmux: transcriber=%d tmux=%#v", transcriber.calls, runner.calls)
+	}
+	if got := strings.Join(*telegramCalls, ","); got != "sendMessage" {
+		t.Fatalf("Telegram calls = %q", got)
+	}
+}
+
+func TestVoiceTmuxFailureCompletesWithoutAnchorDeadlock(t *testing.T) {
+	app, runner, _, telegramCalls := newVoiceInputTestApp(t)
+	runner.inputErr = errors.New("tmux unavailable")
+	status := app.handleUpdate(context.Background(), voiceReplyUpdate(109, 77))
+	if status != "voice_reply_ok" {
+		t.Fatalf("status = %q", status)
+	}
+	done := make(chan struct{})
+	go func() {
+		app.transferWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("voice transfer deadlocked after tmux failure")
+	}
+	if got := strings.Join(*telegramCalls, ","); !strings.Contains(got, "editMessageText") || !strings.HasSuffix(got, "sendMessage") {
+		t.Fatalf("Telegram calls = %q", got)
+	}
+}
+
+func TestVoiceDeliveryDoesNotTakeAnchorBeforeSession(t *testing.T) {
+	app, _, _, _ := newVoiceInputTestApp(t)
+	expected, ok := app.Store.FindSession(1)
+	if !ok {
+		t.Fatal("missing session")
+	}
+	sessionLock := app.sessionMutex(1)
+	sessionLock.Lock()
+	voiceDone := make(chan struct{})
+	go func() {
+		message := voiceReplyUpdate(110, 77).Message
+		_ = app.deliverVoiceInput(context.Background(), *message, expected, 77, "test")
+		close(voiceDone)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	anchorAcquired := make(chan struct{})
+	go func() {
+		anchorLock := app.anchorMutex(1)
+		anchorLock.Lock()
+		close(anchorAcquired)
+		anchorLock.Unlock()
+	}()
+	select {
+	case <-anchorAcquired:
+	case <-time.After(time.Second):
+		sessionLock.Unlock()
+		t.Fatal("voice delivery held anchor while waiting for session lock")
+	}
+	sessionLock.Unlock()
+	select {
+	case <-voiceDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("voice delivery did not resume after session lock release")
+	}
+}
+
 func TestOversizedVoiceReplyIsRejectedBeforeDownload(t *testing.T) {
 	app, runner, transcriber, telegramCalls := newVoiceInputTestApp(t)
 	update := voiceReplyUpdate(105, 77)
@@ -242,6 +321,9 @@ func newVoiceInputTestApp(t *testing.T) (*App, *slashEscapeRunner, *fakeVoiceTra
 				t.Fatal(err)
 			}
 			return snapshotJSONResponse(`{"message_id":200,"chat":{"id":100}}`), nil
+		case strings.HasSuffix(request.URL.Path, "/editMessageText"):
+			telegramCalls = append(telegramCalls, "editMessageText")
+			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
 		default:
 			t.Fatalf("unexpected Telegram request: %s %s", request.Method, request.URL)
 			return nil, nil

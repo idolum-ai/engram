@@ -93,8 +93,8 @@ func TestAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
 	t.Parallel()
 
 	got := AnchorMarkup(7, true, false)
-	if got == nil || len(got.InlineKeyboard) != 2 || len(got.InlineKeyboard[0]) != 2 {
-		t.Fatalf("RefreshMarkup rows = %#v, want refresh row plus key row", got)
+	if got == nil || len(got.InlineKeyboard) != 3 || len(got.InlineKeyboard[0]) != 2 {
+		t.Fatalf("AnchorMarkup rows = %#v, want action, key, and arrow rows", got)
 	}
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
@@ -115,6 +115,20 @@ func TestAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
 	for i := range want {
 		if got.InlineKeyboard[1][i] != want[i] {
 			t.Fatalf("key button %d = %#v, want %#v", i, got.InlineKeyboard[1][i], want[i])
+		}
+	}
+	wantArrows := []InlineKeyboardButton{
+		{Text: "←", CallbackData: "key:7:left"},
+		{Text: "↑", CallbackData: "key:7:up"},
+		{Text: "↓", CallbackData: "key:7:down"},
+		{Text: "→", CallbackData: "key:7:right"},
+	}
+	if len(got.InlineKeyboard[2]) != len(wantArrows) {
+		t.Fatalf("arrow button count = %d, want %d", len(got.InlineKeyboard[2]), len(wantArrows))
+	}
+	for i := range wantArrows {
+		if got.InlineKeyboard[2][i] != wantArrows[i] {
+			t.Fatalf("arrow button %d = %#v, want %#v", i, got.InlineKeyboard[2][i], wantArrows[i])
 		}
 	}
 }

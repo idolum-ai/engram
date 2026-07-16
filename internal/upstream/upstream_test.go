@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -35,7 +36,7 @@ func TestWriteRecordEstablishesBoundaryAndObservationKeepsLatestIdentity(t *test
 	if err := WriteRecord(&output, Record{ID: testRecordID, Payload: "tests\nfinished"}); err != nil {
 		t.Fatal(err)
 	}
-	want := "\a\r\n[engram:upstream] " + testRecordID + " tests finished\r\n"
+	want := "\a\r\n[engram:upstream] " + testRecordID + " v1:14:tests finished\r\n"
 	if got := output.String(); got != want {
 		t.Fatalf("signal output = %q, want %q", got, want)
 	}
@@ -55,7 +56,7 @@ func TestObserveStripsMalformedFramingWithoutTreatingItAsSignal(t *testing.T) {
 }
 
 func TestObserveAcceptsBoundedPresentationIndent(t *testing.T) {
-	line := Prefix + testRecordID + " Codex tool output"
+	line := Prefix + testRecordID + " v1:41:Codex tool output"
 	got := Observe("before\n    " + line + "\n    finished through Engram\n\nafter")
 	if !got.Found || got.Latest.Payload != "Codex tool output finished through Engram" || got.PresentationText != "before\n\nafter" {
 		t.Fatalf("Observe indented = %#v", got)
@@ -67,11 +68,27 @@ func TestObserveAcceptsBoundedPresentationIndent(t *testing.T) {
 	}
 }
 
+func TestObserveKeepsAdjacentIndentedOutputOutsideLengthFramedSignal(t *testing.T) {
+	payload := "build complete"
+	line := "    " + Prefix + testRecordID + " v1:" + strconv.Itoa(len(payload)) + ":" + payload
+	got := Observe(line + "\n    /tmp/report.txt\n    ERROR: deployment failed")
+	if !got.Found || got.Latest.Payload != payload || got.PresentationText != "    /tmp/report.txt\n    ERROR: deployment failed" {
+		t.Fatalf("Observe adjacent output = %#v", got)
+	}
+}
+
 func TestObserveDoesNotJoinContinuationToColumnZeroRecord(t *testing.T) {
 	line := Prefix + testRecordID + " direct signal"
 	got := Observe(line + "\nordinary output")
 	if !got.Found || got.Latest.Payload != "direct signal" || got.PresentationText != "ordinary output" {
 		t.Fatalf("Observe direct = %#v", got)
+	}
+}
+
+func TestObserveKeepsIncompleteLengthFramedSignalUnrecognized(t *testing.T) {
+	got := Observe("    " + Prefix + testRecordID + " v1:20:short")
+	if got.Found || got.PresentationText != "" {
+		t.Fatalf("Observe incomplete = %#v", got)
 	}
 }
 

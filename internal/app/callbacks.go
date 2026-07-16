@@ -324,6 +324,14 @@ func anchorKeyAction(preset string) (anchorKeyPreset, bool) {
 		return anchorKeyPreset{Label: "^D", Groups: [][]string{{"C-d"}}}, true
 	case "enter":
 		return anchorKeyPreset{Label: "Enter", Groups: [][]string{{"Enter"}}}, true
+	case "left":
+		return anchorKeyPreset{Label: "Left", Groups: [][]string{{"Left"}}}, true
+	case "up":
+		return anchorKeyPreset{Label: "Up", Groups: [][]string{{"Up"}}}, true
+	case "down":
+		return anchorKeyPreset{Label: "Down", Groups: [][]string{{"Down"}}}, true
+	case "right":
+		return anchorKeyPreset{Label: "Right", Groups: [][]string{{"Right"}}}, true
 	default:
 		return anchorKeyPreset{}, false
 	}

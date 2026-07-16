@@ -26,20 +26,23 @@ second transport or model a deployment hierarchy.
 - `engram signal <message>` writes `BEL`, establishes a new physical row with
   explicit CRLF, and writes one UTF-8 line beginning with the stable literal
   prefix `[engram:upstream] ` to its controlling terminal.
-- Each record contains a random 128-bit lowercase hexadecimal ID between the
-  prefix and payload. The ID is framing for bounded deduplication, not identity
-  or authentication, and is omitted from the Telegram notification.
+- Each record contains a random 128-bit lowercase hexadecimal ID followed by a
+  versioned decimal byte length and the payload. The ID is framing for bounded
+  deduplication, not identity or authentication, and both framing fields are
+  omitted from the Telegram notification. Legacy records without version and
+  length remain accepted only as complete one-line records.
 - The message is normalized to one line, strips terminal control characters,
   and is capped at 1 KiB after UTF-8 validation. Empty messages are rejected.
 - Observation admits zero through eight leading ASCII spaces before the exact
   prefix so terminal hosts such as Codex may present command output as an
-  indented block. A valid indented record may collect a bounded run of
-  contiguous rows with exactly the same indentation when that host physically
-  wraps its payload; those rows are removed from guide evidence with the record.
-  Column-zero records remain one line. Deeper indentation, tabs, altered
-  prefixes, and malformed record IDs are not signals. This tolerance is
-  presentation framing, not authentication; any pane writer can already forge
-  a valid record.
+  indented block. Only a valid versioned record whose payload is shorter than
+  its declared byte length may collect a bounded run of contiguous rows with
+  exactly the same indentation when that host physically wraps its payload. It
+  stops at the exact declared length; adjacent same-indent output remains guide
+  and reference evidence. Column-zero and legacy records remain one line.
+  Deeper indentation, tabs, altered prefixes, invalid lengths, and malformed
+  record IDs are not signals. This tolerance is presentation framing, not
+  authentication; any pane writer can already forge a valid record.
 - The command makes no network request and reads no Engram service state. If no
   controlling terminal is available, it exits nonzero without attempting a
   fallback transport.

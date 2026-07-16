@@ -45,6 +45,33 @@ func TestKeyCallbackSendsCtrlC(t *testing.T) {
 	}
 }
 
+func TestKeyCallbacksSendDirectionalKeys(t *testing.T) {
+	for _, test := range []struct {
+		preset string
+		key    string
+	}{
+		{preset: "left", key: "Left"},
+		{preset: "up", key: "Up"},
+		{preset: "down", key: "Down"},
+		{preset: "right", key: "Right"},
+	} {
+		t.Run(test.preset, func(t *testing.T) {
+			app, runner, _ := newAnchorKeyTestApp(t)
+			status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+				ID: "cb", From: telegram.User{ID: 42},
+				Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+				Data:    "key:1:" + test.preset,
+			})
+			if status != "callback_ok" {
+				t.Fatalf("handleCallback status = %q", status)
+			}
+			if len(runner.calls) != 2 || runner.calls[1][0] != "if-shell" || !strings.Contains(runner.calls[1][5], "send-keys -t %1 '"+test.key+"'") {
+				t.Fatalf("tmux calls = %#v", runner.calls)
+			}
+		})
+	}
+}
+
 func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 	app, runner, refreshed := newAnchorKeyTestApp(t)
 	var sleepMu sync.Mutex
@@ -93,7 +120,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 }
 
 func TestRetiredAnchorCallbacksAreInert(t *testing.T) {
-	for _, callbackData := range []string{"refresh:1", "snapshot:1", "key:1:ctrl-c", "recover:1"} {
+	for _, callbackData := range []string{"refresh:1", "snapshot:1", "key:1:ctrl-c", "key:1:up", "recover:1"} {
 		t.Run(callbackData, func(t *testing.T) {
 			app, runner, refreshed := newAnchorKeyTestApp(t)
 			if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {

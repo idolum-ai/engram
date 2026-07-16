@@ -211,7 +211,8 @@ func TestEscapedSlashInputRemovesExactlyOneSlash(t *testing.T) {
 }
 
 type slashEscapeRunner struct {
-	calls [][]string
+	calls    [][]string
+	inputErr error
 }
 
 func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -221,6 +222,9 @@ func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, erro
 	}
 	if len(args) > 0 && args[0] == "display-message" {
 		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+	}
+	if len(args) > 0 && args[0] == "if-shell" && r.inputErr != nil {
+		return "", r.inputErr
 	}
 	return "", nil
 }

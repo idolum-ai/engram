@@ -12,6 +12,8 @@ Notable user-visible and operational changes are recorded here.
 
 ### Input
 
+- Add a distinct `← ↑ ↓ →` row to current session anchors for direct tmux
+  directional input under the existing authenticated callback boundary.
 - Send long and multiline Telegram replies as one bracketed tmux paste followed
   by one Enter, allowing terminal applications to receive the complete input as
   one submission.
@@ -19,9 +21,9 @@ Notable user-visible and operational changes are recorded here.
   delivery by default, or opt-in `gpt-4o-transcribe`. Transcription audio is
   temporary, transcript provenance is explicit, and latest-view plus
   immutable-pane checks are repeated before either input reaches tmux.
-- Recognize exact upstream-signal records through bounded presentation indent
-  and same-indent wrapping so Codex-rendered command output can still request
-  attention without leaving payload fragments in guide evidence.
+- Recognize versioned, length-framed upstream-signal records through bounded
+  presentation indent and same-indent wrapping so Codex-rendered command output
+  can request attention without consuming adjacent guide evidence.
 
 ## [v0.4.0] - 2026-07-14
 

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -16,6 +17,7 @@ const RecordIDBytes = 16
 const RecordIDLength = RecordIDBytes * 2
 const MaxPresentationIndent = 8
 const MaxPresentationContinuationLines = 32
+const RecordVersion = "v1"
 
 type Record struct {
 	ID      string
@@ -85,7 +87,7 @@ func WriteRecord(w io.Writer, record Record) error {
 	}
 	// CRLF establishes both a physical row and column-zero boundary even when
 	// the preceding process left the cursor mid-line or disabled ONLCR.
-	_, err = fmt.Fprintf(w, "\a\r\n%s%s %s\r\n", Prefix, record.ID, payload)
+	_, err = fmt.Fprintf(w, "\a\r\n%s%s %s:%d:%s\r\n", Prefix, record.ID, RecordVersion, len(payload), payload)
 	return err
 }
 
@@ -102,23 +104,26 @@ func Observe(joinedText string) Observation {
 			kept = append(kept, line)
 			continue
 		}
-		if record, ok := parseRecord(recordText); ok {
-			if indent > 0 {
-				payload := record.Payload
-				for continued := 0; continued < MaxPresentationContinuationLines && i+1 < len(lines); continued++ {
+		id, payload, expectedBytes, versioned, ok := parseRecordStart(recordText)
+		if ok {
+			if versioned && indent > 0 {
+				for continued := 0; len(payload) < expectedBytes && continued < MaxPresentationContinuationLines && i+1 < len(lines); continued++ {
 					text, ok := presentationContinuation(lines[i+1], indent)
 					if !ok {
 						break
 					}
+					candidate := payload + " " + text
+					if len(candidate) > expectedBytes {
+						break
+					}
 					i++
-					payload += " " + text
-				}
-				if normalized, err := Normalize(payload); err == nil {
-					record.Payload = normalized
+					payload = candidate
 				}
 			}
-			latest = record
-			found = true
+			if record, valid := finishRecord(id, payload, expectedBytes, versioned); valid {
+				latest = record
+				found = true
+			}
 		}
 	}
 	return Observation{
@@ -152,18 +157,51 @@ func presentationContinuation(line string, indent int) (string, bool) {
 }
 
 func parseRecord(text string) (Record, bool) {
+	id, payload, expectedBytes, versioned, ok := parseRecordStart(text)
+	if !ok {
+		return Record{}, false
+	}
+	return finishRecord(id, payload, expectedBytes, versioned)
+}
+
+func parseRecordStart(text string) (id, payload string, expectedBytes int, versioned, ok bool) {
 	if len(text) <= RecordIDLength || text[RecordIDLength] != ' ' {
-		return Record{}, false
+		return "", "", 0, false, false
 	}
-	id := text[:RecordIDLength]
+	id = text[:RecordIDLength]
 	if !validRecordID(id) {
-		return Record{}, false
+		return "", "", 0, false, false
 	}
-	payload, err := Normalize(text[RecordIDLength+1:])
+	payload = text[RecordIDLength+1:]
+	versionPrefix := RecordVersion + ":"
+	if !strings.HasPrefix(payload, versionPrefix) {
+		return id, payload, 0, false, true
+	}
+	payload = strings.TrimPrefix(payload, versionPrefix)
+	separator := strings.IndexByte(payload, ':')
+	if separator <= 0 {
+		return "", "", 0, false, false
+	}
+	expectedBytes, err := strconv.Atoi(payload[:separator])
+	if err != nil || expectedBytes <= 0 || expectedBytes > MaxMessageBytes {
+		return "", "", 0, false, false
+	}
+	payload = payload[separator+1:]
+	if len(payload) > expectedBytes {
+		return "", "", 0, false, false
+	}
+	return id, payload, expectedBytes, true, true
+}
+
+func finishRecord(id, payload string, expectedBytes int, versioned bool) (Record, bool) {
+	normalized, err := Normalize(payload)
 	if err != nil {
 		return Record{}, false
 	}
-	return Record{ID: id, Payload: payload}, true
+	if versioned && (len(payload) != expectedBytes || len(normalized) != expectedBytes) {
+		return Record{}, false
+	}
+	return Record{ID: id, Payload: normalized}, true
 }
 
 func validRecordID(id string) bool {

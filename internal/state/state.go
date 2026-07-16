@@ -707,9 +707,20 @@ func (s *Store) MarkMessage(key string) error {
 func (s *Store) AddAttachment(a Attachment) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.addAttachmentLocked(a, s.saveLocked)
+}
+
+func (s *Store) addAttachmentLocked(a Attachment, save func() error) error {
+	previous := append([]Attachment(nil), s.state.Attachments...)
 	a.ID = maxAttachmentID(s.state.Attachments) + 1
 	s.state.Attachments = append(s.state.Attachments, a)
-	return s.saveLocked()
+	if err := save(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.Attachments = previous
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) AddAttachmentBypass(bypass AttachmentBypass) error {

@@ -48,7 +48,8 @@ Telegram is Engram's only user interface.
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
-- Guide anchors expose refresh, allowed keys, and `🖼️` only when Chromium is
+- Guide anchors expose refresh, allowed keys including a distinct `← ↑ ↓ →`
+  directional row, and `🖼️` only when Chromium is
   ready. Snapshot anchors expose refresh, allowed keys, and `🗣️` only when
   a guide is configured.
 - `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one model
@@ -69,7 +70,10 @@ Telegram is Engram's only user interface.
   a temporary copy once to the admitted non-streaming model, normalizes the
   result to one bounded line, prefixes `(transcribed)`, and sends one guarded
   paste plus Enter. The current reply identity and immutable tmux binding are
-  checked again under their delivery locks after the download or transcription.
+  checked again under session-then-anchor delivery locks after the download or
+  transcription. Closed targets are rejected before download or provider use;
+  asynchronous closure or rotation is rechecked before terminal input. Anchor
+  error presentation occurs only after delivery locks are released.
   A stale, unknown, oversized, unsafe, failed, or identity-changed voice reply
   sends no terminal input. A transcription failure does not fall back to a path.
 - Voice notes that are not replies retain ordinary attachment behavior. Voice

@@ -26,7 +26,7 @@ func TestEmitSignalUsesOnlyControllingTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := tty.String()
-	if !strings.HasPrefix(got, "\a\r\n[engram:upstream] ") || !strings.HasSuffix(got, " tests finished\r\n") {
+	if !strings.HasPrefix(got, "\a\r\n[engram:upstream] ") || !strings.HasSuffix(got, " v1:14:tests finished\r\n") {
 		t.Fatalf("signal = %q", got)
 	}
 

@@ -498,6 +498,12 @@ func AnchorMarkup(sessionID int, includeImage, includeVoice bool) *InlineKeyboar
 			{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
 			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
 		},
+		{
+			{Text: "←", CallbackData: fmt.Sprintf("key:%d:left", sessionID)},
+			{Text: "↑", CallbackData: fmt.Sprintf("key:%d:up", sessionID)},
+			{Text: "↓", CallbackData: fmt.Sprintf("key:%d:down", sessionID)},
+			{Text: "→", CallbackData: fmt.Sprintf("key:%d:right", sessionID)},
+		},
 	}}
 }
 

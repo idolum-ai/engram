@@ -41,6 +41,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   Session updates roll in-memory state back after a failure before replacement;
   after replacement they retain the visible new state and report uncertain
   durability so memory and the current state file do not diverge.
+- Attachment insertion has the same replacement boundary: a pre-replacement
+  failure rolls back the in-memory record so its file may be removed, while an
+  uncertain post-replacement result keeps both record and file and is audited.
 - On Linux, failure to sync either the file or parent directory fails the save.
   Subject to the filesystem and storage device honoring `fsync`, a successful
   save survives process failure and sudden power loss. On Darwin, Go's standard
@@ -174,6 +177,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   seconds. A retained tmux bell may accelerate capture, but signal discovery
   remains polling-based and does not bypass bounded rendering work or amplify
   Telegram retries.
+- Operations that need both terminal identity and anchor freshness acquire the
+  session lock before the anchor lock. Tmux identity loss and anchor error
+  presentation run only after both locks are released; transfer workers must
+  not strand service shutdown through lock inversion or reentrant anchor work.
 - A Telegram `retry_after` that outlives the client's bounded retry is retained
   in memory before persistence is attempted, then persisted per terminal. A
   pre-replacement state-write failure must not cause the running process to
