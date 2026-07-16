@@ -126,9 +126,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   expose `🖼️` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session
   unchanged for retry.
-- Snapshot refreshes hash styled capture and metadata before invoking Chromium,
-  coalesce per session, use bounded capture/render concurrency, and edit
-  automatically no more than once every ten seconds when content changed. A
+- Snapshot refreshes hash styled capture, metadata, and the derived caption
+  before invoking Chromium, coalesce per session, use bounded capture/render
+  concurrency, and edit automatically no more than once every ten seconds when
+  content or visible references changed. A
   failed automatic migration attempt is also throttled before capture and
   rendering, preventing retry amplification. A manual refresh may render the
   same capture immediately.

@@ -588,7 +588,8 @@ func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
 
 func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 	a.redactSessionPresentation(&ts)
-	return a.redactText(renderLocal(ts, a.redactText(summary)))
+	references := renderVisibleReferences(ts.LastRawCapture, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+	return renderLocalWithReferences(ts, a.redactText(summary), references)
 }
 
 func (a *App) statusText() string {
@@ -618,6 +619,10 @@ func (a *App) statusText() string {
 }
 
 func renderLocal(ts state.TerminalSession, summary string) string {
+	return renderLocalWithReferences(ts, summary, renderVisibleReferences(ts.LastRawCapture))
+}
+
+func renderLocalWithReferences(ts state.TerminalSession, summary, references string) string {
 	title := firstNonEmpty(ts.Title, "-")
 	if len(title) > 40 {
 		title = headUTF8(title, 40)
@@ -629,7 +634,7 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 	}
 	b.WriteString("\n")
 	b.WriteString(summary)
-	if references := renderVisibleReferences(ts.LastRawCapture); references != "" {
+	if references != "" {
 		b.WriteString("\n\n")
 		b.WriteString(references)
 	}

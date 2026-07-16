@@ -477,9 +477,10 @@ Chromium passed startup readiness, `🖼️` replies with an iPhone-sized image 
 that frame.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its
-media in place only when the styled capture changes, automatically at most once
-every ten seconds. The refresh button renders immediately, including an
-unchanged capture. If a guide is configured, `🗣️` replies with a one-off
+media in place when the styled capture or its derived caption changes,
+automatically at most once every ten seconds. This includes visible paths that
+appear or disappear without changing terminal text. The refresh button renders
+immediately, including an unchanged capture. If a guide is configured, `🗣️` replies with a one-off
 conversational rendering without replacing the canonical image. `/sessions`
 lists lost sessions first, then active sessions by recency in either mode.
 
@@ -493,7 +494,10 @@ absolute or home-relative files and directories under `paths`, and syntactically
 valid HTTP(S) URLs under `links`. Engram never fetches or endorses an extracted
 URL; it is untrusted terminal text surfaced for convenient navigation. URLs
 with embedded user credentials are omitted, and recognized credential query
-parameters are redacted before delivery.
+parameters are redacted before delivery. Unmatched closing wrappers are removed;
+otherwise, subject to best-effort credential redaction, terminal punctuation,
+first-seen spelling, and order are preserved. Engram does not rewrite or prefer
+links for particular services.
 
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or

@@ -120,6 +120,9 @@ func TestRenderLocalRedactsDerivedSecretsWithoutMutatingSession(t *testing.T) {
 	if strings.Contains(got, secret) || !strings.Contains(got, "<redacted>") {
 		t.Fatalf("rendered secret was not redacted:\n%s", got)
 	}
+	if !strings.Contains(got, "https://example.test/report?token=REDACTED") {
+		t.Fatalf("rendered reference redaction broke URL token:\n%s", got)
+	}
 	if !strings.Contains(session.Title, secret) || !strings.Contains(session.LastKnownCWD, secret) {
 		t.Fatalf("render mutated source session: %#v", session)
 	}

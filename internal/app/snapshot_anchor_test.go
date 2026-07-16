@@ -29,7 +29,8 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		t.Fatal(err)
 	}
 	visibleURL := "https://example.test/build/7"
-	captureText := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 61) + artifact + "\n" + visibleURL + "\n[engram:upstream] " + firstSignalID + " build needs review https://signal.invalid/hidden\n"
+	physicalCapture := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 60) + artifact + "\nhttps://example.test/build/\n7\n[engram:upstream] " + firstSignalID + " build needs review https://signal.invalid/hidden\n"
+	joinedCapture := strings.Repeat("green\n", 60) + artifact + "\n" + visibleURL + "\n[engram:upstream] " + firstSignalID + " build needs review https://signal.invalid/hidden\n"
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +51,9 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 
 	requests := 0
 	signalRequests := 0
+	expectedCaptionURL := visibleURL
+	expectedTitle := "build"
+	expectArtifact := true
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -76,11 +80,17 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 			return nil, err
 		}
 		caption, _ := media["caption"].(string)
-		if req.FormValue("message_id") != "77" || !strings.Contains(caption, "[1] running · build") {
+		if req.FormValue("message_id") != "77" || !strings.Contains(caption, "[1] running · "+expectedTitle) {
 			return nil, errors.New("incorrect snapshot anchor identity or caption")
 		}
-		if !strings.Contains(caption, "paths:\n"+artifact) || !strings.Contains(caption, "links:\n"+visibleURL) {
+		if expectArtifact != strings.Contains(caption, "paths:\n"+artifact) || !strings.Contains(caption, "links:\n"+expectedCaptionURL) {
 			return nil, errors.New("snapshot anchor omitted visible references")
+		}
+		if expectedCaptionURL != visibleURL && strings.Contains(caption, visibleURL) {
+			return nil, errors.New("snapshot anchor retained stale joined URL")
+		}
+		if strings.Contains(caption, "```") || media["parse_mode"] != nil {
+			return nil, errors.New("snapshot references must remain a plain clickable caption")
 		}
 		if strings.Contains(caption, "signal.invalid") {
 			return nil, errors.New("snapshot references parsed an upstream payload")
@@ -92,11 +102,12 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
 	})}
 	renderer := &countingSnapshotRenderer{}
+	tmuxRunner := &snapshotReferenceTmuxRunner{physical: physicalCapture, joined: joinedCapture}
 	app := &App{
 		Config:        config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "contrast-dark", TelegramChatID: 100, Home: dir},
 		Store:         store,
 		Telegram:      client,
-		Tmux:          tmux.New(snapshotReferenceTmuxRunner{capture: captureText}),
+		Tmux:          tmux.New(tmuxRunner),
 		Snapshots:     renderer,
 		captureSlots:  make(chan struct{}, 1),
 		renderSlots:   make(chan struct{}, 1),
@@ -112,14 +123,115 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		t.Fatalf("first refresh requests=%d signals=%d renders=%d", requests, signalRequests, renderer.renders)
 	}
 
+	ageSnapshotAttempt(t, store, session.ID)
 	app.refreshSnapshotAnchor(context.Background(), session.ID, false)
 	if requests != 1 || renderer.renders != 1 {
 		t.Fatalf("unchanged refresh requests=%d renders=%d", requests, renderer.renders)
 	}
+
+	if err := os.Remove(artifact); err != nil {
+		t.Fatal(err)
+	}
+	expectArtifact = false
+	ageSnapshotAttempt(t, store, session.ID)
+	app.refreshSnapshotAnchor(context.Background(), session.ID, false)
+	if requests != 2 || renderer.renders != 2 {
+		t.Fatalf("reference-only refresh requests=%d renders=%d", requests, renderer.renders)
+	}
+
+	expectedCaptionURL = "https://example.test/build/"
+	tmuxRunner.joined = strings.Replace(joinedCapture, visibleURL, "https://example.test/build/\n7", 1)
+	ageSnapshotAttempt(t, store, session.ID)
+	app.refreshSnapshotAnchor(context.Background(), session.ID, false)
+	if requests != 3 || renderer.renders != 3 {
+		t.Fatalf("joined-only refresh requests=%d renders=%d", requests, renderer.renders)
+	}
+
 	app.manualRefresh[session.ID] = true
 	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
-	if requests != 2 || renderer.renders != 2 {
+	if requests != 4 || renderer.renders != 4 {
 		t.Fatalf("manual refresh requests=%d renders=%d", requests, renderer.renders)
+	}
+
+	renderer.onRender = func() {
+		expectedTitle = "renamed"
+		if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+			current.Title = expectedTitle
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app.manualRefresh[session.ID] = true
+	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
+	if requests != 4 || renderer.renders != 5 {
+		t.Fatalf("rename-during-render requests=%d renders=%d", requests, renderer.renders)
+	}
+	ageSnapshotAttempt(t, store, session.ID)
+	app.refreshSnapshotAnchor(context.Background(), session.ID, false)
+	if requests != 5 || renderer.renders != 6 {
+		t.Fatalf("rename retry requests=%d renders=%d", requests, renderer.renders)
+	}
+}
+
+func ageSnapshotAttempt(t *testing.T, store *state.Store, id int) {
+	t.Helper()
+	if _, _, err := store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.LastSnapshotAttemptAt = time.Now().Add(-11 * time.Second)
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSnapshotAnchorCaptionUsesExplicitPresentationTextWithoutURLRewrite(t *testing.T) {
+	t.Parallel()
+	publicURL := "https://github.com/idolum-ai/kenogram/pull/19"
+	apiURL := "https://api.github.com/repos/idolum-ai/kenogram/pulls/19"
+	capture := tmux.StyledCapture{
+		Text:        "physical command " + apiURL,
+		JoinedText:  "joined output " + publicURL,
+		Title:       "review",
+		CurrentPath: "/tmp",
+		Columns:     80,
+		VisibleRows: 24,
+		BufferRows:  64,
+	}
+	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: "review"}
+
+	caption := (&App{}).snapshotAnchorCaption(session, capture, capture.JoinedText)
+	if !strings.Contains(caption, "links:\n"+publicURL) {
+		t.Fatalf("snapshot caption omitted exact presentation URL: %q", caption)
+	}
+	if strings.Contains(caption, apiURL) {
+		t.Fatalf("snapshot caption used physical capture URL instead of explicit presentation text: %q", caption)
+	}
+}
+
+func TestSnapshotAnchorCaptionKeepsRedactionURLSafe(t *testing.T) {
+	t.Parallel()
+	configuredSecret := "configured-secret-value"
+	capture := tmux.StyledCapture{Title: "review", CurrentPath: "/tmp", Columns: 80, VisibleRows: 24, BufferRows: 64}
+	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: "review"}
+	referenceText := strings.Join([]string{
+		"https://example.test/build?mode=fast&access_token=query-secret",
+		"https://example.test/artifacts/" + configuredSecret,
+		"https://malformed.example/cb?access_token=query-secret;ignored=x",
+	}, "\n")
+
+	app := &App{Config: config.Config{OpenAIAPIKey: configuredSecret}}
+	caption := app.snapshotAnchorCaption(session, capture, referenceText)
+	for _, want := range []string{
+		"https://example.test/build?access_token=REDACTED&mode=fast",
+		"https://example.test/artifacts/REDACTED",
+	} {
+		if !strings.Contains(caption, want) {
+			t.Fatalf("snapshot caption omitted URL-safe redaction %q: %q", want, caption)
+		}
+	}
+	if strings.Contains(caption, "query-secret") || strings.Contains(caption, configuredSecret) || strings.ContainsAny(caption, "<>") {
+		t.Fatalf("snapshot caption leaked or broke a redacted URL: %q", caption)
+	}
+	if strings.Contains(caption, "malformed.example") {
+		t.Fatalf("snapshot caption repaired a malformed sensitive query: %q", caption)
 	}
 }
 
@@ -506,7 +618,8 @@ func mustJSON(value any) []byte {
 }
 
 type countingSnapshotRenderer struct {
-	renders int
+	renders  int
+	onRender func()
 }
 
 type failingSnapshotRenderer struct{ renders int }
@@ -518,7 +631,9 @@ func (r *failingSnapshotRenderer) Render(context.Context, terminalshot.Input, st
 }
 
 type snapshotReferenceTmuxRunner struct {
-	capture string
+	capture  string
+	physical string
+	joined   string
 }
 
 func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (string, error) {
@@ -526,7 +641,9 @@ func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (s
 		return framedStyledCaptureMetadata("bash"), nil
 	}
 	if len(args) > 0 && args[0] == "show-buffer" {
-		return pairedCaptureResult(args, r.capture, r.capture), nil
+		physical := firstNonEmpty(r.physical, r.capture)
+		joined := firstNonEmpty(r.joined, r.capture)
+		return pairedCaptureResult(args, physical, joined), nil
 	}
 	return (snapshotTmuxRunner{}).Run(ctx, args...)
 }
@@ -535,6 +652,10 @@ func (r *countingSnapshotRenderer) Available() (string, error) { return "/usr/bi
 
 func (r *countingSnapshotRenderer) Render(_ context.Context, _ terminalshot.Input, dir string) (string, error) {
 	r.renders++
+	if onRender := r.onRender; onRender != nil {
+		r.onRender = nil
+		onRender()
+	}
 	path := filepath.Join(dir, "snapshot-card.png")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err

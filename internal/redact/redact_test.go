@@ -40,3 +40,38 @@ func TestSecretsRedactsCommonSecretShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestURLSafeSecretsKeepsMarkersInsideURLTokens(t *testing.T) {
+	t.Parallel()
+	secret := "configured-secret-value"
+	raw := "https://example.test/" + secret + "?token=<redacted>&mode=fast"
+	got := URLSafeSecrets(raw, secret)
+	if strings.Contains(got, secret) {
+		t.Fatalf("URLSafeSecrets leaked a secret: %q", got)
+	}
+	if strings.ContainsAny(got, "<>") || got != "https://example.test/REDACTED?token=REDACTED&mode=fast" {
+		t.Fatalf("URLSafeSecrets broke URL token: %q", got)
+	}
+}
+
+func TestURLSafeConfiguredSecretsPreservesURLDelimiters(t *testing.T) {
+	t.Parallel()
+	secret := "configured-secret-value"
+	raw := "https://example.test/" + secret + "?access_token=" + secret + ";ignored=x"
+	got := URLSafeConfiguredSecrets(raw, secret)
+	if strings.Contains(got, secret) {
+		t.Fatalf("URLSafeConfiguredSecrets leaked a secret: %q", got)
+	}
+	want := "https://example.test/REDACTED?access_token=REDACTED;ignored=x"
+	if got != want {
+		t.Fatalf("URLSafeConfiguredSecrets changed URL structure:\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestURLSafeComponentSecretsRedactsAssignments(t *testing.T) {
+	t.Parallel()
+	got := URLSafeComponentSecrets("TOKEN=terminal-secret")
+	if got != "TOKEN=REDACTED" {
+		t.Fatalf("URLSafeComponentSecrets() = %q", got)
+	}
+}

@@ -19,6 +19,14 @@ var patterns = []struct {
 	{regexp.MustCompile(`([?&](?:X-Amz-Signature|signature|token|access_token|api_key)=)[^&\s]+`), `${1}<redacted>`},
 }
 
+var redactionMarker = regexp.MustCompile(`<redacted(?::[^>]+)?>`)
+
+var urlSafeTokenPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`github_pat_[A-Za-z0-9_]+`),
+	regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]+`),
+	regexp.MustCompile(`sk-(?:proj-)?[A-Za-z0-9_-]{16,}`),
+}
+
 func Secrets(text string, secrets ...string) string {
 	out := text
 	for _, secret := range secrets {
@@ -30,6 +38,36 @@ func Secrets(text string, secrets ...string) string {
 	}
 	for _, pattern := range patterns {
 		out = pattern.re.ReplaceAllString(out, pattern.repl)
+	}
+	return out
+}
+
+// URLSafeSecrets keeps redaction markers inside a plain URL token. Angle
+// brackets terminate Telegram's automatic URL recognition. Query values are
+// redacted structurally by the reference parser before this final pass.
+func URLSafeSecrets(text string, secrets ...string) string {
+	out := URLSafeConfiguredSecrets(text, secrets...)
+	for _, pattern := range urlSafeTokenPatterns {
+		out = pattern.ReplaceAllString(out, "REDACTED")
+	}
+	return redactionMarker.ReplaceAllString(out, "REDACTED")
+}
+
+// URLSafeComponentSecrets applies the full text redactor to one isolated URL
+// component. Callers must split URL delimiters before using it.
+func URLSafeComponentSecrets(text string, secrets ...string) string {
+	return redactionMarker.ReplaceAllString(Secrets(text, secrets...), "REDACTED")
+}
+
+// URLSafeConfiguredSecrets removes configured values without changing URL
+// delimiters before structural parsing validates the candidate.
+func URLSafeConfiguredSecrets(text string, secrets ...string) string {
+	out := text
+	for _, secret := range secrets {
+		secret = strings.TrimSpace(secret)
+		if len(secret) >= 6 {
+			out = strings.ReplaceAll(out, secret, "REDACTED")
+		}
 	}
 	return out
 }
