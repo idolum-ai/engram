@@ -113,8 +113,10 @@ func TestHardOutputRegressionsRejectOneWhenExplicitCountIsZero(t *testing.T) {
 		output string
 	}{
 		{source: "Warnings: 0", output: "There is one warning."},
+		{source: `{"warnings": 0}`, output: "There is one warning."},
 		{source: "1 test passed; 0 blockers", output: "There is one blocker."},
 		{source: "1 test passed; 0 blockers", output: "There is 1 blocker."},
+		{source: "tests=1 blockers=0", output: "There is one blocker."},
 	} {
 		if failures := unsupportedNumberClaims(test.source, test.output); !containsFailure(failures, "unsupported number claim") {
 			t.Errorf("source=%q output=%q failures=%v, want count mismatch", test.source, test.output, failures)
@@ -381,7 +383,7 @@ func unsupportedNumberClaims(source, output string) []string {
 }
 
 var leadingCountPattern = regexp.MustCompile(`(?i)(?:^|[\s(])(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+([[:alpha:]][[:alnum:]_-]*)`)
-var trailingCountPattern = regexp.MustCompile(`(?i)([[:alpha:]][[:alnum:]_-]*)\s*:\s*(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)`)
+var trailingCountPattern = regexp.MustCompile(`(?i)["']?([[:alpha:]][[:alnum:]_-]*)["']?\s*[:=]\s*(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)`)
 
 func countedSubjects(source string) map[string]map[string]bool {
 	counts := make(map[string]map[string]bool)
