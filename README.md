@@ -41,8 +41,9 @@ You need:
 - For **guide mode**, either an Anthropic API key with access to Claude Haiku
   4.5 or an OpenAI API key with access to Luna; Chromium is optional and
   enables the `🖼️` button
-- For **voice replies**, an OpenAI API key with access to
-  `gpt-4o-transcribe`, independent of the selected guide provider
+- For automatic **voice transcription**, an OpenAI API key with access to
+  `gpt-4o-transcribe`, independent of the selected guide provider; without it,
+  voice replies can remain local files
 - For **Chromium mode**, Chromium, Chrome, or another Chromium-compatible
   executable; a configured guide provider is optional and enables `🗣️`
 
@@ -102,11 +103,12 @@ To use OpenAI Luna instead, set `LLM_PROVIDER=openai` and
 `OPENAI_API_KEY=your-OpenAI-key`. Provider selection is startup configuration;
 restart Engram after changing it.
 
-An `OPENAI_API_KEY` also enables voice replies independently of the selected
-guide provider. Reply to a session's latest live anchor or latest alternate
-view with a Telegram voice note; Engram transcribes it with
-`gpt-4o-transcribe` and sends one `(transcribed) ...` input to that pane. A
-standalone voice note remains an ordinary saved attachment.
+Voice replies default to `VOICE_INPUT_MODE=path`: Engram retains the OGG in its
+private attachment store and sends one `(voice message: /absolute/path.ogg)`
+input to the pane. Set `VOICE_INPUT_MODE=transcribe` with an `OPENAI_API_KEY` to
+send the audio once to `gpt-4o-transcribe` and deliver one `(transcribed) ...`
+input instead. A standalone voice note remains an ordinary saved attachment.
+Changing the voice mode requires a restart.
 
 For Chromium anchors instead:
 
@@ -181,9 +183,10 @@ privacy boundaries below before running commands that may print secrets.
 | `LLM_PROVIDER` | `anthropic` | when enabling a guide | `anthropic` for Haiku 4.5 or `openai` for Luna. Only the selected provider is used. Changing it requires a restart. |
 | `ANTHROPIC_API_KEY` | none | when selecting Anthropic, secret | Credential for one-pass Haiku rendering. |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
-| `OPENAI_API_KEY` | none | when selecting OpenAI, secret | Credential for one-pass Luna rendering. |
+| `OPENAI_API_KEY` | none | when selecting OpenAI or transcription, secret | Credential for one-pass Luna rendering and, when explicitly selected, voice transcription. |
 | `OPENAI_MODEL` | `gpt-5.6-luna` | no | Luna model ID. Other OpenAI models are not admitted by this release. |
-| `OPENAI_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | no | Assessed one-shot speech-to-text model for voice replies. Requires `OPENAI_API_KEY`; other transcription models are not admitted by this release. |
+| `VOICE_INPUT_MODE` | `path` | no | Replied voice-note handling: retain locally and send its absolute `path`, or `transcribe` through OpenAI. Changing it requires a restart. |
+| `OPENAI_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | no | Assessed one-shot speech-to-text model used only by `VOICE_INPUT_MODE=transcribe`. Other transcription models are not admitted by this release. |
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
@@ -246,16 +249,16 @@ the bot channel and must be revoked immediately.
   same one-off request and sends its conversational result as a reply without
   replacing the photo anchor. Captures are not credential-redacted before they
   are sent.
-- **Voice input:** When `OPENAI_API_KEY` is configured, a Telegram voice note
-  replying to a session's latest routable message is downloaded into the
-  private runtime directory and sent once to OpenAI's non-streaming
-  `gpt-4o-transcribe` endpoint. Engram normalizes a successful transcript to
-  one bounded, control-free line, prefixes `(transcribed)` to make recognition
-  uncertainty visible to the terminal application, and uses the same guarded
-  paste-plus-Enter path as text replies. Audio and transcript text are not
-  persisted; the temporary OGG file is removed after success or failure. A
-  target that becomes stale or changes tmux identity before delivery receives
-  no input.
+- **Voice input:** A Telegram voice note replying to a session's latest
+  routable message uses the same guarded paste-plus-Enter path as text replies.
+  In default `path` mode, Engram retains the OGG and attachment metadata in its
+  private artifact store and sends its absolute path to the terminal. In
+  explicit `transcribe` mode, it sends a temporary OGG once to OpenAI's
+  non-streaming `gpt-4o-transcribe` endpoint, normalizes the response to one
+  bounded control-free line, prefixes `(transcribed)`, and removes the audio;
+  transcript text is not persisted. A stale reply, changed tmux identity, or
+  transcription failure sends no input. Engram never silently crosses from
+  transcription to path delivery after an error.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
@@ -452,7 +455,9 @@ engram signal "Tests finished; two failures need attention."
 ```
 
 The command establishes a fresh terminal row, then writes one bounded
-`[engram:upstream] <record-id> ...` record and a terminal bell. It makes no
+`[engram:upstream] <record-id> ...` record and a terminal bell. Engram also
+recognizes that exact record after up to eight presentation spaces added by a
+terminal host such as Codex. It makes no
 network request and reads no service configuration. The outer Engram finds the
 record through its normal tmux capture loop and immediately attempts a redacted
 terminal-signal notification; the guide and Chromium continue independently. At

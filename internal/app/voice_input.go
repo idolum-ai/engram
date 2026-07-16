@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 )
@@ -19,8 +21,9 @@ type voiceTranscriber interface {
 const maxVoiceTranscriptBytes = 4096
 
 func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) actionResult {
-	if a.Transcriber == nil {
-		a.reply(ctx, msg, "Voice input is unavailable. Configure OPENAI_API_KEY and restart Engram.")
+	mode := a.Config.EffectiveVoiceInputMode()
+	if mode == config.VoiceInputModeTranscribe && a.Transcriber == nil {
+		a.reply(ctx, msg, "Voice transcription is unavailable. Check VOICE_INPUT_MODE and OPENAI_API_KEY, then restart Engram.")
 		return actionResult{Outcome: actionUserError, Message: "voice input unavailable"}
 	}
 	ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID)
@@ -39,12 +42,73 @@ func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) action
 	}
 	targetMessageID := msg.ReplyToMessage.MessageID
 	if !a.queueTransfer(func(transferCtx context.Context) {
-		a.transcribeVoiceReply(transferCtx, msg, ts, targetMessageID)
+		if mode == config.VoiceInputModeTranscribe {
+			a.transcribeVoiceReply(transferCtx, msg, ts, targetMessageID)
+			return
+		}
+		a.routeVoicePathReply(transferCtx, msg, ts, targetMessageID)
 	}) {
 		a.reply(ctx, msg, "Voice input is temporarily unavailable because Engram is stopping or its transfer queue is full.")
 		return actionResult{Outcome: actionStateFailed, Message: "voice transfer unavailable"}
 	}
 	return actionResult{Outcome: actionOK, Message: "voice input queued"}
+}
+
+func (a *App) routeVoicePathReply(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int) {
+	if !a.replyTargetStillCurrent(msg.Chat.ID, targetMessageID, expected) {
+		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		return
+	}
+	file, err := a.Telegram.GetFile(ctx, msg.Voice.FileID)
+	if err != nil {
+		a.reply(ctx, msg, "Could not retrieve the voice note: "+err.Error())
+		return
+	}
+	path, err := reserveVoicePath(a.Config.AttachmentDir())
+	if err != nil {
+		a.reply(ctx, msg, "Could not prepare the voice note: "+err.Error())
+		return
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(path)
+		}
+	}()
+	download, err := a.Telegram.DownloadFileHashed(ctx, file.FilePath, path, minInt64(telegramCloudDownloadMax, a.attachmentHardMax()))
+	if err != nil {
+		a.reply(ctx, msg, "Could not download the voice note: "+err.Error())
+		return
+	}
+	anchorLock := a.anchorMutex(expected.ID)
+	anchorLock.Lock()
+	defer anchorLock.Unlock()
+	if !a.replyTargetStillCurrent(msg.Chat.ID, targetMessageID, expected) {
+		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		return
+	}
+	if err := a.Store.AddAttachment(state.Attachment{
+		TelegramFileID:       msg.Voice.FileID,
+		TelegramUniqueFileID: msg.Voice.FileUniqueID,
+		ChatID:               msg.Chat.ID,
+		UserID:               msg.From.ID,
+		OriginalName:         "voice.ogg",
+		ContentType:          msg.Voice.MimeType,
+		SizeBytes:            download.Size,
+		SHA256:               download.SHA256,
+		StoredPath:           path,
+		ReceivedAt:           time.Now().UTC(),
+	}); err != nil {
+		a.reply(ctx, msg, "Could not retain the voice note: "+err.Error())
+		return
+	}
+	keep = true
+	result := a.sendInputExpected(ctx, expected.ID, "(voice message: "+path+")", "voice", true, &expected)
+	if !result.OK() {
+		a.reply(ctx, msg, result.Message)
+		return
+	}
+	_ = a.audit("voice.path", "ok", map[string]any{"session_id": expected.ID, "path": path})
 }
 
 func (a *App) transcribeVoiceReply(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int) {

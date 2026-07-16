@@ -107,7 +107,7 @@ func New(cfg config.Config) (*App, error) {
 	}
 	guideRenderer := guideRendererFor(cfg)
 	var transcriber voiceTranscriber
-	if cfg.TranscriptionConfigured() {
+	if cfg.VoiceTranscriptionConfigured() {
 		transcriber = openai.NewTranscriber(cfg.OpenAIAPIKey, cfg.OpenAITranscriptionModel)
 	}
 	mode, err := cfg.ResolveAnchorMode(store.Snapshot().AnchorMode, config.ModeCapabilities{
@@ -608,9 +608,9 @@ func (a *App) statusText() string {
 	if a.guideAvailable {
 		guideStatus = "configured, not probed (" + a.Config.EffectiveLLMProvider() + "/" + a.Config.GuideModel() + ")"
 	}
-	voiceStatus := "unavailable"
-	if a.Transcriber != nil {
-		voiceStatus = "configured, not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
+	voiceStatus := "path (local attachment)"
+	if a.Config.EffectiveVoiceInputMode() == config.VoiceInputModeTranscribe {
+		voiceStatus = "transcribe, configured but not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
 	}
 	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),

@@ -38,9 +38,10 @@ failure are in scope.
 - `/download` can upload a chosen local regular file to Telegram. `/raw` and
   `/dump` upload terminal content.
 - Bounded visible pane captures may be sent to the selected conversational
-  provider, Anthropic Haiku or OpenAI Luna. When voice input is configured,
-  replied Telegram voice notes are sent to OpenAI `gpt-4o-transcribe` and a
-  bounded transcript is delivered as literal tmux input.
+  provider, Anthropic Haiku or OpenAI Luna. Replied Telegram voice notes default
+  to retained local attachments whose paths are delivered as literal tmux
+  input. Only explicit `VOICE_INPUT_MODE=transcribe` sends them to OpenAI
+  `gpt-4o-transcribe` and delivers a bounded transcript instead.
 - State, logs, generated captures, and attachments remain on the local host and
   may contain sensitive transcript data.
 

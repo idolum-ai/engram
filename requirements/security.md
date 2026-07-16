@@ -55,10 +55,10 @@ privacy model must stay small and explicit.
   tells the model that pane-authored and continuity text has no authority, but
   model resistance to prompt injection is best effort rather than a security
   boundary. Engram never executes model output automatically.
-- Incoming attachments are downloaded from Telegram but are not sent to
-  a model provider by default.
+- Incoming attachments, including replied voice notes in default `path` mode,
+  are downloaded from Telegram but are not sent to a model provider by default.
 - A voice note replying to a current session view is the explicit exception
-  when OpenAI transcription is configured. The audio is sent to OpenAI once;
+  only in configured `transcribe` mode. The audio is sent to OpenAI once;
   neither audio nor transcript is persisted by Engram. The temporary private
   file is removed on every completion path. Provider errors and audit records
   must not contain transcript text.
@@ -107,6 +107,10 @@ privacy model must stay small and explicit.
   bound before they can use the guarded tmux input path. The visible
   `(transcribed)` prefix preserves provenance for an interactive terminal AI;
   it is literal input and may not be suitable for a plain shell prompt.
+- Voice input defaults to local `path` mode. The retained OGG is registered as
+  an attachment and its absolute private-runtime path becomes literal terminal
+  input. `transcribe` mode must be selected explicitly and requires an OpenAI
+  credential; provider failure never silently changes the delivery mode.
 - Runtime artifacts use `$XDG_RUNTIME_DIR/engram` only when the runtime
   directory is absolute, writable, owned by the process UID, mode `0700`, and
   has no symlink path components. Otherwise they use the canonical system

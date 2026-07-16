@@ -31,6 +31,11 @@ second transport or model a deployment hierarchy.
   or authentication, and is omitted from the Telegram notification.
 - The message is normalized to one line, strips terminal control characters,
   and is capped at 1 KiB after UTF-8 validation. Empty messages are rejected.
+- Observation admits zero through eight leading ASCII spaces before the exact
+  prefix so terminal hosts such as Codex may present command output as an
+  indented block. Deeper indentation, tabs, altered prefixes, and malformed
+  record IDs are not signals. This tolerance is presentation framing, not
+  authentication; any pane writer can already forge a valid record.
 - The command makes no network request and reads no Engram service state. If no
   controlling terminal is available, it exits nonzero without attempting a
   fallback transport.

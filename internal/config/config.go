@@ -22,6 +22,8 @@ const (
 	LLMProviderOpenAI               = "openai"
 	AnchorModeGuide                 = "guide"
 	AnchorModeSnapshot              = "snapshot"
+	VoiceInputModePath              = "path"
+	VoiceInputModeTranscribe        = "transcribe"
 )
 
 type Config struct {
@@ -36,6 +38,7 @@ type Config struct {
 	OpenAIAPIKey               string
 	OpenAIModel                string
 	OpenAITranscriptionModel   string
+	VoiceInputMode             string
 	Home                       string
 	Workdir                    string
 	TmuxSession                string
@@ -85,6 +88,7 @@ func Load(path string) (Config, error) {
 		OpenAIAPIKey:               values["OPENAI_API_KEY"],
 		OpenAIModel:                firstNonEmpty(values["OPENAI_MODEL"], DefaultOpenAIModel),
 		OpenAITranscriptionModel:   firstNonEmpty(values["OPENAI_TRANSCRIPTION_MODEL"], DefaultOpenAITranscriptionModel),
+		VoiceInputMode:             strings.ToLower(firstNonEmpty(values["VOICE_INPUT_MODE"], VoiceInputModePath)),
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
@@ -140,7 +144,16 @@ func (c Config) Validate() error {
 	if c.TelegramChatID == 0 {
 		return fmt.Errorf("TELEGRAM_CHAT_ID resolved to zero")
 	}
-	if c.TranscriptionConfigured() && c.OpenAITranscriptionModel != DefaultOpenAITranscriptionModel {
+	switch c.EffectiveVoiceInputMode() {
+	case VoiceInputModePath:
+	case VoiceInputModeTranscribe:
+		if strings.TrimSpace(c.OpenAIAPIKey) == "" {
+			return fmt.Errorf("VOICE_INPUT_MODE=transcribe requires OPENAI_API_KEY")
+		}
+	default:
+		return fmt.Errorf("VOICE_INPUT_MODE must be path or transcribe")
+	}
+	if c.VoiceTranscriptionConfigured() && c.OpenAITranscriptionModel != DefaultOpenAITranscriptionModel {
 		return fmt.Errorf("OPENAI_TRANSCRIPTION_MODEL must be %s", DefaultOpenAITranscriptionModel)
 	}
 	if c.AttachmentSoftMaxBytes <= 0 {
@@ -216,8 +229,12 @@ func (c Config) GuideModel() string {
 	}
 }
 
-func (c Config) TranscriptionConfigured() bool {
-	return strings.TrimSpace(c.OpenAIAPIKey) != ""
+func (c Config) EffectiveVoiceInputMode() string {
+	return strings.ToLower(firstNonEmpty(strings.TrimSpace(c.VoiceInputMode), VoiceInputModePath))
+}
+
+func (c Config) VoiceTranscriptionConfigured() bool {
+	return c.EffectiveVoiceInputMode() == VoiceInputModeTranscribe && strings.TrimSpace(c.OpenAIAPIKey) != ""
 }
 
 func (c Config) EffectiveTelegramAPIBase() string {

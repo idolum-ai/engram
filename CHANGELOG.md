@@ -15,9 +15,12 @@ Notable user-visible and operational changes are recorded here.
 - Send long and multiline Telegram replies as one bracketed tmux paste followed
   by one Enter, allowing terminal applications to receive the complete input as
   one submission.
-- Add optional `gpt-4o-transcribe` voice replies. Audio is temporary, transcript
-  provenance is explicit, and latest-view plus immutable-pane checks are
-  repeated before the bounded one-line input reaches tmux.
+- Add voice replies with explicit startup modes: local durable attachment-path
+  delivery by default, or opt-in `gpt-4o-transcribe`. Transcription audio is
+  temporary, transcript provenance is explicit, and latest-view plus
+  immutable-pane checks are repeated before either input reaches tmux.
+- Recognize exact upstream-signal records through a bounded presentation indent
+  so Codex-rendered command output can still request attention.
 
 ## [v0.4.0] - 2026-07-14
 

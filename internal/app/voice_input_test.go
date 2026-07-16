@@ -40,6 +40,69 @@ func TestCurrentVoiceReplyTranscribesAndRoutesOnce(t *testing.T) {
 	}
 }
 
+func TestCurrentVoiceReplyRetainsAndRoutesLocalPath(t *testing.T) {
+	app, runner, transcriber, telegramCalls := newVoiceInputTestApp(t)
+	app.Config.VoiceInputMode = config.VoiceInputModePath
+	app.Transcriber = nil
+	status := app.handleUpdate(context.Background(), voiceReplyUpdate(106, 77))
+	if status != "voice_reply_ok" {
+		t.Fatalf("status = %q", status)
+	}
+	app.transferWG.Wait()
+	if transcriber.calls != 0 {
+		t.Fatalf("path mode called transcriber %d times", transcriber.calls)
+	}
+	if len(runner.calls) != 4 || runner.calls[1][0] != "set-buffer" || !strings.HasPrefix(runner.calls[1][4], "(voice message: ") || !strings.HasSuffix(runner.calls[1][4], ".ogg)") {
+		t.Fatalf("tmux calls = %#v", runner.calls)
+	}
+	attachments := app.Store.Snapshot().Attachments
+	if len(attachments) != 1 || attachments[0].StoredPath == "" || attachments[0].SizeBytes != int64(len("ogg-voice-data")) {
+		t.Fatalf("attachments = %#v", attachments)
+	}
+	if _, err := os.Stat(attachments[0].StoredPath); err != nil {
+		t.Fatalf("retained voice path: %v", err)
+	}
+	if input := runner.calls[1][4]; input != "(voice message: "+attachments[0].StoredPath+")" {
+		t.Fatalf("input = %q, path = %q", input, attachments[0].StoredPath)
+	}
+	if got := strings.Join(*telegramCalls, ","); got != "getFile,downloadFile" {
+		t.Fatalf("Telegram calls = %q", got)
+	}
+}
+
+func TestVoicePathReplyIsRevalidatedAfterDownload(t *testing.T) {
+	app, runner, _, telegramCalls := newVoiceInputTestApp(t)
+	app.Config.VoiceInputMode = config.VoiceInputModePath
+	app.Transcriber = nil
+	base := app.Telegram.HTTPClient.Transport
+	app.Telegram.HTTPClient.Transport = snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if strings.Contains(request.URL.Path, "/file/botTOKEN/") {
+			if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
+				s.StaleAlternateMessageIDs = append(s.StaleAlternateMessageIDs, s.AnchorMessageID)
+				s.AnchorMessageID = 78
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return base.RoundTrip(request)
+	})
+	status := app.handleUpdate(context.Background(), voiceReplyUpdate(107, 77))
+	if status != "voice_reply_ok" {
+		t.Fatalf("status = %q", status)
+	}
+	app.transferWG.Wait()
+	if len(runner.calls) != 0 || len(app.Store.Snapshot().Attachments) != 0 {
+		t.Fatalf("retired path target reached state/tmux: attachments=%#v calls=%#v", app.Store.Snapshot().Attachments, runner.calls)
+	}
+	entries, err := os.ReadDir(app.Config.AttachmentDir())
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("retired path left files: entries=%#v err=%v", entries, err)
+	}
+	if got := strings.Join(*telegramCalls, ","); got != "getFile,downloadFile,sendMessage" {
+		t.Fatalf("Telegram calls = %q", got)
+	}
+}
+
 func TestStaleVoiceReplyNeverDownloadsOrTranscribes(t *testing.T) {
 	app, runner, transcriber, telegramCalls := newVoiceInputTestApp(t)
 	status := app.handleUpdate(context.Background(), voiceReplyUpdate(102, 76))
@@ -139,6 +202,11 @@ func TestNormalizeVoiceTranscriptCreatesOneBoundedControlFreeLine(t *testing.T) 
 func newVoiceInputTestApp(t *testing.T) (*App, *slashEscapeRunner, *fakeVoiceTranscriber, *[]string) {
 	t.Helper()
 	dir := t.TempDir()
+	runtimeDir := filepath.Join(dir, "runtime")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -181,8 +249,12 @@ func newVoiceInputTestApp(t *testing.T) (*App, *slashEscapeRunner, *fakeVoiceTra
 	})}
 	runner := &slashEscapeRunner{}
 	transcriber := &fakeVoiceTranscriber{text: "please run the tests"}
+	cfg := config.Config{Home: dir, TelegramAllowedUserID: 42, TelegramChatID: 100, VoiceInputMode: config.VoiceInputModeTranscribe}
+	if err := config.EnsureDirs(cfg); err != nil {
+		t.Fatal(err)
+	}
 	app := &App{
-		Config: config.Config{Home: dir, TelegramAllowedUserID: 42, TelegramChatID: 100},
+		Config: cfg,
 		Store:  store, Telegram: client, Tmux: tmux.New(runner), Transcriber: transcriber,
 		transferSlots: make(chan struct{}, 1), transferQueue: make(chan struct{}, 2),
 		summaryQueued: map[int]bool{}, summaryRunning: map[int]bool{}, summaryForce: map[int]bool{},

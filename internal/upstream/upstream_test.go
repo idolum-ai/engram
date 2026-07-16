@@ -54,6 +54,19 @@ func TestObserveStripsMalformedFramingWithoutTreatingItAsSignal(t *testing.T) {
 	}
 }
 
+func TestObserveAcceptsBoundedPresentationIndent(t *testing.T) {
+	line := Prefix + testRecordID + " Codex tool output finished"
+	got := Observe("before\n    " + line + "\nafter")
+	if !got.Found || got.Latest.Payload != "Codex tool output finished" || got.PresentationText != "before\nafter" {
+		t.Fatalf("Observe indented = %#v", got)
+	}
+
+	tooDeep := Observe(strings.Repeat(" ", MaxPresentationIndent+1) + line)
+	if tooDeep.Found || tooDeep.PresentationText == "" {
+		t.Fatalf("Observe over-indented = %#v", tooDeep)
+	}
+}
+
 func TestWriteRecordRejectsInvalidIdentity(t *testing.T) {
 	if err := WriteRecord(&bytes.Buffer{}, Record{ID: "short", Payload: "done"}); err == nil {
 		t.Fatal("WriteRecord accepted an invalid record ID")

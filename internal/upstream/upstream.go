@@ -14,6 +14,7 @@ const Prefix = "[engram:upstream] "
 const MaxMessageBytes = 1024
 const RecordIDBytes = 16
 const RecordIDLength = RecordIDBytes * 2
+const MaxPresentationIndent = 8
 
 type Record struct {
 	ID      string
@@ -94,11 +95,12 @@ func Observe(joinedText string) Observation {
 	found := false
 	for _, line := range lines {
 		line = strings.TrimLeft(line, "\r")
-		if !strings.HasPrefix(line, Prefix) {
+		recordText, framed := presentationRecordText(line)
+		if !framed {
 			kept = append(kept, line)
 			continue
 		}
-		if record, ok := parseRecord(strings.TrimPrefix(line, Prefix)); ok {
+		if record, ok := parseRecord(recordText); ok {
 			latest = record
 			found = true
 		}
@@ -108,6 +110,17 @@ func Observe(joinedText string) Observation {
 		Latest:           latest,
 		Found:            found,
 	}
+}
+
+func presentationRecordText(line string) (string, bool) {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+	}
+	if indent > MaxPresentationIndent || !strings.HasPrefix(line[indent:], Prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(line[indent:], Prefix), true
 }
 
 func parseRecord(text string) (Record, bool) {

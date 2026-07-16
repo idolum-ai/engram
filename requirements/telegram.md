@@ -62,16 +62,19 @@ Telegram is Engram's only user interface.
   not reach tmux and receive a concise normal bot reply; Telegram offers no
   callback-style ephemeral banner for an ordinary message reply.
 - A Telegram voice note replying to any current routable message follows the
-  same latest-only rule. When OpenAI transcription is configured, Engram
-  downloads it through the bounded transfer queue, transcribes it once with
-  the admitted non-streaming model, normalizes the result to one bounded line,
-  prefixes `(transcribed)`, and sends exactly one guarded paste plus Enter.
-  The current reply identity and immutable tmux binding are checked again under
-  their delivery locks after transcription. A stale, unknown, oversized,
-  unsafe, failed, or identity-changed voice reply sends no terminal input.
+  same latest-only rule. `VOICE_INPUT_MODE=path`, the default, downloads it
+  through the bounded transfer queue, retains it in the private attachment
+  store, and sends one `(voice message: <absolute-path>)` guarded paste plus
+  Enter. `VOICE_INPUT_MODE=transcribe` instead requires `OPENAI_API_KEY`, sends
+  a temporary copy once to the admitted non-streaming model, normalizes the
+  result to one bounded line, prefixes `(transcribed)`, and sends one guarded
+  paste plus Enter. The current reply identity and immutable tmux binding are
+  checked again under their delivery locks after the download or transcription.
+  A stale, unknown, oversized, unsafe, failed, or identity-changed voice reply
+  sends no terminal input. A transcription failure does not fall back to a path.
 - Voice notes that are not replies retain ordinary attachment behavior. Voice
-  transcription is independent of `LLM_PROVIDER` and is available only when
-  `OPENAI_API_KEY` configured it at service startup.
+  mode is independent of `LLM_PROVIDER`, is selected only at startup, and never
+  becomes transcription merely because an OpenAI credential exists.
 - Alternate delivery is committed only while the complete tmux binding, mode,
   and canonical anchor still match. A prospective alternate that loses this
   race or cannot persist its reply alias is deleted; an uncertain post-replace
