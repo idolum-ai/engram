@@ -210,6 +210,49 @@ func TestEscapedSlashInputRemovesExactlyOneSlash(t *testing.T) {
 	}
 }
 
+func TestDeferredInputNoticeDoesNotReachReattachedBinding(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &slashEscapeRunner{inputErr: context.DeadlineExceeded}
+	app := &App{Store: store, Tmux: tmux.New(runner)}
+
+	lock := app.sessionMutex(session.ID)
+	lock.Lock()
+	completion := app.sendInputExpectedLocked(context.Background(), session.ID, "input", "reply", true, &session)
+	lock.Unlock()
+	if completion.anchorNotice == "" {
+		t.Fatal("tmux failure did not defer an anchor notice")
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxPaneID = "%2"
+		current.TmuxWindowID = "@2"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := app.finishInput(context.Background(), session.ID, completion)
+	if result.OK() {
+		t.Fatal("failed tmux input reported success")
+	}
+	current, ok := store.FindSession(session.ID)
+	if !ok || current.TmuxPaneID != "%2" || current.TmuxWindowID != "@2" {
+		t.Fatalf("reattached binding changed by deferred notice: %#v ok=%v", current, ok)
+	}
+}
+
 type slashEscapeRunner struct {
 	calls    [][]string
 	inputErr error

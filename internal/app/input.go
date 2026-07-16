@@ -50,6 +50,7 @@ func (a *App) sendInputExpected(ctx context.Context, id int, text, mode string, 
 type inputCompletion struct {
 	result         actionResult
 	anchorNotice   string
+	noticeBinding  state.TerminalSession
 	identitySource state.TerminalSession
 	identityError  error
 	refresh        bool
@@ -84,13 +85,15 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 			return inputCompletion{
 				result:         actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"},
 				anchorNotice:   "tmux send error: " + err.Error(),
+				noticeBinding:  ts,
 				identitySource: ts,
 				identityError:  err,
 			}
 		}
 		return inputCompletion{
-			result:       actionResult{Outcome: actionTmuxFailed, Message: "tmux send failed: " + err.Error()},
-			anchorNotice: "tmux send error: " + err.Error(),
+			result:        actionResult{Outcome: actionTmuxFailed, Message: "tmux send failed: " + err.Error()},
+			anchorNotice:  "tmux send error: " + err.Error(),
+			noticeBinding: ts,
 		}
 	}
 	if err := a.recordValidatedPane(ts, pane); err != nil {
@@ -105,8 +108,9 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": mode, "error": err.Error()})
 		return inputCompletion{
-			result:       actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux input: " + err.Error()},
-			anchorNotice: "state update error after tmux input: " + err.Error(),
+			result:        actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux input: " + err.Error()},
+			anchorNotice:  "state update error after tmux input: " + err.Error(),
+			noticeBinding: ts,
 		}
 	}
 	if !found || !applied {
@@ -120,7 +124,10 @@ func (a *App) finishInput(ctx context.Context, id int, completion inputCompletio
 		a.recordIdentityLoss(ctx, completion.identitySource, completion.identityError)
 	}
 	if completion.anchorNotice != "" {
-		a.updateAnchorLocal(ctx, id, completion.anchorNotice, true)
+		a.updateAnchorLocalGuarded(ctx, id, completion.anchorNotice, true, func() bool {
+			current, ok := a.Store.FindSession(id)
+			return ok && sameTerminalBinding(current, completion.noticeBinding)
+		}, nil)
 	}
 	if completion.refresh {
 		a.refreshSoon(id)
@@ -129,10 +136,14 @@ func (a *App) finishInput(ctx context.Context, id int, completion inputCompletio
 }
 
 func (a *App) sendKeys(ctx context.Context, id int, keys []string) actionResult {
-	return a.sendKeyGroups(ctx, id, [][]string{keys}, strings.Join(keys, " "), 0)
+	return a.sendKeyGroupsExpected(ctx, id, [][]string{keys}, strings.Join(keys, " "), 0, nil)
 }
 
 func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, preview string, delay time.Duration) actionResult {
+	return a.sendKeyGroupsExpected(ctx, id, groups, preview, delay, nil)
+}
+
+func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]string, preview string, delay time.Duration, expectedBinding *state.TerminalSession) actionResult {
 	if len(groups) == 0 {
 		a.updateAnchorLocal(ctx, id, "missing keys", true)
 		return actionResult{Outcome: actionUserError, Message: "missing keys"}
@@ -152,6 +163,9 @@ func (a *App) sendKeyGroups(ctx context.Context, id int, groups [][]string, prev
 	}
 	if ts.State == state.TerminalClosed {
 		return actionResult{Outcome: actionUserError, Message: "session is closed"}
+	}
+	if expectedBinding != nil && !sameTerminalBinding(ts, *expectedBinding) {
+		return actionResult{Outcome: actionUserError, Message: "session changed before keys could be sent"}
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()

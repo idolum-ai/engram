@@ -319,6 +319,9 @@ func TestLiveHaikuPromptTournament(t *testing.T) {
 				t.Fatalf("judge %s: %v", evalCase.Name, err)
 			}
 			for _, score := range scores {
+				if score.ID == "production" && score.Fidelity < 3 {
+					t.Errorf("judge repeat=%d case=%q production fidelity %.1f below per-case floor 3.0: %s", repeat+1, evalCase.Name, score.Fidelity, score.Reason)
+				}
 				total := judgeTotals[score.ID]
 				if total == nil {
 					total = &judgeAggregate{}
@@ -353,13 +356,13 @@ func TestLiveHaikuPromptTournament(t *testing.T) {
 func loadPromptTournamentCases(t *testing.T) []promptTournamentCase {
 	t.Helper()
 	full := loadConversationCases(t)
-	holdout := loadPreferenceHoldoutCases(t)
-	cases := make([]promptTournamentCase, 0, len(full)+len(holdout)+3)
+	preferenceRegressions := loadPreferenceRegressionCases(t)
+	cases := make([]promptTournamentCase, 0, len(full)+len(preferenceRegressions)+3)
 	for _, evalCase := range full {
 		cases = append(cases, promptTournamentCase{Kind: "full", Eval: evalCase, Input: ConversationInput{VisibleText: evalCase.TerminalText}})
 	}
-	for _, evalCase := range holdout {
-		cases = append(cases, promptTournamentCase{Kind: "preference_holdout", Eval: evalCase, Input: ConversationInput{VisibleText: evalCase.TerminalText}})
+	for _, evalCase := range preferenceRegressions {
+		cases = append(cases, promptTournamentCase{Kind: "preference_regression", Eval: evalCase, Input: ConversationInput{VisibleText: evalCase.TerminalText}})
 	}
 	for _, fixture := range loadIncrementalConversationCases(t) {
 		cases = append(cases, promptTournamentCase{
@@ -386,15 +389,15 @@ func TestPromptTournamentIncludesFullAndContinuationTruth(t *testing.T) {
 			t.Fatalf("%s/%s does not carry complete current truth", testCase.Kind, testCase.Eval.Name)
 		}
 	}
-	if !kinds["full"] || !kinds["preference_holdout"] || !kinds["continuation"] {
+	if !kinds["full"] || !kinds["preference_regression"] || !kinds["continuation"] {
 		t.Fatalf("tournament kinds = %#v", kinds)
 	}
 }
 
-func TestPreferenceHoldoutIsAbsentFromProductionPrompt(t *testing.T) {
-	for _, evalCase := range loadPreferenceHoldoutCases(t) {
+func TestPreferenceRegressionProseIsAbsentFromProductionPrompt(t *testing.T) {
+	for _, evalCase := range loadPreferenceRegressionCases(t) {
 		if strings.Contains(SystemPrompt, evalCase.TerminalText) || strings.Contains(SystemPrompt, evalCase.Reference) {
-			t.Fatalf("held-out case %q appears in production prompt", evalCase.Name)
+			t.Fatalf("preference-regression case %q appears verbatim in production prompt", evalCase.Name)
 		}
 	}
 }

@@ -125,7 +125,8 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "bad key")
 			return "failed_bad_callback_key"
 		}
-		if _, status := a.validateAnchorCallback(ctx, cb, id); status != "" {
+		validated, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
 			return status
 		}
 		action, ok := anchorKeyAction(preset)
@@ -133,7 +134,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "unknown key")
 			return "failed_unknown_callback_key"
 		}
-		result := a.sendKeyGroups(ctx, id, action.Groups, action.Label, action.Delay)
+		result := a.sendKeyGroupsExpected(ctx, id, action.Groups, action.Label, action.Delay, &validated)
 		if !a.answerCallback(ctx, cb.ID, result.Message) {
 			return "callback_telegram_failed"
 		}

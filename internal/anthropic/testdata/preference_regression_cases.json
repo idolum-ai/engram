@@ -15,7 +15,7 @@
       ["terminal evidence", "reproduce cases"],
       ["multiple examples", "recurring patterns"]
     ],
-    "forbidden": ["the terminal shows", "repository state", "ac2229d", "no samples", "send the first", "run /review", "ready for the first"],
+    "forbidden": ["the terminal shows", "repository state", "ac2229d", "no samples", "send the first", "run /review", "ready for the first", "ready to receive"],
     "contradicts": ["document was not created", "prompt changes are ready"]
   },
   {

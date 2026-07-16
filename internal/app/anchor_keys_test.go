@@ -72,6 +72,27 @@ func TestKeyCallbacksSendDirectionalKeys(t *testing.T) {
 	}
 }
 
+func TestKeyGroupsRejectReattachmentAfterCallbackValidation(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	expected, ok := app.Store.FindSession(1)
+	if !ok {
+		t.Fatal("session missing")
+	}
+	if _, _, err := app.Store.UpdateSession(1, func(current *state.TerminalSession) {
+		current.TmuxPaneID = "%2"
+		current.TmuxWindowID = "@2"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := app.sendKeyGroupsExpected(context.Background(), 1, [][]string{{"Up"}}, "Up", 0, &expected)
+	if result.OK() || result.Message != "session changed before keys could be sent" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("reattached key reached tmux: %#v", runner.calls)
+	}
+}
+
 func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 	app, runner, refreshed := newAnchorKeyTestApp(t)
 	var sleepMu sync.Mutex

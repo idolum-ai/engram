@@ -457,7 +457,7 @@ engram signal "Tests finished; two failures need attention."
 ```
 
 The command establishes a fresh terminal row, then writes one bounded
-`[engram:upstream] <record-id> v1:<bytes>:<payload>` record and a terminal bell. Engram also
+`[engram:upstream:v1] <record-id> <bytes>:<payload>` record and a terminal bell. Engram also
 recognizes that exact record after up to eight presentation spaces added by a
 terminal host such as Codex. A versioned byte length lets Engram reconstruct a
 bounded same-indent continuation when the host wraps the payload into physical
@@ -619,13 +619,16 @@ rotates, candidate names are replaced with fresh opaque IDs, and a separate
 judge uses its model-default decoding and scores fidelity, usefulness, voice,
 and readability from JSON-serialized untrusted evidence. The fixture's human
 reference guides information priority and style but never overrides terminal
-truth. The three human-preference fixtures live in a separate held-out file and
-none of their terminal or reference prose appears in the production prompt.
-Hard production regressions fail independently of the judge. Semantic distance
-and concept coverage remain visible diagnostics; acceptance requires the
+truth. The three human-preference fixtures are development-informed regression
+cases, not an unseen generalization set. They live outside the broader corpus,
+and none of their terminal or reference prose appears verbatim in the production
+prompt. Future user examples must remain untouched to become a true holdout.
+Contradictions, unsafe relayed instructions, unsupported numeric claims, and
+output-bound violations fail independently of the judge. Relevance exclusions,
+semantic distance, and concept coverage remain visible diagnostics; acceptance requires the
 production candidate to average at least 4/5 for blinded fidelity, usefulness,
 and overall quality. The tournament defaults to two repeats and reports full-frame,
-held-out preference, and continuation cohorts separately. A comma-separated
+preference-regression, and continuation cohorts separately. A comma-separated
 `ENGRAM_TOURNAMENT_CASES` list selects exact fixture names for focused iteration:
 
 ```sh

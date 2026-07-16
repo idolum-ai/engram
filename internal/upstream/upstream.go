@@ -12,12 +12,12 @@ import (
 )
 
 const Prefix = "[engram:upstream] "
+const VersionedPrefix = "[engram:upstream:v1] "
 const MaxMessageBytes = 1024
 const RecordIDBytes = 16
 const RecordIDLength = RecordIDBytes * 2
 const MaxPresentationIndent = 8
 const MaxPresentationContinuationLines = 32
-const RecordVersion = "v1"
 
 type Record struct {
 	ID      string
@@ -87,7 +87,7 @@ func WriteRecord(w io.Writer, record Record) error {
 	}
 	// CRLF establishes both a physical row and column-zero boundary even when
 	// the preceding process left the cursor mid-line or disabled ONLCR.
-	_, err = fmt.Fprintf(w, "\a\r\n%s%s %s:%d:%s\r\n", Prefix, record.ID, RecordVersion, len(payload), payload)
+	_, err = fmt.Fprintf(w, "\a\r\n%s%s %d:%s\r\n", VersionedPrefix, record.ID, len(payload), payload)
 	return err
 }
 
@@ -99,16 +99,17 @@ func Observe(joinedText string) Observation {
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		line = strings.TrimLeft(line, "\r")
-		recordText, indent, framed := presentationRecordText(line)
+		recordText, indent, versioned, framed := presentationRecordText(line)
 		if !framed {
 			kept = append(kept, line)
 			continue
 		}
-		id, payload, expectedBytes, versioned, ok := parseRecordStart(recordText)
+		id, payload, expectedBytes, ok := parseRecordStart(recordText, versioned)
 		if ok {
+			continuationEnd := i
 			if versioned && indent > 0 {
-				for continued := 0; len(payload) < expectedBytes && continued < MaxPresentationContinuationLines && i+1 < len(lines); continued++ {
-					text, ok := presentationContinuation(lines[i+1], indent)
+				for continued := 0; len(payload) < expectedBytes && continued < MaxPresentationContinuationLines && continuationEnd+1 < len(lines); continued++ {
+					text, ok := presentationContinuation(lines[continuationEnd+1], indent)
 					if !ok {
 						break
 					}
@@ -116,11 +117,12 @@ func Observe(joinedText string) Observation {
 					if len(candidate) > expectedBytes {
 						break
 					}
-					i++
+					continuationEnd++
 					payload = candidate
 				}
 			}
 			if record, valid := finishRecord(id, payload, expectedBytes, versioned); valid {
+				i = continuationEnd
 				latest = record
 				found = true
 			}
@@ -133,15 +135,22 @@ func Observe(joinedText string) Observation {
 	}
 }
 
-func presentationRecordText(line string) (string, int, bool) {
+func presentationRecordText(line string) (string, int, bool, bool) {
 	indent := 0
 	for indent < len(line) && line[indent] == ' ' {
 		indent++
 	}
-	if indent > MaxPresentationIndent || !strings.HasPrefix(line[indent:], Prefix) {
-		return "", 0, false
+	if indent > MaxPresentationIndent {
+		return "", 0, false, false
 	}
-	return strings.TrimPrefix(line[indent:], Prefix), indent, true
+	text := line[indent:]
+	if strings.HasPrefix(text, VersionedPrefix) {
+		return strings.TrimPrefix(text, VersionedPrefix), indent, true, true
+	}
+	if strings.HasPrefix(text, Prefix) {
+		return strings.TrimPrefix(text, Prefix), indent, false, true
+	}
+	return "", 0, false, false
 }
 
 func presentationContinuation(line string, indent int) (string, bool) {
@@ -150,47 +159,37 @@ func presentationContinuation(line string, indent int) (string, bool) {
 		return "", false
 	}
 	text := strings.TrimSpace(line[indent:])
-	if text == "" || strings.HasPrefix(text, Prefix) {
+	if text == "" || strings.HasPrefix(text, Prefix) || strings.HasPrefix(text, VersionedPrefix) {
 		return "", false
 	}
 	return text, true
 }
 
-func parseRecord(text string) (Record, bool) {
-	id, payload, expectedBytes, versioned, ok := parseRecordStart(text)
-	if !ok {
-		return Record{}, false
-	}
-	return finishRecord(id, payload, expectedBytes, versioned)
-}
-
-func parseRecordStart(text string) (id, payload string, expectedBytes int, versioned, ok bool) {
+func parseRecordStart(text string, versioned bool) (id, payload string, expectedBytes int, ok bool) {
 	if len(text) <= RecordIDLength || text[RecordIDLength] != ' ' {
-		return "", "", 0, false, false
+		return "", "", 0, false
 	}
 	id = text[:RecordIDLength]
 	if !validRecordID(id) {
-		return "", "", 0, false, false
+		return "", "", 0, false
 	}
 	payload = text[RecordIDLength+1:]
-	versionPrefix := RecordVersion + ":"
-	if !strings.HasPrefix(payload, versionPrefix) {
-		return id, payload, 0, false, true
+	if !versioned {
+		return id, payload, 0, true
 	}
-	payload = strings.TrimPrefix(payload, versionPrefix)
 	separator := strings.IndexByte(payload, ':')
 	if separator <= 0 {
-		return "", "", 0, false, false
+		return "", "", 0, false
 	}
 	expectedBytes, err := strconv.Atoi(payload[:separator])
 	if err != nil || expectedBytes <= 0 || expectedBytes > MaxMessageBytes {
-		return "", "", 0, false, false
+		return "", "", 0, false
 	}
 	payload = payload[separator+1:]
 	if len(payload) > expectedBytes {
-		return "", "", 0, false, false
+		return "", "", 0, false
 	}
-	return id, payload, expectedBytes, true, true
+	return id, payload, expectedBytes, true
 }
 
 func finishRecord(id, payload string, expectedBytes int, versioned bool) (Record, bool) {

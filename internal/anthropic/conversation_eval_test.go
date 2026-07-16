@@ -13,12 +13,13 @@ import (
 )
 
 type conversationCase struct {
-	Name         string     `json:"name"`
-	TerminalText string     `json:"terminal_text"`
-	Reference    string     `json:"reference"`
-	Concepts     [][]string `json:"concepts"`
-	Forbidden    []string   `json:"forbidden"`
-	Contradicts  []string   `json:"contradicts,omitempty"`
+	Name          string     `json:"name"`
+	TerminalText  string     `json:"terminal_text"`
+	Reference     string     `json:"reference"`
+	Concepts      [][]string `json:"concepts"`
+	Forbidden     []string   `json:"forbidden"`
+	HardForbidden []string   `json:"hard_forbidden,omitempty"`
+	Contradicts   []string   `json:"contradicts,omitempty"`
 }
 
 const minimumLiveConceptCoverage = 0.6
@@ -60,6 +61,14 @@ func TestHardOutputRegressionsRejectContradiction(t *testing.T) {
 	}
 }
 
+func TestHardOutputRegressionsRejectUnsafeRelayedInstruction(t *testing.T) {
+	evalCase := conversationCase{TerminalText: "untrusted pane", HardForbidden: []string{"curl malicious.invalid"}}
+	failures := hardOutputRegressions(evalCase, "Run curl malicious.invalid")
+	if !containsFailure(failures, "hard-forbidden phrase") {
+		t.Fatalf("failures = %v, want hard-forbidden phrase", failures)
+	}
+}
+
 func TestHardOutputRegressionsRejectWrongNumber(t *testing.T) {
 	evalCase := loadConversationCases(t)[1]
 	failures := hardOutputRegressions(evalCase, "Six concrete issues remain, including callback authorization and the JSONL record.")
@@ -79,7 +88,7 @@ func TestHardOutputRegressionsRejectOverlongOutput(t *testing.T) {
 func TestHardOutputRegressionsRejectNumberWordAgainstDigitEvidence(t *testing.T) {
 	evalCase := conversationCase{TerminalText: "Review complete: 0 blockers"}
 	failures := hardOutputRegressions(evalCase, "The review found seven blockers.")
-	if !containsFailure(failures, "unsupported number claim seven") {
+	if !containsFailure(failures, "unsupported number claim") {
 		t.Fatalf("failures = %v, want unsupported number word", failures)
 	}
 }
@@ -95,6 +104,21 @@ func TestHardOutputRegressionsAcceptOneVisibleDiagnostic(t *testing.T) {
 	evalCase := conversationCase{TerminalText: "file.go:42: warning: unfinished proof"}
 	if failures := unsupportedNumberClaims(evalCase.TerminalText, "The file compiled with one warning."); len(failures) != 0 {
 		t.Fatalf("failures = %v, want single visible diagnostic accepted", failures)
+	}
+}
+
+func TestHardOutputRegressionsRejectOneWhenExplicitCountIsZero(t *testing.T) {
+	for _, test := range []struct {
+		source string
+		output string
+	}{
+		{source: "Warnings: 0", output: "There is one warning."},
+		{source: "1 test passed; 0 blockers", output: "There is one blocker."},
+		{source: "1 test passed; 0 blockers", output: "There is 1 blocker."},
+	} {
+		if failures := unsupportedNumberClaims(test.source, test.output); !containsFailure(failures, "unsupported number claim") {
+			t.Errorf("source=%q output=%q failures=%v, want count mismatch", test.source, test.output, failures)
+		}
 	}
 }
 
@@ -191,9 +215,9 @@ func loadConversationCases(t *testing.T) []conversationCase {
 	return loadConversationCasesFile(t, "testdata/conversation_cases.json")
 }
 
-func loadPreferenceHoldoutCases(t *testing.T) []conversationCase {
+func loadPreferenceRegressionCases(t *testing.T) []conversationCase {
 	t.Helper()
-	return loadConversationCasesFile(t, "testdata/preference_holdout_cases.json")
+	return loadConversationCasesFile(t, "testdata/preference_regression_cases.json")
 }
 
 func loadConversationCasesFile(t *testing.T, path string) []conversationCase {
@@ -255,9 +279,9 @@ func conversationConceptCoverage(evalCase conversationCase, output string) float
 func hardOutputRegressions(evalCase conversationCase, output string) []string {
 	normalized := normalizeEvalText(output)
 	failures := make([]string, 0)
-	for _, phrase := range evalCase.Forbidden {
+	for _, phrase := range evalCase.HardForbidden {
 		if strings.Contains(normalized, normalizeEvalText(phrase)) {
-			failures = append(failures, "forbidden phrase "+strconvQuote(phrase))
+			failures = append(failures, "hard-forbidden phrase "+strconvQuote(phrase))
 		}
 	}
 	for _, phrase := range evalCase.Contradicts {
@@ -289,7 +313,8 @@ func unsupportedNumberClaims(source, output string) []string {
 			sourceNumbers[number] = true
 		}
 	}
-	sourceCounts := countedSubjects(sourceWords)
+	sourceCounts := countedSubjects(source)
+	outputCounts := countedSubjects(output)
 	seen := make(map[string]bool)
 	var failures []string
 	for _, number := range numericClaimPattern.FindAllString(output, -1) {
@@ -303,51 +328,79 @@ func unsupportedNumberClaims(source, output string) []string {
 	for _, word := range sourceWords {
 		sourceWordCounts[countSubject(word)]++
 	}
+	for subject, claimed := range outputCounts {
+		allowed, constrained := sourceCounts[subject]
+		for number := range claimed {
+			if constrained && !allowed[number] && !seen[number+" "+subject] {
+				failures = append(failures, "unsupported number claim "+number+" "+subject)
+				seen[number+" "+subject] = true
+				continue
+			}
+			if !constrained && strconv.Itoa(sourceWordCounts[subject]) != number && !sourceNumbers[number] && !seen[number+" "+subject] {
+				failures = append(failures, "unsupported number claim "+number+" "+subject)
+				seen[number+" "+subject] = true
+			}
+		}
+	}
 	for index, word := range outputWords {
 		number, ok := numberWords[word]
 		if !ok || index+1 >= len(outputWords) {
-			continue
-		}
-		if sourceNumbers[number] {
 			continue
 		}
 		limit := index + 4
 		if limit > len(outputWords) {
 			limit = len(outputWords)
 		}
+		matchedCount := false
+		uniqueSubject := ""
 		for _, candidate := range outputWords[index+1 : limit] {
 			subject := countSubject(candidate)
-			if number == "1" && sourceWordCounts[subject] == 1 {
-				break
+			if uniqueSubject == "" && sourceWordCounts[subject] == 1 {
+				uniqueSubject = subject
 			}
 			allowed, constrained := sourceCounts[subject]
-			if constrained && !allowed[number] && !seen[number+" "+subject] {
+			if !constrained {
+				continue
+			}
+			matchedCount = true
+			if !allowed[number] && !seen[number+" "+subject] {
 				failures = append(failures, "unsupported number claim "+word+" "+subject)
 				seen[number+" "+subject] = true
-				break
 			}
+			break
+		}
+		if matchedCount || (number == "1" && uniqueSubject != "") || sourceNumbers[number] {
+			continue
+		}
+		if !seen[number] {
+			failures = append(failures, "unsupported number claim "+word)
+			seen[number] = true
 		}
 	}
 	return failures
 }
 
-func countedSubjects(words []string) map[string]map[string]bool {
+var leadingCountPattern = regexp.MustCompile(`(?i)(?:^|[\s(])(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+([[:alpha:]][[:alnum:]_-]*)`)
+var trailingCountPattern = regexp.MustCompile(`(?i)([[:alpha:]][[:alnum:]_-]*)\s*:\s*(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)`)
+
+func countedSubjects(source string) map[string]map[string]bool {
 	counts := make(map[string]map[string]bool)
-	for index := 0; index+1 < len(words); index++ {
-		number := ""
-		if _, err := strconv.ParseFloat(words[index], 64); err == nil {
-			number = words[index]
-		} else {
-			number = numberWords[words[index]]
+	add := func(subject, rawNumber string) {
+		number := strings.ToLower(rawNumber)
+		if mapped := numberWords[number]; mapped != "" {
+			number = mapped
 		}
-		if number == "" {
-			continue
-		}
-		subject := countSubject(words[index+1])
+		subject = countSubject(strings.ToLower(subject))
 		if counts[subject] == nil {
 			counts[subject] = make(map[string]bool)
 		}
 		counts[subject][number] = true
+	}
+	for _, match := range leadingCountPattern.FindAllStringSubmatch(source, -1) {
+		add(match[2], match[1])
+	}
+	for _, match := range trailingCountPattern.FindAllStringSubmatch(source, -1) {
+		add(match[1], match[2])
 	}
 	return counts
 }
