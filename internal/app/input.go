@@ -36,6 +36,10 @@ func (r actionResult) status(prefix string) string {
 }
 
 func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bool) actionResult {
+	return a.sendInputExpected(ctx, id, text, mode, enter, nil)
+}
+
+func (a *App) sendInputExpected(ctx context.Context, id int, text, mode string, enter bool, expectedBinding *state.TerminalSession) actionResult {
 	lock := a.sessionMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -45,6 +49,9 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 	}
 	if ts.State == state.TerminalClosed {
 		return actionResult{Outcome: actionUserError, Message: "session is closed"}
+	}
+	if expectedBinding != nil && !sameTerminalBinding(ts, *expectedBinding) {
+		return actionResult{Outcome: actionUserError, Message: "session changed before input could be sent"}
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()

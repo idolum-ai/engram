@@ -166,6 +166,25 @@ func TestSendCommandSendsLiteralThenEnter(t *testing.T) {
 	}
 }
 
+func TestSendTextIfBindingMatchesUsesOneBracketedPaste(t *testing.T) {
+	t.Parallel()
+	runner := &fakeRunner{}
+	text := strings.Repeat("long line ", 300) + "\nsecond paragraph\nthird paragraph"
+	err := New(runner).SendTextIfBindingMatches(context.Background(), "%1", "@2", styledCaptureServerID, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("calls = %#v, want set-buffer and one guarded paste", runner.calls)
+	}
+	if got := runner.calls[0]; len(got) != 5 || got[0] != "set-buffer" || got[4] != text {
+		t.Fatalf("set-buffer call = %#v", got)
+	}
+	if got := runner.calls[1]; got[0] != "if-shell" || !strings.Contains(got[5], "paste-buffer -p -r -d") {
+		t.Fatalf("guarded paste call = %#v", got)
+	}
+}
+
 func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
 		out: tmuxRecord("main", "$1", "3", "1") + tmuxRecord("other", "$2", "1", "0"),

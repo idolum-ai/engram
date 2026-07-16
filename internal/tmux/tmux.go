@@ -451,7 +451,7 @@ func (m Manager) SendTextIfBindingMatches(ctx context.Context, paneID, windowID,
 	if _, err := m.Runner.Run(ctx, "set-buffer", "-b", buffer, "--", text); err != nil {
 		return err
 	}
-	command := "paste-buffer -r -d -b " + buffer + " -t " + paneID
+	command := "paste-buffer -p -r -d -b " + buffer + " -t " + paneID
 	if err := m.runIfBindingMatches(ctx, paneID, windowID, serverID, command); err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		_, _ = m.Runner.Run(cleanupCtx, "delete-buffer", "-b", buffer)

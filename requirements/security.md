@@ -57,6 +57,11 @@ privacy model must stay small and explicit.
   boundary. Engram never executes model output automatically.
 - Incoming attachments are downloaded from Telegram but are not sent to
   a model provider by default.
+- A voice note replying to a current session view is the explicit exception
+  when OpenAI transcription is configured. The audio is sent to OpenAI once;
+  neither audio nor transcript is persisted by Engram. The temporary private
+  file is removed on every completion path. Provider errors and audit records
+  must not contain transcript text.
 - Terminal image snapshots are exact, unredacted transcript data. They are sent
   to a local headless browser and then to the configured Telegram DM, never to
   a model provider. Terminal text must be HTML-escaped; browser networking, extensions,
@@ -96,6 +101,12 @@ privacy model must stay small and explicit.
   paths and never accepts Telegram identifiers or arbitrary tmux targets.
 
 - Telegram messages can cause shell input in tmux.
+- OpenAI transcription is untrusted input derivation, not a security boundary.
+  Transcripts must be valid UTF-8, contain no terminal or bidirectional control
+  characters, normalize whitespace to one line, and remain within a fixed byte
+  bound before they can use the guarded tmux input path. The visible
+  `(transcribed)` prefix preserves provenance for an interactive terminal AI;
+  it is literal input and may not be suitable for a plain shell prompt.
 - Runtime artifacts use `$XDG_RUNTIME_DIR/engram` only when the runtime
   directory is absolute, writable, owned by the process UID, mode `0700`, and
   has no symlink path components. Otherwise they use the canonical system

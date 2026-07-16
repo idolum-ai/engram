@@ -54,6 +54,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   recorded again with the final handler status. This gives tmux input
   at-most-once delivery after a crash, avoiding surprise replayed shell
   commands at the cost of possibly dropping the in-flight Telegram update.
+- Voice replies inherit the same at-most-once update acceptance. Their bounded
+  download and transcription run outside polling in the existing transfer
+  queue; the current reply alias and immutable tmux binding are revalidated at
+  delivery so delayed speech cannot cross a view rotation or reattachment.
 - The update journal retains the newest 200 accepted and handled/skipped update
   states so recent polling behavior remains inspectable after restart.
 - Audit records are capped at 64 KiB. `audit.jsonl` rotates before exceeding

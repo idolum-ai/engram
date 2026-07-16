@@ -23,6 +23,7 @@ type conversationCase struct {
 
 const minimumLiveConceptCoverage = 1.0
 const maximumLiveSemanticDistance = 0.7
+const maxConversationParagraphRunes = 320
 
 func TestConversationFixturesAndScoring(t *testing.T) {
 	t.Parallel()
@@ -104,6 +105,9 @@ func TestConversationShapePrefersCollaborativeReadableProse(t *testing.T) {
 	}
 	if got := conversationShapePenalty("The prompt is idle.\n\nWhat should we do next?"); got == 0 {
 		t.Fatal("conversational question ending received no style penalty")
+	}
+	if got := conversationShapePenalty(strings.Repeat("a", maxConversationParagraphRunes+1)); got == 0 {
+		t.Fatal("overlong paragraph received no style penalty")
 	}
 }
 
@@ -367,7 +371,7 @@ func conversationShapePenalty(output string) float64 {
 		penalty += 0.08
 	}
 	for _, paragraph := range paragraphs {
-		if len([]rune(strings.TrimSpace(paragraph))) > 240 {
+		if len([]rune(strings.TrimSpace(paragraph))) > maxConversationParagraphRunes {
 			penalty += 0.08
 		}
 	}

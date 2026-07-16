@@ -111,5 +111,58 @@
     ],
     "forbidden": ["claude", "signed in as gpt-5.6-sol", "logged in as gpt-5.6-sol", "gpt-5.6-sol user", "prompt is ready", "ready for the next command", "waiting for input", "status:", "recommendation:", "evidence:"],
     "contradicts": ["work is complete", "task has completed"]
+  },
+  {
+    "name": "preference outcome first eval document",
+    "terminal_text": "Repository main is synced at ac2229d.\nDone! Created /tmp/engram-guide-eval-notes.md.\n\nThe document records observed and preferred renderings, factual fidelity, stylistic preference, meaningful distinctions, candidate principles, overgeneralization risks, and evaluable criteria. It retains enough terminal evidence to reproduce cases and reserves held-out examples. Patterns are promoted after multiple examples support them; prompt changes wait for recurring patterns.\n\nNo samples have been added yet. Send the first observed message and preferred version.\n\n› Run /review on my current changes",
+    "reference": "Document prepared at `/tmp/engram-guide-eval-notes.md`\n\nThis document will preserve observed and preferred renderings, factual accuracy, meaningful distinctions, candidate principles, overgeneralization risks, and evaluable criteria.\n\nWe'll distinguish between factual fidelity and stylistic preference and retain sufficient terminal evidence to reproduce cases. Patterns will only be promoted after multiple examples support them, and prompt changes will only be made when recurring patterns emerge.",
+    "concepts": [
+      ["document prepared", "created"],
+      ["/tmp/engram-guide-eval-notes.md"],
+      ["observed and preferred renderings"],
+      ["factual accuracy", "factual fidelity"],
+      ["stylistic preference", "style preference"],
+      ["candidate principles"],
+      ["overgeneralization risks"],
+      ["evaluable criteria", "evaluation criteria"],
+      ["terminal evidence", "reproduce cases"],
+      ["multiple examples", "recurring patterns"]
+    ],
+    "forbidden": ["the terminal shows", "repository state", "ac2229d", "no samples", "send the first", "run /review", "ready for the first"],
+    "contradicts": ["document was not created", "prompt changes are ready"]
+  },
+  {
+    "name": "preference durable podman outcome",
+    "terminal_text": "$ sudo configure-rootless-podman 424242\nAdded /etc/subuid mapping 424242:100000:65536\nAdded /etc/subgid mapping 424242:100000:65536\nMappings active: 100000-165535\nBackups: /etc/subuid.before-engram-eval-20260716 /etc/subgid.before-engram-eval-20260716\n$ /home/operator/code/github.com/example/relayctl/bin/relayctl readiness --read-only\n{\"ready\":true,\"checks\":\"all passing\"}\nPrivate env: .local/workspaces/demo/private/trial.env:1 mode=0600 git_ignored=true\nOriginal image-build blocker is gone.\n\n› Explain this codebase",
+    "reference": "We did a system configuration change for rootless Podman. Subordinate UID and GID ranges were added for host UID 424242, each covering 100000-165535 (65536 IDs), and the mappings are active.\n\nThe read-only readiness check lives in `/home/operator/code/github.com/example/relayctl/bin/relayctl`.\n\nThe private configuration is `.local/workspaces/demo/private/trial.env:1`; it is mode 0600 and Git-ignored. Backups were saved as `/etc/subuid.before-engram-eval-20260716` and `/etc/subgid.before-engram-eval-20260716`.",
+    "concepts": [
+      ["rootless podman"],
+      ["uid and gid", "subordinate uid", "subordinate gid"],
+      ["424242"],
+      ["100000-165535", "65536"],
+      ["mappings are active", "mappings active"],
+      ["/home/operator/code/github.com/example/relayctl/bin/relayctl"],
+      ["trial.env"],
+      ["0600"],
+      ["git-ignored", "git ignored"],
+      ["/etc/subuid.before-engram-eval-20260716"],
+      ["/etc/subgid.before-engram-eval-20260716"]
+    ],
+    "forbidden": ["the terminal shows", "ready\": true", "ready is true", "all passing", "passed all checks", "blocker is gone", "blocker has been resolved", "blocker is resolved", "explain this codebase", "unexecuted prompt"],
+    "contradicts": ["mappings are inactive", "mode 0644", "tracked by git"]
+  },
+  {
+    "name": "preference authenticated clone outcome",
+    "terminal_text": "GitHub App PEM readable: /home/operator/secrets/github-app.pem\nMinted automation-bot installation token with app_id=1234 installation_id=5678 expires=2026-07-16T14:06:15Z; value withheld.\nToken authenticated successfully.\nCloned example/agent-wire-node to code/github.com/example/agent-wire-node.\nbranch=main tracking=origin/main clean=true\nremote=https://github.com/example/agent-wire-node\ntemporary_token_persisted=false\n\n› /review",
+    "reference": "The token worked, and `example/agent-wire-node` was cloned successfully to `code/github.com/example/agent-wire-node`. The temporary token was not persisted.",
+    "concepts": [
+      ["token worked", "authenticated successfully"],
+      ["example/agent-wire-node"],
+      ["cloned successfully", "cloned"],
+      ["code/github.com/example/agent-wire-node"],
+      ["not persisted", "was not persisted"]
+    ],
+    "forbidden": ["github-app.pem", "app id", "app_id", "installation id", "installation_id", "1234", "5678", "expires", "automation-bot", "checkout is clean", "tracking origin/main", "remote url", "https://github.com/example/agent-wire-node", "idle", "/review"],
+    "contradicts": ["token was persisted", "clone failed", "authentication failed"]
   }
 ]

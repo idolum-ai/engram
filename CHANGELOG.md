@@ -4,6 +4,21 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Conversational guide
+
+- Prefer durable outcomes and current work over terminal narration, routine
+  mechanism, idle prompts, and unexecuted interface text, guided by human
+  preference fixtures and a reproducible prompt tournament.
+
+### Input
+
+- Send long and multiline Telegram replies as one bracketed tmux paste followed
+  by one Enter, allowing terminal applications to receive the complete input as
+  one submission.
+- Add optional `gpt-4o-transcribe` voice replies. Audio is temporary, transcript
+  provenance is explicit, and latest-view plus immutable-pane checks are
+  repeated before the bounded one-line input reaches tmux.
+
 ## [v0.4.0] - 2026-07-14
 
 ### Conversational guide

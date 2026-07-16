@@ -41,6 +41,8 @@ You need:
 - For **guide mode**, either an Anthropic API key with access to Claude Haiku
   4.5 or an OpenAI API key with access to Luna; Chromium is optional and
   enables the `🖼️` button
+- For **voice replies**, an OpenAI API key with access to
+  `gpt-4o-transcribe`, independent of the selected guide provider
 - For **Chromium mode**, Chromium, Chrome, or another Chromium-compatible
   executable; a configured guide provider is optional and enables `🗣️`
 
@@ -99,6 +101,12 @@ ANTHROPIC_API_KEY=your-Anthropic-key
 To use OpenAI Luna instead, set `LLM_PROVIDER=openai` and
 `OPENAI_API_KEY=your-OpenAI-key`. Provider selection is startup configuration;
 restart Engram after changing it.
+
+An `OPENAI_API_KEY` also enables voice replies independently of the selected
+guide provider. Reply to a session's latest live anchor or latest alternate
+view with a Telegram voice note; Engram transcribes it with
+`gpt-4o-transcribe` and sends one `(transcribed) ...` input to that pane. A
+standalone voice note remains an ordinary saved attachment.
 
 For Chromium anchors instead:
 
@@ -175,6 +183,7 @@ privacy boundaries below before running commands that may print secrets.
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
 | `OPENAI_API_KEY` | none | when selecting OpenAI, secret | Credential for one-pass Luna rendering. |
 | `OPENAI_MODEL` | `gpt-5.6-luna` | no | Luna model ID. Other OpenAI models are not admitted by this release. |
+| `OPENAI_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | no | Assessed one-shot speech-to-text model for voice replies. Requires `OPENAI_API_KEY`; other transcription models are not admitted by this release. |
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
@@ -237,6 +246,16 @@ the bot channel and must be revoked immediately.
   same one-off request and sends its conversational result as a reply without
   replacing the photo anchor. Captures are not credential-redacted before they
   are sent.
+- **Voice input:** When `OPENAI_API_KEY` is configured, a Telegram voice note
+  replying to a session's latest routable message is downloaded into the
+  private runtime directory and sent once to OpenAI's non-streaming
+  `gpt-4o-transcribe` endpoint. Engram normalizes a successful transcript to
+  one bounded, control-free line, prefixes `(transcribed)` to make recognition
+  uncertainty visible to the terminal application, and uses the same guarded
+  paste-plus-Enter path as text replies. Audio and transcript text are not
+  persisted; the temporary OGG file is removed after success or failure. A
+  target that becomes stale or changes tmux identity before delivery receives
+  no input.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
@@ -254,8 +273,8 @@ the bot channel and must be revoked immediately.
   `/raw`, `/dump`, `/logs`, and command metadata create files in the private
   runtime root. These files are not automatically removed by uninstall and may
   remain until manual or operating-system cleanup.
-  On-demand snapshot intermediates are the exception: they are removed after
-  delivery or failure.
+  On-demand snapshot and voice-transcription intermediates are exceptions:
+  they are removed after delivery or failure.
 - **Downloads:** `/download <absolute-path>` opens a local regular file, copies
   that opened file into a private bounded snapshot, and uploads the snapshot to
   Telegram. It rejects symlinks, but it is still an intentional
@@ -588,10 +607,13 @@ ENGRAM_LIVE_HAIKU_INCREMENTAL_EVAL=1 go test -v ./internal/anthropic \
 Compare a challenger prompt with the production prompt using the tournament.
 Both candidates receive identical inputs at production temperature `0.2`. Candidate order
 rotates, candidate names are replaced with fresh opaque IDs, and a separate
-judge uses its model-default decoding and scores fidelity, usefulness, voice, and readability from JSON-serialized
-untrusted evidence. Hard fixture regressions fail the run independently of the
-judge. The tournament defaults to two repeats, gates material-concept coverage,
-and reports full-frame and continuation cohorts separately:
+judge uses its model-default decoding and scores fidelity, usefulness, voice,
+and readability from JSON-serialized untrusted evidence. The fixture's human
+reference guides information priority and style but never overrides terminal
+truth. Hard fixture regressions fail independently of the judge. The tournament
+defaults to two repeats, gates material-concept coverage, and reports full-frame
+and continuation cohorts separately. A comma-separated
+`ENGRAM_TOURNAMENT_CASES` list selects exact fixture names for focused iteration:
 
 ```sh
 ENGRAM_LIVE_HAIKU_TOURNAMENT=1 \

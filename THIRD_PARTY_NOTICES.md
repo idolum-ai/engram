@@ -6,6 +6,7 @@ External services and tools used by deployment or operation:
 
 - Telegram Bot API
 - Anthropic Messages API
+- OpenAI Chat Completions and Audio Transcriptions APIs
 - tmux
 - systemd user services
 

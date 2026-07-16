@@ -31,6 +31,7 @@ type App struct {
 	Store                *state.Store
 	Telegram             *telegram.Client
 	Guide                guide.Renderer
+	Transcriber          voiceTranscriber
 	Tmux                 tmux.Manager
 	Snapshots            snapshotRenderer
 	modeMu               sync.RWMutex
@@ -105,6 +106,10 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	guideRenderer := guideRendererFor(cfg)
+	var transcriber voiceTranscriber
+	if cfg.TranscriptionConfigured() {
+		transcriber = openai.NewTranscriber(cfg.OpenAIAPIKey, cfg.OpenAITranscriptionModel)
+	}
 	mode, err := cfg.ResolveAnchorMode(store.Snapshot().AnchorMode, config.ModeCapabilities{
 		GuideConfigured: guideRenderer != nil,
 		SnapshotReady:   snapshotReady,
@@ -124,6 +129,7 @@ func New(cfg config.Config) (*App, error) {
 		Store:              store,
 		Telegram:           telegramClient,
 		Guide:              guideRenderer,
+		Transcriber:        transcriber,
 		Tmux:               tmux.New(tmux.ExecRunner{}),
 		Snapshots:          snapshotRenderer,
 		mode:               mode,
@@ -278,6 +284,9 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if err := a.Store.MarkMessage(key); err != nil {
 		_ = a.audit("state.message", "failed", map[string]any{"message_id": msg.MessageID, "error": err.Error()})
 		return "failed_state_mark_message"
+	}
+	if msg.Voice != nil && msg.ReplyToMessage != nil {
+		return a.handleVoiceReply(ctx, msg).status("voice_reply")
 	}
 	if doc, ok := msg.FileAttachment(); ok {
 		return a.handleAttachment(ctx, msg, doc).status("attachment")
@@ -599,12 +608,17 @@ func (a *App) statusText() string {
 	if a.guideAvailable {
 		guideStatus = "configured, not probed (" + a.Config.EffectiveLLMProvider() + "/" + a.Config.GuideModel() + ")"
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	voiceStatus := "unavailable"
+	if a.Transcriber != nil {
+		voiceStatus = "configured, not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
+	}
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
 		a.anchorMode(),
 		guideStatus,
+		voiceStatus,
 		a.snapshotStatus(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),

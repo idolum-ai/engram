@@ -50,8 +50,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   pane. Retired anchors and stale alternate replies do not route input.
 - Every literal-text and key effect executes behind a tmux-side server/window
   identity condition. Literal text crosses that command boundary through a
-  random temporary tmux buffer; if tmux restarts between text and Enter, the
-  second effect fails closed instead of reaching a reused pane ID.
+  random temporary tmux buffer. When the foreground application requests
+  bracketed-paste mode, tmux wraps the complete buffer so multiline or long
+  Telegram input arrives as one paste before Engram sends one Enter. If tmux
+  restarts between text and Enter, the second effect fails closed instead of
+  reaching a reused pane ID.
 - A reply beginning `//` removes one slash and sends the resulting slash-led
   input downstream. `/text` omits Enter; `/key` sends validated tmux key names.
 - Live anchors include `Esc`, `Escx2`, `^C`, `^D`, and `Enter`. `Escx2` waits

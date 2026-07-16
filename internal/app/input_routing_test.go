@@ -139,7 +139,7 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 	if status != "anchor_reply_ok" {
 		t.Fatalf("handleUpdate status = %q, want anchor_reply_ok", status)
 	}
-	if len(runner.calls) != 4 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "/clear" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") || runner.calls[3][0] != "if-shell" || !strings.Contains(runner.calls[3][5], "'Enter'") {
+	if len(runner.calls) != 4 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "/clear" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -p -r -d") || runner.calls[3][0] != "if-shell" || !strings.Contains(runner.calls[3][5], "'Enter'") {
 		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
 	got, ok := store.FindSession(ts.ID)

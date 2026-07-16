@@ -61,6 +61,17 @@ Telegram is Engram's only user interface.
   makes the predecessor stale. Replies to known stale alternates must
   not reach tmux and receive a concise normal bot reply; Telegram offers no
   callback-style ephemeral banner for an ordinary message reply.
+- A Telegram voice note replying to any current routable message follows the
+  same latest-only rule. When OpenAI transcription is configured, Engram
+  downloads it through the bounded transfer queue, transcribes it once with
+  the admitted non-streaming model, normalizes the result to one bounded line,
+  prefixes `(transcribed)`, and sends exactly one guarded paste plus Enter.
+  The current reply identity and immutable tmux binding are checked again under
+  their delivery locks after transcription. A stale, unknown, oversized,
+  unsafe, failed, or identity-changed voice reply sends no terminal input.
+- Voice notes that are not replies retain ordinary attachment behavior. Voice
+  transcription is independent of `LLM_PROVIDER` and is available only when
+  `OPENAI_API_KEY` configured it at service startup.
 - Alternate delivery is committed only while the complete tmux binding, mode,
   and canonical anchor still match. A prospective alternate that loses this
   race or cannot persist its reply alias is deleted; an uncertain post-replace

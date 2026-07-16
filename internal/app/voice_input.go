@@ -1,0 +1,136 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/idolum-ai/engram/internal/state"
+	"github.com/idolum-ai/engram/internal/telegram"
+)
+
+type voiceTranscriber interface {
+	Transcribe(context.Context, string) (string, error)
+}
+
+const maxVoiceTranscriptBytes = 4096
+
+func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) actionResult {
+	if a.Transcriber == nil {
+		a.reply(ctx, msg, "Voice input is unavailable. Configure OPENAI_API_KEY and restart Engram.")
+		return actionResult{Outcome: actionUserError, Message: "voice input unavailable"}
+	}
+	ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID)
+	if found && targetState == state.ReplyTargetStale {
+		a.reply(ctx, msg, staleAlternateReply(ts.ID))
+		return actionResult{Outcome: actionUserError, Message: "stale voice reply"}
+	}
+	if !found || targetState != state.ReplyTargetCurrent {
+		a.reply(ctx, msg, "Session not found for this voice reply. Reply to a session's latest view or live anchor.")
+		return actionResult{Outcome: actionUserError, Message: "voice reply target unavailable"}
+	}
+	hardMax := minInt64(telegramCloudDownloadMax, a.attachmentHardMax())
+	if msg.Voice.FileSize > hardMax {
+		a.reply(ctx, msg, fmt.Sprintf("Voice note rejected: %d bytes exceeds the available %d-byte download limit.", msg.Voice.FileSize, hardMax))
+		return actionResult{Outcome: actionUserError, Message: "voice note exceeds hard limit"}
+	}
+	targetMessageID := msg.ReplyToMessage.MessageID
+	if !a.queueTransfer(func(transferCtx context.Context) {
+		a.transcribeVoiceReply(transferCtx, msg, ts, targetMessageID)
+	}) {
+		a.reply(ctx, msg, "Voice input is temporarily unavailable because Engram is stopping or its transfer queue is full.")
+		return actionResult{Outcome: actionStateFailed, Message: "voice transfer unavailable"}
+	}
+	return actionResult{Outcome: actionOK, Message: "voice input queued"}
+}
+
+func (a *App) transcribeVoiceReply(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int) {
+	if !a.replyTargetStillCurrent(msg.Chat.ID, targetMessageID, expected) {
+		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		return
+	}
+	file, err := a.Telegram.GetFile(ctx, msg.Voice.FileID)
+	if err != nil {
+		a.reply(ctx, msg, "Could not retrieve the voice note: "+err.Error())
+		return
+	}
+	path, err := reserveVoicePath(a.Config.ArtifactDir())
+	if err != nil {
+		a.reply(ctx, msg, "Could not prepare the voice note: "+err.Error())
+		return
+	}
+	defer os.Remove(path)
+	if _, err := a.Telegram.DownloadFile(ctx, file.FilePath, path, minInt64(telegramCloudDownloadMax, a.attachmentHardMax())); err != nil {
+		a.reply(ctx, msg, "Could not download the voice note: "+err.Error())
+		return
+	}
+	transcript, err := a.Transcriber.Transcribe(ctx, path)
+	if err != nil {
+		_ = a.audit("voice.transcribe", "failed", map[string]any{"session_id": expected.ID, "error": err.Error()})
+		a.reply(ctx, msg, "The voice note could not be transcribed; no input was sent.")
+		return
+	}
+	transcript, err = normalizeVoiceTranscript(transcript)
+	if err != nil {
+		_ = a.audit("voice.transcribe", "rejected", map[string]any{"session_id": expected.ID, "error": err.Error()})
+		a.reply(ctx, msg, "The voice transcript was not safe to send as terminal input; no input was sent.")
+		return
+	}
+	anchorLock := a.anchorMutex(expected.ID)
+	anchorLock.Lock()
+	if !a.replyTargetStillCurrent(msg.Chat.ID, targetMessageID, expected) {
+		anchorLock.Unlock()
+		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		return
+	}
+	result := a.sendInputExpected(ctx, expected.ID, "(transcribed) "+transcript, "voice", true, &expected)
+	anchorLock.Unlock()
+	if !result.OK() {
+		a.reply(ctx, msg, result.Message)
+		return
+	}
+	_ = a.audit("voice.transcribe", "ok", map[string]any{"session_id": expected.ID})
+}
+
+func (a *App) replyTargetStillCurrent(chatID int64, messageID int, expected state.TerminalSession) bool {
+	current, targetState, found := a.Store.FindReplyTarget(chatID, messageID)
+	return found && targetState == state.ReplyTargetCurrent && sameTerminalBinding(current, expected)
+}
+
+func reserveVoicePath(dir string) (string, error) {
+	file, err := os.CreateTemp(dir, "engram-voice-*.ogg")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func normalizeVoiceTranscript(text string) (string, error) {
+	if !utf8.ValidString(text) {
+		return "", fmt.Errorf("transcript is not valid UTF-8")
+	}
+	for _, r := range text {
+		if (unicode.IsControl(r) && !unicode.IsSpace(r)) || unicode.Is(unicode.Cf, r) {
+			return "", fmt.Errorf("transcript contains terminal control characters")
+		}
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return "", fmt.Errorf("transcript is empty")
+	}
+	if len(text) > maxVoiceTranscriptBytes {
+		return "", fmt.Errorf("transcript exceeds %d bytes", maxVoiceTranscriptBytes)
+	}
+	return text, nil
+}
