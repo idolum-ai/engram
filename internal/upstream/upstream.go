@@ -15,6 +15,7 @@ const MaxMessageBytes = 1024
 const RecordIDBytes = 16
 const RecordIDLength = RecordIDBytes * 2
 const MaxPresentationIndent = 8
+const MaxPresentationContinuationLines = 32
 
 type Record struct {
 	ID      string
@@ -93,14 +94,29 @@ func Observe(joinedText string) Observation {
 	kept := lines[:0]
 	var latest Record
 	found := false
-	for _, line := range lines {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		line = strings.TrimLeft(line, "\r")
-		recordText, framed := presentationRecordText(line)
+		recordText, indent, framed := presentationRecordText(line)
 		if !framed {
 			kept = append(kept, line)
 			continue
 		}
 		if record, ok := parseRecord(recordText); ok {
+			if indent > 0 {
+				payload := record.Payload
+				for continued := 0; continued < MaxPresentationContinuationLines && i+1 < len(lines); continued++ {
+					text, ok := presentationContinuation(lines[i+1], indent)
+					if !ok {
+						break
+					}
+					i++
+					payload += " " + text
+				}
+				if normalized, err := Normalize(payload); err == nil {
+					record.Payload = normalized
+				}
+			}
 			latest = record
 			found = true
 		}
@@ -112,15 +128,27 @@ func Observe(joinedText string) Observation {
 	}
 }
 
-func presentationRecordText(line string) (string, bool) {
+func presentationRecordText(line string) (string, int, bool) {
 	indent := 0
 	for indent < len(line) && line[indent] == ' ' {
 		indent++
 	}
 	if indent > MaxPresentationIndent || !strings.HasPrefix(line[indent:], Prefix) {
+		return "", 0, false
+	}
+	return strings.TrimPrefix(line[indent:], Prefix), indent, true
+}
+
+func presentationContinuation(line string, indent int) (string, bool) {
+	line = strings.TrimLeft(line, "\r")
+	if indent <= 0 || len(line) <= indent || line[:indent] != strings.Repeat(" ", indent) || line[indent] == ' ' {
 		return "", false
 	}
-	return strings.TrimPrefix(line[indent:], Prefix), true
+	text := strings.TrimSpace(line[indent:])
+	if text == "" || strings.HasPrefix(text, Prefix) {
+		return "", false
+	}
+	return text, true
 }
 
 func parseRecord(text string) (Record, bool) {

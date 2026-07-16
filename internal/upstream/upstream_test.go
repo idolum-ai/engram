@@ -55,15 +55,23 @@ func TestObserveStripsMalformedFramingWithoutTreatingItAsSignal(t *testing.T) {
 }
 
 func TestObserveAcceptsBoundedPresentationIndent(t *testing.T) {
-	line := Prefix + testRecordID + " Codex tool output finished"
-	got := Observe("before\n    " + line + "\nafter")
-	if !got.Found || got.Latest.Payload != "Codex tool output finished" || got.PresentationText != "before\nafter" {
+	line := Prefix + testRecordID + " Codex tool output"
+	got := Observe("before\n    " + line + "\n    finished through Engram\n\nafter")
+	if !got.Found || got.Latest.Payload != "Codex tool output finished through Engram" || got.PresentationText != "before\n\nafter" {
 		t.Fatalf("Observe indented = %#v", got)
 	}
 
 	tooDeep := Observe(strings.Repeat(" ", MaxPresentationIndent+1) + line)
 	if tooDeep.Found || tooDeep.PresentationText == "" {
 		t.Fatalf("Observe over-indented = %#v", tooDeep)
+	}
+}
+
+func TestObserveDoesNotJoinContinuationToColumnZeroRecord(t *testing.T) {
+	line := Prefix + testRecordID + " direct signal"
+	got := Observe(line + "\nordinary output")
+	if !got.Found || got.Latest.Payload != "direct signal" || got.PresentationText != "ordinary output" {
+		t.Fatalf("Observe direct = %#v", got)
 	}
 }
 

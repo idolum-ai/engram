@@ -19,8 +19,9 @@ Notable user-visible and operational changes are recorded here.
   delivery by default, or opt-in `gpt-4o-transcribe`. Transcription audio is
   temporary, transcript provenance is explicit, and latest-view plus
   immutable-pane checks are repeated before either input reaches tmux.
-- Recognize exact upstream-signal records through a bounded presentation indent
-  so Codex-rendered command output can still request attention.
+- Recognize exact upstream-signal records through bounded presentation indent
+  and same-indent wrapping so Codex-rendered command output can still request
+  attention without leaving payload fragments in guide evidence.
 
 ## [v0.4.0] - 2026-07-14
 

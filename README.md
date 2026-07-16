@@ -457,7 +457,8 @@ engram signal "Tests finished; two failures need attention."
 The command establishes a fresh terminal row, then writes one bounded
 `[engram:upstream] <record-id> ...` record and a terminal bell. Engram also
 recognizes that exact record after up to eight presentation spaces added by a
-terminal host such as Codex. It makes no
+terminal host such as Codex, including a bounded same-indent continuation when
+the host wraps the payload into physical rows. It makes no
 network request and reads no service configuration. The outer Engram finds the
 record through its normal tmux capture loop and immediately attempts a redacted
 terminal-signal notification; the guide and Chromium continue independently. At

@@ -33,9 +33,13 @@ second transport or model a deployment hierarchy.
   and is capped at 1 KiB after UTF-8 validation. Empty messages are rejected.
 - Observation admits zero through eight leading ASCII spaces before the exact
   prefix so terminal hosts such as Codex may present command output as an
-  indented block. Deeper indentation, tabs, altered prefixes, and malformed
-  record IDs are not signals. This tolerance is presentation framing, not
-  authentication; any pane writer can already forge a valid record.
+  indented block. A valid indented record may collect a bounded run of
+  contiguous rows with exactly the same indentation when that host physically
+  wraps its payload; those rows are removed from guide evidence with the record.
+  Column-zero records remain one line. Deeper indentation, tabs, altered
+  prefixes, and malformed record IDs are not signals. This tolerance is
+  presentation framing, not authentication; any pane writer can already forge
+  a valid record.
 - The command makes no network request and reads no Engram service state. If no
   controlling terminal is available, it exits nonzero without attempting a
   fallback transport.
