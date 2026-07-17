@@ -83,20 +83,20 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		if req.FormValue("message_id") != "77" || !strings.Contains(caption, "[1] running · "+expectedTitle) {
 			return nil, errors.New("incorrect snapshot anchor identity or caption")
 		}
-		if expectArtifact != strings.Contains(caption, "paths:\n"+artifact) || !strings.Contains(caption, "links:\n"+expectedCaptionURL) {
+		if expectArtifact != strings.Contains(caption, "files:\n<pre>1. "+artifact+"</pre>") || !strings.Contains(caption, "links:\n"+expectedCaptionURL) {
 			return nil, errors.New("snapshot anchor omitted visible references")
 		}
 		if expectedCaptionURL != visibleURL && strings.Contains(caption, visibleURL) {
 			return nil, errors.New("snapshot anchor retained stale joined URL")
 		}
-		if strings.Contains(caption, "```") || media["parse_mode"] != nil {
-			return nil, errors.New("snapshot references must remain a plain clickable caption")
+		if strings.Contains(caption, "```") || media["parse_mode"] != "HTML" {
+			return nil, errors.New("snapshot file references must use HTML code formatting")
 		}
 		if strings.Contains(caption, "signal.invalid") {
 			return nil, errors.New("snapshot references parsed an upstream payload")
 		}
 		markup := req.FormValue("reply_markup")
-		if !strings.Contains(markup, "refresh:1") || strings.Contains(markup, "snapshot:1") {
+		if !strings.Contains(markup, "refresh:1") || strings.Contains(markup, "snapshot:1") || expectArtifact != strings.Contains(markup, "file:1:") {
 			return nil, errors.New("incorrect snapshot anchor markup")
 		}
 		return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
@@ -197,7 +197,8 @@ func TestSnapshotAnchorCaptionUsesExplicitPresentationTextWithoutURLRewrite(t *t
 	}
 	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: "review"}
 
-	caption := (&App{}).snapshotAnchorCaption(session, capture, capture.JoinedText)
+	app := &App{}
+	caption, _ := app.snapshotAnchorCaption(session, capture, app.visibleReferences(capture.JoinedText))
 	if !strings.Contains(caption, "links:\n"+publicURL) {
 		t.Fatalf("snapshot caption omitted exact presentation URL: %q", caption)
 	}
@@ -218,7 +219,7 @@ func TestSnapshotAnchorCaptionKeepsRedactionURLSafe(t *testing.T) {
 	}, "\n")
 
 	app := &App{Config: config.Config{OpenAIAPIKey: configuredSecret}}
-	caption := app.snapshotAnchorCaption(session, capture, referenceText)
+	caption, _ := app.snapshotAnchorCaption(session, capture, app.visibleReferences(referenceText))
 	for _, want := range []string{
 		"https://example.test/build?access_token=REDACTED&mode=fast",
 		"https://example.test/artifacts/REDACTED",
@@ -403,6 +404,14 @@ func TestGuideModeRotatesSnapshotAnchorBackToText(t *testing.T) {
 		paths = append(paths, req.URL.Path)
 		switch req.URL.Path {
 		case "/botTOKEN/sendMessage":
+			var body map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				return nil, err
+			}
+			markup := string(mustJSON(body["reply_markup"]))
+			if strings.Contains(markup, "key:1:left") {
+				return nil, errors.New("prospective guide anchor retained snapshot arrows")
+			}
 			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
 		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
 			return snapshotJSONResponse(`true`), nil
@@ -467,7 +476,7 @@ func TestSnapshotAnchorReplacesUnavailableTextAnchor(t *testing.T) {
 			if err := req.ParseMultipartForm(1 << 20); err != nil {
 				return nil, err
 			}
-			if !strings.Contains(req.FormValue("reply_markup"), "refresh:1") {
+			if markup := req.FormValue("reply_markup"); !strings.Contains(markup, "refresh:1") || !strings.Contains(markup, "key:1:left") {
 				return nil, errors.New("replacement snapshot omitted controls")
 			}
 			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil

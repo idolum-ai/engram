@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -143,6 +144,27 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_telegram_failed"
 		}
 		return result.status("callback")
+	case "file":
+		id, token, index, ok := parseFileCallback(parts[1])
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "bad file reference")
+			return "failed_bad_callback_file"
+		}
+		validated, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		path, ok := resolveAnchorFile(validated, token, index)
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "file list changed; refresh the card")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, fmt.Sprintf("preparing file %d", index)) {
+			return "callback_telegram_failed"
+		}
+		msg := *cb.Message
+		msg.From = &cb.From
+		return a.download(ctx, msg, path).status("callback")
 	case "watch":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -213,6 +235,29 @@ func directionalKeyPreset(preset string) bool {
 	default:
 		return false
 	}
+}
+
+func parseFileCallback(value string) (int, string, int, bool) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 3 || len(parts[1]) != 16 {
+		return 0, "", 0, false
+	}
+	id, idErr := strconv.Atoi(parts[0])
+	index, indexErr := strconv.Atoi(parts[2])
+	if idErr != nil || indexErr != nil || id <= 0 || index <= 0 {
+		return 0, "", 0, false
+	}
+	if _, err := hex.DecodeString(parts[1]); err != nil {
+		return 0, "", 0, false
+	}
+	return id, parts[1], index, true
+}
+
+func resolveAnchorFile(ts state.TerminalSession, token string, index int) (string, bool) {
+	if ts.State != state.TerminalRunning || token == "" || token != ts.AnchorFileToken || index <= 0 || index > len(ts.AnchorFiles) {
+		return "", false
+	}
+	return ts.AnchorFiles[index-1], true
 }
 
 func (a *App) callbackAuthorized(cb telegram.CallbackQuery) bool {

@@ -67,7 +67,8 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	caption := a.snapshotAnchorCaption(current, capture, presentationText)
+	refs := a.visibleReferences(presentationText)
+	caption, files := a.snapshotAnchorCaption(current, capture, refs)
 	captureHash := snapshotAnchorHash(current, capture, presentationText, caption, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
 		return
@@ -111,10 +112,12 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if latest.Title != current.Title {
 		return
 	}
-	caption = a.snapshotAnchorCaption(latest, capture, presentationText)
+	caption, files = a.snapshotAnchorCaption(latest, capture, refs)
 	captureHash = snapshotAnchorHash(latest, capture, presentationText, caption, a.Config.SnapshotTheme)
-	markup := a.anchorMarkup(latest)
-	_, editErr := a.Telegram.EditPhoto(ctx, latest.AnchorChatID, latest.AnchorMessageID, pngPath, caption, markup)
+	presented := bindAnchorFiles(latest, files)
+	presented.AnchorFormat = "snapshot"
+	markup := a.anchorMarkup(presented)
+	_, editErr := a.Telegram.EditHTMLPhoto(ctx, latest.AnchorChatID, latest.AnchorMessageID, pngPath, telegram.MarkdownToHTML(caption), markup)
 	if telegram.IsMessageNotModified(editErr) {
 		editErr = nil
 	}
@@ -123,7 +126,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 			_ = a.audit("telegram.snapshot_anchor", "edit_failed", map[string]any{"session_id": id, "error": editErr.Error()})
 			return
 		}
-		msg, sendErr := a.Telegram.SendPhotoWithMarkup(ctx, a.Config.TelegramChatID, pngPath, caption, 0, markup)
+		msg, sendErr := a.Telegram.SendHTMLPhotoWithMarkup(ctx, a.Config.TelegramChatID, pngPath, telegram.MarkdownToHTML(caption), 0, markup)
 		if sendErr != nil {
 			_ = a.audit("telegram.snapshot_anchor", "replacement_failed", map[string]any{"session_id": id, "error": sendErr.Error()})
 			return
@@ -144,6 +147,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 				session.LastRenderHash = sha(captureHash + "\x00" + caption)
 				session.LastKnownCWD = capture.CurrentPath
 				session.LastAnchorEditAt = time.Now().UTC()
+				setAnchorFiles(session, files)
 				replaced = true
 			}
 		})
@@ -171,6 +175,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 			session.LastRenderHash = sha(captureHash + "\x00" + caption)
 			session.LastKnownCWD = capture.CurrentPath
 			session.LastAnchorEditAt = time.Now().UTC()
+			setAnchorFiles(session, files)
 			updated = true
 		}
 	}); err != nil {
@@ -197,15 +202,16 @@ func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, pr
 	return sha(strings.Join([]string{capture.ANSI, presentationText, capture.Title, capture.CurrentPath, fmt.Sprint(capture.Columns), fmt.Sprint(capture.VisibleRows), fmt.Sprint(capture.BufferRows), ts.Title, caption, theme}, "\x00"))
 }
 
-func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture, referenceText string) string {
+func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture, refs visibleReferences) (string, []string) {
 	const safeCaptionBytes = 960
 	title := a.redactText(firstNonEmpty(ts.Title, capture.Title, "terminal"))
 	cwd := a.redactText(capture.CurrentPath)
 	caption := fmt.Sprintf("[%d] %s · %s\n%s\n%d buffer rows · %dx%d visible", ts.ID, ts.State, title, cwd, capture.BufferRows, capture.Columns, capture.VisibleRows)
-	if references := renderSnapshotReferences(referenceText, safeCaptionBytes-len(caption)-2, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey); references != "" {
+	if references, files := renderSnapshotReferenceSetWithFiles(refs, safeCaptionBytes-len(caption)-2); references != "" {
 		caption += "\n\n" + references
+		return caption, files
 	}
-	return caption
+	return caption, nil
 }
 
 func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.TerminalSession, summary string, final bool) {
@@ -217,7 +223,8 @@ func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.Te
 	if !final && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
 		return
 	}
-	markup := a.anchorMarkup(ts)
+	presented := bindAnchorFiles(ts, nil)
+	markup := a.anchorMarkup(presented)
 	if ts.State == state.TerminalClosed {
 		markup = telegram.ClearMarkup()
 	}
@@ -232,6 +239,7 @@ func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.Te
 	if _, _, err := a.Store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
 		session.LastRenderHash = renderHash
 		session.LastAnchorEditAt = time.Now().UTC()
+		setAnchorFiles(session, nil)
 		if session.State == state.TerminalClosed || session.State == state.TerminalLost {
 			session.LastSnapshotCaptureHash = ""
 		}
@@ -242,7 +250,9 @@ func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.Te
 
 func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.TerminalSession, rendered, renderHash string, guard func() bool) {
 	oldID := ts.AnchorMessageID
-	msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(ts))
+	presented := ts
+	presented.AnchorFormat = "text"
+	msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(presented))
 	if err != nil {
 		_ = a.audit("telegram.anchor_mode", "guide_send_failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return
@@ -262,6 +272,7 @@ func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.Ter
 			session.AnchorPinKnown = false
 			session.LastRenderHash = renderHash
 			session.LastAnchorEditAt = time.Now().UTC()
+			setAnchorFiles(session, ts.AnchorFiles)
 			rotated = true
 		}
 	})

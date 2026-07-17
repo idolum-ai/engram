@@ -431,17 +431,29 @@ func (c *Client) SendPhoto(ctx context.Context, chatID int64, path, caption stri
 }
 
 func (c *Client) SendPhotoWithMarkup(ctx context.Context, chatID int64, path, caption string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendPhotoWithMarkup(ctx, chatID, path, caption, replyTo, markup, "")
+}
+
+func (c *Client) SendHTMLPhotoWithMarkup(ctx context.Context, chatID int64, path, caption string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendPhotoWithMarkup(ctx, chatID, path, caption, replyTo, markup, "HTML")
+}
+
+func (c *Client) sendPhotoWithMarkup(ctx context.Context, chatID int64, path, caption string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
 	var out Message
 	err := c.do(ctx, "sendPhoto", true, func() (*http.Request, error) {
-		return c.mediaRequest(ctx, "sendPhoto", "photo", chatID, path, "engram-window.png", caption, replyTo, markup)
+		return c.mediaRequest(ctx, "sendPhoto", "photo", chatID, path, "engram-window.png", caption, replyTo, markup, parseMode)
 	}, &out)
 	return out, err
 }
 
-func (c *Client) EditPhoto(ctx context.Context, chatID int64, messageID int, path, caption string, markup *InlineKeyboardMarkup) (Message, error) {
+func (c *Client) EditHTMLPhoto(ctx context.Context, chatID int64, messageID int, path, caption string, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.editPhoto(ctx, chatID, messageID, path, caption, markup, "HTML")
+}
+
+func (c *Client) editPhoto(ctx context.Context, chatID int64, messageID int, path, caption string, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
 	var out Message
 	err := c.do(ctx, "editMessageMedia", true, func() (*http.Request, error) {
-		return c.editPhotoRequest(ctx, chatID, messageID, path, caption, markup)
+		return c.editPhotoRequest(ctx, chatID, messageID, path, caption, markup, parseMode)
 	}, &out)
 	return out, err
 }
@@ -481,25 +493,41 @@ func (m Message) FileAttachment() (Document, bool) {
 	return Document{}, false
 }
 
-func AnchorMarkup(sessionID int, includeImage, includeVoice, includeArrows bool) *InlineKeyboardMarkup {
+type AnchorMarkupOptions struct {
+	Image     bool
+	Voice     bool
+	Arrows    bool
+	FileToken string
+	FileCount int
+}
+
+func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
 	actions := []InlineKeyboardButton{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}}
-	if includeImage {
+	if options.Image {
 		actions = append(actions, InlineKeyboardButton{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
 	}
-	if includeVoice {
+	if options.Voice {
 		actions = append(actions, InlineKeyboardButton{Text: "🗣️", CallbackData: fmt.Sprintf("voice:%d", sessionID)})
 	}
-	rows := [][]InlineKeyboardButton{
-		actions,
-		{
-			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
-			{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
-			{Text: "^C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
-			{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
-			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
-		},
+	rows := [][]InlineKeyboardButton{actions}
+	if options.FileToken != "" && options.FileCount > 0 {
+		files := make([]InlineKeyboardButton, 0, options.FileCount)
+		for index := 1; index <= options.FileCount; index++ {
+			files = append(files, InlineKeyboardButton{
+				Text:         fmt.Sprintf("⬇️ %d", index),
+				CallbackData: fmt.Sprintf("file:%d:%s:%d", sessionID, options.FileToken, index),
+			})
+		}
+		rows = append(rows, files)
 	}
-	if includeArrows {
+	rows = append(rows, []InlineKeyboardButton{
+		{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
+		{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
+		{Text: "^C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
+		{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
+		{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
+	})
+	if options.Arrows {
 		rows = append(rows, []InlineKeyboardButton{
 			{Text: "←", CallbackData: fmt.Sprintf("key:%d:left", sessionID)},
 			{Text: "↑", CallbackData: fmt.Sprintf("key:%d:up", sessionID)},
@@ -646,10 +674,10 @@ func (c *Client) doOnce(ctx context.Context, method string, req *http.Request, o
 }
 
 func (c *Client) documentRequest(ctx context.Context, chatID int64, path, filename, caption string) (*http.Request, error) {
-	return c.mediaRequest(ctx, "sendDocument", "document", chatID, path, filename, caption, 0, nil)
+	return c.mediaRequest(ctx, "sendDocument", "document", chatID, path, filename, caption, 0, nil, "")
 }
 
-func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID int64, path, filename, caption string, replyTo int, markup *InlineKeyboardMarkup) (*http.Request, error) {
+func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID int64, path, filename, caption string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (*http.Request, error) {
 	pr, pw := io.Pipe()
 	writer := multipart.NewWriter(pw)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/"+method, pr)
@@ -673,6 +701,11 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 		}
 		if caption != "" {
 			if writeErr = writer.WriteField("caption", clampCaption(caption)); writeErr != nil {
+				return
+			}
+		}
+		if parseMode != "" {
+			if writeErr = writer.WriteField("parse_mode", parseMode); writeErr != nil {
 				return
 			}
 		}
@@ -710,7 +743,7 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 	return req, nil
 }
 
-func (c *Client) editPhotoRequest(ctx context.Context, chatID int64, messageID int, path, caption string, markup *InlineKeyboardMarkup) (*http.Request, error) {
+func (c *Client) editPhotoRequest(ctx context.Context, chatID int64, messageID int, path, caption string, markup *InlineKeyboardMarkup, parseMode string) (*http.Request, error) {
 	pr, pw := io.Pipe()
 	writer := multipart.NewWriter(pw)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/editMessageMedia", pr)
@@ -733,7 +766,11 @@ func (c *Client) editPhotoRequest(ctx context.Context, chatID int64, messageID i
 			"chat_id":    strconv.FormatInt(chatID, 10),
 			"message_id": strconv.Itoa(messageID),
 		}
-		media, err := json.Marshal(map[string]any{"type": "photo", "media": "attach://photo", "caption": clampCaption(caption)})
+		mediaFields := map[string]any{"type": "photo", "media": "attach://photo", "caption": clampCaption(caption)}
+		if parseMode != "" {
+			mediaFields["parse_mode"] = parseMode
+		}
+		media, err := json.Marshal(mediaFields)
 		if err != nil {
 			writeErr = err
 			return

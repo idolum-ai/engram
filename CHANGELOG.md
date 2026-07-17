@@ -25,6 +25,12 @@ Notable user-visible and operational changes are recorded here.
   presentation indent and same-indent wrapping so Codex-rendered command output
   can request attention without consuming adjacent guide evidence.
 
+### File handoff
+
+- Show only existing regular files in anchor reference sections, enumerate and
+  code-format them in both modes, and add matching `⬇️ n` buttons that reuse
+  `/download` behind current-card and exact-list callback guards.
+
 ## [v0.4.0] - 2026-07-14
 
 ### Conversational guide

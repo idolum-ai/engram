@@ -597,8 +597,12 @@ func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
 
 func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 	a.redactSessionPresentation(&ts)
-	references := renderVisibleReferences(ts.LastRawCapture, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+	references := renderReferences(a.visibleReferences(ts.LastRawCapture), true, maxGuideReferenceBytes)
 	return renderLocalWithReferences(ts, a.redactText(summary), references)
+}
+
+func (a *App) visibleReferences(capture string) visibleReferences {
+	return visibleReferencesForCapture(capture, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
 }
 
 func (a *App) statusText() string {

@@ -56,7 +56,8 @@ inert; two actionable representations of one pane are a product error.
 
 A guide anchor uses compact conversational prose. A snapshot anchor uses a
 bounded, ANSI-preserving terminal image. Both retain deterministic references
-and a small allowlisted row of terminal controls.
+and small allowlisted controls, including exact numbered handoffs for files
+already visible in the pane.
 
 ### Fast input path
 
@@ -121,7 +122,7 @@ older alternate is explicitly stale and cannot route input.
 ### Deterministic facts beat guesses
 
 Engram should compute session IDs, tmux targets, pane IDs, working directories,
-attachment paths, visible paths and URLs, capture hashes, timestamps, and
+attachment paths, visible files and URLs, capture hashes, timestamps, and
 service status locally. Extracted references are untrusted pane content;
 Engram does not fetch or endorse them.
 

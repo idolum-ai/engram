@@ -434,6 +434,46 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 	}
 }
 
+func TestAnchorFileBindingsRemainProcessLocalAndDeepCloned(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(current *TerminalSession) {
+		current.AnchorFiles = []string{"/tmp/report.txt"}
+		current.AnchorFileToken = "0123456789abcdef"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	snapshot.TerminalSessions[0].AnchorFiles[0] = "/tmp/mutated.txt"
+	current, _ := store.FindSession(session.ID)
+	if current.AnchorFiles[0] != "/tmp/report.txt" {
+		t.Fatalf("snapshot aliased anchor files: %#v", current.AnchorFiles)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(persisted), "report.txt") || strings.Contains(string(persisted), "0123456789abcdef") {
+		t.Fatalf("anchor file binding persisted: %s", persisted)
+	}
+	reopened, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ := reopened.FindSession(session.ID)
+	if len(loaded.AnchorFiles) != 0 || loaded.AnchorFileToken != "" {
+		t.Fatalf("process-local binding survived restart: %#v", loaded)
+	}
+}
+
 func TestStoreNormalizesLegacyAnchorFormats(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")

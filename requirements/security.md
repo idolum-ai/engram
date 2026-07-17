@@ -135,6 +135,11 @@ privacy model must stay small and explicit.
   the original source basename as the Telegram-visible document filename.
 - `/download` rejects files above Telegram's 50 MiB cloud Bot API multipart
   upload ceiling before opening a network request.
+- Numbered anchor-file callbacks never carry filesystem paths. They require the
+  authorized current canonical message and an exact process-local list token,
+  then pass the selected absolute path through `/download` validation. The
+  mapping is not persisted and is removed from Telegram controls after restart
+  until a fresh card render establishes it again.
 - Attachment downloads hash while streaming, and long file transfers run in
   bounded background workers and a bounded queue so polling remains responsive.
 - Generated `/raw` and `/dump` artifacts must not exceed the same 50 MiB cloud

@@ -53,6 +53,10 @@ Telegram is Engram's only user interface.
   distinct `← ↑ ↓ →` row and `🗣️` only when a guide is configured.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
+- When a canonical anchor displays files, one `⬇️ n` button is shown for each
+  numbered entry. The callback contains no path: it resolves through the
+  current anchor's exact process-local file-list token and then uses the same
+  validation, bounded snapshot, queue, and upload path as `/download`.
 - `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces

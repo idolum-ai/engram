@@ -507,7 +507,7 @@ that frame.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its
 media in place when the styled capture or its derived caption changes,
-automatically at most once every ten seconds. This includes visible paths that
+automatically at most once every ten seconds. This includes visible files that
 appear or disappear without changing terminal text. The refresh button renders
 immediately, including an unchanged capture. If a guide is configured, `🗣️` replies with a one-off
 conversational rendering without replacing the canonical image. `/sessions`
@@ -518,9 +518,12 @@ when the target capability is available. Existing anchors migrate in the
 background. The choice persists across restart; `ENGRAM_ANCHOR_MODE` remains
 the initial configuration and fallback.
 
-Both modes append bounded local references from the captured pane: existing
-absolute or home-relative files and directories under `paths`, and syntactically
-valid HTTP(S) URLs under `links`. Engram never fetches or endorses an extracted
+Both modes append bounded local references from the captured pane: numbered,
+code-formatted regular files under `files`, and syntactically valid HTTP(S)
+URLs under `links`. Directories, symlinks, missing files, and paths that require
+secret redaction are omitted. Each displayed file has a matching `⬇️ n` button
+that queues the same guarded upload as `/download`; the button is bound to the
+current canonical card and its exact displayed list. Engram never fetches or endorses an extracted
 URL; it is untrusted terminal text surfaced for convenient navigation. URLs
 with embedded user credentials are omitted, and recognized credential query
 parameters are redacted before delivery. Unmatched closing wrappers are removed;
@@ -536,8 +539,7 @@ capture; `/dump` streams the pane's scrollback to an attachment. Cloud Bot API
 downloads are hard-limited to 20 MiB and `/download` uploads to 50 MiB.
 Generated captures and upload snapshots are also capped at 50 MiB, and Engram
 accepts at most eight queued file transfers with two running concurrently.
-Those ceilings follow the hosted [Telegram Bot API file limits](https://core.telegram.org/bots/api#sending-files);
-a local Bot API server is not currently configurable.
+Those ceilings follow the hosted [Telegram Bot API file limits](https://core.telegram.org/bots/api#sending-files).
 
 Local diagnostics use the same protected env file:
 

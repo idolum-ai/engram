@@ -84,10 +84,9 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   closed, and a URL whose authority would require redaction is omitted. Engram
   does not canonicalize, rank, or otherwise translate URLs for particular hosts.
   At most the first four distinct visible HTTP(S) URLs are shown.
-- Guide anchors fence local paths for copying. Snapshot captions keep references
-  plain, and links stay outside code fences so Telegram can make them directly
-  navigable. Presentation tests must keep this distinction explicit rather than
-  treating it as an incidental renderer detail.
+- Both anchor modes enumerate regular local files in a code block. Links stay
+  outside code blocks so Telegram can make them directly navigable.
+  Presentation tests must preserve that distinction.
 - Guide mode sends every frame's complete joined logical text, with upstream
   records, the trailing model-status footer, and a small allowlist of paired
   Codex placeholder prompts removed, to the selected guide provider in one
@@ -122,9 +121,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - A guide anchor includes `🖼️` only when Chromium passed startup readiness. A
   snapshot anchor includes `🗣️` only when a guide is configured. These produce
   one-off replies and never replace the canonical anchor.
-- Both modes append locally extracted references. `paths` contains at most four
-  existing absolute or home-relative regular files/directories. `links`
-  contains at most four valid HTTP(S) URLs. Engram never asks the model to generate
+- Both modes append locally extracted references. `files` contains at most four
+  existing absolute regular files after home expansion; directories, symlinks,
+  missing files, and credential-shaped paths are omitted. `links` contains at
+  most four valid HTTP(S) URLs. Engram never asks the model to generate
   references or fetches an extracted URL.
 - `/raw` preserves the visible pane's physical wrapped lines and attributes.
   `/dump` streams physical full scrollback to an attachment. Both captures are

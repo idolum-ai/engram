@@ -255,10 +255,12 @@ func (a *App) updateAnchorLocalGuarded(ctx context.Context, id int, summary stri
 		a.updateSnapshotAnchorCaptionLocked(ctx, ts, summary, final)
 		return false
 	}
-	rendered := a.renderLocal(ts, summary)
+	refs := a.visibleReferences(ts.LastRawCapture)
+	references, files := renderReferencesWithFiles(refs, true, maxGuideReferenceBytes)
+	rendered := renderLocalWithReferences(ts, a.redactText(summary), references)
 	renderHash := sha(rendered)
 	if !a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
-		a.rotateSnapshotAnchorToTextLocked(ctx, ts, rendered, renderHash, guard)
+		a.rotateSnapshotAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
 		updated, found := a.Store.FindSession(id)
 		return found && updated.AnchorFormat == "text" && updated.LastRenderHash == renderHash && finish()
 	}
@@ -268,7 +270,8 @@ func (a *App) updateAnchorLocalGuarded(ctx context.Context, id int, summary stri
 	if !final && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
 		return false
 	}
-	markup := a.anchorMarkup(ts)
+	presented := bindAnchorFiles(ts, files)
+	markup := a.anchorMarkup(presented)
 	_, err := a.editAnchor(ctx, ts.AnchorChatID, ts.AnchorMessageID, rendered, markup)
 	if err != nil {
 		if telegram.IsRateLimited(err) {
@@ -303,6 +306,7 @@ func (a *App) updateAnchorLocalGuarded(ctx context.Context, id int, summary stri
 				s.AnchorPinKnown = false
 				s.LastRenderHash = renderHash
 				s.LastAnchorEditAt = time.Now().UTC()
+				setAnchorFiles(s, files)
 				applied = true
 			})
 			committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
@@ -338,6 +342,7 @@ func (a *App) updateAnchorLocalGuarded(ctx context.Context, id int, summary stri
 		}
 		s.LastRenderHash = renderHash
 		s.LastAnchorEditAt = time.Now().UTC()
+		setAnchorFiles(s, files)
 		applied = true
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
@@ -591,17 +596,18 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalLost {
 		return telegram.RecoverMarkup(ts.ID)
 	}
-	return telegram.AnchorMarkup(ts.ID, false, false, false)
+	return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{})
 }
 
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalRunning {
-		return telegram.AnchorMarkup(
-			ts.ID,
-			ts.AnchorFormat != "snapshot" && a.snapshotReady,
-			ts.AnchorFormat == "snapshot" && a.guideAvailable,
-			ts.AnchorFormat == "snapshot",
-		)
+		return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{
+			Image:     ts.AnchorFormat != "snapshot" && a.snapshotReady,
+			Voice:     ts.AnchorFormat == "snapshot" && a.guideAvailable,
+			Arrows:    ts.AnchorFormat == "snapshot",
+			FileToken: ts.AnchorFileToken,
+			FileCount: len(ts.AnchorFiles),
+		})
 	}
 	return anchorMarkup(ts)
 }

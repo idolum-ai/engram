@@ -154,7 +154,27 @@ func TestURLRangesCannotBecomeVisiblePaths(t *testing.T) {
 	}
 }
 
-func TestRenderVisibleReferencesRedactsCredentialShapedPaths(t *testing.T) {
+func TestVisiblePathsIncludeOnlyDownloadableRegularFiles(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "report.txt")
+	directory := filepath.Join(root, "reports")
+	symlink := filepath.Join(root, "report-link.txt")
+	if err := os.WriteFile(file, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(file, symlink); err != nil {
+		t.Fatal(err)
+	}
+	capture := strings.Join([]string{directory, symlink, file}, "\n")
+	if got := extractVisiblePaths(capture, 4); !reflect.DeepEqual(got, []string{file}) {
+		t.Fatalf("visible files = %#v, want only %q", got, file)
+	}
+}
+
+func TestRenderVisibleReferencesOmitsCredentialShapedPaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "TOKEN=terminal-secret")
@@ -163,8 +183,8 @@ func TestRenderVisibleReferencesRedactsCredentialShapedPaths(t *testing.T) {
 	}
 
 	got := renderVisibleReferences(path)
-	if strings.Contains(got, "terminal-secret") || !strings.Contains(got, "TOKEN=<redacted>") {
-		t.Fatalf("rendered path was not redacted: %q", got)
+	if got != "" {
+		t.Fatalf("credential-shaped path remained actionable: %q", got)
 	}
 }
 
@@ -175,7 +195,7 @@ func TestReferenceRenderingFencesPathsOnlyWhenRequestedAndKeepsLinksPlain(t *tes
 		URLs:  []string{"https://example.com/report"},
 	}
 	plain := renderReferences(refs, false, 100)
-	if strings.Contains(plain, "```") || !strings.Contains(plain, "paths:\n/tmp/report.pdf") || !strings.Contains(plain, "links:\nhttps://example.com/report") {
+	if strings.Contains(plain, "```") || !strings.Contains(plain, "files:\n1. /tmp/report.pdf") || !strings.Contains(plain, "links:\nhttps://example.com/report") {
 		t.Fatalf("plain references = %q", plain)
 	}
 	if len(plain) > 100 {
@@ -183,7 +203,7 @@ func TestReferenceRenderingFencesPathsOnlyWhenRequestedAndKeepsLinksPlain(t *tes
 	}
 
 	fenced := renderReferences(refs, true, 120)
-	if !strings.Contains(fenced, "paths:\n```\n/tmp/report.pdf\n```") || !strings.Contains(fenced, "links:\nhttps://example.com/report") {
+	if !strings.Contains(fenced, "files:\n```\n1. /tmp/report.pdf\n```") || !strings.Contains(fenced, "links:\nhttps://example.com/report") {
 		t.Fatalf("fenced references = %q", fenced)
 	}
 	linkSection := fenced[strings.Index(fenced, "links:"):]
@@ -204,8 +224,11 @@ func TestSnapshotReferencesReserveRoomForLinks(t *testing.T) {
 		}
 	}
 	capture := strings.Join(append(paths, "https://example.com/important"), "\n")
-	got := renderSnapshotReferences(capture, maxSnapshotReferenceBytes)
-	if len(got) > maxSnapshotReferenceBytes || !strings.Contains(got, "paths:\n") || !strings.Contains(got, "links:\nhttps://example.com/important") {
+	got, files := renderSnapshotReferenceSetWithFiles(visibleReferencesForCapture(capture), maxSnapshotReferenceBytes)
+	if len(got) > maxSnapshotReferenceBytes || !strings.Contains(got, "files:\n```\n1. ") || !strings.Contains(got, "links:\nhttps://example.com/important") {
 		t.Fatalf("snapshot reference allocation = %q", got)
+	}
+	if len(files) == 0 || len(files) >= len(paths) {
+		t.Fatalf("displayed file binding = %#v, want the exact budgeted subset", files)
 	}
 }

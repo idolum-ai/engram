@@ -82,6 +82,8 @@ type TerminalSession struct {
 	WatchEnabled             bool           `json:"watch_enabled"`
 	LastAnchorEditAt         time.Time      `json:"last_anchor_edit_at,omitempty"`
 	LastRawCapture           string         `json:"last_raw_capture,omitempty"`
+	AnchorFiles              []string       `json:"-"`
+	AnchorFileToken          string         `json:"-"`
 }
 
 func (s TerminalSession) HasSeenUpstreamSignal(recordID string) bool {
@@ -979,6 +981,7 @@ func cloneState(in State) State {
 
 func cloneTerminalSession(in TerminalSession) TerminalSession {
 	out := in
+	out.AnchorFiles = append([]string(nil), in.AnchorFiles...)
 	out.StaleAlternateMessageIDs = append([]int(nil), in.StaleAlternateMessageIDs...)
 	out.SeenUpstreamSignalIDs = append([]string(nil), in.SeenUpstreamSignalIDs...)
 	return out

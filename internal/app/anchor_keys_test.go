@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -89,6 +91,104 @@ func TestDirectionalKeyCallbackRejectedOutsideSnapshotMode(t *testing.T) {
 	}
 	if len(runner.calls) != 0 {
 		t.Fatalf("guide arrow callback touched tmux: %#v", runner.calls)
+	}
+}
+
+func TestAnchorFileCallbackResolvesOnlyCurrentNumberedList(t *testing.T) {
+	files := []string{"/tmp/first.txt", "/tmp/second.txt"}
+	ts := bindAnchorFiles(state.TerminalSession{State: state.TerminalRunning}, files)
+	id, token, index, ok := parseFileCallback("7:" + ts.AnchorFileToken + ":2")
+	if !ok || id != 7 || index != 2 || token != ts.AnchorFileToken {
+		t.Fatalf("parsed file callback = id=%d token=%q index=%d ok=%v", id, token, index, ok)
+	}
+	if got, ok := resolveAnchorFile(ts, token, index); !ok || got != files[1] {
+		t.Fatalf("resolved file = %q ok=%v", got, ok)
+	}
+	if _, ok := resolveAnchorFile(ts, "0000000000000000", index); ok {
+		t.Fatal("stale file-list token resolved")
+	}
+	if _, ok := resolveAnchorFile(ts, token, 3); ok {
+		t.Fatal("out-of-range file index resolved")
+	}
+	ts.State = state.TerminalLost
+	if _, ok := resolveAnchorFile(ts, token, index); ok {
+		t.Fatal("lost session file callback resolved")
+	}
+}
+
+func TestCurrentAnchorFileCallbackQueuesExactDownload(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.txt")
+	if err := os.WriteFile(path, []byte("report body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app.Config.Home = dir
+	app.transferSlots = make(chan struct{}, 1)
+	app.transferQueue = make(chan struct{}, 1)
+	token := anchorFileToken([]string{path})
+	if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
+		setAnchorFiles(s, []string{path})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	uploaded := make(chan string, 1)
+	requestErr := make(chan error, 1)
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/sendMessage":
+			return anchorKeyJSONResponse(`{"message_id":11,"chat":{"id":100}}`), nil
+		case "/botTOKEN/sendDocument":
+			if err := req.ParseMultipartForm(1 << 20); err != nil {
+				requestErr <- err
+				return nil, err
+			}
+			file, _, err := req.FormFile("document")
+			if err != nil {
+				requestErr <- err
+				return nil, err
+			}
+			defer file.Close()
+			body, err := io.ReadAll(file)
+			if err != nil {
+				requestErr <- err
+				return nil, err
+			}
+			uploaded <- string(body)
+			return anchorKeyJSONResponse(`{"message_id":12,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "cb", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+		Data:    "file:1:" + token + ":1",
+	})
+	if status != "callback_ok" {
+		t.Fatalf("handleCallback status = %q", status)
+	}
+	app.transferWG.Wait()
+	select {
+	case err := <-requestErr:
+		t.Fatal(err)
+	case got := <-uploaded:
+		if got != "report body" {
+			t.Fatalf("uploaded body = %q", got)
+		}
+	default:
+		t.Fatal("file callback did not upload the selected file")
+	}
+}
+
+func anchorKeyJSONResponse(result string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":` + result + `}`)),
+		Header:     make(http.Header),
 	}
 }
 
