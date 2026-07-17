@@ -205,6 +205,15 @@ privacy model must stay small and explicit.
   pull refs. The job treats the verified target as untrusted code under test,
   receives read-only contents permission, and references no repository secrets
   or protected environment.
+- Developer ID and notarization credentials exist only as secrets in the
+  maintainer-approved `release` environment. Pull requests and candidate builds
+  must not reference or receive them.
+- The signing job imports the Developer ID certificate into an ephemeral
+  keychain, materializes the notarization key as a private temporary file, and
+  removes both on every completion path. It has read-only repository permission.
+- Darwin publication fails closed unless code-signature verification and Apple
+  notarization both succeed. The later publication job receives the signed
+  artifact but no signing secret.
 
 ## Vulnerability Handling
 

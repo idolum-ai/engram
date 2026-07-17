@@ -7,6 +7,7 @@ deployment and does not restart a running Engram service.
 
 - make the exact release source and human meaning reviewable before publication;
 - publish portable binaries without introducing a release framework or Go dependency;
+- give Darwin binaries one stable Developer ID identity across updates;
 - give every asset an embedded version, commit, and build date;
 - let users verify downloads before installation;
 - keep tagging and GitHub Release creation inside narrowly scoped automation.
@@ -46,14 +47,19 @@ unchanged, and schema migrations must remain covered by their normal tests.
    list or untouched pull-request template is not sufficient.
 5. Wait for normal CI and the release-candidate workflow. The candidate workflow
    checks the changelog version, runs the full gate and real-tmux integration,
-   builds every release archive, and uploads an artifact preview with checksums
-   and draft notes.
+   builds every release archive, and uploads an unsigned artifact preview with
+   checksums and draft notes. Pull-request code never receives signing secrets.
 6. Review the PR and its candidate artifacts. Merge only when the release text
    and binaries describe the same source.
 7. The release workflow verifies that the merged tree exactly matches the
    candidate-reviewed release-branch head, then repeats validation and builds
    fresh assets from the resulting `main` commit without write credentials.
-8. A separate publication job receives write authority, creates the tag with an
+8. After approval of the protected `release` environment, a macOS job imports
+   the Developer ID certificate into an ephemeral keychain, signs both Darwin
+   binaries as `ai.idolum.engram`, submits them together to Apple's notary
+   service, rebuilds their archives, and refreshes all checksums. Missing or
+   rejected credentials fail closed before publication.
+9. A separate publication job receives write authority, creates the tag with an
    atomic create-only push, recovers or creates a draft release, uploads and
    verifies all assets, then publishes it. Maintainers do not push the normal
    release tag manually.
@@ -76,6 +82,12 @@ Before the first release, maintainers configure and verify these GitHub settings
 - a `v*` tag ruleset prevents update and deletion while allowing the release
   environment's GitHub Actions token to create a new tag;
 - Actions are restricted to reviewed actions pinned by full commit SHA.
+- the `release` environment contains `MACOS_DEVELOPER_ID_P12_BASE64`,
+  `MACOS_DEVELOPER_ID_P12_PASSWORD`, `MACOS_NOTARY_KEY_P8_BASE64`,
+  `MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_ISSUER_ID`;
+- the PKCS#12 contains an active Developer ID Application certificate, and the
+  notarization credential is a team App Store Connect API key rather than an
+  individual key.
 
 The workflow and repository settings are complementary. The workflow refuses
 tag replacement and publishes through a draft, but repository settings enforce
@@ -97,10 +109,19 @@ with `CGO_ENABLED=0`, `-trimpath`, and embedded release metadata. The release
 workflow builds from the merged release PR commit, not from a maintainer
 worktree or previously uploaded candidate artifact.
 
+Linux archives remain ordinary portable command-line binaries. Darwin binaries
+are signed with hardened runtime, a secure timestamp, and the stable code
+identifier `ai.idolum.engram`, then notarized as one submission before their
+release archives are rebuilt. The tarball and installer shape remains the same
+on both operating systems; code signing does not introduce an app bundle or
+change `~/.local/bin/engram`.
+
 `checksums.txt` detects corruption and asset substitution after publication. It
 does not protect against compromise of both the GitHub release and its checksum
-file. Code signing and independent provenance attestations are useful future
-layers, not claims made by the initial release pipeline.
+file. Developer ID signing gives macOS a stable Engram identity and detects
+binary modification, while notarization records Apple's automated malware and
+signature check. Independent provenance attestations remain a useful future
+layer.
 
 ## Installation And Updates
 
@@ -108,6 +129,12 @@ layers, not claims made by the initial release pipeline.
 downloads one archive and `checksums.txt`, verifies SHA-256, checks archive
 contents, verifies the binary's embedded version, and atomically replaces
 `~/.local/bin/engram` by default.
+
+On Darwin, atomically replacing that path with a later release preserves the
+same designated code requirement because the identifier and Developer ID signer
+remain stable. This gives macOS privacy controls an update-stable identity. A
+source-checkout `make install` is a development build and does not make that
+release-signing claim.
 
 The installer does not create configuration, install a service, or restart one.
 After an update, the operator chooses when to restart and can inspect the new
@@ -132,6 +159,9 @@ tag.
 - Candidate failure: fix the release branch and let the PR checks rerun.
 - Publication validation or build failure: fix `main`, create a new release
   branch/version when necessary, and do not manufacture assets locally.
+- Signing or notarization failure: verify the protected environment secrets,
+  certificate validity, and notarization log, then rerun the failed workflow;
+  never publish the unsigned build artifact as a substitute.
 - Workflow failure before publication: rerun the failed job. A matching tag and
   draft release are recovered; a matching complete release is verified and
   treated as success.
@@ -147,8 +177,12 @@ tag.
 - [ ] PR notes explain impact, compatibility, and known limits.
 - [ ] `make check` and the real-tmux integration test pass.
 - [ ] Candidate archives exist for all four supported OS/architecture pairs.
+- [ ] Candidate Darwin archives are understood to be unsigned previews; the
+      protected post-merge job supplies the only release signatures.
 - [ ] A native candidate reports the intended version and commit.
 - [ ] Checksums cover exactly the published archives.
+- [ ] Published Darwin binaries satisfy `codesign --verify --strict` with the
+      `ai.idolum.engram` designated identifier and have an accepted notarization.
 - [ ] No runtime config, transcript, token, state, or generated local artifact is included.
 - [ ] Publication and any live-service restart are understood as separate actions.
 - [ ] The protected `release` environment, immutable releases, and `v*` tag ruleset are enabled.
@@ -159,5 +193,5 @@ tag.
 - mutable tags or replacement of published assets;
 - automatic service restart or unattended update;
 - package-manager distribution in the first iteration;
-- claiming code signing, SBOMs, or independent build provenance before those
-  surfaces are actually implemented and maintained.
+- SBOMs or independent build provenance attestations before those surfaces are
+  actually implemented and maintained.

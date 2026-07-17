@@ -37,6 +37,9 @@ Notable user-visible and operational changes are recorded here.
   service through a local Telegram simulator, isolated real tmux, and real
   Chromium, retaining reviewable snapshot and interaction evidence without
   repository secrets.
+- Sign Darwin release binaries with a stable Developer ID identity and require
+  Apple notarization in a protected, read-only macOS job before publication.
+  Linux archives and the cross-platform installer layout remain unchanged.
 
 ### Fixed
 

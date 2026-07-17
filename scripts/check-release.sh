@@ -136,4 +136,6 @@ NOTES
 grep -F "# ${version}" "${tmp_dir}/prepared.md" >/dev/null
 grep -F 'Release PR: [Release' "${tmp_dir}/prepared.md" >/dev/null
 
+./scripts/check-darwin-signing.sh
+
 echo "release tooling check passed"

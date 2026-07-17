@@ -101,8 +101,84 @@ jobs:
             release-notes.md
             release-version.txt
 
-  publish:
+  sign-macos:
     needs: build
+    runs-on: macos-15
+    environment: release
+    permissions:
+      contents: read
+    env:
+      CERTIFICATE_PATH: ${{ runner.temp }}/engram-developer-id.p12
+      KEYCHAIN_PATH: ${{ runner.temp }}/engram-signing.keychain-db
+      NOTARY_KEY_PATH: ${{ runner.temp }}/engram-notary-key.p8
+      SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ needs.build.outputs.source_sha }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-bundle
+
+      - name: Install deterministic archive tool
+        run: brew install gnu-tar
+
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [[ -n "${CERTIFICATE_BASE64}" && -n "${CERTIFICATE_PASSWORD}" ]]
+          printf '%s' "${CERTIFICATE_BASE64}" | base64 --decode > "${CERTIFICATE_PATH}"
+          keychain_password="$(openssl rand -hex 32)"
+          security create-keychain -p "${keychain_password}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${keychain_password}" "${KEYCHAIN_PATH}"
+          security import "${CERTIFICATE_PATH}" -P "${CERTIFICATE_PASSWORD}" \
+            -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "${keychain_password}" "${KEYCHAIN_PATH}"
+          security list-keychain -d user -s "${KEYCHAIN_PATH}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | \
+            grep -F 'Developer ID Application'
+
+      - name: Sign and notarize Darwin assets
+        env:
+          ENGRAM_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          ENGRAM_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          NOTARY_KEY_BASE64: ${{ secrets.MACOS_NOTARY_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          [[ -n "${NOTARY_KEY_BASE64}" && -n "${ENGRAM_NOTARY_KEY_ID}" && -n "${ENGRAM_NOTARY_ISSUER}" ]]
+          printf '%s' "${NOTARY_KEY_BASE64}" | base64 --decode > "${NOTARY_KEY_PATH}"
+          chmod 0600 "${NOTARY_KEY_PATH}"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${SOURCE_SHA}")" \
+          ENGRAM_NOTARY_KEY="${NOTARY_KEY_PATH}" \
+            ./scripts/sign-darwin-release.sh "${TAG}" dist
+
+      - name: Upload signed release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-release-bundle
+          if-no-files-found: error
+          path: |
+            dist/*
+            release-notes.md
+            release-version.txt
+
+      - name: Remove signing material
+        if: ${{ always() }}
+        run: |
+          security delete-keychain "${KEYCHAIN_PATH}" || true
+          rm -f "${CERTIFICATE_PATH}" "${NOTARY_KEY_PATH}"
+
+  publish:
+    needs: [build, sign-macos]
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -119,7 +195,7 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: release-bundle
+          name: signed-release-bundle
 
       - name: Create tag atomically
         run: |

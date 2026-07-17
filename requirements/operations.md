@@ -62,6 +62,23 @@ runtime state.
   they require `systemctl`.
 - A user-authored LaunchAgent is outside the supported service lifecycle.
 
+## Release Signing
+
+- Linux release archives remain unsigned portable binaries and retain their
+  current names, contents, checksums, and installer path.
+- Candidate Darwin archives are unsigned review evidence and must never receive
+  protected signing credentials.
+- After a release PR merges, both Darwin binaries must be signed on macOS with
+  hardened runtime, a secure timestamp, the stable `ai.idolum.engram` code
+  identifier, and the same Developer ID Application identity across releases.
+- Signed Darwin binaries must be accepted together by Apple's notary service
+  before publication. Signing or notarization failure stops the release.
+- Signing rebuilds only the Darwin archives, preserves the three-file archive
+  contract, leaves Linux assets unchanged, and refreshes checksums for every
+  published archive.
+- The protected signing job and the write-authorized publication job remain
+  separate. Release signing must not grant repository write access.
+
 ## Diagnostics
 
 - `/status` shows version, uptime, session count, anchor mode, snapshot renderer
