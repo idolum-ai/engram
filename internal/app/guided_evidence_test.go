@@ -178,26 +178,26 @@ func TestGuidedRangeCropCarriesInheritedANSIState(t *testing.T) {
 	plain := []string{"red one", "red two", "plain"}
 	ansi := []string{"\x1b[31mred one", "red two", "\x1b[39mplain"}
 	capture := tmux.StyledCapture{Columns: 71, VisibleRows: 37}
-	crop := buildGuidedRangeCrop(state.TerminalSession{ID: 2}, capture, plain, ansi, 1, 1, []int{0}, nil, "quoted terminal text", guidedEvidenceExcerpt, "terminal")
+	crop := buildGuidedRangeCrop(state.TerminalSession{ID: 2}, capture, plain, ansi, 1, 1, []int{0}, "quoted terminal text", guidedEvidenceExcerpt, "terminal")
 	if !strings.HasPrefix(crop.input.ANSI, "\x1b[31m") || !strings.Contains(crop.input.ANSI, "red two") {
 		t.Fatalf("inherited ANSI state was lost: %q", crop.input.ANSI)
 	}
 }
 
-func TestGuidedEvidenceHorizontallyFramesQuotedText(t *testing.T) {
+func TestGuidedEvidencePreservesWideQuotedRowForWrapping(t *testing.T) {
 	line := "populated prefix " + strings.Repeat("x", 128) + " decisive result near the right edge"
 	capture := tmux.StyledCapture{Text: line, ANSI: line, Columns: 200, VisibleRows: 50, BufferRows: 1}
 	crop, ok := buildGuidedEvidenceCrop(state.TerminalSession{ID: 2}, capture, []string{"decisive result near the right edge"}, "terminal")
-	if !ok || crop.input.ColumnOffset <= 0 || crop.input.ColumnOffset > 129 || !strings.Contains(crop.plain, "decisive result near the right edge") {
+	if !ok || crop.plain != line || crop.input.ANSI != line || !crop.input.Compact {
 		t.Fatalf("wide quoted crop=%#v ok=%v", crop, ok)
 	}
 }
 
-func TestGuidedTailFramesDenseRightmostContentAndMatchesRawViewport(t *testing.T) {
+func TestGuidedTailPreservesCompleteWideRowForImageAndRaw(t *testing.T) {
 	line := strings.Repeat("x", 120) + " final terminal result"
 	capture := tmux.StyledCapture{Text: line, ANSI: line, Columns: 160, VisibleRows: 50, BufferRows: 1}
 	crop, ok := buildGuidedTailCrop(state.TerminalSession{ID: 2}, capture, "terminal")
-	if !ok || crop.input.ColumnOffset == 0 || !strings.Contains(crop.plain, "final terminal result") || terminalCellWidth(crop.plain) > guidedViewportColumns {
+	if !ok || crop.plain != line || crop.input.ANSI != line {
 		t.Fatalf("wide tail crop=%#v ok=%v", crop, ok)
 	}
 }
@@ -206,9 +206,6 @@ func TestEvidenceMatchingUsesTerminalCells(t *testing.T) {
 	match, ok := matchEvidenceSpan([]string{"prefix\t界界 decisive result"}, "decisive result")
 	if !ok || match.columns[0] != 13 {
 		t.Fatalf("cell-aware match=%#v ok=%v", match, ok)
-	}
-	if got := terminalCellSlice("a\t界e\u0301 result", 7, 8); got != " 界e\u0301 res" {
-		t.Fatalf("cell slice=%q", got)
 	}
 }
 
@@ -562,14 +559,6 @@ func TestUnwatchWaitsForInFlightTelegramPublication(t *testing.T) {
 type blockingSnapshotRenderer struct {
 	started chan struct{}
 	release chan struct{}
-}
-
-func terminalCellWidth(text string) int {
-	column := 0
-	for _, r := range text {
-		column += terminalRuneWidth(r, column)
-	}
-	return column
 }
 
 func (r *blockingSnapshotRenderer) Available() (string, error) { return "/usr/bin/chromium", nil }

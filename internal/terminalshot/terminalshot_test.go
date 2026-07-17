@@ -153,7 +153,7 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 		Columns: 71, VisibleRows: 37, BufferRows: 3, Compact: true, HighlightRows: []int{1},
 	}
 	page := RenderHTML(input, "contrast-dark")
-	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px`) || !strings.Contains(page, "left:8.00px") || !strings.Contains(page, "quoted terminal text") {
+	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px;height:13.2px`) || !strings.Contains(page, ".evidence-mark{position:absolute;left:8px") || !strings.Contains(page, "quoted terminal text") {
 		t.Fatalf("compact evidence HTML = %s", page)
 	}
 	if got := renderHeight(input); got != 180 {
@@ -161,18 +161,51 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 	}
 }
 
-func TestCompactEvidenceKeepsWidePanesReadableAndEscapesFooter(t *testing.T) {
+func TestCompactEvidenceWrapsWidePanesAndEscapesFooter(t *testing.T) {
 	page := RenderHTML(Input{
-		ANSI: "important", Title: "build", Target: "[3]", CWD: "/tmp",
-		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, ColumnOffset: 100, Footer: `<unsafe & footer>`,
+		ANSI: "left " + strings.Repeat("x", 150) + " right", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, Footer: `<unsafe & footer>`,
 	}, "terminal")
-	for _, want := range []string{"width:200ch", "font:9.40px/13.2px", "left:0.00px", "transform:translateX(-", "&lt;unsafe &amp; footer&gt;"} {
+	for _, want := range []string{"width:71ch", "font:9.40px/13.2px", "white-space:pre-wrap", "overflow-wrap:anywhere", "word-break:break-all", "left ", " right", "&lt;unsafe &amp; footer&gt;"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide compact HTML missing %q: %s", want, page)
 		}
 	}
+	if strings.Contains(page, "translateX") {
+		t.Fatal("compact evidence retained horizontal panning")
+	}
 	if strings.Contains(page, `<unsafe & footer>`) {
 		t.Fatal("footer became executable HTML")
+	}
+}
+
+func TestCompactEvidenceWrappedRowsExpandImageAndHighlights(t *testing.T) {
+	rows := make([]string, 18)
+	for index := range rows {
+		rows[index] = strings.Repeat(string(rune('a'+index%26)), 400)
+	}
+	input := Input{
+		ANSI: strings.Join(rows, "\n"), Title: "wide evidence", Target: "[8]", CWD: "/tmp",
+		Columns: 400, VisibleRows: 120, BufferRows: len(rows), Compact: true, HighlightRows: []int{0, 1}, Footer: "wrapped evidence",
+	}
+	page := RenderHTML(input, "contrast-dark")
+	for _, want := range []string{
+		`top:10.0px;height:79.2px`,
+		`top:89.2px;height:79.2px`,
+		"width:71ch",
+		"white-space:pre-wrap",
+		"word-break:break-all",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("wrapped compact evidence missing %q: %s", want, page)
+		}
+	}
+	width, height := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio
+	if height <= LogicalHeight*PixelRatio {
+		t.Fatalf("wrapped compact height = %d, want greater than fixed portrait height %d", height, LogicalHeight*PixelRatio)
+	}
+	if width+height > 10000 || width > height*20 || height > width*20 {
+		t.Fatalf("wrapped compact dimensions %dx%d exceed Telegram photo bounds", width, height)
 	}
 }
 
@@ -222,14 +255,14 @@ func TestSupportedScreenshotSurfacesContainTheirVisibleAreas(t *testing.T) {
 		{
 			name: "compact evidence",
 			input: Input{ANSI: "COMPACT BODY", Title: "evidence", Target: "[3]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
-				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, ColumnOffset: 100, Footer: "COMPACT FOOTER"},
-			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre", font: "font:9.40px/13.2px", footer: "COMPACT FOOTER",
+				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "COMPACT FOOTER"},
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "COMPACT FOOTER",
 		},
 		{
 			name: "quiet guided frame",
 			input: Input{ANSI: " ", Title: "quiet", Target: "[4]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
 				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "QUIET FOOTER"},
-			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre", font: "font:9.40px/13.2px", footer: "QUIET FOOTER",
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "QUIET FOOTER",
 		},
 	}
 	for _, test := range tests {
@@ -433,7 +466,7 @@ func TestLiveChromiumSupportedSurfaceAreas(t *testing.T) {
 		{
 			name: "compact evidence", bodyText: true, highlight: true,
 			input: Input{ANSI: strings.Repeat(" ", 100) + "COMPACT BODY", Title: "compact surface", Target: "[3]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
-				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, ColumnOffset: 100, Footer: "compact evidence footer"},
+				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "compact evidence footer"},
 		},
 		{
 			name: "quiet guided frame",
@@ -511,14 +544,14 @@ func channelDifference(a, b uint8) int {
 	return int(b - a)
 }
 
-func TestLiveChromiumCompactOffsetRender(t *testing.T) {
+func TestLiveChromiumCompactWrappedRender(t *testing.T) {
 	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
 		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
 	}
 	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
 	path, err := renderer.Render(context.Background(), Input{
-		ANSI: strings.Repeat(" ", 100) + "VISIBLE OFFSET CONTENT", Title: "compact offset", Target: "[5]", CWD: "/tmp",
-		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, ColumnOffset: 100,
+		ANSI: strings.Repeat(" ", 100) + "VISIBLE WRAPPED CONTENT", Title: "compact wrap", Target: "[5]", CWD: "/tmp",
+		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true,
 	}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -534,7 +567,7 @@ func TestLiveChromiumCompactOffsetRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	visiblePixels := 0
-	for y := 52 * PixelRatio; y < 68*PixelRatio; y++ {
+	for y := 52 * PixelRatio; y < 96*PixelRatio; y++ {
 		for x := 8 * PixelRatio; x < 180*PixelRatio; x++ {
 			r, g, b, _ := img.At(x, y).RGBA()
 			if r > 0x4000 || g > 0x4000 || b > 0x4000 {
@@ -543,7 +576,7 @@ func TestLiveChromiumCompactOffsetRender(t *testing.T) {
 		}
 	}
 	if visiblePixels == 0 {
-		t.Fatal("horizontally offset compact evidence rendered an empty terminal body")
+		t.Fatal("wrapped compact evidence rendered an empty terminal body")
 	}
 }
 
