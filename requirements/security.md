@@ -151,7 +151,8 @@ privacy model must stay small and explicit.
   use a deterministic suffix in the private artifact root.
 - Snapshot HTML, isolated browser profiles, and PNGs must use private temporary
   paths and be removed after upload or failure.
-- Automatic guided evidence uses literal terminal pixels and is not a general
+- Automatic guided evidence uses literal terminal pixels inside the canonical
+  guide card and is not a general
   redacted screenshot. Engram refuses the crop when its configured secret
   redactor would change any selected or context row, but unrecognized sensitive
   terminal content can still appear. The same single-user Telegram boundary

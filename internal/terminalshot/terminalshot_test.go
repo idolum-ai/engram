@@ -92,6 +92,17 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 	}
 }
 
+func TestCompactEvidenceHTMLCanDisclaimUnverifiedFrame(t *testing.T) {
+	input := Input{
+		ANSI: "No verified excerpt.", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "no verified terminal evidence",
+	}
+	page := RenderHTML(input, "contrast-dark")
+	if !strings.Contains(page, "no verified terminal evidence") || strings.Contains(page, ">verified terminal evidence<") {
+		t.Fatalf("compact disclaimer HTML = %s", page)
+	}
+}
+
 func TestAccessibleThemePalettesMeetTextContrastFloor(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"contrast-dark", "contrast-light"} {

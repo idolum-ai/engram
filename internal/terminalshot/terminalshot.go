@@ -37,6 +37,7 @@ type Input struct {
 	BufferRows    int
 	Compact       bool
 	HighlightRows []int
+	Footer        string
 }
 
 type CommandRunner interface {
@@ -230,7 +231,7 @@ func RenderHTML(input Input, themeName string) string {
 	theme := snapshotThemeFor(themeName)
 	footer := fmt.Sprintf("last %d buffer rows", bufferRows)
 	if input.Compact {
-		footer = "verified terminal evidence"
+		footer = firstNonEmpty(input.Footer, "verified terminal evidence")
 	}
 	highlights := renderHighlights(input.HighlightRows, theme)
 	return fmt.Sprintf(`<!doctype html>

@@ -713,6 +713,11 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 				return
 			}
 		}
+		if field == "photo" {
+			if writeErr = writer.WriteField("show_caption_above_media", "false"); writeErr != nil {
+				return
+			}
+		}
 		if replyTo > 0 {
 			if writeErr = writer.WriteField("reply_to_message_id", strconv.Itoa(replyTo)); writeErr != nil {
 				return
@@ -774,6 +779,7 @@ func (c *Client) editPhotoRequest(ctx context.Context, chatID int64, messageID i
 		if parseMode != "" {
 			mediaFields["parse_mode"] = parseMode
 		}
+		mediaFields["show_caption_above_media"] = false
 		media, err := json.Marshal(mediaFields)
 		if err != nil {
 			writeErr = err

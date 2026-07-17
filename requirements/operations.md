@@ -16,8 +16,9 @@ runtime state.
   supported. Engram derives both bot-method and file endpoints from this root.
 - `ENGRAM_ANCHOR_MODE` selects the startup presentation and fallback when no
   valid persisted mode exists. State schema v9 persists runtime mode changes,
-  guide-evidence and upstream-signal reply aliases, bounded record IDs, retry
-  deadlines, delivery timing, and the tmux server incarnation for each watch.
+  canonical guide-evidence presentation, upstream-signal reply aliases, bounded
+  record IDs, retry deadlines, delivery timing, and the tmux server incarnation
+  for each watch.
 - The effective startup mode must be available: `guide` requires a configured
   conversational provider; `snapshot` requires a successful bounded, ephemeral
   Chromium render. Engram does not call a model provider merely to probe credentials.

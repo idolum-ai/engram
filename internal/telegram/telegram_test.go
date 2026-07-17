@@ -641,7 +641,7 @@ func TestSendPhotoRepliesToCanonicalAnchor(t *testing.T) {
 	}
 }
 
-func TestSendHTMLPhotoIncludesMarkupAndParseModeWithoutReplyTarget(t *testing.T) {
+func TestSendHTMLPhotoIncludesMarkupParseModeAndStablePlacementWithoutReplyTarget(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "snapshot.png")
 	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
@@ -659,6 +659,9 @@ func TestSendHTMLPhotoIncludesMarkupAndParseModeWithoutReplyTarget(t *testing.T)
 		if got := req.FormValue("parse_mode"); got != "HTML" {
 			t.Fatalf("photo parse mode = %q, want HTML", got)
 		}
+		if got := req.FormValue("show_caption_above_media"); got != "false" {
+			t.Fatalf("caption placement = %q, want false", got)
+		}
 		if got := req.FormValue("reply_markup"); !strings.Contains(got, "refresh:7") || strings.Contains(got, "snapshot:7") {
 			t.Fatalf("snapshot markup = %q", got)
 		}
@@ -672,7 +675,7 @@ func TestSendHTMLPhotoIncludesMarkupAndParseModeWithoutReplyTarget(t *testing.T)
 	}
 }
 
-func TestEditHTMLPhotoUsesAttachedMediaMarkupAndParseMode(t *testing.T) {
+func TestEditHTMLPhotoUsesAttachedMediaMarkupParseModeAndStablePlacement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.png")
 	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
 		t.Fatal(err)
@@ -693,7 +696,7 @@ func TestEditHTMLPhotoUsesAttachedMediaMarkupAndParseMode(t *testing.T) {
 		if err := json.Unmarshal([]byte(req.FormValue("media")), &media); err != nil {
 			t.Fatal(err)
 		}
-		if media["type"] != "photo" || media["media"] != "attach://photo" || media["caption"] != "live terminal" || media["parse_mode"] != "HTML" {
+		if media["type"] != "photo" || media["media"] != "attach://photo" || media["caption"] != "live terminal" || media["parse_mode"] != "HTML" || media["show_caption_above_media"] != false {
 			t.Fatalf("media = %#v", media)
 		}
 		if !strings.Contains(req.FormValue("reply_markup"), "refresh:7") || strings.Contains(req.FormValue("reply_markup"), "snapshot:7") {

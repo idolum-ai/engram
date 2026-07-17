@@ -233,13 +233,14 @@ the bot channel and must be revoked immediately.
   contrast themes use a color-vision-safe ANSI palette, remove opacity-based
   dim text, and correct low-contrast terminal colors to at least a 4.5:1
   contrast ratio.
-  When guide mode and Chromium are both available, Engram can also maintain one
-  compact evidence photo beneath each conversational anchor. The selected model
-  identifies short verbatim excerpts in its existing request; Engram verifies
-  them against unique physical terminal rows, adds bounded context, and
-  highlights the matched rows. The photo is edited in place and disappears
-  when the evidence is ambiguous, too broad, fabricated, or intersects a known
-  configured secret.
+  When guide mode and Chromium are both available, the conversational anchor is
+  one photo card: a compact evidence crop appears above bounded guide prose in
+  the same canonical Telegram message. The selected model identifies short
+  verbatim excerpts in its existing request; Engram verifies them against
+  unique physical terminal rows, adds bounded context, and highlights the
+  matched rows. Ambiguous, broad, fabricated, or known-secret-bearing evidence
+  produces a small explicit no-evidence frame instead of stale or guessed
+  terminal pixels. The message ID, pin, controls, and reply route do not change.
   Every snapshot anchor also offers `📄 Raw`, which returns the exact delivered
   image frame as a bounded plain UTF-8 text attachment for screen readers or
   exact inspection. It does not recapture a newer terminal state on click.

@@ -62,6 +62,7 @@ func TestAnchorMarkupUsesActualAnchorFormat(t *testing.T) {
 		reject     string
 	}{
 		{name: "text offers image", format: "text", wantAction: "snapshot:1", reject: "voice:1"},
+		{name: "guided media offers image", format: anchorFormatGuideEvidence, wantAction: "snapshot:1", reject: "voice:1"},
 		{name: "snapshot offers voice", format: "snapshot", wantAction: "voice:1", reject: "snapshot:1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

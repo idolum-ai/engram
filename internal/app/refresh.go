@@ -152,8 +152,14 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
 	}
-	if a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs) && guideErr == nil {
-		a.updateGuidedEvidence(ctx, ts, capture, evidence)
+	updated := false
+	if a.snapshotReady {
+		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, summary, refs, evidence, force, guard, accepted)
+	} else {
+		updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
+	}
+	if updated && guideErr == nil {
+		_ = a.audit("terminal.guide", "updated", map[string]any{"session_id": id})
 	}
 }
 
@@ -270,10 +276,6 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 		}
 		final = true
 	}
-	if a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
-		a.updateSnapshotAnchorCaptionLocked(ctx, ts, summary, final)
-		return false
-	}
 	refs := a.visibleReferences(ts.LastRawCapture)
 	if referenceOverride != nil {
 		refs = *referenceOverride
@@ -281,10 +283,14 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 	references, files := renderReferencesWithFiles(refs, true, maxGuideReferenceBytes)
 	rendered := renderLocalWithReferences(ts, a.redactText(summary), references)
 	renderHash := sha(rendered)
-	if !a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
-		a.rotateSnapshotAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
+	if !a.snapshotAnchors() && (ts.AnchorFormat == anchorFormatSnapshot || ts.AnchorFormat == anchorFormatGuideEvidence && !a.snapshotReady) {
+		a.rotateMediaAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
 		updated, found := a.Store.FindSession(id)
 		return found && updated.AnchorFormat == "text" && updated.LastRenderHash == renderHash && finish()
+	}
+	if mediaAnchorFormat(ts.AnchorFormat) {
+		a.updateMediaAnchorCaptionLocked(ctx, ts, summary, final)
+		return false
 	}
 	if renderHash == ts.LastRenderHash && !final {
 		return finish()
@@ -624,10 +630,10 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalRunning {
 		return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{
-			Image:     ts.AnchorFormat != "snapshot" && a.snapshotReady,
-			Voice:     ts.AnchorFormat == "snapshot" && a.guideAvailable,
-			Raw:       ts.AnchorFormat == "snapshot",
-			Arrows:    ts.AnchorFormat == "snapshot",
+			Image:     ts.AnchorFormat != anchorFormatSnapshot && a.snapshotReady,
+			Voice:     ts.AnchorFormat == anchorFormatSnapshot && a.guideAvailable,
+			Raw:       ts.AnchorFormat == anchorFormatSnapshot,
+			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),
 		})

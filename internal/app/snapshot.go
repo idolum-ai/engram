@@ -118,7 +118,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	updated := false
 	if _, _, err := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if !a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && firstNonEmpty(session.AnchorFormat, "text") == "text" && session.RetiringAnchorMessageID == 0 {
+		if !a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && guideAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 {
 			recordAlternateMessage(session, "snapshot", message.MessageID)
 			updated = true
 		}
@@ -128,19 +128,28 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 			return
 		}
 		_ = a.audit("state.snapshot", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})
-		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
-		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
-		cancel()
+		a.deleteSnapshotReply(ctx, latest.AnchorChatID, message.MessageID, "state_failed")
 		return
 	}
 	if !updated {
-		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
-		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
-		cancel()
+		a.deleteSnapshotReply(ctx, latest.AnchorChatID, message.MessageID, "superseded")
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": latest.ID})
 		return
 	}
 	_ = a.audit("terminal.snapshot", "sent", map[string]any{"session_id": latest.ID, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
+}
+
+func (a *App) deleteSnapshotReply(ctx context.Context, chatID int64, messageID int, reason string) {
+	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
+	err := a.Telegram.DeleteMessage(deleteCtx, chatID, messageID)
+	cancel()
+	status := "ok"
+	data := map[string]any{"message_id": messageID, "reason": reason}
+	if err != nil && !isTelegramAnchorUnavailable(err) {
+		status = "failed"
+		data["error"] = err.Error()
+	}
+	_ = a.audit("telegram.snapshot_cleanup", status, data)
 }
 
 func (a *App) snapshotNotice(ctx context.Context, id int, text string) {

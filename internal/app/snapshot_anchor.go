@@ -185,7 +185,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		})
 		committed := replaced && (stateErr == nil || state.PersistenceReachedReplacement(stateErr))
 		if !committed {
-			a.deactivateProspectiveSnapshotAnchor(ctx, msg.Chat.ID, msg.MessageID)
+			a.deactivateProspectiveMediaAnchor(ctx, msg.Chat.ID, msg.MessageID)
 			_ = a.audit("state.snapshot_anchor", "replacement_failed", map[string]any{"session_id": id, "error": firstNonEmpty(errorText(stateErr), "superseded")})
 			return
 		}
@@ -258,7 +258,7 @@ func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.Style
 	return caption, nil
 }
 
-func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.TerminalSession, summary string, final bool) {
+func (a *App) updateMediaAnchorCaptionLocked(ctx context.Context, ts state.TerminalSession, summary string, final bool) {
 	caption := fmt.Sprintf("[%d] %s · %s\n%s", ts.ID, ts.State, a.redactText(firstNonEmpty(ts.Title, "terminal")), a.redactText(summary))
 	renderHash := sha(caption)
 	if renderHash == ts.LastRenderHash && !final {
@@ -277,7 +277,7 @@ func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.Te
 		err = nil
 	}
 	if err != nil {
-		_ = a.audit("telegram.snapshot_caption", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
+		_ = a.audit("telegram.anchor_caption", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return
 	}
 	if _, _, err := a.Store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
@@ -288,11 +288,11 @@ func (a *App) updateSnapshotAnchorCaptionLocked(ctx context.Context, ts state.Te
 			session.LastSnapshotCaptureHash = ""
 		}
 	}); err != nil {
-		_ = a.audit("state.snapshot_caption", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
+		_ = a.audit("state.anchor_caption", "failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
 	}
 }
 
-func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.TerminalSession, rendered, renderHash string, guard func() bool) {
+func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.TerminalSession, rendered, renderHash string, guard func() bool) {
 	oldID := ts.AnchorMessageID
 	presented := ts
 	presented.AnchorFormat = "text"
@@ -307,7 +307,7 @@ func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.Ter
 	}
 	rotated := false
 	updated, _, stateErr := a.Store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == oldID && session.AnchorFormat == "snapshot" && session.RetiringAnchorMessageID == 0 && !a.snapshotAnchors() {
+		if session.AnchorMessageID == oldID && mediaAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 && !a.snapshotAnchors() {
 			session.AnchorMessageID = msg.MessageID
 			session.AnchorFormat = "text"
 			session.RetiringAnchorMessageID = oldID
@@ -335,7 +335,7 @@ func (a *App) rotateSnapshotAnchorToTextLocked(ctx context.Context, ts state.Ter
 	a.finishAnchorRotationLocked(ctx, ts.ID)
 }
 
-func (a *App) deactivateProspectiveSnapshotAnchor(ctx context.Context, chatID int64, messageID int) {
+func (a *App) deactivateProspectiveMediaAnchor(ctx context.Context, chatID int64, messageID int) {
 	_, _ = a.Telegram.EditCaption(ctx, chatID, messageID, "inactive snapshot anchor", telegram.ClearMarkup())
 	_ = a.Telegram.UnpinChatMessage(ctx, chatID, messageID)
 }

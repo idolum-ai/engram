@@ -255,7 +255,7 @@ func (a *App) neutralizeAnchorForReattachLocked(ctx context.Context, session sta
 	}
 	text := fmt.Sprintf("[%d] %s\nreattaching to a new tmux binding", session.ID, firstNonEmpty(session.Title, "session"))
 	var err error
-	if session.AnchorFormat == "snapshot" {
+	if mediaAnchorFormat(session.AnchorFormat) {
 		_, err = a.Telegram.EditCaption(ctx, session.AnchorChatID, session.AnchorMessageID, text, telegram.ClearMarkup())
 	} else {
 		_, err = a.editAnchor(ctx, session.AnchorChatID, session.AnchorMessageID, text, telegram.ClearMarkup())
@@ -273,7 +273,7 @@ func (a *App) restoreAnchorAfterFailedReattachLocked(ctx context.Context, sessio
 	text := a.renderLocal(session, firstNonEmpty(session.LastSummary, "waiting for terminal output"))
 	markup := a.anchorMarkup(session)
 	var err error
-	if session.AnchorFormat == "snapshot" {
+	if mediaAnchorFormat(session.AnchorFormat) {
 		_, err = a.Telegram.EditCaption(ctx, session.AnchorChatID, session.AnchorMessageID, text, markup)
 	} else {
 		_, err = a.editAnchor(ctx, session.AnchorChatID, session.AnchorMessageID, text, markup)

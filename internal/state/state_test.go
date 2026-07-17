@@ -500,6 +500,23 @@ func TestStoreNormalizesLegacyAnchorFormats(t *testing.T) {
 	}
 }
 
+func TestStorePreservesCanonicalGuideEvidenceFormat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	contents := fmt.Sprintf(`{"version":%d,"next_session_id":2,"terminal_sessions":[{"id":1,"state":"running","anchor_message_id":10,"anchor_format":"guide-evidence","retiring_anchor_message_id":9,"retiring_anchor_format":"guide-evidence"}],"attachments":[]}`, currentStateVersion)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, ok := store.FindSession(1)
+	if !ok || session.AnchorFormat != "guide-evidence" || session.RetiringAnchorFormat != "guide-evidence" {
+		t.Fatalf("guide evidence formats = %#v ok=%v", session, ok)
+	}
+}
+
 func TestStoreRejectsNewerSchemaWithoutRewritingIt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
@@ -664,13 +681,12 @@ func TestReplyTargetsDistinguishCurrentAndStaleAlternates(t *testing.T) {
 		s.AnchorMessageID = 10
 		s.SummaryMessageID = 20
 		s.SnapshotMessageID = 30
-		s.EvidenceMessageID = 35
 		s.UpstreamMessageID = 40
 		s.StaleAlternateMessageIDs = []int{18, 28}
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, messageID := range []int{10, 20, 30, 35, 40} {
+	for _, messageID := range []int{10, 20, 30, 40} {
 		got, targetState, ok := store.FindReplyTarget(100, messageID)
 		if !ok || targetState != ReplyTargetCurrent || got.ID != session.ID {
 			t.Fatalf("current reply target %d = %#v %q ok=%v", messageID, got, targetState, ok)

@@ -69,17 +69,17 @@ Telegram is Engram's only user interface.
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces
   the canonical anchor.
-- When guide mode and Chromium are both available, a verified compact evidence
-  photo accompanies the canonical text anchor as a reply. Each session has at
-  most one current evidence photo; subsequent captures edit its media in place.
-  A changed canonical anchor creates a replacement tied to the new anchor and
-  retires the predecessor. Missing or unverifiable evidence deletes the current
-  photo instead of leaving an image that describes an older frame.
+- When guide mode and Chromium are both available, the canonical anchor is a
+  single photo card with a verified compact evidence crop above bounded
+  conversational prose. Telegram media edits preserve the canonical message ID, pin,
+  controls, and reply route. Missing or unverifiable evidence renders an
+  explicit compact no-evidence frame instead of preserving stale pixels,
+  guessing a crop, or creating a second message.
 - The latest conversational reply and latest screenshot reply for each session
   route Telegram replies to that session. The latest upstream-signal reply has
-  the same routing behavior. The current guide-evidence photo is also a reply
-  alias. Publishing a newer alternate of the same kind
-  makes the predecessor stale. Replies to known stale alternates must
+  the same routing behavior. The canonical guide-evidence card routes through
+  the ordinary anchor identity, not an alternate alias. Publishing a newer
+  alternate of the same kind makes the predecessor stale. Replies to known stale alternates must
   not reach tmux and receive a concise normal bot reply; Telegram offers no
   callback-style ephemeral banner for an ordinary message reply.
 - A Telegram voice note replying to any current routable message follows the

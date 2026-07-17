@@ -33,6 +33,7 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
+		s.AnchorFormat = anchorFormatGuideEvidence
 		s.WatchEnabled = true
 	}); err != nil {
 		t.Fatal(err)

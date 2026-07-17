@@ -115,11 +115,14 @@ Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
 literal and deterministic, at the cost of greater visual density and local
 rendering work.
 
-Guide mode can use that same renderer for a compact evidence image. The prose
-provides orientation; highlighted terminal rows provide inspectable evidence.
-The model cannot choose pixels or expand the observation boundary. Engram adds
-bounded surrounding rows and omits the image when matching is ambiguous, the
-crop would become broad, or configured secret redaction would alter it.
+Guide mode can use that same renderer to make its canonical anchor one compact
+photo card. Highlighted terminal rows provide inspectable evidence first; the
+prose remains readable and copyable below the media without a
+second message. The model cannot choose pixels or expand the observation
+boundary. Engram adds bounded surrounding rows and substitutes an explicit
+no-evidence frame when matching is ambiguous, the crop would become broad, or
+configured secret redaction would alter it. The canonical message identity,
+pin, controls, and reply route remain stable.
 
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying

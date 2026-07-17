@@ -118,12 +118,14 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   visibly establishes that identity. Model identifiers are never user identities.
 - Snapshot mode renders the same frame through Chromium into a full-bleed
   430x932 logical-pixel image at 3x density.
-- Guide mode may render a compact evidence image from the same captured frame.
+- Guide mode may render its canonical anchor as a compact evidence photo card
+  from the same captured frame, with bounded prose below the media.
   Every model excerpt must match one unique physical row range after whitespace
   normalization. Engram adds at most two context rows on each side, highlights
   only matched rows, and rejects a crop spanning more than 18 rows. Ambiguous,
   fabricated, widely separated, or configured-secret-bearing evidence produces
-  no image; it never falls back to a larger automatic screenshot.
+  an explicit no-evidence frame; it never preserves stale pixels or falls back
+  to a larger automatic screenshot.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.

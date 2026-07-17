@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
@@ -44,7 +45,22 @@ func TestBuildGuidedEvidenceCropRejectsWidelySeparatedEvidence(t *testing.T) {
 	}
 }
 
-func TestGuidedEvidencePhotoIsStableThenRetiredAsStale(t *testing.T) {
+func TestGuidedEvidenceCaptionBoundsProseAndKeepsFileBindings(t *testing.T) {
+	app := &App{}
+	session := state.TerminalSession{ID: 4, State: state.TerminalRunning, Title: "release", LastKnownCWD: "/work/engram"}
+	path := "/tmp/release-notes.md"
+	caption, files := app.guidedEvidenceCaption(session, strings.Repeat("We are checking a faithful result with café. ", 80), visibleReferences{
+		Paths: []string{path}, URLs: []string{"https://example.test/review"},
+	})
+	if len(caption) > guidedCaptionBytes || !utf8.ValidString(caption) {
+		t.Fatalf("caption bytes=%d valid=%v", len(caption), utf8.ValidString(caption))
+	}
+	if !strings.Contains(caption, "files:\n```\n1. "+path+"\n```") || !reflect.DeepEqual(files, []string{path}) {
+		t.Fatalf("caption=%q files=%#v", caption, files)
+	}
+}
+
+func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -70,12 +86,14 @@ func TestGuidedEvidencePhotoIsStableThenRetiredAsStale(t *testing.T) {
 	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		paths = append(paths, request.URL.Path)
 		switch request.URL.Path {
-		case "/botTOKEN/sendPhoto":
-			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
 		case "/botTOKEN/editMessageMedia":
-			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
-		case "/botTOKEN/deleteMessage":
-			return snapshotJSONResponse(`true`), nil
+			if err := request.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(request.FormValue("media"), `"show_caption_above_media":false`) {
+				t.Fatalf("media = %s", request.FormValue("media"))
+			}
+			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
 		default:
 			return nil, fmt.Errorf("unexpected Telegram endpoint %s", request.URL.Path)
 		}
@@ -86,25 +104,25 @@ func TestGuidedEvidencePhotoIsStableThenRetiredAsStale(t *testing.T) {
 		Snapshots: renderer, mode: "guide", snapshotReady: true, renderSlots: make(chan struct{}, 1),
 	}
 	first := tmux.StyledCapture{Text: "context\ntests passed successfully\nprompt", ANSI: "context\n\x1b[32mtests passed successfully\x1b[0m\nprompt", Columns: 71, VisibleRows: 37, BufferRows: 3, CurrentPath: "/tmp"}
-	a.updateGuidedEvidence(context.Background(), session, first, []string{"tests passed successfully"})
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
+		t.Fatal("guided anchor was not updated")
+	}
 	current, _ := store.FindSession(session.ID)
-	if current.EvidenceMessageID != 88 || current.EvidenceAnchorMessageID != 77 || current.LastEvidenceHash == "" || renderer.renders != 1 || !renderer.input.Compact {
+	if current.AnchorMessageID != 77 || current.AnchorFormat != anchorFormatGuideEvidence || current.LastRenderHash == "" || renderer.renders != 1 || !renderer.input.Compact {
 		t.Fatalf("first evidence state=%#v renderer=%#v", current, renderer)
 	}
-	if routed, targetState, ok := store.FindReplyTarget(100, 88); !ok || targetState != state.ReplyTargetCurrent || routed.ID != session.ID {
+	if routed, targetState, ok := store.FindReplyTarget(100, 77); !ok || targetState != state.ReplyTargetCurrent || routed.ID != session.ID {
 		t.Fatalf("evidence reply target = %#v %q ok=%v", routed, targetState, ok)
 	}
 
 	second := first
 	second.Text = "context\nnew decisive result\nprompt"
 	second.ANSI = second.Text
-	a.updateGuidedEvidence(context.Background(), current, second, []string{"new decisive result"})
-	a.updateGuidedEvidence(context.Background(), current, second, []string{"missing fabricated evidence"})
-	retired, _ := store.FindSession(session.ID)
-	if retired.EvidenceMessageID != 0 || !reflect.DeepEqual(paths, []string{"/botTOKEN/sendPhoto", "/botTOKEN/editMessageMedia", "/botTOKEN/deleteMessage"}) {
-		t.Fatalf("retired evidence=%#v paths=%#v", retired, paths)
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, true, nil, nil) {
+		t.Fatal("placeholder anchor was not updated")
 	}
-	if _, targetState, ok := store.FindReplyTarget(100, 88); !ok || targetState != state.ReplyTargetStale {
-		t.Fatalf("retired evidence target = %q ok=%v", targetState, ok)
+	placeholder, _ := store.FindSession(session.ID)
+	if placeholder.AnchorMessageID != 77 || placeholder.AnchorFormat != anchorFormatGuideEvidence || renderer.renders != 2 || renderer.input.ANSI != "No verified terminal excerpt selected for this update." || renderer.input.Footer != "no verified terminal evidence" || !reflect.DeepEqual(paths, []string{"/botTOKEN/editMessageMedia", "/botTOKEN/editMessageMedia"}) {
+		t.Fatalf("placeholder state=%#v renderer=%#v paths=%#v", placeholder, renderer, paths)
 	}
 }

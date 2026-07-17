@@ -16,9 +16,6 @@ func recordAlternateMessage(session *state.TerminalSession, kind string, message
 	case "snapshot":
 		previous = session.SnapshotMessageID
 		session.SnapshotMessageID = messageID
-	case "evidence":
-		previous = session.EvidenceMessageID
-		session.EvidenceMessageID = messageID
 	case "upstream":
 		previous = session.UpstreamMessageID
 		session.UpstreamMessageID = messageID
@@ -36,7 +33,7 @@ func recordAlternateMessage(session *state.TerminalSession, kind string, message
 }
 
 func recordStaleMessage(session *state.TerminalSession, messageID int) {
-	if messageID == 0 || messageID == session.AnchorMessageID || messageID == session.SummaryMessageID || messageID == session.SnapshotMessageID || messageID == session.EvidenceMessageID || messageID == session.UpstreamMessageID {
+	if messageID == 0 || messageID == session.AnchorMessageID || messageID == session.SummaryMessageID || messageID == session.SnapshotMessageID || messageID == session.UpstreamMessageID {
 		return
 	}
 	stale := session.StaleAlternateMessageIDs[:0]
@@ -53,12 +50,9 @@ func recordStaleMessage(session *state.TerminalSession, messageID int) {
 }
 
 func retireAlternateReplyTargets(session *state.TerminalSession) {
-	messageIDs := []int{session.SummaryMessageID, session.SnapshotMessageID, session.EvidenceMessageID, session.UpstreamMessageID}
+	messageIDs := []int{session.SummaryMessageID, session.SnapshotMessageID, session.UpstreamMessageID}
 	session.SummaryMessageID = 0
 	session.SnapshotMessageID = 0
-	session.EvidenceMessageID = 0
-	session.EvidenceAnchorMessageID = 0
-	session.LastEvidenceHash = ""
 	session.UpstreamMessageID = 0
 	for _, messageID := range messageIDs {
 		recordStaleMessage(session, messageID)

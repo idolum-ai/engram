@@ -97,8 +97,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v9 persists `anchor_mode`, the latest conversational, snapshot,
-  guide-evidence, and upstream-signal reply IDs, upstream deduplication facts,
+- State schema v9 persists `anchor_mode`, the canonical anchor presentation
+  format, the latest conversational, snapshot, and upstream-signal reply IDs,
+  upstream deduplication facts,
   and a bounded stale-alias set used only to reject confusing replies. It binds each watch to
   a random tmux server incarnation so reused pane/window IDs after a server
   restart cannot silently gain authority. Legacy watches without that identity
@@ -136,12 +137,13 @@ exports a bounded recent tail, not an unbounded full audit file.
   expose `🖼️` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session
   unchanged for retry.
-- Guided evidence uses the already accepted guide capture and the shared render
-  concurrency limit. Its image is published once and edited in place. A render
-  failure, unverifiable excerpt, broad crop, or secret-redaction conflict
-  retires the previous evidence alias so stale pixels cannot remain authoritative.
-  Publishing a replacement persists its current reply alias before deleting the
-  predecessor; a lost persistence race deletes the prospective photo.
+- Guided evidence uses the guide capture and the shared render concurrency
+  limit. Engram edits the canonical message media and bounded caption together,
+  preserving its ID. An unverifiable excerpt, broad crop, or secret-redaction
+  conflict renders an explicit no-evidence frame so stale pixels cannot remain
+  authoritative. A render or upload failure leaves the previous coherent card
+  unchanged for retry. If Telegram reports the anchor unavailable, replacement
+  follows the ordinary send, persist, pin, compact, and unpin lifecycle.
 - Snapshot refreshes hash styled capture, metadata, and the derived caption
   before invoking Chromium, coalesce per session, use bounded capture/render
   concurrency, and edit automatically no more than once every ten seconds when

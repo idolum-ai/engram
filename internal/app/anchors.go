@@ -22,7 +22,9 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return
 	}
-	formatMismatch := a.snapshotAnchors() && ts.AnchorFormat != "snapshot" || !a.snapshotAnchors() && ts.AnchorFormat == "snapshot"
+	formatMismatch := a.snapshotAnchors() && ts.AnchorFormat != anchorFormatSnapshot ||
+		!a.snapshotAnchors() && a.snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
+		!a.snapshotAnchors() && !a.snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
 	if formatMismatch && ts.State == state.TerminalRunning && ts.WatchEnabled {
 		a.queueRefresh(id, true, 0)
 	}
@@ -65,7 +67,7 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 		return
 	}
 	var retireErr error
-	if ts.RetiringAnchorFormat == "snapshot" {
+	if mediaAnchorFormat(ts.RetiringAnchorFormat) {
 		_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
 	} else {
 		_, retireErr = a.editAnchor(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
