@@ -127,10 +127,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   changed physical-row cluster under the same continuity boundaries, then to
   the last meaningful non-empty terminal block capped at 10 rows. The crop
   footer identifies `verified terminal evidence`, `recent terminal activity`,
-  or `current terminal tail`; tail rows are not highlighted. Empty or
-  configured-secret-bearing candidates produce an explicit no-evidence frame.
-  Engram never preserves stale pixels or falls back to a larger automatic
-  screenshot.
+  or `current terminal tail`; tail rows are not highlighted. If the styled tail
+  cannot be delivered safely, Engram renders the same bounded range as redacted
+  plain text. Empty terminals use a quiet `guided view` frame. Engram never
+  preserves stale pixels or falls back to a larger automatic screenshot.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.

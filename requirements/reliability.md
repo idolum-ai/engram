@@ -142,8 +142,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   preserving its ID. An unverifiable or broad model crop falls back to the
   latest physical-row change against the last accepted aligned frame, then to
   a bounded current terminal tail. Each source is labeled and only verified or
-  locally changed rows are highlighted. Empty or secret-redaction-conflicting
-  candidates render an explicit no-evidence frame so stale pixels cannot remain
+  locally changed rows are highlighted. Secret-redaction-conflicting or
+  structurally unaligned candidates render a redacted plain-text tail; empty
+  terminals render a quiet guide-only frame, so stale pixels cannot remain
   authoritative. A render or upload failure leaves the previous coherent card
   unchanged for retry. If Telegram reports the anchor unavailable, replacement
   follows the ordinary send, persist, pin, compact, and unpin lifecycle.

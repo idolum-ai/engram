@@ -74,9 +74,10 @@ Telegram is Engram's only user interface.
   conversational prose. Telegram media edits preserve the canonical message ID, pin,
   controls, and reply route. Missing or unverifiable model evidence falls back
   to locally computed recent terminal activity, then to the current terminal
-  tail. Every crop labels its provenance; an empty or known-secret-bearing
-  candidate renders an explicit compact no-evidence frame. Engram never
-  preserves stale pixels, guesses semantic importance, or creates a second message.
+  tail. Every crop labels its provenance. If styled candidates cannot be
+  delivered safely, Engram renders the bounded tail as redacted plain text; a
+  truly empty terminal receives a quiet guide-only frame. Engram never preserves
+  stale pixels, guesses semantic importance, or creates a second message.
 - The latest conversational reply and latest screenshot reply for each session
   route Telegram replies to that session. The latest upstream-signal reply has
   the same routing behavior. The canonical guide-evidence card routes through

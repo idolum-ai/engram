@@ -122,10 +122,11 @@ second message. The model cannot choose pixels or expand the observation
 boundary. Engram adds bounded surrounding rows. When matching fails, it falls
 back deterministically to the newest changed physical-row cluster since the
 last accepted frame, then to the current terminal tail. The footer says which
-basis was used; only verified and locally changed rows are highlighted. An
-empty frame or configured-secret conflict substitutes an explicit no-evidence
-frame. The canonical message identity, pin, controls, and reply route remain
-stable.
+basis was used; only verified and locally changed rows are highlighted. If
+styled rows cannot be delivered safely, the bounded tail is redacted and
+rendered without styling. A truly empty terminal receives a quiet guide-only
+frame rather than a warning that competes with the summary. The canonical
+message identity, pin, controls, and reply route remain stable.
 
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying

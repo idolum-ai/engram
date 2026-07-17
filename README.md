@@ -241,9 +241,10 @@ the bot channel and must be revoked immediately.
   matched rows. If model evidence cannot be verified, Engram deterministically
   shows the newest changed physical-row cluster from the last accepted frame,
   or the current terminal tail when no aligned frame exists. Each crop labels
-  its provenance. Only an empty frame or a known-secret conflict produces the
-  explicit no-evidence frame. The message ID, pin, controls, and reply route do
-  not change.
+  its provenance. If styled rows contain a configured secret or cannot be
+  aligned safely, Engram renders the bounded tail as redacted plain text. A
+  truly empty terminal uses a quiet guide-only frame so the prose remains the
+  focus. The message ID, pin, controls, and reply route do not change.
   Every snapshot anchor also offers `📄 Raw`, which returns the exact delivered
   image frame as a bounded plain UTF-8 text attachment for screen readers or
   exact inspection. It does not recapture a newer terminal state on click.

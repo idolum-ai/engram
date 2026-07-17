@@ -92,14 +92,14 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 	}
 }
 
-func TestCompactEvidenceHTMLCanDisclaimUnverifiedFrame(t *testing.T) {
+func TestCompactEvidenceHTMLCanRenderQuietGuidedFrame(t *testing.T) {
 	input := Input{
-		ANSI: "No verified excerpt.", Title: "build", Target: "[3]", CWD: "/tmp",
-		Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "no verified terminal evidence",
+		ANSI: " ", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "guided view",
 	}
 	page := RenderHTML(input, "contrast-dark")
-	if !strings.Contains(page, "no verified terminal evidence") || strings.Contains(page, ">verified terminal evidence<") {
-		t.Fatalf("compact disclaimer HTML = %s", page)
+	if !strings.Contains(page, "guided view") || strings.Contains(page, "No verified") {
+		t.Fatalf("quiet guided HTML = %s", page)
 	}
 }
 

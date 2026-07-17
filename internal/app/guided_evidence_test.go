@@ -154,9 +154,18 @@ func TestGuidedTailCropUsesLastMeaningfulBlockWithoutHighlight(t *testing.T) {
 
 func TestGuidedFallbackNeverSelectsKnownSecretPixels(t *testing.T) {
 	app := &App{Config: config.Config{TelegramBotToken: "known-secret", SnapshotTheme: "contrast-dark"}}
-	capture := tmux.StyledCapture{Text: "result known-secret", ANSI: "result known-secret", Columns: 71, VisibleRows: 37, BufferRows: 1}
-	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2}, capture, conversationFrame{}, nil)
-	if crop.source != guidedEvidenceNone || crop.input.Footer != "no verified terminal evidence" {
+	capture := tmux.StyledCapture{Text: "result known-secret", ANSI: "result known-secret", CurrentPath: "/tmp/known-secret", Columns: 71, VisibleRows: 37, BufferRows: 1}
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "known-secret build"}, capture, conversationFrame{}, nil)
+	if crop.source != guidedEvidencePlain || crop.input.Footer != "current terminal tail" || strings.Contains(crop.input.ANSI+crop.input.Title+crop.input.CWD, "known-secret") || !strings.Contains(crop.input.ANSI, "<redacted>") {
 		t.Fatalf("secret fallback crop=%#v", crop)
+	}
+}
+
+func TestGuidedFallbackKeepsEmptyFrameQuiet(t *testing.T) {
+	app := &App{Config: config.Config{SnapshotTheme: "contrast-dark"}}
+	capture := tmux.StyledCapture{Columns: 71, VisibleRows: 37}
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "work"}, capture, conversationFrame{}, nil)
+	if crop.source != guidedEvidenceGuide || crop.input.Footer != "guided view" || strings.TrimSpace(crop.input.ANSI) != "" {
+		t.Fatalf("empty fallback crop=%#v", crop)
 	}
 }
