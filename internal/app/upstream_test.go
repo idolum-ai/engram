@@ -77,11 +77,10 @@ func TestUnchangedGuideEvidenceRefreshPreservesCanonicalCard(t *testing.T) {
 		session.AnchorChatID = 100
 		session.AnchorMessageID = 77
 		session.AnchorFormat = anchorFormatGuideEvidence
+		session.LastKnownCWD = "/tmp"
 		session.LastRawCaptureHash = wantHash
-		session.LastRenderHash = "coherent-card"
 		session.LastSummary = "Ordinary output is visible."
 		session.LastAnchorEditAt = time.Now().Add(-time.Minute)
-		setAnchorFiles(session, []string{"/tmp/result.txt"})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,11 +94,71 @@ func TestUnchangedGuideEvidenceRefreshPreservesCanonicalCard(t *testing.T) {
 	a.Telegram = client
 	a.snapshotReady = true
 	a.mode = config.AnchorModeGuide
+	current, _ := a.Store.FindSession(id)
+	a.rememberAnchorTextFrame(current, "ordinary output", "coherent-crop")
+	caption, _ := a.guidedEvidenceCaption(current, current.LastSummary, visibleReferences{})
+	wantRenderHash := sha(caption + "\x00coherent-crop")
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.LastRenderHash = wantRenderHash
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	a.refreshSession(context.Background(), id, false)
 	got, _ := a.Store.FindSession(id)
-	if telegramCalls != 0 || got.LastRenderHash != "coherent-card" || !reflect.DeepEqual(got.AnchorFiles, []string{"/tmp/result.txt"}) || got.AnchorFileToken == "" {
+	if telegramCalls != 0 || got.LastRenderHash != wantRenderHash {
 		t.Fatalf("unchanged refresh degraded card: calls=%d session=%#v", telegramCalls, got)
+	}
+}
+
+func TestUnchangedGuideEvidenceRefreshRestoresCompanionAfterRestart(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.capturePhysical = "ordinary output\n"
+	runner.captureJoined = runner.capturePhysical
+	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = anchorFormatGuideEvidence
+		session.LastRawCaptureHash = wantHash
+		session.LastRenderHash = "persisted-card"
+		session.LastSummary = "Ordinary output is visible."
+		session.LastAnchorEditAt = time.Now().Add(-time.Minute)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	modelCalls := 0
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		modelCalls++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"Ordinary output is visible."}]}`))}, nil
+	})}
+	a.Guide = model
+	renderer := &fakeSnapshotRenderer{}
+	a.Snapshots = renderer
+	a.Config.Home = t.TempDir()
+	a.snapshotReady = true
+	a.mode = config.AnchorModeGuide
+	a.renderSlots = make(chan struct{}, 1)
+	telegramCalls := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		telegramCalls++
+		if request.URL.Path != "/botTOKEN/editMessageMedia" {
+			return nil, errors.New("unexpected Telegram method: " + request.URL.Path)
+		}
+		return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+	})}
+	a.Telegram = client
+
+	a.refreshSession(context.Background(), id, false)
+
+	got, _ := a.Store.FindSession(id)
+	frame, frameOK := a.snapshotTextFrame(got)
+	if modelCalls != 1 || renderer.renders != 1 || telegramCalls != 1 || !frameOK || frame.JoinedText != "ordinary output" {
+		t.Fatalf("companion recovery: model=%d renders=%d telegram=%d frame=%#v ok=%v", modelCalls, renderer.renders, telegramCalls, frame, frameOK)
 	}
 }
 

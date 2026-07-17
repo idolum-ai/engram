@@ -83,15 +83,20 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if hash == ts.LastRawCaptureHash {
 		if !force {
 			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotReady {
-				a.updateGuidedAnchorReferences(ctx, ts, refs)
+				if _, hasCompanion := a.snapshotTextFrame(ts); hasCompanion {
+					a.updateGuidedAnchorReferences(ctx, ts, refs)
+					return
+				}
+				// Process-local companions vanish on restart. Fall through until a
+				// successful canonical render restores Raw for this unchanged frame.
+			} else {
+				guard := func() bool {
+					current, ok := a.Store.FindSession(id)
+					return !a.snapshotAnchors() && ok && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
+				}
+				a.updateAnchorLocalGuardedWithReferences(ctx, id, ts.LastSummary, false, guard, nil, &refs)
 				return
 			}
-			guard := func() bool {
-				current, ok := a.Store.FindSession(id)
-				return !a.snapshotAnchors() && ok && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
-			}
-			a.updateAnchorLocalGuardedWithReferences(ctx, id, ts.LastSummary, false, guard, nil, &refs)
-			return
 		}
 	}
 	summary, evidence, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
