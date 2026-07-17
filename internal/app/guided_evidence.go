@@ -18,27 +18,27 @@ const guidedEvidenceContextRows = 2
 const guidedEvidenceMaxRows = 18
 const guidedEvidenceMinExcerptBytes = 12
 const guidedCaptionBytes = 960
+const guidedTailRows = 10
+
+const (
+	guidedEvidenceVerified = "verified"
+	guidedEvidenceRecent   = "recent_activity"
+	guidedEvidenceTail     = "terminal_tail"
+	guidedEvidenceNone     = "no_evidence"
+)
 
 type guidedEvidenceCrop struct {
-	input terminalshot.Input
-	plain string
-	hash  string
+	input  terminalshot.Input
+	plain  string
+	hash   string
+	source string
 }
 
-func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, summary string, refs visibleReferences, excerpts []string, force bool, guard, accepted func() bool) bool {
+func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, summary string, refs visibleReferences, excerpts []string, force bool, guard, accepted func() bool) bool {
 	if !a.snapshotReady || a.Snapshots == nil || a.snapshotAnchors() {
 		return false
 	}
-	safeExcerpts := make([]string, 0, len(excerpts))
-	for _, excerpt := range excerpts {
-		if a.redactText(excerpt) == excerpt {
-			safeExcerpts = append(safeExcerpts, excerpt)
-		}
-	}
-	crop, verified := buildGuidedEvidenceCrop(expected, capture, safeExcerpts, a.Config.SnapshotTheme)
-	if !verified || a.redactText(crop.plain) != crop.plain {
-		crop = buildGuidedEvidencePlaceholder(expected, capture, a.Config.SnapshotTheme)
-	}
+	crop := a.selectGuidedEvidenceCrop(expected, capture, previous, excerpts)
 	if !acquireSlot(ctx, a.renderSlots) {
 		return false
 	}
@@ -131,7 +131,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 			a.ensureCurrentAnchorPinnedLocked(ctx, updated)
 		}
 		a.finishAnchorRotationLocked(ctx, latest.ID)
-		_ = a.audit("terminal.guided_evidence", "replaced", map[string]any{"session_id": latest.ID, "verified": verified, "rows": crop.input.BufferRows})
+		_ = a.audit("terminal.guided_evidence", "replaced", map[string]any{"session_id": latest.ID, "source": crop.source, "rows": crop.input.BufferRows})
 		return finish()
 	}
 	if guard != nil && !guard() {
@@ -153,7 +153,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	if !updated {
 		return false
 	}
-	_ = a.audit("terminal.guided_evidence", "updated", map[string]any{"session_id": latest.ID, "verified": verified, "rows": crop.input.BufferRows})
+	_ = a.audit("terminal.guided_evidence", "updated", map[string]any{"session_id": latest.ID, "source": crop.source, "rows": crop.input.BufferRows})
 	return finish()
 }
 
@@ -199,6 +199,32 @@ func truncateAtWord(text string, maxBytes int) string {
 	return trimmed + "..."
 }
 
+func (a *App) selectGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, excerpts []string) guidedEvidenceCrop {
+	safeExcerpts := make([]string, 0, len(excerpts))
+	for _, excerpt := range excerpts {
+		if a.redactText(excerpt) == excerpt {
+			safeExcerpts = append(safeExcerpts, excerpt)
+		}
+	}
+	builders := []func() (guidedEvidenceCrop, bool){
+		func() (guidedEvidenceCrop, bool) {
+			return buildGuidedEvidenceCrop(session, capture, safeExcerpts, a.Config.SnapshotTheme)
+		},
+		func() (guidedEvidenceCrop, bool) {
+			return buildGuidedRecentActivityCrop(session, capture, previous, a.Config.SnapshotTheme)
+		},
+		func() (guidedEvidenceCrop, bool) {
+			return buildGuidedTailCrop(session, capture, a.Config.SnapshotTheme)
+		},
+	}
+	for _, build := range builders {
+		if crop, ok := build(); ok && a.redactText(crop.plain) == crop.plain {
+			return crop
+		}
+	}
+	return buildGuidedEvidencePlaceholder(session, capture, a.Config.SnapshotTheme)
+}
+
 func buildGuidedEvidencePlaceholder(session state.TerminalSession, capture tmux.StyledCapture, theme string) guidedEvidenceCrop {
 	const message = "No verified terminal excerpt selected for this update."
 	input := terminalshot.Input{
@@ -206,7 +232,7 @@ func buildGuidedEvidencePlaceholder(session state.TerminalSession, capture tmux.
 		CWD: capture.CurrentPath, Columns: max(capture.Columns, 48), VisibleRows: capture.VisibleRows,
 		BufferRows: 1, Compact: true, Footer: "no verified terminal evidence",
 	}
-	return guidedEvidenceCrop{input: input, plain: message, hash: sha(strings.Join([]string{message, input.Title, input.CWD, theme}, "\x00"))}
+	return guidedEvidenceCrop{input: input, plain: message, source: guidedEvidenceNone, hash: guidedCropHash(input, theme, guidedEvidenceNone)}
 }
 
 func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledCapture, excerpts []string, theme string) (guidedEvidenceCrop, bool) {
@@ -260,9 +286,95 @@ func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledC
 		BufferRows:    end - start + 1,
 		Compact:       true,
 		HighlightRows: highlights,
+		Footer:        "verified terminal evidence",
 	}
-	hash := sha(strings.Join([]string{input.ANSI, fmt.Sprint(highlights), input.Title, input.CWD, theme}, "\x00"))
-	return guidedEvidenceCrop{input: input, plain: strings.Join(plainRows[start:end+1], "\n"), hash: hash}, true
+	return guidedEvidenceCrop{input: input, plain: strings.Join(plainRows[start:end+1], "\n"), source: guidedEvidenceVerified, hash: guidedCropHash(input, theme, guidedEvidenceVerified)}, true
+}
+
+func buildGuidedRecentActivityCrop(session state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, theme string) (guidedEvidenceCrop, bool) {
+	if previous.physicalText == "" || previous.serverID == "" || previous.serverID != capture.ServerID ||
+		previous.windowID == "" || previous.windowID != capture.WindowID || previous.paneID == "" || previous.paneID != capture.PaneID ||
+		previous.command == "" || previous.command != strings.TrimSpace(capture.CurrentCmd) || previous.alternateOn != capture.AlternateOn ||
+		previous.paneInMode != capture.PaneInMode || previous.columns != capture.Columns || previous.visibleRows != capture.VisibleRows {
+		return guidedEvidenceCrop{}, false
+	}
+	oldRows := captureRows(previous.physicalText)
+	newRows := captureRows(capture.Text)
+	ansiRows := captureRows(capture.ANSI)
+	if len(oldRows) == 0 || len(newRows) == 0 || len(newRows) != len(ansiRows) {
+		return guidedEvidenceCrop{}, false
+	}
+	oldMatched, newMatched := lcsLineMatches(oldRows, newRows)
+	if !strongConversationAlignment(oldRows, newRows, oldMatched, newMatched) {
+		return guidedEvidenceCrop{}, false
+	}
+	first, last := -1, -1
+	for index := 0; index < len(newRows); {
+		if newMatched[index] {
+			index++
+			continue
+		}
+		start := index
+		meaningful := false
+		for index < len(newRows) && !newMatched[index] {
+			meaningful = meaningful || strings.TrimSpace(newRows[index]) != ""
+			index++
+		}
+		if meaningful {
+			first, last = start, index-1
+		}
+	}
+	if first < 0 {
+		return guidedEvidenceCrop{}, false
+	}
+	start := max(0, first-guidedEvidenceContextRows)
+	end := min(len(newRows)-1, last+guidedEvidenceContextRows)
+	if end-start+1 > guidedEvidenceMaxRows {
+		start = max(0, end-guidedEvidenceMaxRows+1)
+	}
+	highlights := make([]int, 0, end-start+1)
+	for row := max(first, start); row <= min(last, end); row++ {
+		if !newMatched[row] && strings.TrimSpace(newRows[row]) != "" {
+			highlights = append(highlights, row-start)
+		}
+	}
+	if len(highlights) == 0 {
+		return guidedEvidenceCrop{}, false
+	}
+	return buildGuidedRangeCrop(session, capture, newRows, ansiRows, start, end, highlights, "recent terminal activity", guidedEvidenceRecent, theme), true
+}
+
+func buildGuidedTailCrop(session state.TerminalSession, capture tmux.StyledCapture, theme string) (guidedEvidenceCrop, bool) {
+	plainRows := captureRows(capture.Text)
+	ansiRows := captureRows(capture.ANSI)
+	if len(plainRows) == 0 || len(plainRows) != len(ansiRows) {
+		return guidedEvidenceCrop{}, false
+	}
+	end := len(plainRows) - 1
+	for end >= 0 && strings.TrimSpace(plainRows[end]) == "" {
+		end--
+	}
+	if end < 0 {
+		return guidedEvidenceCrop{}, false
+	}
+	start := end
+	for start > 0 && end-start+1 < guidedTailRows && strings.TrimSpace(plainRows[start-1]) != "" {
+		start--
+	}
+	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, nil, "current terminal tail", guidedEvidenceTail, theme), true
+}
+
+func buildGuidedRangeCrop(session state.TerminalSession, capture tmux.StyledCapture, plainRows, ansiRows []string, start, end int, highlights []int, footer, source, theme string) guidedEvidenceCrop {
+	input := terminalshot.Input{
+		ANSI: strings.Join(ansiRows[start:end+1], "\n"), Title: firstNonEmpty(session.Title, capture.Title), Target: fmt.Sprintf("[%d]", session.ID),
+		CWD: capture.CurrentPath, Columns: capture.Columns, VisibleRows: capture.VisibleRows, BufferRows: end - start + 1,
+		Compact: true, HighlightRows: highlights, Footer: footer,
+	}
+	return guidedEvidenceCrop{input: input, plain: strings.Join(plainRows[start:end+1], "\n"), source: source, hash: guidedCropHash(input, theme, source)}
+}
+
+func guidedCropHash(input terminalshot.Input, theme, source string) string {
+	return sha(strings.Join([]string{input.ANSI, fmt.Sprint(input.HighlightRows), input.Title, input.CWD, input.Footer, theme, source}, "\x00"))
 }
 
 func matchEvidenceRows(rows []string, excerpt string) ([2]int, bool) {

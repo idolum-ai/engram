@@ -123,9 +123,14 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   Every model excerpt must match one unique physical row range after whitespace
   normalization. Engram adds at most two context rows on each side, highlights
   only matched rows, and rejects a crop spanning more than 18 rows. Ambiguous,
-  fabricated, widely separated, or configured-secret-bearing evidence produces
-  an explicit no-evidence frame; it never preserves stale pixels or falls back
-  to a larger automatic screenshot.
+  fabricated, or widely separated model evidence falls back to the newest
+  changed physical-row cluster under the same continuity boundaries, then to
+  the last meaningful non-empty terminal block capped at 10 rows. The crop
+  footer identifies `verified terminal evidence`, `recent terminal activity`,
+  or `current terminal tail`; tail rows are not highlighted. Empty or
+  configured-secret-bearing candidates produce an explicit no-evidence frame.
+  Engram never preserves stale pixels or falls back to a larger automatic
+  screenshot.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.

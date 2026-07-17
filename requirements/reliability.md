@@ -139,8 +139,11 @@ exports a bounded recent tail, not an unbounded full audit file.
   unchanged for retry.
 - Guided evidence uses the guide capture and the shared render concurrency
   limit. Engram edits the canonical message media and bounded caption together,
-  preserving its ID. An unverifiable excerpt, broad crop, or secret-redaction
-  conflict renders an explicit no-evidence frame so stale pixels cannot remain
+  preserving its ID. An unverifiable or broad model crop falls back to the
+  latest physical-row change against the last accepted aligned frame, then to
+  a bounded current terminal tail. Each source is labeled and only verified or
+  locally changed rows are highlighted. Empty or secret-redaction-conflicting
+  candidates render an explicit no-evidence frame so stale pixels cannot remain
   authoritative. A render or upload failure leaves the previous coherent card
   unchanged for retry. If Telegram reports the anchor unavailable, replacement
   follows the ordinary send, persist, pin, compact, and unpin lifecycle.

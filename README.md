@@ -238,9 +238,12 @@ the bot channel and must be revoked immediately.
   the same canonical Telegram message. The selected model identifies short
   verbatim excerpts in its existing request; Engram verifies them against
   unique physical terminal rows, adds bounded context, and highlights the
-  matched rows. Ambiguous, broad, fabricated, or known-secret-bearing evidence
-  produces a small explicit no-evidence frame instead of stale or guessed
-  terminal pixels. The message ID, pin, controls, and reply route do not change.
+  matched rows. If model evidence cannot be verified, Engram deterministically
+  shows the newest changed physical-row cluster from the last accepted frame,
+  or the current terminal tail when no aligned frame exists. Each crop labels
+  its provenance. Only an empty frame or a known-secret conflict produces the
+  explicit no-evidence frame. The message ID, pin, controls, and reply route do
+  not change.
   Every snapshot anchor also offers `📄 Raw`, which returns the exact delivered
   image frame as a bounded plain UTF-8 text attachment for screen readers or
   exact inspection. It does not recapture a newer terminal state on click.

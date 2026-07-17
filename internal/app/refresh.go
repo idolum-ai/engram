@@ -154,7 +154,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	updated := false
 	if a.snapshotReady {
-		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, summary, refs, evidence, force, guard, accepted)
+		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, summary, refs, evidence, force, guard, accepted)
 	} else {
 		updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
 	}

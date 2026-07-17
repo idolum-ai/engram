@@ -119,10 +119,13 @@ Guide mode can use that same renderer to make its canonical anchor one compact
 photo card. Highlighted terminal rows provide inspectable evidence first; the
 prose remains readable and copyable below the media without a
 second message. The model cannot choose pixels or expand the observation
-boundary. Engram adds bounded surrounding rows and substitutes an explicit
-no-evidence frame when matching is ambiguous, the crop would become broad, or
-configured secret redaction would alter it. The canonical message identity,
-pin, controls, and reply route remain stable.
+boundary. Engram adds bounded surrounding rows. When matching fails, it falls
+back deterministically to the newest changed physical-row cluster since the
+last accepted frame, then to the current terminal tail. The footer says which
+basis was used; only verified and locally changed rows are highlighted. An
+empty frame or configured-secret conflict substitutes an explicit no-evidence
+frame. The canonical message identity, pin, controls, and reply route remain
+stable.
 
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying

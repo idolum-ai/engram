@@ -72,9 +72,11 @@ Telegram is Engram's only user interface.
 - When guide mode and Chromium are both available, the canonical anchor is a
   single photo card with a verified compact evidence crop above bounded
   conversational prose. Telegram media edits preserve the canonical message ID, pin,
-  controls, and reply route. Missing or unverifiable evidence renders an
-  explicit compact no-evidence frame instead of preserving stale pixels,
-  guessing a crop, or creating a second message.
+  controls, and reply route. Missing or unverifiable model evidence falls back
+  to locally computed recent terminal activity, then to the current terminal
+  tail. Every crop labels its provenance; an empty or known-secret-bearing
+  candidate renders an explicit compact no-evidence frame. Engram never
+  preserves stale pixels, guesses semantic importance, or creates a second message.
 - The latest conversational reply and latest screenshot reply for each session
   route Telegram replies to that session. The latest upstream-signal reply has
   the same routing behavior. The canonical guide-evidence card routes through

@@ -117,6 +117,9 @@ func TestConversationTurnAlwaysCarriesFullCurrentTruth(t *testing.T) {
 	if second.input.VisibleText != secondCapture.JoinedText || second.input.PreviousRendering != "We are running tests." || second.input.ChangedText != "tests passed\napp ok" || second.input.RemovedText != "tests running\napp pending" {
 		t.Fatalf("second turn = %#v", second.input)
 	}
+	if second.previousFrame.physicalText != firstCapture.Text {
+		t.Fatalf("previous physical frame = %q, want %q", second.previousFrame.physicalText, firstCapture.Text)
+	}
 }
 
 func TestConversationResetRejectsInFlightCommit(t *testing.T) {
@@ -372,7 +375,7 @@ func mutateConversationFrame(frame conversationFrame, mutate func(*conversationF
 }
 
 func testStyledCapture(command, text string) tmux.StyledCapture {
-	return tmux.StyledCapture{ServerID: appTestServerID, WindowID: "@1", PaneID: "%1", CurrentCmd: command, AlternateOn: "1", PaneInMode: "0", Columns: 80, VisibleRows: 24, JoinedText: text}
+	return tmux.StyledCapture{ServerID: appTestServerID, WindowID: "@1", PaneID: "%1", CurrentCmd: command, AlternateOn: "1", PaneInMode: "0", Columns: 80, VisibleRows: 24, Text: text, ANSI: text, JoinedText: text}
 }
 
 type conversationEpochRoundTrip func(*http.Request) (*http.Response, error)

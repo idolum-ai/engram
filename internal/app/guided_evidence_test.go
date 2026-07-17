@@ -60,7 +60,7 @@ func TestGuidedEvidenceCaptionBoundsProseAndKeepsFileBindings(t *testing.T) {
 	}
 }
 
-func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesPlaceholder(t *testing.T) {
+func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -104,7 +104,7 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesPlaceholder(t *testi
 		Snapshots: renderer, mode: "guide", snapshotReady: true, renderSlots: make(chan struct{}, 1),
 	}
 	first := tmux.StyledCapture{Text: "context\ntests passed successfully\nprompt", ANSI: "context\n\x1b[32mtests passed successfully\x1b[0m\nprompt", Columns: 71, VisibleRows: 37, BufferRows: 3, CurrentPath: "/tmp"}
-	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, conversationFrame{}, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
 		t.Fatal("guided anchor was not updated")
 	}
 	current, _ := store.FindSession(session.ID)
@@ -118,11 +118,45 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesPlaceholder(t *testi
 	second := first
 	second.Text = "context\nnew decisive result\nprompt"
 	second.ANSI = second.Text
-	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, true, nil, nil) {
-		t.Fatal("placeholder anchor was not updated")
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, conversationFrame{}, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, true, nil, nil) {
+		t.Fatal("fallback anchor was not updated")
 	}
-	placeholder, _ := store.FindSession(session.ID)
-	if placeholder.AnchorMessageID != 77 || placeholder.AnchorFormat != anchorFormatGuideEvidence || renderer.renders != 2 || renderer.input.ANSI != "No verified terminal excerpt selected for this update." || renderer.input.Footer != "no verified terminal evidence" || !reflect.DeepEqual(paths, []string{"/botTOKEN/editMessageMedia", "/botTOKEN/editMessageMedia"}) {
-		t.Fatalf("placeholder state=%#v renderer=%#v paths=%#v", placeholder, renderer, paths)
+	fallback, _ := store.FindSession(session.ID)
+	if fallback.AnchorMessageID != 77 || fallback.AnchorFormat != anchorFormatGuideEvidence || renderer.renders != 2 || !strings.Contains(renderer.input.ANSI, "new decisive result") || renderer.input.Footer != "current terminal tail" || !reflect.DeepEqual(paths, []string{"/botTOKEN/editMessageMedia", "/botTOKEN/editMessageMedia"}) {
+		t.Fatalf("fallback state=%#v renderer=%#v paths=%#v", fallback, renderer, paths)
+	}
+}
+
+func TestGuidedRecentActivityCropChoosesNewestChangedCluster(t *testing.T) {
+	previousText := strings.Join([]string{"header", "old early", "stable one", "stable two", "stable three", "old latest", "prompt"}, "\n")
+	currentText := strings.Join([]string{"header", "new early", "stable one", "stable two", "stable three", "new latest", "prompt"}, "\n")
+	previous := conversationFrame{
+		serverID: "server", windowID: "@1", paneID: "%1", command: "codex", columns: 71, visibleRows: 37, physicalText: previousText,
+	}
+	capture := tmux.StyledCapture{
+		Text: currentText, ANSI: currentText, ServerID: "server", WindowID: "@1", PaneID: "%1", CurrentCmd: "codex",
+		Columns: 71, VisibleRows: 37, BufferRows: 7, CurrentPath: "/work",
+	}
+	crop, ok := buildGuidedRecentActivityCrop(state.TerminalSession{ID: 2, Title: "work"}, capture, previous, "contrast-dark")
+	if !ok || crop.source != guidedEvidenceRecent || crop.input.Footer != "recent terminal activity" || !strings.Contains(crop.plain, "new latest") || strings.Contains(crop.plain, "new early") || len(crop.input.HighlightRows) != 1 {
+		t.Fatalf("recent crop=%#v ok=%v", crop, ok)
+	}
+}
+
+func TestGuidedTailCropUsesLastMeaningfulBlockWithoutHighlight(t *testing.T) {
+	text := "older output\n\nlast result\nnext action\n\n"
+	capture := tmux.StyledCapture{Text: text, ANSI: text, Columns: 71, VisibleRows: 37, BufferRows: 5, CurrentPath: "/work"}
+	crop, ok := buildGuidedTailCrop(state.TerminalSession{ID: 2}, capture, "terminal")
+	if !ok || crop.source != guidedEvidenceTail || crop.input.Footer != "current terminal tail" || crop.plain != "last result\nnext action" || len(crop.input.HighlightRows) != 0 {
+		t.Fatalf("tail crop=%#v ok=%v", crop, ok)
+	}
+}
+
+func TestGuidedFallbackNeverSelectsKnownSecretPixels(t *testing.T) {
+	app := &App{Config: config.Config{TelegramBotToken: "known-secret", SnapshotTheme: "contrast-dark"}}
+	capture := tmux.StyledCapture{Text: "result known-secret", ANSI: "result known-secret", Columns: 71, VisibleRows: 37, BufferRows: 1}
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2}, capture, conversationFrame{}, nil)
+	if crop.source != guidedEvidenceNone || crop.input.Footer != "no verified terminal evidence" {
+		t.Fatalf("secret fallback crop=%#v", crop)
 	}
 }
