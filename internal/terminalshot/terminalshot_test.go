@@ -78,6 +78,20 @@ func TestRenderHTMLAccessibilityThemesCorrectLowContrastText(t *testing.T) {
 	}
 }
 
+func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
+	input := Input{
+		ANSI: "context\ncritical result\nnext step", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 71, VisibleRows: 37, BufferRows: 3, Compact: true, HighlightRows: []int{1},
+	}
+	page := RenderHTML(input, "contrast-dark")
+	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px`) || !strings.Contains(page, "verified terminal evidence") {
+		t.Fatalf("compact evidence HTML = %s", page)
+	}
+	if got := renderHeight(input); got != 180 {
+		t.Fatalf("compact render height = %d, want 180", got)
+	}
+}
+
 func TestAccessibleThemePalettesMeetTextContrastFloor(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"contrast-dark", "contrast-light"} {

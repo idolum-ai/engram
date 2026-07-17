@@ -89,7 +89,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			return
 		}
 	}
-	summary, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
+	summary, evidence, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
 	if errors.Is(guideErr, errConversationTurnSuperseded) {
 		return
 	}
@@ -152,7 +152,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
 	}
-	a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
+	if a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs) && guideErr == nil {
+		a.updateGuidedEvidence(ctx, ts, capture, evidence)
+	}
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -183,10 +185,11 @@ func headUTF8(text string, maxBytes int) string {
 	return text[:end]
 }
 
-func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, conversationTurn, error) {
+func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, []string, conversationTurn, error) {
 	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText))
+	turn.input.EvidenceRequested = a.snapshotReady
 	if !acquireSlot(ctx, a.guideSlots) {
-		return "", turn, ctx.Err()
+		return "", nil, turn, ctx.Err()
 	}
 	defer releaseSlot(a.guideSlots)
 	identityLock := a.sessionMutex(session.ID)
@@ -196,14 +199,20 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	defer a.presentationMu.RUnlock()
 	latest, ok := a.Store.FindSession(session.ID)
 	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
-		return "", turn, errConversationTurnSuperseded
+		return "", nil, turn, errConversationTurnSuperseded
 	}
-	summary, err := a.Guide.Converse(ctx, turn.input)
+	var result guide.Result
+	var err error
+	if renderer, ok := a.Guide.(guide.EvidenceRenderer); ok && a.snapshotReady {
+		result, err = renderer.ConverseWithEvidence(ctx, turn.input)
+	} else {
+		result.Text, err = a.Guide.Converse(ctx, turn.input)
+	}
 	if err != nil {
-		return "", turn, err
+		return "", nil, turn, err
 	}
-	summary = a.redactText(summary)
-	return summary, turn, nil
+	result.Text = a.redactText(result.Text)
+	return result.Text, result.Evidence, turn, nil
 }
 
 func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string) (string, error) {

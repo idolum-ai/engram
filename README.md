@@ -179,7 +179,7 @@ privacy boundaries below before running commands that may print secrets.
 | `TELEGRAM_ALLOWED_USER_ID` | none | yes | The one Telegram user ID allowed to issue commands. |
 | `TELEGRAM_CHAT_ID` | allowed user ID | no | The one allowed chat. Leave empty for a private DM; group operation is unsupported. |
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
-| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: conversational `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v8. |
+| `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: conversational `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v9. |
 | `LLM_PROVIDER` | `anthropic` | when enabling a guide | `anthropic` for Haiku 4.5 or `openai` for Luna. Only the selected provider is used. Changing it requires a restart. |
 | `ANTHROPIC_API_KEY` | none | when selecting Anthropic, secret | Credential for one-pass Haiku rendering. |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
@@ -233,6 +233,13 @@ the bot channel and must be revoked immediately.
   contrast themes use a color-vision-safe ANSI palette, remove opacity-based
   dim text, and correct low-contrast terminal colors to at least a 4.5:1
   contrast ratio.
+  When guide mode and Chromium are both available, Engram can also maintain one
+  compact evidence photo beneath each conversational anchor. The selected model
+  identifies short verbatim excerpts in its existing request; Engram verifies
+  them against unique physical terminal rows, adds bounded context, and
+  highlights the matched rows. The photo is edited in place and disappears
+  when the evidence is ambiguous, too broad, fabricated, or intersects a known
+  configured secret.
   Every snapshot anchor also offers `📄 Raw`, which returns the exact delivered
   image frame as a bounded plain UTF-8 text attachment for screen readers or
   exact inspection. It does not recapture a newer terminal state on click.
@@ -243,8 +250,10 @@ the bot channel and must be revoked immediately.
   but remain in screenshots and raw captures. Every request contains the
   complete current semantic evidence;
   aligned requests may also carry prior prose and deterministic changed,
-  removed, and neighboring lines as attention hints. There is no model history
-  or structured response, no second request, and no remembered Telegram input.
+  removed, and neighboring lines as attention hints. There is no model history,
+  no second request, and no remembered Telegram input. A private evidence
+  trailer is removed before delivery and can only select a verified compact
+  Chromium crop; it is never accepted as terminal truth.
   Completed model prose is deterministically bounded to 180 words before
   delivery.
   `LLM_PROVIDER` selects Anthropic Haiku 4.5 or OpenAI Luna; both receive the

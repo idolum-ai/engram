@@ -97,9 +97,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v8 persists `anchor_mode`, the latest conversational, snapshot,
-  and upstream-signal reply IDs, upstream deduplication facts, and a bounded
-  stale-alias set used only to reject confusing replies. It binds each watch to
+- State schema v9 persists `anchor_mode`, the latest conversational, snapshot,
+  guide-evidence, and upstream-signal reply IDs, upstream deduplication facts,
+  and a bounded stale-alias set used only to reject confusing replies. It binds each watch to
   a random tmux server incarnation so reused pane/window IDs after a server
   restart cannot silently gain authority. Legacy watches without that identity
   require an explicit `/attach` from `/sessions`; reattachment changes their
@@ -136,6 +136,12 @@ exports a bounded recent tail, not an unbounded full audit file.
   expose `🖼️` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session
   unchanged for retry.
+- Guided evidence uses the already accepted guide capture and the shared render
+  concurrency limit. Its image is published once and edited in place. A render
+  failure, unverifiable excerpt, broad crop, or secret-redaction conflict
+  retires the previous evidence alias so stale pixels cannot remain authoritative.
+  Publishing a replacement persists its current reply alias before deleting the
+  predecessor; a lost persistence race deletes the prospective photo.
 - Snapshot refreshes hash styled capture, metadata, and the derived caption
   before invoking Chromium, coalesce per session, use bounded capture/render
   concurrency, and edit automatically no more than once every ten seconds when

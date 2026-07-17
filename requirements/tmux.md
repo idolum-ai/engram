@@ -106,15 +106,24 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   delivery, and never persisted or shared across windows. One-off alternate
   renderings do not mutate it.
 - Every guide rendering still uses exactly one non-streaming model request,
-  with no model API history, structured response, or second request. It renders
+  with no model API history or second request. It renders
   compact conversational prose with short, single-idea paragraphs. Engram
   deterministically bounds a completed response to at most 180 words before
-  delivery. Shared work uses a collaborative "we" voice; "you" is reserved for
-  actions that belong to the reader alone.
+  delivery. When Chromium is ready, the same response carries a private trailer
+  containing at most two short verbatim evidence excerpts. Engram removes that
+  trailer from user-facing prose and treats it only as an untrusted crop hint.
+  Shared work uses a collaborative "we" voice; "you" is reserved for actions
+  that belong to the reader alone.
 - The guide names a tool, project, account, or person only when the terminal text
   visibly establishes that identity. Model identifiers are never user identities.
 - Snapshot mode renders the same frame through Chromium into a full-bleed
   430x932 logical-pixel image at 3x density.
+- Guide mode may render a compact evidence image from the same captured frame.
+  Every model excerpt must match one unique physical row range after whitespace
+  normalization. Engram adds at most two context rows on each side, highlights
+  only matched rows, and rejects a crop spanning more than 18 rows. Ambiguous,
+  fabricated, widely separated, or configured-secret-bearing evidence produces
+  no image; it never falls back to a larger automatic screenshot.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.

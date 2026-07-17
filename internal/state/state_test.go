@@ -664,12 +664,13 @@ func TestReplyTargetsDistinguishCurrentAndStaleAlternates(t *testing.T) {
 		s.AnchorMessageID = 10
 		s.SummaryMessageID = 20
 		s.SnapshotMessageID = 30
+		s.EvidenceMessageID = 35
 		s.UpstreamMessageID = 40
 		s.StaleAlternateMessageIDs = []int{18, 28}
 	}); err != nil {
 		t.Fatal(err)
 	}
-	for _, messageID := range []int{10, 20, 30, 40} {
+	for _, messageID := range []int{10, 20, 30, 35, 40} {
 		got, targetState, ok := store.FindReplyTarget(100, messageID)
 		if !ok || targetState != ReplyTargetCurrent || got.ID != session.ID {
 			t.Fatalf("current reply target %d = %#v %q ok=%v", messageID, got, targetState, ok)

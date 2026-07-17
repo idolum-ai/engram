@@ -66,6 +66,9 @@ type TerminalSession struct {
 	LastSummary              string         `json:"last_summary,omitempty"`
 	SummaryMessageID         int            `json:"summary_message_id,omitempty"`
 	SnapshotMessageID        int            `json:"snapshot_message_id,omitempty"`
+	EvidenceMessageID        int            `json:"evidence_message_id,omitempty"`
+	EvidenceAnchorMessageID  int            `json:"evidence_anchor_message_id,omitempty"`
+	LastEvidenceHash         string         `json:"last_evidence_hash,omitempty"`
 	UpstreamMessageID        int            `json:"upstream_message_id,omitempty"`
 	SeenUpstreamSignalIDs    []string       `json:"seen_upstream_signal_ids,omitempty"`
 	LastUpstreamSignalAt     time.Time      `json:"last_upstream_signal_at,omitempty"`
@@ -155,7 +158,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion    = 8
+	currentStateVersion    = 9
 	maxTerminalSessions    = 200
 	maxAttachments         = 200
 	maxAttachmentBypasses  = 100
@@ -615,7 +618,7 @@ func (s *Store) FindReplyTarget(chatID int64, messageID int) (TerminalSession, R
 		if ts.AnchorChatID != chatID {
 			continue
 		}
-		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID || ts.UpstreamMessageID == messageID {
+		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID || ts.EvidenceMessageID == messageID || ts.UpstreamMessageID == messageID {
 			return cloneTerminalSession(ts), ReplyTargetCurrent, true
 		}
 		if ts.RetiringAnchorMessageID == messageID {
@@ -927,6 +930,10 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 		}
 		if session.RetiringAnchorMessageID != 0 && session.RetiringAnchorFormat != "snapshot" {
 			session.RetiringAnchorFormat = "text"
+		}
+		if session.EvidenceMessageID == 0 {
+			session.EvidenceAnchorMessageID = 0
+			session.LastEvidenceHash = ""
 		}
 		switch session.State {
 		case TerminalRunning, TerminalLost, TerminalClosed:

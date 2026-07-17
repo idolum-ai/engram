@@ -100,8 +100,11 @@ and focused on what the terminal content means, within 180 words. Its voice
 stands beside the reader, using direct orientation grounded only in visibly
 named tools, collaborative "we" for shared work, and short one-idea paragraphs
 for phone readability; "you" is reserved for actions only the reader can take.
-It has no model conversation history or structured response and makes no
-second request. Its small process-local continuity is isolated per window and
+It has no model conversation history and makes no second request. When local
+Chromium is ready, its single response also carries a private list of short
+verbatim evidence excerpts. Engram strips that metadata from the prose and
+accepts it only when each excerpt maps uniquely back to the shared physical
+capture. Its small process-local continuity is isolated per window and
 never becomes terminal truth. A different capture boundary, weakly aligned
 frame, manual refresh, mode switch, reattachment, or service restart discards
 the hints. Continuity advances only after the canonical Telegram rendering is
@@ -111,6 +114,12 @@ views do not alter it.
 Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
 literal and deterministic, at the cost of greater visual density and local
 rendering work.
+
+Guide mode can use that same renderer for a compact evidence image. The prose
+provides orientation; highlighted terminal rows provide inspectable evidence.
+The model cannot choose pixels or expand the observation boundary. Engram adds
+bounded surrounding rows and omits the image when matching is ambiguous, the
+crop would become broad, or configured secret redaction would alter it.
 
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying

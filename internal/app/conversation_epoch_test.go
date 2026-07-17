@@ -230,12 +230,12 @@ func TestConversationalSummaryBuildsTruthGroundedContinuation(t *testing.T) {
 	})}
 	app.Guide = client
 	first := testStyledCapture("codex", "project\nbranch\ntests running\napp pending\nstatus\ncwd\nready")
-	summary, turn, err := app.conversationalSummary(context.Background(), session, first, first.JoinedText)
+	summary, _, turn, err := app.conversationalSummary(context.Background(), session, first, first.JoinedText)
 	if err != nil || !app.commitConversationTurn(session, turn, summary) {
 		t.Fatalf("first summary: %q %v", summary, err)
 	}
 	second := testStyledCapture("codex", "project\nbranch\ntests passed\napp ok\nstatus\ncwd\nready")
-	if _, _, err := app.conversationalSummary(context.Background(), session, second, second.JoinedText); err != nil {
+	if _, _, _, err := app.conversationalSummary(context.Background(), session, second, second.JoinedText); err != nil {
 		t.Fatal(err)
 	}
 	if len(prompts) != 2 || prompts[0]["observation"] != "full" || prompts[1]["observation"] != "incremental" {
@@ -265,7 +265,7 @@ func TestConversationalSummaryDoesNotDiscloseSupersededFrame(t *testing.T) {
 			started := make(chan struct{})
 			go func() {
 				close(started)
-				_, _, err := app.conversationalSummary(context.Background(), session, capture, capture.JoinedText)
+				_, _, _, err := app.conversationalSummary(context.Background(), session, capture, capture.JoinedText)
 				done <- result{err: err}
 			}()
 			<-started

@@ -49,15 +49,40 @@ When work is in progress inside a named application, preserve the application, w
 VOICE
 Every factual sentence must be traceable to terminal_text. Never say "the terminal shows" or "the screen shows." Never attribute completed work with "you" or "you've"; use direct prose or "we" when shared interactive work is visible. Use "you" only for an action explicitly left to the reader. Write one to three short phone-readable paragraphs. A 180-word limit is a ceiling, not a target. Return prose only, without headings, labels, lists, a fixed opening, troubleshooting, or a closing question.
 
+PRIVATE EVIDENCE TRAILER
+When evidence_requested is true, silently choose one or two short excerpts copied exactly and contiguously from terminal_text that most directly support the prose. Prefer the smallest excerpts that preserve the decisive fact. Never paraphrase, repair, combine, or invent excerpt text. Do not select credentials or secrets. When no excerpt can directly support the prose, return an empty list.
+
+After the prose, append exactly one private trailer on its own line:
+<engram-evidence>{"excerpts":["exact terminal excerpt"]}</engram-evidence>
+
+When evidence_requested is false, append the same trailer with an empty excerpts list. The trailer is machine-readable metadata, not part of the prose. Each excerpt must be at most 240 characters and the prose must not mention the trailer.
+
 FINAL SILENT EDIT
 Draft first, then edit before returning. When substantive work exists, delete repository-sync state, commit hashes, absence-of-work statements, readiness claims, and every invitation or suggestion to send, provide, type, run, review, explain, begin, or continue something. Never call a repository, artifact, branch, interface, or reader "ready." Delete clean-tree, credential-identity, ID, and expiry details after a successful credential-backed operation. Delete branch and remote only when redundant with the named operation target or destination. For durable configuration work, compare the draft with terminal_text: every absolute path tied to its verification executable, private configuration, or backups, and every stated range, size, mode, or protection must survive in the prose; describe the state as active when terminal_text does. Delete routine passed-check output. If useful and disposable facts share a sentence, keep only the useful facts. After substantive work, the final sentence must be a durable fact, never an invitation, readiness claim, or proposed next action.`
 
-const MaxTokens = 640
+const MaxTokens = 768
 const MaxWords = 180
 const Temperature = 0.2
 
+const evidenceOpen = "<engram-evidence>"
+const evidenceClose = "</engram-evidence>"
+const maxEvidenceExcerpts = 2
+const maxEvidenceExcerptRunes = 240
+
 type Renderer interface {
 	Converse(context.Context, Input) (string, error)
+}
+
+// EvidenceRenderer adds privately selected terminal evidence to the ordinary
+// conversational rendering. Callers must still verify every excerpt against
+// the capture before presenting it.
+type EvidenceRenderer interface {
+	ConverseWithEvidence(context.Context, Input) (Result, error)
+}
+
+type Result struct {
+	Text     string
+	Evidence []string
 }
 
 // Input is one bounded terminal observation. VisibleText is always the complete
@@ -69,6 +94,7 @@ type Input struct {
 	ChangedText       string
 	RemovedText       string
 	StableContext     string
+	EvidenceRequested bool
 }
 
 func BuildPrompt(in Input) string {
@@ -80,6 +106,7 @@ func BuildPrompt(in Input) string {
 		ChangedText       string `json:"changed_terminal_text,omitempty"`
 		RemovedText       string `json:"removed_terminal_text,omitempty"`
 		StableContext     string `json:"stable_terminal_context,omitempty"`
+		EvidenceRequested bool   `json:"evidence_requested"`
 	}
 	request := prompt{
 		SessionID:         in.SessionID,
@@ -89,6 +116,7 @@ func BuildPrompt(in Input) string {
 		ChangedText:       in.ChangedText,
 		RemovedText:       in.RemovedText,
 		StableContext:     in.StableContext,
+		EvidenceRequested: in.EvidenceRequested,
 	}
 	if in.PreviousRendering != "" && (in.ChangedText != "" || in.RemovedText != "") {
 		request.Observation = "incremental"
@@ -98,6 +126,42 @@ func BuildPrompt(in Input) string {
 		panic(err)
 	}
 	return "TERMINAL_OBSERVATION_JSON\n" + string(b)
+}
+
+// ParseResult separates private evidence metadata from user-facing prose.
+// Missing or malformed metadata degrades to prose-only output.
+func ParseResult(raw string) Result {
+	raw = strings.TrimSpace(raw)
+	result := Result{Text: raw}
+	start := strings.LastIndex(raw, evidenceOpen)
+	if start < 0 {
+		return result
+	}
+	result.Text = strings.TrimSpace(raw[:start])
+	metadata := raw[start+len(evidenceOpen):]
+	end := strings.Index(metadata, evidenceClose)
+	if end < 0 || strings.TrimSpace(metadata[end+len(evidenceClose):]) != "" {
+		return result
+	}
+	var trailer struct {
+		Excerpts []string `json:"excerpts"`
+	}
+	if err := json.Unmarshal([]byte(metadata[:end]), &trailer); err != nil {
+		return result
+	}
+	seen := make(map[string]bool, len(trailer.Excerpts))
+	for _, excerpt := range trailer.Excerpts {
+		excerpt = strings.TrimSpace(excerpt)
+		if excerpt == "" || len([]rune(excerpt)) > maxEvidenceExcerptRunes || seen[excerpt] {
+			continue
+		}
+		seen[excerpt] = true
+		result.Evidence = append(result.Evidence, excerpt)
+		if len(result.Evidence) == maxEvidenceExcerpts {
+			break
+		}
+	}
+	return result
 }
 
 func LimitWords(text string, maximum int) string {

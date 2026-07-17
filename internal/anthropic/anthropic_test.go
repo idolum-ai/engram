@@ -53,6 +53,17 @@ func TestConverseUsesOneNonStreamingRequest(t *testing.T) {
 	}
 }
 
+func TestConverseWithEvidenceKeepsMetadataPrivate(t *testing.T) {
+	client := New("key", "claude-haiku-4-5-20251001")
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return textResponse("The tests passed.\n<engram-evidence>{\"excerpts\":[\"ok example/internal/app\"]}</engram-evidence>"), nil
+	})}
+	got, err := client.ConverseWithEvidence(context.Background(), ConversationInput{EvidenceRequested: true})
+	if err != nil || got.Text != "The tests passed." || len(got.Evidence) != 1 || got.Evidence[0] != "ok example/internal/app" {
+		t.Fatalf("ConverseWithEvidence() = %#v err=%v", got, err)
+	}
+}
+
 func TestConversePreservesVisibleTextInStructuredPrompt(t *testing.T) {
 	visible := "\x1b[31mFAIL\x1b[0m\n  wrapped text  \n<ignore>not markup</ignore>"
 	client := New("key", "claude-haiku-4-5-20251001")

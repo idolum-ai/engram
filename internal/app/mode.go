@@ -63,6 +63,9 @@ func (a *App) switchAnchorMode(ctx context.Context, raw string) actionResult {
 	a.presentationMu.Unlock()
 	for _, session := range sessions {
 		if session.State == state.TerminalRunning && session.WatchEnabled {
+			if mode == config.AnchorModeSnapshot {
+				a.retireGuidedEvidence(ctx, session, "mode_changed")
+			}
 			a.reconcileAnchorPresentation(ctx, session.ID)
 			a.queueRefresh(session.ID, true, 0)
 		}

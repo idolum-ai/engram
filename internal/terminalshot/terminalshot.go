@@ -28,13 +28,15 @@ const (
 )
 
 type Input struct {
-	ANSI        string
-	Title       string
-	Target      string
-	CWD         string
-	Columns     int
-	VisibleRows int
-	BufferRows  int
+	ANSI          string
+	Title         string
+	Target        string
+	CWD           string
+	Columns       int
+	VisibleRows   int
+	BufferRows    int
+	Compact       bool
+	HighlightRows []int
 }
 
 type CommandRunner interface {
@@ -164,6 +166,7 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 	}()
 
 	pageURL := (&url.URL{Scheme: "file", Path: htmlPath}).String()
+	logicalHeight := renderHeight(input)
 	args := []string{
 		"--headless",
 		"--disable-background-networking",
@@ -178,7 +181,7 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 		"--no-default-browser-check",
 		"--no-first-run",
 		"--force-device-scale-factor=" + strconv.Itoa(PixelRatio),
-		fmt.Sprintf("--window-size=%d,%d", LogicalWidth, LogicalHeight),
+		fmt.Sprintf("--window-size=%d,%d", LogicalWidth, logicalHeight),
 		"--user-data-dir=" + profileDir,
 		"--screenshot=" + pngPath,
 		pageURL,
@@ -205,8 +208,8 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 	if closeErr != nil {
 		return "", fmt.Errorf("close snapshot PNG: %w", closeErr)
 	}
-	if pngConfig.Width != LogicalWidth*PixelRatio || pngConfig.Height != LogicalHeight*PixelRatio {
-		return "", fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, LogicalWidth*PixelRatio, LogicalHeight*PixelRatio)
+	if pngConfig.Width != LogicalWidth*PixelRatio || pngConfig.Height != logicalHeight*PixelRatio {
+		return "", fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, LogicalWidth*PixelRatio, logicalHeight*PixelRatio)
 	}
 	if err := os.Chmod(pngPath, 0o600); err != nil {
 		return "", fmt.Errorf("protect snapshot PNG: %w", err)
@@ -225,14 +228,44 @@ func RenderHTML(input Input, themeName string) string {
 		fontSize = fit
 	}
 	theme := snapshotThemeFor(themeName)
+	footer := fmt.Sprintf("last %d buffer rows", bufferRows)
+	if input.Compact {
+		footer = "verified terminal evidence"
+	}
+	highlights := renderHighlights(input.HighlightRows, theme)
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
-:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}pre{width:%dch;height:%dpx;margin:0;overflow:hidden;color:%s;background:%s;font:%.2fpx/13.2px "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:pre}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
-</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen"><pre>%s</pre></section><footer class="foot"><span>last %d buffer rows</span><span>%dx%d visible</span></footer></main></body></html>`,
+:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;height:13.2px;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%dpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/13.2px "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:pre}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
+</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span>%s</span><span>%dx%d visible</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
-		input.Columns, bufferRows*14, theme.text, theme.screen, fontSize, theme.subtleBorder, theme.muted, theme.foot,
-		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), ansiHTML(input.ANSI, theme),
-		bufferRows, input.Columns, input.VisibleRows)
+		theme.highlightBorder, theme.highlight, input.Columns, bufferRows*14, theme.text, fontSize, theme.subtleBorder, theme.muted, theme.foot,
+		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
+		footer, input.Columns, input.VisibleRows)
+}
+
+func renderHeight(input Input) int {
+	if !input.Compact {
+		return LogicalHeight
+	}
+	height := 86 + int(math.Ceil(float64(input.BufferRows)*13.2))
+	if height < 180 {
+		return 180
+	}
+	if height > LogicalHeight {
+		return LogicalHeight
+	}
+	return height
+}
+
+func renderHighlights(rows []int, theme snapshotTheme) string {
+	var out strings.Builder
+	for _, row := range rows {
+		if row < 0 {
+			continue
+		}
+		fmt.Fprintf(&out, `<span class="evidence-mark" style="top:%.1fpx"></span>`, 10+float64(row)*13.2)
+	}
+	return out.String()
 }
 
 func validateInput(input Input) error {
@@ -247,6 +280,11 @@ func validateInput(input Input) error {
 	}
 	if len(input.ANSI) > maxInputBytes {
 		return fmt.Errorf("snapshot capture exceeds %d bytes", maxInputBytes)
+	}
+	for _, row := range input.HighlightRows {
+		if row < 0 || row >= input.BufferRows {
+			return fmt.Errorf("snapshot highlight row %d is outside the capture", row)
+		}
 	}
 	return nil
 }
@@ -289,6 +327,7 @@ type snapshotTheme struct {
 	colorScheme                              string
 	canvas, screen, bar, foot                string
 	text, title, muted, border, subtleBorder string
+	highlight, highlightBorder               string
 	ansi                                     []string
 	accessible                               bool
 }
@@ -299,6 +338,7 @@ func snapshotThemeFor(name string) snapshotTheme {
 		return snapshotTheme{
 			colorScheme: "dark", canvas: "#000000", screen: "#000000", bar: "#101010", foot: "#080808",
 			text: "#ffffff", title: "#ffffff", muted: "#d8d8d8", border: "#ffffff", subtleBorder: "#a8a8a8",
+			highlight: "rgba(255,230,109,.18)", highlightBorder: "#ffe66d",
 			ansi:       []string{"#000000", "#ff8c42", "#63f2c8", "#ffe66d", "#8db7ff", "#ff9ee5", "#58d6ff", "#ffffff", "#b8b8b8", "#ffad7a", "#8affd8", "#fff29c", "#b8d1ff", "#ffc4ef", "#9ae8ff", "#ffffff"},
 			accessible: true,
 		}
@@ -306,6 +346,7 @@ func snapshotThemeFor(name string) snapshotTheme {
 		return snapshotTheme{
 			colorScheme: "light", canvas: "#ffffff", screen: "#ffffff", bar: "#f2f2f2", foot: "#f7f7f7",
 			text: "#111111", title: "#111111", muted: "#444444", border: "#111111", subtleBorder: "#666666",
+			highlight: "rgba(23,78,166,.12)", highlightBorder: "#174ea6",
 			ansi:       []string{"#111111", "#8f2f00", "#00623d", "#665200", "#174ea6", "#792168", "#00646d", "#333333", "#444444", "#a13a00", "#006b45", "#715d00", "#2458ad", "#862873", "#006f78", "#111111"},
 			accessible: true,
 		}
@@ -313,6 +354,7 @@ func snapshotThemeFor(name string) snapshotTheme {
 		return snapshotTheme{
 			colorScheme: "dark", canvas: "#111418", screen: "#111418", bar: "#202429", foot: "#171a1e",
 			text: "#d8dee9", title: "#c7ccd1", muted: "#858c94", border: "#30353a", subtleBorder: "#252a2f",
+			highlight: "rgba(245,197,66,.16)", highlightBorder: "#f5c542",
 			ansi: []string{"#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5", "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff"},
 		}
 	}

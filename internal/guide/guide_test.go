@@ -36,6 +36,7 @@ func TestBuildPromptSeparatesFullAndIncrementalEvidence(t *testing.T) {
 				ChangedText       string `json:"changed_terminal_text"`
 				RemovedText       string `json:"removed_terminal_text"`
 				StableContext     string `json:"stable_terminal_context"`
+				EvidenceRequested bool   `json:"evidence_requested"`
 			}
 			if err := json.Unmarshal([]byte(encoded), &got); err != nil {
 				t.Fatal(err)
@@ -44,6 +45,21 @@ func TestBuildPromptSeparatesFullAndIncrementalEvidence(t *testing.T) {
 				t.Fatalf("BuildPrompt() = %#v", got)
 			}
 		})
+	}
+}
+
+func TestParseResultSeparatesAndBoundsPrivateEvidence(t *testing.T) {
+	raw := "The tests passed.\n<engram-evidence>{\"excerpts\":[\"ok example/internal/app\",\"ok example/internal/app\",\"tests passed successfully\"]}</engram-evidence>"
+	got := ParseResult(raw)
+	if got.Text != "The tests passed." || len(got.Evidence) != 2 || got.Evidence[0] != "ok example/internal/app" || got.Evidence[1] != "tests passed successfully" {
+		t.Fatalf("ParseResult() = %#v", got)
+	}
+}
+
+func TestParseResultDropsMalformedPrivateMetadata(t *testing.T) {
+	got := ParseResult("The tests passed.\n<engram-evidence>{not json}</engram-evidence>")
+	if got.Text != "The tests passed." || len(got.Evidence) != 0 || strings.Contains(got.Text, "engram-evidence") {
+		t.Fatalf("ParseResult() = %#v", got)
 	}
 }
 
