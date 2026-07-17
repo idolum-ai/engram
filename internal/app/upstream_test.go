@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -61,8 +62,131 @@ func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 
 	a.refreshSession(context.Background(), id, true)
 	got, _ := a.Store.FindSession(id)
-	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != sha("ordinary output") {
-		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, sha("ordinary output"))
+	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != wantHash {
+		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, wantHash)
+	}
+}
+
+func TestUnchangedGuideEvidenceRefreshPreservesCanonicalCard(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.capturePhysical = "ordinary output\n"
+	runner.captureJoined = runner.capturePhysical
+	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = anchorFormatGuideEvidence
+		session.LastKnownCWD = "/tmp"
+		session.LastRawCaptureHash = wantHash
+		session.LastSummary = "Ordinary output is visible."
+		session.LastAnchorEditAt = time.Now().Add(-time.Minute)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	telegramCalls := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		telegramCalls++
+		return nil, errors.New("unchanged card should not be edited")
+	})}
+	a.Telegram = client
+	a.snapshotReady = true
+	a.mode = config.AnchorModeGuide
+	current, _ := a.Store.FindSession(id)
+	a.rememberAnchorTextFrame(current, "ordinary output", "coherent-crop")
+	caption, _ := a.guidedEvidenceCaption(current, current.LastSummary, visibleReferences{})
+	wantRenderHash := sha(caption + "\x00coherent-crop")
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.LastRenderHash = wantRenderHash
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	a.refreshSession(context.Background(), id, false)
+	got, _ := a.Store.FindSession(id)
+	if telegramCalls != 0 || got.LastRenderHash != wantRenderHash {
+		t.Fatalf("unchanged refresh degraded card: calls=%d session=%#v", telegramCalls, got)
+	}
+}
+
+func TestUnchangedGuideEvidenceRefreshRestoresCompanionAfterRestart(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.capturePhysical = "ordinary output\n"
+	runner.captureJoined = runner.capturePhysical
+	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = anchorFormatGuideEvidence
+		session.LastKnownCWD = "/tmp"
+		session.LastRawCaptureHash = wantHash
+		session.LastSummary = "Ordinary output is visible."
+		session.LastAnchorEditAt = time.Now().Add(-time.Minute)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	modelCalls := 0
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		modelCalls++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"Ordinary output is visible."}]}`))}, nil
+	})}
+	a.Guide = model
+	renderer := &fakeSnapshotRenderer{}
+	a.Snapshots = renderer
+	a.Config.Home = t.TempDir()
+	a.snapshotReady = true
+	a.mode = config.AnchorModeGuide
+	a.renderSlots = make(chan struct{}, 1)
+	persisted, _ := a.Store.FindSession(id)
+	capture := tmux.StyledCapture{
+		ANSI: runner.capturePhysical, Text: "ordinary output", JoinedText: "ordinary output",
+		ServerID: appTestServerID, WindowID: "@1", PaneID: "%1", CurrentCmd: "bash",
+		AlternateOn: "1", PaneInMode: "0", Columns: 71, VisibleRows: 37, BufferRows: 1,
+		Title: "build pane", CurrentPath: "/tmp",
+	}
+	crop := a.selectGuidedEvidenceCrop(persisted, capture, conversationFrame{}, "ordinary output", persisted.LastSummary, nil)
+	caption, _ := a.guidedEvidenceCaption(persisted, persisted.LastSummary, visibleReferences{})
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.LastRenderHash = sha(caption + "\x00" + crop.hash)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	telegramCalls := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		telegramCalls++
+		return nil, errors.New("coherent persisted card should not be edited: " + request.URL.Path)
+	})}
+	a.Telegram = client
+
+	a.refreshSession(context.Background(), id, false)
+
+	got, _ := a.Store.FindSession(id)
+	frame, frameOK := a.snapshotTextFrame(got)
+	if modelCalls != 1 || renderer.renders != 1 || telegramCalls != 0 || !frameOK || frame.JoinedText != "ordinary output" {
+		t.Fatalf("companion recovery: model=%d renders=%d telegram=%d frame=%#v ok=%v", modelCalls, renderer.renders, telegramCalls, frame, frameOK)
+	}
+}
+
+func TestGuideCaptureHashIncludesRenderGeometry(t *testing.T) {
+	first := tmux.StyledCapture{Columns: 71, VisibleRows: 37, CurrentPath: "/tmp", Title: "build"}
+	second := first
+	second.Columns = 120
+	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "build", second) {
+		t.Fatal("pane resize did not change the guide capture fingerprint")
+	}
+	styled := first
+	styled.ANSI = "\x1b[31msame text"
+	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "build", styled) {
+		t.Fatal("ANSI-only change did not change the guide capture fingerprint")
+	}
+	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "renamed", first) {
+		t.Fatal("Engram title change did not change the guide capture fingerprint")
 	}
 }
 
@@ -439,7 +563,7 @@ func TestDeletedReplyTargetFallsBackToStandaloneRoutableSignal(t *testing.T) {
 	a.deliverUpstreamSignal(context.Background(), session, upstream.Record{ID: firstSignalID, Payload: "needs attention"})
 	a.refreshWG.Wait()
 	got, targetState, ok := store.FindReplyTarget(100, 88)
-	if len(bodies) != 2 || bodies[0]["reply_to_message_id"] != float64(77) || bodies[1]["reply_to_message_id"] != nil || !ok || targetState != state.ReplyTargetCurrent || got.ID != session.ID || len(recovered) != 1 {
+	if len(bodies) != 2 || telegramReplyMessageID(bodies[0]) != 77 || telegramReplyMessageID(bodies[1]) != 0 || !ok || targetState != state.ReplyTargetCurrent || got.ID != session.ID || len(recovered) != 1 {
 		t.Fatalf("fallback bodies=%#v route=%#v %q ok=%v", bodies, got, targetState, ok)
 	}
 }

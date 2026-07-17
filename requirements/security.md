@@ -66,6 +66,17 @@ privacy model must stay small and explicit.
   to a local headless browser and then to the configured Telegram DM, never to
   a model provider. Terminal text must be HTML-escaped; browser networking, extensions,
   and persistent profiles must be disabled.
+- Guide crops refuse styled rows containing configured credentials and redact
+  title and working-directory chrome. This is a narrow configured-secret check,
+  not general transcript sanitization. Their exact plain-text companions remain
+  process-local and are uploaded only after a current-anchor `📄 Raw` callback.
+- When a canonical media anchor is replaced, Engram attempts to delete the old
+  photo before retiring its identity. A failed deletion triggers replacement
+  with a locally generated neutral image. Telegram may refuse both operations
+  for older messages; in that case Engram clears controls where possible,
+  applies a redacted inactive caption, unpins the message, and audits that pixels
+  remain. Telegram history is a disclosure boundary outside Engram's local
+  retention controls.
 - In `snapshot` mode, exact terminal images are sent automatically whenever a
   changed live anchor is rendered. The selected provider is called only when the user taps
   `🗣️`, if that capability was configured and enabled at startup.
@@ -151,6 +162,13 @@ privacy model must stay small and explicit.
   use a deterministic suffix in the private artifact root.
 - Snapshot HTML, isolated browser profiles, and PNGs must use private temporary
   paths and be removed after upload or failure.
+- Automatic guided evidence uses literal terminal pixels inside the canonical
+  guide card and is not a general
+  redacted screenshot. Engram refuses the crop when its configured secret
+  redactor would change any selected or context row, but unrecognized sensitive
+  terminal content can still appear. The same single-user Telegram boundary
+  therefore applies; full snapshots remain explicitly user-requested in guide
+  mode.
 
 ## Process Ownership
 
@@ -166,6 +184,27 @@ privacy model must stay small and explicit.
   extraction. Their textual notification and audit payload are redacted; an
   exact snapshot can still contain the literal record under the existing
   unredacted snapshot boundary.
+- The hermetic E2E workflow uses fixture-only identifiers and credentials, an
+  in-process loopback Telegram simulator, an isolated tmux socket root, private
+  runtime paths, and no model provider. Its uploaded evidence must not contain
+  generated configuration, state, audit logs, sockets, browser profiles, or
+  arbitrary host terminal data.
+- The E2E child uses a private allowlisted environment, private home and XDG
+  roots, deterministic shell identity, and an absolute tmux wrapper with
+  `-f /dev/null`; socket isolation alone is insufficient because tmux can load
+  user configuration and hooks. The simulator must enforce the exact fixture
+  chat and existing message identities before accepting edits, pins, deletes,
+  or uploads.
+- An external subprocess supervisor must own the E2E service process group and
+  private tmux cleanup. Closing its inherited control pipe, including through a
+  hard test-process exit, triggers bounded cleanup without relying on test
+  defers or signaling stale numeric identities.
+- The manual dispatcher must run the trusted `main` workflow definition and
+  verify the requested SHA is the tip of an actual same-repository branch,
+  rather than trusting exact-SHA fetch behavior that can expose hidden fork
+  pull refs. The job treats the verified target as untrusted code under test,
+  receives read-only contents permission, and references no repository secrets
+  or protected environment.
 
 ## Vulnerability Handling
 

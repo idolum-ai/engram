@@ -33,13 +33,17 @@ const (
 )
 
 type Input struct {
-	ANSI        string
-	Title       string
-	Target      string
-	CWD         string
-	Columns     int
-	VisibleRows int
-	BufferRows  int
+	ANSI          string
+	Title         string
+	Target        string
+	CWD           string
+	Columns       int
+	VisibleRows   int
+	BufferRows    int
+	Compact       bool
+	HighlightRows []int
+	ColumnOffset  int
+	Footer        string
 }
 
 type CommandRunner interface {
@@ -169,6 +173,7 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 	}()
 
 	pageURL := (&url.URL{Scheme: "file", Path: htmlPath}).String()
+	logicalHeight := renderHeight(input)
 	args := []string{
 		"--headless",
 		"--disable-background-networking",
@@ -183,7 +188,7 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 		"--no-default-browser-check",
 		"--no-first-run",
 		"--force-device-scale-factor=" + strconv.Itoa(PixelRatio),
-		fmt.Sprintf("--window-size=%d,%d", LogicalWidth, LogicalHeight),
+		fmt.Sprintf("--window-size=%d,%d", LogicalWidth, logicalHeight),
 		"--user-data-dir=" + profileDir,
 		"--screenshot=" + pngPath,
 		pageURL,
@@ -210,8 +215,8 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 	if closeErr != nil {
 		return "", fmt.Errorf("close snapshot PNG: %w", closeErr)
 	}
-	if pngConfig.Width != LogicalWidth*PixelRatio || pngConfig.Height != LogicalHeight*PixelRatio {
-		return "", fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, LogicalWidth*PixelRatio, LogicalHeight*PixelRatio)
+	if pngConfig.Width != LogicalWidth*PixelRatio || pngConfig.Height != logicalHeight*PixelRatio {
+		return "", fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, LogicalWidth*PixelRatio, logicalHeight*PixelRatio)
 	}
 	if err := os.Chmod(pngPath, 0o600); err != nil {
 		return "", fmt.Errorf("protect snapshot PNG: %w", err)
@@ -225,20 +230,40 @@ func RenderHTML(input Input, themeName string) string {
 	if bufferRows <= 0 {
 		bufferRows = input.VisibleRows
 	}
-	renderColumns, fontSize, lineHeight := readableTerminalLayout(input.Columns)
+	layoutColumns := input.Columns
+	if input.Compact {
+		layoutColumns = min(layoutColumns, 71)
+	}
+	renderColumns, fontSize, lineHeight := readableTerminalLayout(layoutColumns)
+	if input.Compact {
+		lineHeight = 13.2
+	}
+	lineHeightCSS := fmt.Sprintf("%.2f", lineHeight)
+	if input.Compact {
+		lineHeightCSS = "13.2"
+	}
 	columnLabel := fmt.Sprintf("%dx%d visible", input.Columns, input.VisibleRows)
 	if renderColumns < input.Columns {
 		columnLabel = fmt.Sprintf("columns 1–%d of %d · %d visible rows", renderColumns, input.Columns, input.VisibleRows)
 	}
 	theme := snapshotThemeFor(themeName)
+	if input.Compact {
+		theme.accessible = true
+	}
+	footer := fmt.Sprintf("%d-row bounded frame · %s", bufferRows, columnLabel)
+	if input.Compact {
+		footer = firstNonEmpty(input.Footer, "quoted terminal text")
+	}
+	highlights := renderHighlights(input.HighlightRows, theme)
+	horizontalOffset := float64(input.ColumnOffset) * fontSize * 0.602
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
-:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}pre{width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:%s;font:%.2fpx/%.2fpx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:pre}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
-</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen"><pre>%s</pre></section><footer class="foot"><span>%d-row bounded frame</span><span>%s</span></footer></main></body></html>`,
+:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;height:%spx;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:pre;transform:translateX(-%.2fpx)}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
+</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span>%s</span><span>%dx%d visible</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
-		renderColumns, float64(bufferRows)*lineHeight, theme.text, theme.screen, fontSize, lineHeight, theme.subtleBorder, theme.muted, theme.foot,
-		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), ansiHTML(input.ANSI, theme),
-		bufferRows, columnLabel)
+		lineHeightCSS, theme.highlightBorder, theme.highlight, renderColumns, float64(bufferRows)*lineHeight, theme.text, fontSize, lineHeightCSS, horizontalOffset, theme.subtleBorder, theme.muted, theme.foot,
+		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
+		html.EscapeString(footer), input.Columns, input.VisibleRows)
 }
 
 // RenderedColumns reports how many leading columns fit legibly in the fixed
@@ -262,6 +287,31 @@ func readableTerminalLayout(columns int) (renderColumns int, fontSize, lineHeigh
 	return renderColumns, fontSize, fontSize * terminalLineHeight
 }
 
+func renderHeight(input Input) int {
+	if !input.Compact {
+		return LogicalHeight
+	}
+	height := 86 + int(math.Ceil(float64(input.BufferRows)*13.2))
+	if height < 180 {
+		return 180
+	}
+	if height > LogicalHeight {
+		return LogicalHeight
+	}
+	return height
+}
+
+func renderHighlights(rows []int, theme snapshotTheme) string {
+	var out strings.Builder
+	for _, row := range rows {
+		if row < 0 {
+			continue
+		}
+		fmt.Fprintf(&out, `<span class="evidence-mark" style="top:%.1fpx"></span>`, 10+float64(row)*13.2)
+	}
+	return out.String()
+}
+
 func validateInput(input Input) error {
 	if input.Columns <= 0 || input.Columns > 400 {
 		return fmt.Errorf("snapshot columns must be between 1 and 400")
@@ -274,6 +324,14 @@ func validateInput(input Input) error {
 	}
 	if len(input.ANSI) > maxInputBytes {
 		return fmt.Errorf("snapshot capture exceeds %d bytes", maxInputBytes)
+	}
+	for _, row := range input.HighlightRows {
+		if row < 0 || row >= input.BufferRows {
+			return fmt.Errorf("snapshot highlight row %d is outside the capture", row)
+		}
+	}
+	if input.ColumnOffset < 0 || input.ColumnOffset >= input.Columns {
+		return fmt.Errorf("snapshot column offset %d is outside the capture", input.ColumnOffset)
 	}
 	return nil
 }
@@ -316,6 +374,7 @@ type snapshotTheme struct {
 	colorScheme                              string
 	canvas, screen, bar, foot                string
 	text, title, muted, border, subtleBorder string
+	highlight, highlightBorder               string
 	ansi                                     []string
 	accessible                               bool
 }
@@ -326,6 +385,7 @@ func snapshotThemeFor(name string) snapshotTheme {
 		return snapshotTheme{
 			colorScheme: "dark", canvas: "#000000", screen: "#000000", bar: "#101010", foot: "#080808",
 			text: "#ffffff", title: "#ffffff", muted: "#d8d8d8", border: "#ffffff", subtleBorder: "#a8a8a8",
+			highlight: "rgba(255,230,109,.18)", highlightBorder: "#ffe66d",
 			ansi:       []string{"#000000", "#ff8c42", "#63f2c8", "#ffe66d", "#8db7ff", "#ff9ee5", "#58d6ff", "#ffffff", "#b8b8b8", "#ffad7a", "#8affd8", "#fff29c", "#b8d1ff", "#ffc4ef", "#9ae8ff", "#ffffff"},
 			accessible: true,
 		}
@@ -333,6 +393,7 @@ func snapshotThemeFor(name string) snapshotTheme {
 		return snapshotTheme{
 			colorScheme: "light", canvas: "#ffffff", screen: "#ffffff", bar: "#f2f2f2", foot: "#f7f7f7",
 			text: "#111111", title: "#111111", muted: "#444444", border: "#111111", subtleBorder: "#666666",
+			highlight: "rgba(23,78,166,.12)", highlightBorder: "#174ea6",
 			ansi:       []string{"#111111", "#8f2f00", "#00623d", "#665200", "#174ea6", "#792168", "#00646d", "#333333", "#444444", "#a13a00", "#006b45", "#715d00", "#2458ad", "#862873", "#006f78", "#111111"},
 			accessible: true,
 		}
@@ -340,6 +401,7 @@ func snapshotThemeFor(name string) snapshotTheme {
 		return snapshotTheme{
 			colorScheme: "dark", canvas: "#111418", screen: "#111418", bar: "#202429", foot: "#171a1e",
 			text: "#d8dee9", title: "#c7ccd1", muted: "#858c94", border: "#30353a", subtleBorder: "#252a2f",
+			highlight: "rgba(245,197,66,.16)", highlightBorder: "#f5c542",
 			ansi: []string{"#000000", "#cd3131", "#0dbc79", "#e5e510", "#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5", "#666666", "#f14c4c", "#23d18b", "#f5f543", "#3b8eea", "#d670d6", "#29b8db", "#ffffff"},
 		}
 	}

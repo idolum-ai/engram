@@ -2,7 +2,15 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"html"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
@@ -22,7 +30,9 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return
 	}
-	formatMismatch := a.snapshotAnchors() && ts.AnchorFormat != "snapshot" || !a.snapshotAnchors() && ts.AnchorFormat == "snapshot"
+	formatMismatch := a.snapshotAnchors() && ts.AnchorFormat != anchorFormatSnapshot ||
+		!a.snapshotAnchors() && a.snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
+		!a.snapshotAnchors() && !a.snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
 	if formatMismatch && ts.State == state.TerminalRunning && ts.WatchEnabled {
 		a.queueRefresh(id, true, 0)
 	}
@@ -65,10 +75,22 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 		return
 	}
 	var retireErr error
-	if ts.RetiringAnchorFormat == "snapshot" {
-		_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
+	removed := false
+	if mediaAnchorFormat(ts.RetiringAnchorFormat) {
+		retireErr = a.Telegram.DeleteMessage(ctx, ts.AnchorChatID, oldID)
+		if retireErr == nil || isTelegramMessageGone(retireErr) {
+			removed = true
+			retireErr = nil
+		} else {
+			_ = a.audit("telegram.anchor_retire", "delete_failed", map[string]any{"session_id": id, "message_id": oldID, "error": retireErr.Error()})
+			retireErr = a.replaceMediaWithTombstone(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts))
+			if retireErr != nil && isTelegramAnchorUnavailable(retireErr) {
+				_ = a.audit("telegram.anchor_retire", "media_retained", map[string]any{"session_id": id, "message_id": oldID, "error": retireErr.Error()})
+				_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts), telegram.ClearMarkup())
+			}
+		}
 	} else {
-		_, retireErr = a.editAnchor(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
+		_, retireErr = a.editAnchor(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts), telegram.ClearMarkup())
 	}
 	if retireErr != nil && !telegram.IsMessageNotModified(retireErr) {
 		if !isTelegramAnchorUnavailable(retireErr) {
@@ -77,10 +99,12 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 			return
 		}
 	}
-	if err := a.Telegram.UnpinChatMessage(ctx, ts.AnchorChatID, oldID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
-		_ = a.audit("telegram.anchor_retire", "failed", map[string]any{"session_id": id, "message_id": oldID, "stage": "unpin", "error": err.Error()})
-		a.deferAnchorRetirement(id, oldID)
-		return
+	if !removed {
+		if err := a.Telegram.UnpinChatMessage(ctx, ts.AnchorChatID, oldID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
+			_ = a.audit("telegram.anchor_retire", "failed", map[string]any{"session_id": id, "message_id": oldID, "stage": "unpin", "error": err.Error()})
+			a.deferAnchorRetirement(id, oldID)
+			return
+		}
 	}
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		if session.RetiringAnchorMessageID == oldID {
@@ -161,16 +185,80 @@ func (a *App) ensureCurrentAnchorUnpinnedLocked(ctx context.Context, ts state.Te
 }
 
 func (a *App) deactivateProspectiveAnchor(ctx context.Context, chatID int64, messageID int, text string) {
-	_, _ = a.editAnchor(ctx, chatID, messageID, text, telegram.ClearMarkup())
-	_ = a.Telegram.UnpinChatMessage(ctx, chatID, messageID)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := a.Telegram.DeleteMessage(cleanupCtx, chatID, messageID); err == nil || isTelegramMessageGone(err) {
+		return
+	} else {
+		_ = a.audit("telegram.prospective_anchor", "delete_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if _, err := a.editAnchor(cleanupCtx, chatID, messageID, text, telegram.ClearMarkup()); err != nil && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_anchor", "deactivate_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if err := a.Telegram.UnpinChatMessage(cleanupCtx, chatID, messageID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_anchor", "unpin_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+}
+
+func (a *App) replaceMediaWithTombstone(ctx context.Context, chatID int64, messageID int, text string) error {
+	path, err := neutralAnchorImage(a.Config.ArtifactDir())
+	if err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	_, err = a.Telegram.EditHTMLPhoto(ctx, chatID, messageID, path, html.EscapeString(text), telegram.ClearMarkup())
+	return err
+}
+
+func neutralAnchorImage(dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create neutral media directory: %w", err)
+	}
+	file, err := os.CreateTemp(dir, ".engram-neutral-*.png")
+	if err != nil {
+		return "", fmt.Errorf("create neutral media: %w", err)
+	}
+	path := file.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(path)
+		}
+	}()
+	canvas := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.RGBA{R: 17, G: 20, B: 24, A: 255}}, image.Point{}, draw.Src)
+	if err := png.Encode(file, canvas); err != nil {
+		file.Close()
+		return "", fmt.Errorf("encode neutral media: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close neutral media: %w", err)
+	}
+	keep = true
+	return path, nil
 }
 
 func anchorShouldBePinned(ts state.TerminalSession) bool {
 	return ts.State == state.TerminalRunning && ts.WatchEnabled && ts.AnchorMessageID != 0
 }
 
-func retiredAnchorText(ts state.TerminalSession) string {
-	return fmt.Sprintf("[%d] %s\ncontinued in the newer live anchor", ts.ID, firstNonEmpty(ts.Title, "session"))
+func (a *App) retiredAnchorText(ts state.TerminalSession) string {
+	prefix := fmt.Sprintf("[%d] ", ts.ID)
+	suffix := "\ncontinued in the newer live anchor"
+	title := a.redactText(firstNonEmpty(ts.Title, "session"))
+	// The same tombstone is used for text and media predecessors. Keep it below
+	// Telegram's parsed caption limit while preserving its screen-reader meaning.
+	title = truncateAtWord(title, 900-len(prefix)-len(suffix))
+	return prefix + title + suffix
+}
+
+func isTelegramMessageGone(err error) bool {
+	var telegramErr *telegram.Error
+	if !errors.As(err, &telegramErr) || (telegramErr.ErrorCode != 400 && telegramErr.StatusCode != 400) {
+		return false
+	}
+	description := strings.ToLower(telegramErr.Description)
+	return strings.Contains(description, "message to delete not found") || strings.Contains(description, "message not found")
 }
 
 func (a *App) anchorMutex(id int) *keyedMutexHandle {

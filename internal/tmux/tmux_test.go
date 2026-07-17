@@ -319,6 +319,27 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 	})
 }
 
+func TestMissingTmuxServerRecognizesSupportedDiagnostics(t *testing.T) {
+	for _, stderr := range []string{
+		"no server running on /tmp/tmux/default",
+		"error connecting to /tmp/tmux-1000/default (No such file or directory)",
+	} {
+		err := &commandError{args: []string{"list-sessions"}, err: errors.New("exit status 1"), stderr: stderr}
+		if !missingTmuxServer(err) {
+			t.Fatalf("missing server diagnostic not recognized: %q", stderr)
+		}
+	}
+	for _, stderr := range []string{
+		"error connecting to /tmp/tmux-1000/default (Permission denied)",
+		"no such file or directory",
+	} {
+		err := &commandError{args: []string{"list-sessions"}, err: errors.New("exit status 1"), stderr: stderr}
+		if missingTmuxServer(err) {
+			t.Fatalf("unrelated diagnostic classified as missing server: %q", stderr)
+		}
+	}
+}
+
 func TestListWindowsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
 		out: tmuxRecord("$7", "main", "0", "@1", "code", "1", "%2", "/home/me", "bash"),
@@ -443,6 +464,28 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 		!reflect.DeepEqual(captureCall[22:27], []string{";", "display-message", "-p", "-t", "%7"}) ||
 		!strings.Contains(captureCall[27], "pane_current_command") {
 		t.Fatalf("capture-pane coordinates = %#v", captureCall)
+	}
+}
+
+func TestCaptureStyledKeepsPlainAndStyledPhysicalRowsAligned(t *testing.T) {
+	t.Parallel()
+	ansi := "\n\x1b[31museful terminal result\x1b[0m\n\n\n"
+	runner := &styledCaptureRunner{ansi: ansi, joined: "useful terminal result\n"}
+
+	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainRows := strings.Split(strings.TrimSuffix(got.Text, "\n"), "\n")
+	styledRows := strings.Split(strings.TrimSuffix(got.ANSI, "\n"), "\n")
+	if len(plainRows) != len(styledRows) || len(plainRows) != 4 {
+		t.Fatalf("physical rows plain=%d styled=%d; text=%q", len(plainRows), len(styledRows), got.Text)
+	}
+	if plainRows[0] != "" || plainRows[1] != "useful terminal result" || plainRows[2] != "" || plainRows[3] != "" {
+		t.Fatalf("plain physical rows = %#v", plainRows)
+	}
+	if got.JoinedText != "useful terminal result" {
+		t.Fatalf("joined text = %q", got.JoinedText)
 	}
 }
 

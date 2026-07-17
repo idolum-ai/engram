@@ -26,6 +26,7 @@ const (
 	maxRetryAfter         = 30 * time.Second
 	maxConcurrentOutbound = 4
 	defaultSendInterval   = 35 * time.Millisecond
+	maxButtonLabelRunes   = 7 // utf8.RuneCountInString("🖼️ View")
 )
 
 type Client struct {
@@ -235,6 +236,16 @@ type InlineKeyboardButton struct {
 	CallbackData string `json:"callback_data"`
 }
 
+// Button bounds every Telegram button label to the compact live-card budget.
+// Callback data remains exact even when a dynamic display label is shortened.
+func Button(text, callbackData string) InlineKeyboardButton {
+	runes := []rune(text)
+	if len(runes) > maxButtonLabelRunes {
+		text = string(runes[:maxButtonLabelRunes-1]) + "…"
+	}
+	return InlineKeyboardButton{Text: text, CallbackData: callbackData}
+}
+
 type AttachTarget struct {
 	Label  string
 	Target string
@@ -280,9 +291,13 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int)
 }
 
 func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
-	body := map[string]any{"chat_id": chatID, "text": clampText(text), "disable_web_page_preview": true}
+	body := map[string]any{
+		"chat_id":              chatID,
+		"text":                 clampText(text),
+		"link_preview_options": map[string]any{"is_disabled": true},
+	}
 	if replyTo != 0 {
-		body["reply_to_message_id"] = replyTo
+		body["reply_parameters"] = map[string]any{"message_id": replyTo}
 	}
 	if markup != nil {
 		body["reply_markup"] = markup
@@ -303,7 +318,12 @@ func (c *Client) EditHTMLMessage(ctx context.Context, chatID int64, messageID in
 }
 
 func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int, text string, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
-	body := map[string]any{"chat_id": chatID, "message_id": messageID, "text": clampText(text), "disable_web_page_preview": true}
+	body := map[string]any{
+		"chat_id":              chatID,
+		"message_id":           messageID,
+		"text":                 clampText(text),
+		"link_preview_options": map[string]any{"is_disabled": true},
+	}
 	if markup != nil {
 		body["reply_markup"] = markup
 	}
@@ -459,9 +479,20 @@ func (c *Client) editPhoto(ctx context.Context, chatID int64, messageID int, pat
 }
 
 func (c *Client) EditCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup) (Message, error) {
-	body := map[string]any{"chat_id": chatID, "message_id": messageID, "caption": clampCaption(caption)}
+	return c.editCaption(ctx, chatID, messageID, caption, markup, "")
+}
+
+func (c *Client) EditHTMLCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.editCaption(ctx, chatID, messageID, caption, markup, "HTML")
+}
+
+func (c *Client) editCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
+	body := map[string]any{"chat_id": chatID, "message_id": messageID, "caption": mediaCaption(caption, parseMode)}
 	if markup != nil {
 		body["reply_markup"] = markup
+	}
+	if parseMode != "" {
+		body["parse_mode"] = parseMode
 	}
 	var out Message
 	return out, c.postJSON(ctx, "editMessageCaption", body, &out)
@@ -503,40 +534,37 @@ type AnchorMarkupOptions struct {
 }
 
 func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
-	actions := []InlineKeyboardButton{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}}
+	actions := []InlineKeyboardButton{Button("🔄", fmt.Sprintf("refresh:%d", sessionID))}
 	if options.Image {
-		actions = append(actions, InlineKeyboardButton{Text: "🖼️ Snapshot", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
+		actions = append(actions, Button("🖼️ View", fmt.Sprintf("snapshot:%d", sessionID)))
 	}
 	if options.Voice {
-		actions = append(actions, InlineKeyboardButton{Text: "🗣️ Explain", CallbackData: fmt.Sprintf("voice:%d", sessionID)})
+		actions = append(actions, Button("🗣️ Talk", fmt.Sprintf("voice:%d", sessionID)))
 	}
 	if options.Raw {
-		actions = append(actions, InlineKeyboardButton{Text: "📄 Raw", CallbackData: fmt.Sprintf("raw:%d", sessionID)})
+		actions = append(actions, Button("📄 Raw", fmt.Sprintf("raw:%d", sessionID)))
 	}
 	rows := [][]InlineKeyboardButton{actions}
 	if options.FileToken != "" && options.FileCount > 0 {
 		files := make([]InlineKeyboardButton, 0, options.FileCount)
 		for index := 1; index <= options.FileCount; index++ {
-			files = append(files, InlineKeyboardButton{
-				Text:         fmt.Sprintf("⬇️ %d", index),
-				CallbackData: fmt.Sprintf("file:%d:%s:%d", sessionID, options.FileToken, index),
-			})
+			files = append(files, Button(fmt.Sprintf("⬇️ %d", index), fmt.Sprintf("file:%d:%s:%d", sessionID, options.FileToken, index)))
 		}
 		rows = append(rows, files)
 	}
 	rows = append(rows, []InlineKeyboardButton{
-		{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
-		{Text: "Escx2", CallbackData: fmt.Sprintf("key:%d:esc2", sessionID)},
-		{Text: "^C", CallbackData: fmt.Sprintf("key:%d:ctrl-c", sessionID)},
-		{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
-		{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
+		Button("Esc", fmt.Sprintf("key:%d:esc", sessionID)),
+		Button("Escx2", fmt.Sprintf("key:%d:esc2", sessionID)),
+		Button("^C", fmt.Sprintf("key:%d:ctrl-c", sessionID)),
+		Button("^D", fmt.Sprintf("key:%d:ctrl-d", sessionID)),
+		Button("Enter", fmt.Sprintf("key:%d:enter", sessionID)),
 	})
 	if options.Arrows {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "←", CallbackData: fmt.Sprintf("key:%d:left", sessionID)},
-			{Text: "↑", CallbackData: fmt.Sprintf("key:%d:up", sessionID)},
-			{Text: "↓", CallbackData: fmt.Sprintf("key:%d:down", sessionID)},
-			{Text: "→", CallbackData: fmt.Sprintf("key:%d:right", sessionID)},
+			Button("←", fmt.Sprintf("key:%d:left", sessionID)),
+			Button("↑", fmt.Sprintf("key:%d:up", sessionID)),
+			Button("↓", fmt.Sprintf("key:%d:down", sessionID)),
+			Button("→", fmt.Sprintf("key:%d:right", sessionID)),
 		})
 	}
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -548,7 +576,14 @@ func ClearMarkup() *InlineKeyboardMarkup {
 
 func RecoverMarkup(sessionID int) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
-		{Text: "🧭 Reattach", CallbackData: fmt.Sprintf("recover:%d", sessionID)},
+		Button("🧭 Link", fmt.Sprintf("recover:%d", sessionID)),
+	}}}
+}
+
+func CloseConfirmationMarkup(token string) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("Confirm", "close-confirm:"+token),
+		Button("Cancel", "close-cancel:"+token),
 	}}}
 }
 
@@ -559,15 +594,12 @@ func SessionListMarkup(ids []int, attachTargets []AttachTarget) *InlineKeyboardM
 	rows := make([][]InlineKeyboardButton, 0, len(ids)+len(attachTargets))
 	for _, id := range ids {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: fmt.Sprintf("Watch [%d]", id), CallbackData: fmt.Sprintf("watch:%d", id)},
-			{Text: fmt.Sprintf("Close [%d]", id), CallbackData: fmt.Sprintf("close:%d", id)},
+			Button(fmt.Sprintf("▶ %d", id), fmt.Sprintf("watch:%d", id)),
+			Button(fmt.Sprintf("✕ %d", id), fmt.Sprintf("close:%d", id)),
 		})
 	}
 	for _, target := range attachTargets {
-		rows = append(rows, []InlineKeyboardButton{{
-			Text:         "Attach " + target.Label,
-			CallbackData: "attach:" + target.Target,
-		}})
+		rows = append(rows, []InlineKeyboardButton{Button("↪ "+target.Label, "attach:"+target.Target)})
 	}
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -713,8 +745,18 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 				return
 			}
 		}
+		if field == "photo" {
+			if writeErr = writer.WriteField("show_caption_above_media", "false"); writeErr != nil {
+				return
+			}
+		}
 		if replyTo > 0 {
-			if writeErr = writer.WriteField("reply_to_message_id", strconv.Itoa(replyTo)); writeErr != nil {
+			replyParameters, err := json.Marshal(map[string]int{"message_id": replyTo})
+			if err != nil {
+				writeErr = err
+				return
+			}
+			if writeErr = writer.WriteField("reply_parameters", string(replyParameters)); writeErr != nil {
 				return
 			}
 		}
@@ -774,6 +816,7 @@ func (c *Client) editPhotoRequest(ctx context.Context, chatID int64, messageID i
 		if parseMode != "" {
 			mediaFields["parse_mode"] = parseMode
 		}
+		mediaFields["show_caption_above_media"] = false
 		media, err := json.Marshal(mediaFields)
 		if err != nil {
 			writeErr = err

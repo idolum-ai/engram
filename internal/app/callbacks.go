@@ -121,7 +121,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_user_error"
 		}
 		ts = current
-		if ts.State != state.TerminalRunning || ts.AnchorFormat != "snapshot" || ts.RetiringAnchorMessageID != 0 {
+		if ts.State != state.TerminalRunning || !mediaAnchorFormat(ts.AnchorFormat) || ts.RetiringAnchorMessageID != 0 {
 			anchorLock.Unlock()
 			a.answerCallback(ctx, cb.ID, "raw view is unavailable")
 			return "callback_user_error"
@@ -341,10 +341,7 @@ func (a *App) answerCallback(ctx context.Context, id, text string) bool {
 }
 
 func closeConfirmationMarkup(token string) *telegram.InlineKeyboardMarkup {
-	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-		{Text: "Confirm", CallbackData: "close-confirm:" + token},
-		{Text: "Cancel", CallbackData: "close-cancel:" + token},
-	}}}
+	return telegram.CloseConfirmationMarkup(token)
 }
 
 func (a *App) issueCloseConfirmation(session state.TerminalSession) (string, error) {

@@ -40,15 +40,21 @@ func New(apiKey, model string) *Client {
 // Converse renders a single terminal observation as conversational prose. It
 // deliberately sends no model history and makes exactly one non-streaming call.
 func (c *Client) Converse(ctx context.Context, in ConversationInput) (string, error) {
+	result, err := c.ConverseWithEvidence(ctx, in)
+	return result.Text, err
+}
+
+func (c *Client) ConverseWithEvidence(ctx context.Context, in ConversationInput) (guide.Result, error) {
 	text, err := c.completeWithTemperature(ctx, guide.SystemPrompt, guide.BuildPrompt(in), guide.MaxTokens, float64Pointer(guide.Temperature))
 	if err != nil {
-		return "", err
+		return guide.Result{}, err
 	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", fmt.Errorf("anthropic returned no text")
+	result := guide.ParseResult(text)
+	result.Text = guide.LimitWords(result.Text, guide.MaxWords)
+	if result.Text == "" {
+		return guide.Result{}, fmt.Errorf("anthropic returned no text")
 	}
-	return guide.LimitWords(text, guide.MaxWords), nil
+	return result, nil
 }
 
 func limitWords(text string, maximum int) string {

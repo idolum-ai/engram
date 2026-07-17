@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -46,6 +47,7 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 77
+		s.AnchorFormat = anchorFormatGuideEvidence
 		s.WatchEnabled = true
 	}); err != nil {
 		t.Fatal(err)
@@ -73,7 +75,11 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 				return nil, err
 			}
 			caption = req.FormValue("caption")
-			replyTo = req.FormValue("reply_to_message_id")
+			var reply map[string]int
+			if err := json.Unmarshal([]byte(req.FormValue("reply_parameters")), &reply); err != nil {
+				return nil, err
+			}
+			replyTo = strconv.Itoa(reply["message_id"])
 			files := req.MultipartForm.File["photo"]
 			if len(files) != 1 || files[0].Filename != "engram-window.png" {
 				return nil, errors.New("missing terminal photo")

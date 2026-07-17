@@ -155,7 +155,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion    = 8
+	currentStateVersion    = 9
 	maxTerminalSessions    = 200
 	maxAttachments         = 200
 	maxAttachmentBypasses  = 100
@@ -922,10 +922,10 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 		}
 		if session.AnchorMessageID == 0 {
 			session.AnchorFormat = ""
-		} else if session.AnchorFormat != "text" && session.AnchorFormat != "snapshot" {
+		} else if session.AnchorFormat != "text" && session.AnchorFormat != "snapshot" && session.AnchorFormat != "guide-evidence" {
 			session.AnchorFormat = "text"
 		}
-		if session.RetiringAnchorMessageID != 0 && session.RetiringAnchorFormat != "snapshot" {
+		if session.RetiringAnchorMessageID != 0 && session.RetiringAnchorFormat != "snapshot" && session.RetiringAnchorFormat != "guide-evidence" {
 			session.RetiringAnchorFormat = "text"
 		}
 		switch session.State {

@@ -106,19 +106,45 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   delivery, and never persisted or shared across windows. One-off alternate
   renderings do not mutate it.
 - Every guide rendering still uses exactly one non-streaming model request,
-  with no model API history, structured response, or second request. It renders
+  with no model API history or second request. It renders
   compact conversational prose with short, single-idea paragraphs. Engram
   deterministically bounds a completed response to at most 180 words before
-  delivery. Shared work uses a collaborative "we" voice; "you" is reserved for
-  actions that belong to the reader alone.
+  delivery. When Chromium is ready, the same response carries a private trailer
+  containing at most two short verbatim evidence excerpts. Engram removes that
+  trailer from user-facing prose and treats it only as an untrusted crop hint.
+  Shared work uses a collaborative "we" voice; "you" is reserved for actions
+  that belong to the reader alone.
 - The guide names a tool, project, account, or person only when the terminal text
   visibly establishes that identity. Model identifiers are never user identities.
 - Snapshot mode renders the same frame through Chromium into a full-bleed
   430x932 logical-pixel image at 3x density.
+- Guide mode may render its canonical anchor as a compact evidence photo card
+  from the same captured frame, with bounded prose below the media.
+  Every model excerpt must first match one unique range in the cleaned semantic
+  text sent to the provider, then one unique physical row range after whitespace
+  normalization. Engram adds at most two context rows on each side, highlights
+  only matched rows, and rejects a crop spanning more than 18 rows. Ambiguous,
+  fabricated, or widely separated model evidence falls back to the last
+  changed on-screen physical-row region under the same continuity boundaries, then to
+  the last meaningful non-empty terminal block capped at 10 rows. The crop
+  footer identifies `quoted terminal text`, `changed terminal region`, or
+  `current terminal tail`; tail rows are not highlighted. A crop carries the
+  active SGR state from preceding rows. Compact crops preserve a readable
+  71-cell viewport around the exact matched span; deterministic tails frame
+  their rightmost meaningful content. Tabs, combining marks, and wide Unicode
+  characters use terminal-cell widths. Crops enforce the accessible
+  contrast floor regardless of the full-snapshot theme. If the styled tail
+  cannot be delivered safely, Engram renders the same bounded range as redacted
+  plain text. Empty terminals use a quiet `guided view` frame. Engram never
+  preserves stale pixels or falls back to a larger automatic screenshot.
+- The exact plain text corresponding to the displayed vertical and horizontal
+  guide viewport is retained
+  only in process memory and is available through `📄 Raw` while that canonical
+  message remains current.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.
-- A guide anchor includes `🖼️` only when Chromium passed startup readiness. A
+- A guide anchor includes `🖼️ View` only when Chromium passed startup readiness. A
   snapshot anchor includes `🗣️` only when a guide is configured. These produce
   one-off replies and never replace the canonical anchor.
 - Both modes append locally extracted references. `files` contains at most four

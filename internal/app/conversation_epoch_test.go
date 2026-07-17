@@ -117,6 +117,9 @@ func TestConversationTurnAlwaysCarriesFullCurrentTruth(t *testing.T) {
 	if second.input.VisibleText != secondCapture.JoinedText || second.input.PreviousRendering != "We are running tests." || second.input.ChangedText != "tests passed\napp ok" || second.input.RemovedText != "tests running\napp pending" {
 		t.Fatalf("second turn = %#v", second.input)
 	}
+	if second.previousFrame.physicalText != firstCapture.Text {
+		t.Fatalf("previous physical frame = %q, want %q", second.previousFrame.physicalText, firstCapture.Text)
+	}
 }
 
 func TestConversationResetRejectsInFlightCommit(t *testing.T) {
@@ -230,12 +233,12 @@ func TestConversationalSummaryBuildsTruthGroundedContinuation(t *testing.T) {
 	})}
 	app.Guide = client
 	first := testStyledCapture("codex", "project\nbranch\ntests running\napp pending\nstatus\ncwd\nready")
-	summary, turn, err := app.conversationalSummary(context.Background(), session, first, first.JoinedText)
+	summary, _, turn, err := app.conversationalSummary(context.Background(), session, first, first.JoinedText)
 	if err != nil || !app.commitConversationTurn(session, turn, summary) {
 		t.Fatalf("first summary: %q %v", summary, err)
 	}
 	second := testStyledCapture("codex", "project\nbranch\ntests passed\napp ok\nstatus\ncwd\nready")
-	if _, _, err := app.conversationalSummary(context.Background(), session, second, second.JoinedText); err != nil {
+	if _, _, _, err := app.conversationalSummary(context.Background(), session, second, second.JoinedText); err != nil {
 		t.Fatal(err)
 	}
 	if len(prompts) != 2 || prompts[0]["observation"] != "full" || prompts[1]["observation"] != "incremental" {
@@ -265,7 +268,7 @@ func TestConversationalSummaryDoesNotDiscloseSupersededFrame(t *testing.T) {
 			started := make(chan struct{})
 			go func() {
 				close(started)
-				_, _, err := app.conversationalSummary(context.Background(), session, capture, capture.JoinedText)
+				_, _, _, err := app.conversationalSummary(context.Background(), session, capture, capture.JoinedText)
 				done <- result{err: err}
 			}()
 			<-started
@@ -372,7 +375,7 @@ func mutateConversationFrame(frame conversationFrame, mutate func(*conversationF
 }
 
 func testStyledCapture(command, text string) tmux.StyledCapture {
-	return tmux.StyledCapture{ServerID: appTestServerID, WindowID: "@1", PaneID: "%1", CurrentCmd: command, AlternateOn: "1", PaneInMode: "0", Columns: 80, VisibleRows: 24, JoinedText: text}
+	return tmux.StyledCapture{ServerID: appTestServerID, WindowID: "@1", PaneID: "%1", CurrentCmd: command, AlternateOn: "1", PaneInMode: "0", Columns: 80, VisibleRows: 24, Text: text, ANSI: text, JoinedText: text}
 }
 
 type conversationEpochRoundTrip func(*http.Request) (*http.Response, error)

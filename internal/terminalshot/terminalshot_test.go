@@ -118,6 +118,55 @@ func TestRenderHTMLAccessibilityThemesCorrectLowContrastText(t *testing.T) {
 	}
 }
 
+func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
+	input := Input{
+		ANSI: "context\ncritical result\nnext step", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 71, VisibleRows: 37, BufferRows: 3, Compact: true, HighlightRows: []int{1},
+	}
+	page := RenderHTML(input, "contrast-dark")
+	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px`) || !strings.Contains(page, "quoted terminal text") {
+		t.Fatalf("compact evidence HTML = %s", page)
+	}
+	if got := renderHeight(input); got != 180 {
+		t.Fatalf("compact render height = %d, want 180", got)
+	}
+}
+
+func TestCompactEvidenceKeepsWidePanesReadableAndEscapesFooter(t *testing.T) {
+	page := RenderHTML(Input{
+		ANSI: "important", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, ColumnOffset: 100, Footer: `<unsafe & footer>`,
+	}, "terminal")
+	for _, want := range []string{"font:9.40px/13.2px", "transform:translateX(-", "&lt;unsafe &amp; footer&gt;"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("wide compact HTML missing %q: %s", want, page)
+		}
+	}
+	if strings.Contains(page, `<unsafe & footer>`) {
+		t.Fatal("footer became executable HTML")
+	}
+}
+
+func TestCompactEvidenceAppliesContrastFloorToTerminalTheme(t *testing.T) {
+	page := RenderHTML(Input{
+		ANSI: "\x1b[2;38;2;50;50;50mdim dark text\x1b[0m", Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true,
+	}, "terminal")
+	if strings.Contains(page, "color:#323232") || strings.Contains(page, "opacity:.68") {
+		t.Fatalf("compact terminal theme retained inaccessible styling: %s", page)
+	}
+}
+
+func TestCompactEvidenceHTMLCanRenderQuietGuidedFrame(t *testing.T) {
+	input := Input{
+		ANSI: " ", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "guided view",
+	}
+	page := RenderHTML(input, "contrast-dark")
+	if !strings.Contains(page, "guided view") || strings.Contains(page, "No verified") {
+		t.Fatalf("quiet guided HTML = %s", page)
+	}
+}
+
 func TestAccessibleThemePalettesMeetTextContrastFloor(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"contrast-dark", "contrast-light"} {

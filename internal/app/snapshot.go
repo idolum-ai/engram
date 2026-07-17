@@ -118,7 +118,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	updated := false
 	if _, _, err := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if !a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && firstNonEmpty(session.AnchorFormat, "text") == "text" && session.RetiringAnchorMessageID == 0 {
+		if !a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && guideAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 {
 			recordAlternateMessage(session, "snapshot", message.MessageID)
 			updated = true
 		}
@@ -153,6 +153,19 @@ func snapshotFrameDescription(capture tmux.StyledCapture, rawCompanion bool) str
 		description += fmt.Sprintf("\nimage columns 1–%d of %d · %s", rendered, capture.Columns, widthDisclosure)
 	}
 	return description
+}
+
+func (a *App) deleteSnapshotReply(ctx context.Context, chatID int64, messageID int, reason string) {
+	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
+	err := a.Telegram.DeleteMessage(deleteCtx, chatID, messageID)
+	cancel()
+	status := "ok"
+	data := map[string]any{"message_id": messageID, "reason": reason}
+	if err != nil && !isTelegramAnchorUnavailable(err) {
+		status = "failed"
+		data["error"] = err.Error()
+	}
+	_ = a.audit("telegram.snapshot_cleanup", status, data)
 }
 
 func (a *App) snapshotNotice(ctx context.Context, id int, text string) {

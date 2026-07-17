@@ -393,7 +393,9 @@ func missingTmuxServer(err error) bool {
 	if !errors.As(err, &commandErr) {
 		return false
 	}
-	return strings.Contains(strings.ToLower(commandErr.stderr), "no server running")
+	stderr := strings.ToLower(commandErr.stderr)
+	return strings.Contains(stderr, "no server running") ||
+		(strings.Contains(stderr, "error connecting to") && strings.Contains(stderr, "no such file or directory"))
 }
 
 func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {
@@ -636,7 +638,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}
 	return StyledCapture{
 		ANSI:        ansi,
-		Text:        semanticCapture(ansi),
+		Text:        physicalSemanticCapture(ansi),
 		JoinedText:  semanticCapture(joined),
 		ServerID:    after.ServerID,
 		WindowID:    after.WindowID,
@@ -1056,6 +1058,18 @@ func semanticCapture(s string) string {
 		lines[i] = strings.TrimRight(lines[i], " \t")
 	}
 	return strings.Trim(strings.Join(lines, "\n"), "\n")
+}
+
+// physicalSemanticCapture removes terminal controls without changing the row
+// coordinates shared with the styled capture. Crop selection relies on this
+// alignment, including blank rows at either edge of the pane.
+func physicalSemanticCapture(s string) string {
+	clean := stripTerminalControls(s)
+	lines := strings.Split(clean, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func stripTerminalControls(s string) string {

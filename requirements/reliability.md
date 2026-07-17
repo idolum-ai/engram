@@ -97,9 +97,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v8 persists `anchor_mode`, the latest conversational, snapshot,
-  and upstream-signal reply IDs, upstream deduplication facts, and a bounded
-  stale-alias set used only to reject confusing replies. It binds each watch to
+- State schema v9 persists `anchor_mode`, the canonical anchor presentation
+  format, the latest conversational, snapshot, and upstream-signal reply IDs,
+  upstream deduplication facts,
+  and a bounded stale-alias set used only to reject confusing replies. It binds each watch to
   a random tmux server incarnation so reused pane/window IDs after a server
   restart cannot silently gain authority. Legacy watches without that identity
   require an explicit `/attach` from `/sessions`; reattachment changes their
@@ -133,9 +134,31 @@ exports a bounded recent tail, not an unbounded full audit file.
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.
 - Chromium readiness controls both snapshot startup and whether guide anchors
-  expose `🖼️` or allow `/mode snapshot`. A later capture, render,
+  expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session
   unchanged for retry.
+- Guided evidence uses the guide capture and the shared render concurrency
+  limit. Engram edits the canonical message media and bounded caption together,
+  preserving its ID. An unverifiable or broad model crop falls back to the
+  last on-screen physical-row change against the last accepted aligned frame,
+  then to a bounded summary-related physical paragraph with a visible-link
+  preference, and finally to a bounded current terminal tail. Each source is
+  labeled and quoted, locally changed, or summary-related rows are highlighted.
+  Model-selected excerpts are admitted
+  only when they also occur uniquely in the provider's semantic input.
+  Secret-redaction-conflicting or
+  structurally unaligned candidates render a redacted plain-text tail; empty
+  terminals render a quiet guide-only frame, so stale pixels cannot remain
+  authoritative. A render or upload failure leaves the previous coherent card
+  unchanged for retry. If Telegram reports the anchor unavailable, replacement
+  follows the ordinary send, persist, pin, delete-or-compact, and unpin lifecycle.
+- An unchanged guide capture already represented by a guide-evidence anchor
+  performs no generic caption edit or model/render work. It may reconcile
+  process-local file bindings through a caption-only media edit. A change to
+  ANSI styling, pane width, visible height, command, tmux title, Engram title,
+  or working directory changes the guide capture fingerprint.
+  Disabling watch invalidates an in-flight guide turn before it may publish or
+  advance continuity.
 - Snapshot refreshes hash styled capture, metadata, and the derived caption
   before invoking Chromium, coalesce per session, use bounded capture/render
   concurrency, and edit automatically no more than once every ten seconds when

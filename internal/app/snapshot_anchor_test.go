@@ -64,7 +64,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 				return nil, err
 			}
-			if body["text"] != "[1] terminal-authored signal\n\nbuild needs review https://signal.invalid/hidden" || body["reply_to_message_id"] != float64(77) {
+			if body["text"] != "[1] terminal-authored signal\n\nbuild needs review https://signal.invalid/hidden" || telegramReplyMessageID(body) != 77 {
 				return nil, errors.New("incorrect upstream notification")
 			}
 			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
@@ -456,7 +456,7 @@ func TestGuideModeRotatesSnapshotAnchorBackToText(t *testing.T) {
 				return nil, errors.New("prospective guide anchor retained snapshot arrows")
 			}
 			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
-		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage", "/botTOKEN/deleteMessage":
 			return snapshotJSONResponse(`true`), nil
 		case "/botTOKEN/editMessageCaption":
 			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
@@ -476,7 +476,7 @@ func TestGuideModeRotatesSnapshotAnchorBackToText(t *testing.T) {
 	if routed, targetState, ok := store.FindReplyTarget(100, 77); !ok || targetState != state.ReplyTargetStale || routed.ID != session.ID {
 		t.Fatalf("retired snapshot reply = %#v %q ok=%v", routed, targetState, ok)
 	}
-	want := []string{"/botTOKEN/sendMessage", "/botTOKEN/pinChatMessage", "/botTOKEN/editMessageCaption", "/botTOKEN/unpinChatMessage"}
+	want := []string{"/botTOKEN/sendMessage", "/botTOKEN/pinChatMessage", "/botTOKEN/deleteMessage"}
 	if strings.Join(paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("guide migration paths = %#v, want %#v", paths, want)
 	}
