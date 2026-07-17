@@ -242,8 +242,8 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 	if err := manager.AdvertiseEngramIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID, 42); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 4 {
-		t.Fatalf("calls = %#v, want four guarded pane option writes", runner.calls)
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v, want one guarded pane option transaction", runner.calls)
 	}
 	wantCommands := []string{
 		"set-option -p -q -t %7 @engram 'v1 watch=42 remote=telegram'",
@@ -251,9 +251,13 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		"set-option -p -q -t %7 @engram_notify 'run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)'",
 		"set-option -p -q -t %7 @engram_artifact 'print a visible file:// URI (OSC 8 optional), then run @engram_notify'",
 	}
-	for index, call := range runner.calls {
-		if len(call) != 7 || call[0] != "if-shell" || call[3] != "%7" || call[5] != wantCommands[index] {
-			t.Fatalf("guarded option call %d = %#v, want command %q", index, call, wantCommands[index])
+	call := runner.calls[0]
+	if len(call) != 7 || call[0] != "if-shell" || call[3] != "%7" {
+		t.Fatalf("guarded option call = %#v", call)
+	}
+	for _, command := range wantCommands {
+		if !strings.Contains(call[5], command) {
+			t.Fatalf("guarded option transaction = %q, missing %q", call[5], command)
 		}
 	}
 
@@ -267,9 +271,12 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		"set-option -p -q -u -t %7 @engram_notify",
 		"set-option -p -q -u -t %7 @engram_artifact",
 	}
-	for index, call := range runner.calls {
-		if len(call) != 7 || call[5] != wantCommands[index] {
-			t.Fatalf("guarded option clear %d = %#v, want command %q", index, call, wantCommands[index])
+	if len(runner.calls) != 1 || len(runner.calls[0]) != 7 {
+		t.Fatalf("guarded option clear calls = %#v, want one transaction", runner.calls)
+	}
+	for _, command := range wantCommands {
+		if !strings.Contains(runner.calls[0][5], command) {
+			t.Fatalf("guarded option clear transaction = %q, missing %q", runner.calls[0][5], command)
 		}
 	}
 }

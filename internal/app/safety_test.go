@@ -28,12 +28,47 @@ func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 	if !result.OK() || result.Message != "untracked; tmux remains open" {
 		t.Fatalf("close result = %#v", result)
 	}
-	if len(runner.calls) != 4 || runner.calls[0][0] != "if-shell" || !strings.Contains(runner.calls[0][5], "-u -t %1 @engram") || !strings.Contains(runner.calls[1][5], "-u -t %1 @engram_watch_id") || !strings.Contains(runner.calls[2][5], "-u -t %1 @engram_notify") || !strings.Contains(runner.calls[3][5], "-u -t %1 @engram_artifact") {
+	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" || !strings.Contains(runner.calls[0][5], "-u -t %1 @engram") || !strings.Contains(runner.calls[0][5], "-u -t %1 @engram_watch_id") || !strings.Contains(runner.calls[0][5], "-u -t %1 @engram_notify") || !strings.Contains(runner.calls[0][5], "-u -t %1 @engram_artifact") {
 		t.Fatalf("attached close did not only clear Engram pane metadata: %#v", runner.calls)
 	}
 	got, ok := app.Store.FindSession(id)
 	if !ok || got.State != state.TerminalClosed || got.WatchEnabled {
 		t.Fatalf("session after untrack = %#v ok=%v", got, ok)
+	}
+}
+
+func TestTerminalCapabilityReconciliationConvergesActiveAndInactiveSessions(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginAttached)
+	session, ok := app.Store.FindSession(id)
+	if !ok {
+		t.Fatal("session not found")
+	}
+
+	app.reconcileTerminalCapabilities(context.Background(), session)
+	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" || strings.Contains(runner.calls[0][5], " -u ") {
+		t.Fatalf("active capability reconciliation = %#v, want one guarded advertisement", runner.calls)
+	}
+	for _, option := range []string{"@engram ", "@engram_watch_id ", "@engram_notify ", "@engram_artifact "} {
+		if !strings.Contains(runner.calls[0][5], option) {
+			t.Fatalf("active capability transaction missing %q: %#v", option, runner.calls)
+		}
+	}
+
+	updated, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
+		current.WatchEnabled = false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.calls = nil
+	app.reconcileTerminalCapabilities(context.Background(), updated)
+	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" {
+		t.Fatalf("inactive capability reconciliation = %#v, want one guarded clear", runner.calls)
+	}
+	for _, option := range []string{"@engram", "@engram_watch_id", "@engram_notify", "@engram_artifact"} {
+		if !strings.Contains(runner.calls[0][5], "-u -t %1 "+option) {
+			t.Fatalf("inactive capability transaction missing clear for %q: %#v", option, runner.calls)
+		}
 	}
 }
 

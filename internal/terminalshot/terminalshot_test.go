@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -99,7 +100,7 @@ func TestWideSnapshotDimensionsPreserveAllColumnsWithinTelegramPhotoBounds(t *te
 	if got, want := renderWidth(input), 446; got != want {
 		t.Fatalf("wide render width = %d, want %d", got, want)
 	}
-	if got, want := renderHeight(input), 1948; got != want {
+	if got, want := renderHeight(input), 1958; got != want {
 		t.Fatalf("wide render height = %d, want %d", got, want)
 	}
 	sparse := Input{ANSI: "short line\n", Columns: 289, VisibleRows: 162, BufferRows: 64}
@@ -226,6 +227,27 @@ func TestCompactEvidenceHTMLCanRenderQuietGuidedFrame(t *testing.T) {
 	page := RenderHTML(input, "contrast-dark")
 	if !strings.Contains(page, "guided view") || strings.Contains(page, "No verified") {
 		t.Fatalf("quiet guided HTML = %s", page)
+	}
+}
+
+func TestOSCTerminatorsPreserveFollowingRenderedTextAndRowCounts(t *testing.T) {
+	t.Parallel()
+	for name, terminator := range map[string]string{
+		"bel":        "\a",
+		"escape st":  "\x1b\\",
+		"raw c1 st":  string([]byte{0x9c}),
+		"utf8 c1 st": "\u009c",
+	} {
+		t.Run(name, func(t *testing.T) {
+			ansi := "before \x1b]8;;file:///tmp/report.txt" + terminator + "AFTER-SENTINEL"
+			page := RenderHTML(Input{ANSI: ansi, Columns: 71, VisibleRows: 1, BufferRows: 1}, "contrast-dark")
+			if !strings.Contains(page, "before ") || !strings.Contains(page, "AFTER-SENTINEL") || strings.Contains(page, "file:///tmp/report.txt") {
+				t.Fatalf("rendered OSC sequence incorrectly: %s", page)
+			}
+			if got := snapshotRowVisualCounts(ansi, 1, 71); !reflect.DeepEqual(got, []int{1}) {
+				t.Fatalf("visual row counts = %#v, want [1]", got)
+			}
+		})
 	}
 }
 
@@ -601,13 +623,29 @@ func TestLiveChromiumWideRender(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	config, err := png.DecodeConfig(f)
+	img, err := png.Decode(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wantWidth, wantHeight := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio; config.Width != wantWidth || config.Height != wantHeight {
-		t.Fatalf("wide snapshot size = %dx%d, want %dx%d", config.Width, config.Height, wantWidth, wantHeight)
+	if wantWidth, wantHeight := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio; img.Bounds().Dx() != wantWidth || img.Bounds().Dy() != wantHeight {
+		t.Fatalf("wide snapshot size = %dx%d, want %dx%d", img.Bounds().Dx(), img.Bounds().Dy(), wantWidth, wantHeight)
 	}
+	logicalHeight := renderHeight(input)
+	if !regionContainsCyan(img, image.Rect(8, logicalHeight-36, renderWidth(input)-8, logicalHeight-22)) {
+		t.Fatal("final wrapped terminal row is not visible immediately above the footer")
+	}
+}
+
+func regionContainsCyan(img image.Image, logical image.Rectangle) bool {
+	for y := logical.Min.Y * PixelRatio; y < logical.Max.Y*PixelRatio; y++ {
+		for x := logical.Min.X * PixelRatio; x < logical.Max.X*PixelRatio; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if b > 0xc000 && g > 0x9000 && r < 0xa000 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type fakeBrowserRunner struct {

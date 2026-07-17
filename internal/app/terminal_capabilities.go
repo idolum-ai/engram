@@ -2,10 +2,21 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+const terminalCapabilityReconcileInterval = 30 * time.Second
+
+func (a *App) reconcileTerminalCapabilities(ctx context.Context, session state.TerminalSession) {
+	if session.State == state.TerminalRunning && session.WatchEnabled {
+		a.advertiseTerminalCapabilities(ctx, session)
+		return
+	}
+	a.clearTerminalCapabilities(ctx, session)
+}
 
 func (a *App) advertiseTerminalCapabilities(ctx context.Context, session state.TerminalSession) {
 	if a.Tmux.Runner == nil || session.State != state.TerminalRunning || !session.WatchEnabled || session.TmuxPaneID == "" {

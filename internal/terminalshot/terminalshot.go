@@ -314,7 +314,10 @@ func renderHeight(input Input) int {
 			return LogicalHeight
 		}
 		visualRows := snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
-		return max(LogicalHeight, 66+int(math.Ceil(float64(visualRows)*lineHeight)))
+		// The screen's border-box includes 10px of top padding. Reserve it in
+		// addition to the 44px header and 22px footer so the final visual row
+		// remains above the footer instead of being clipped by overflow:hidden.
+		return max(LogicalHeight, 76+int(math.Ceil(float64(visualRows)*lineHeight)))
 	}
 	renderColumns := min(input.Columns, 71)
 	visualRows := snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
@@ -375,18 +378,11 @@ func plainANSIText(input string) string {
 				}
 			}
 			if i+1 < len(input) && input[i+1] == ']' {
-				i += 2
-				for i < len(input) {
-					if input[i] == 0x07 {
-						i++
-						break
-					}
-					if input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\' {
-						i += 2
-						break
-					}
-					i++
+				_, next, ok := terminalStringEnd(input, i+2)
+				if !ok {
+					return out.String()
 				}
+				i = next
 				continue
 			}
 			i++
@@ -400,6 +396,24 @@ func plainANSIText(input string) string {
 		i = end
 	}
 	return out.String()
+}
+
+// terminalStringEnd recognizes every string terminator tmux may preserve for
+// OSC sequences: BEL, the 7-bit ST escape, raw C1 ST, and UTF-8 C1 ST.
+func terminalStringEnd(input string, start int) (end, next int, ok bool) {
+	for i := start; i < len(input); i++ {
+		switch {
+		case input[i] == 0x07:
+			return i, i + 1, true
+		case input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\':
+			return i, i + 2, true
+		case input[i] == 0x9c:
+			return i, i + 1, true
+		case input[i] == 0xc2 && i+1 < len(input) && input[i+1] == 0x9c:
+			return i, i + 2, true
+		}
+	}
+	return len(input), len(input), false
 }
 
 func renderHighlights(rows []int, theme snapshotTheme, ansi string, bufferRows, columns int, lineHeight float64, wrapped bool) string {
@@ -564,18 +578,11 @@ func ansiHTML(input string, theme snapshotTheme) string {
 				}
 			}
 			if i+1 < len(input) && input[i+1] == ']' {
-				i += 2
-				for i < len(input) {
-					if input[i] == 0x07 {
-						i++
-						break
-					}
-					if input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\' {
-						i += 2
-						break
-					}
-					i++
+				_, next, ok := terminalStringEnd(input, i+2)
+				if !ok {
+					return out.String()
 				}
+				i = next
 				continue
 			}
 			i++

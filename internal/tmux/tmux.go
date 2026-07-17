@@ -525,6 +525,7 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 	if watchID <= 0 {
 		return fmt.Errorf("invalid Engram watch ID %d", watchID)
 	}
+	commands := make([]string, 0, 4)
 	for _, option := range []struct {
 		name  string
 		value string
@@ -534,24 +535,21 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 		{EngramNotifyOption, "run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)"},
 		{EngramArtifactOption, "print a visible file:// URI (OSC 8 optional), then run @engram_notify"},
 	} {
-		command := "set-option -p -q -t " + paneID + " " + option.name + " " + ShellQuote(option.value)
-		if err := m.runIfBindingMatches(ctx, paneID, windowID, serverID, command); err != nil {
-			return err
-		}
+		commands = append(commands, "set-option -p -q -t "+paneID+" "+option.name+" "+ShellQuote(option.value))
 	}
-	return nil
+	// One guarded tmux command list makes the four-option capability contract
+	// visible as one queue operation rather than exposing partial metadata.
+	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(commands, " ; "))
 }
 
 // ClearEngramAdvertisementIfBindingMatches removes capability metadata without
 // affecting the pane's program, environment, title, or other user options.
 func (m Manager) ClearEngramAdvertisementIfBindingMatches(ctx context.Context, paneID, windowID, serverID string) error {
+	commands := make([]string, 0, 4)
 	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption} {
-		command := "set-option -p -q -u -t " + paneID + " " + option
-		if err := m.runIfBindingMatches(ctx, paneID, windowID, serverID, command); err != nil {
-			return err
-		}
+		commands = append(commands, "set-option -p -q -u -t "+paneID+" "+option)
 	}
-	return nil
+	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(commands, " ; "))
 }
 
 func (m Manager) runIfBindingMatches(ctx context.Context, paneID, windowID, serverID, command string) error {

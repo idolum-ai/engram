@@ -155,18 +155,18 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   the last meaningful non-empty terminal block capped at 10 rows. The crop
   footer identifies `quoted terminal text`, `changed terminal region`, or
   `current terminal tail`; tail rows are not highlighted. A crop carries the
-  active SGR state from preceding rows. Compact crops preserve a readable
-  71-cell viewport around the exact matched span; deterministic tails frame
-  their rightmost meaningful content. The highlight border tracks that
-  horizontal viewport and must begin at or immediately before the first visible
-  text cell rather than retaining an off-screen content inset. Tabs, combining marks, and wide Unicode
-  characters use terminal-cell widths. Crops enforce the accessible
+  active SGR state from preceding rows. Compact crops preserve every complete
+  selected physical row and soft-wrap it at 71 terminal cells; no horizontal
+  viewport or column offset may discard text. The highlight border begins at
+  the content edge and covers every wrapped visual fragment belonging to a
+  highlighted physical row. Tabs, combining marks, and wide Unicode characters
+  use terminal-cell widths. Crops enforce the accessible
   contrast floor regardless of the full-snapshot theme. If the styled tail
   cannot be delivered safely, Engram renders the same bounded range as redacted
   plain text. Empty terminals use a quiet `guided view` frame. Engram never
   preserves stale pixels or falls back to a larger automatic screenshot.
-- The exact plain text corresponding to the displayed vertical and horizontal
-  guide viewport is retained
+- The exact plain text corresponding to the selected guide rows, before visual
+  soft-wrapping, is retained
   only in process memory and is available through `📄 Raw` while that canonical
   message remains current.
 - Terminal content is untrusted data for the model, not intended instructions or
