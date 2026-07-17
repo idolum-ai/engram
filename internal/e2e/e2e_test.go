@@ -64,7 +64,7 @@ func TestHermeticGoldenPath(t *testing.T) {
 	browser := requiredExecutable(t, "ENGRAM_SNAPSHOT_BROWSER")
 	tmuxBinary := requiredExecutable(t, "ENGRAM_E2E_TMUX", "tmux")
 
-	root := t.TempDir()
+	root := shortTempDir(t)
 	stateHome := privateDir(t, root, "state")
 	userHome := privateDir(t, root, "user-home")
 	configHome := privateDir(t, root, "config")
@@ -636,6 +636,20 @@ func privateDir(t *testing.T, root, name string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "engram-e2e-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove short E2E temporary directory: %v", err)
+		}
+	})
+	return dir
 }
 
 func writeFile(t *testing.T, path, content string, mode os.FileMode) {
