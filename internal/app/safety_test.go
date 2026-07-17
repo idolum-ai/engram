@@ -378,7 +378,7 @@ func TestLostSessionOffersOnlyReattach(t *testing.T) {
 		t.Fatalf("lost anchor markup = %#v", markup)
 	}
 	button := markup.InlineKeyboard[0][0]
-	if button.Text != "🧭 Reattach" || button.CallbackData != "recover:"+strconv.Itoa(id) {
+	if button.Text != "🧭 Link" || button.CallbackData != "recover:"+strconv.Itoa(id) {
 		t.Fatalf("lost anchor button = %#v", button)
 	}
 }

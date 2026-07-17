@@ -78,13 +78,16 @@ func TestSessionListMarkupWithSessions(t *testing.T) {
 	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 2 {
 		t.Fatalf("SessionListMarkup([1]) = %#v", got)
 	}
+	if got.InlineKeyboard[0][0].Text != "▶ 1" || got.InlineKeyboard[0][1].Text != "✕ 1" {
+		t.Fatalf("session actions = %#v", got.InlineKeyboard[0])
+	}
 }
 
 func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	t.Parallel()
 
 	got := SessionListMarkup(nil, []AttachTarget{{Label: "0:1", Target: "0:1"}})
-	if got == nil || len(got.InlineKeyboard) != 1 || got.InlineKeyboard[0][0].CallbackData != "attach:0:1" {
+	if got == nil || len(got.InlineKeyboard) != 1 || got.InlineKeyboard[0][0].Text != "↪ 0:1" || got.InlineKeyboard[0][0].CallbackData != "attach:0:1" {
 		t.Fatalf("SessionListMarkup attach = %#v", got)
 	}
 }
@@ -99,7 +102,7 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
 	}
-	if got.InlineKeyboard[0][1].Text != "🖼️" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+	if got.InlineKeyboard[0][1].Text != "🖼️ View" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
 	want := []InlineKeyboardButton{
@@ -149,7 +152,7 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	if got == nil || len(got.InlineKeyboard[0]) != 3 {
 		t.Fatalf("AnchorMarkup actions = %#v", got)
 	}
-	if want := (InlineKeyboardButton{Text: "🗣️ Explain", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
+	if want := (InlineKeyboardButton{Text: "🗣️ Talk", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
 		t.Fatalf("explain action = %#v, want %#v", got.InlineKeyboard[0][1], want)
 	}
 	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
@@ -178,9 +181,39 @@ func TestRecoverMarkupOffersExactReattach(t *testing.T) {
 	t.Parallel()
 
 	got := RecoverMarkup(7)
-	want := InlineKeyboardButton{Text: "🧭 Reattach", CallbackData: "recover:7"}
+	want := InlineKeyboardButton{Text: "🧭 Link", CallbackData: "recover:7"}
 	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 1 || got.InlineKeyboard[0][0] != want {
 		t.Fatalf("RecoverMarkup(7) = %#v, want %#v", got, want)
+	}
+}
+
+// Do not skip, weaken, replace, or supersede this test for any Telegram button.
+// Every button builder belongs here: Telegram truncation makes longer labels an
+// application-level usability failure, even when the callback remains valid.
+func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
+	t.Parallel()
+
+	maxRunes := utf8.RuneCountInString("🖼️ View")
+	markups := map[string]*InlineKeyboardMarkup{
+		"anchor": AnchorMarkup(123456789, AnchorMarkupOptions{
+			Image: true, Voice: true, Raw: true, Arrows: true,
+			FileToken: "0123456789abcdef", FileCount: 4,
+		}),
+		"recover": RecoverMarkup(123456789),
+		"sessions": SessionListMarkup(
+			[]int{1, 123456789},
+			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},
+		),
+		"close confirmation": CloseConfirmationMarkup("0123456789abcdef"),
+	}
+	for name, markup := range markups {
+		for rowIndex, row := range markup.InlineKeyboard {
+			for buttonIndex, button := range row {
+				if runes := utf8.RuneCountInString(button.Text); runes > maxRunes {
+					t.Errorf("%s row %d button %d label %q has %d runes, max %d", name, rowIndex, buttonIndex, button.Text, runes, maxRunes)
+				}
+			}
+		}
 	}
 }
 

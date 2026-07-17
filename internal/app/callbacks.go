@@ -341,10 +341,7 @@ func (a *App) answerCallback(ctx context.Context, id, text string) bool {
 }
 
 func closeConfirmationMarkup(token string) *telegram.InlineKeyboardMarkup {
-	return &telegram.InlineKeyboardMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{{
-		{Text: "Confirm", CallbackData: "close-confirm:" + token},
-		{Text: "Cancel", CallbackData: "close-cancel:" + token},
-	}}}
+	return telegram.CloseConfirmationMarkup(token)
 }
 
 func (a *App) issueCloseConfirmation(session state.TerminalSession) (string, error) {
