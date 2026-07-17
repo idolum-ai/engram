@@ -844,11 +844,12 @@ func densestCaptureStart(capture string, visibleRows, targetRows int) int {
 			bestStart, bestScore = start, windowScore
 		}
 	}
-	// Prefer the current screen tail when it retains nearly all of the best
-	// evidence. This keeps a pane that is actively filling stable between the
-	// framing probe and the final atomic styled capture, while a sparse
-	// full-screen UI with a genuinely blank tail still selects its dense block.
-	if windowScores[len(windowScores)-1] >= bestScore*4/5 {
+	// Prefer a substantially populated current screen tail over denser history.
+	// Full-screen agent UIs often leave more transcript rows near the top while
+	// their latest exchange occupies a shorter block near the bottom. Requiring
+	// near-equal density freezes captures on that history. A genuinely sparse or
+	// blank tail still falls back to the densest meaningful block.
+	if windowScores[len(windowScores)-1] >= bestScore*3/5 {
 		return len(windowScores) - 1
 	}
 	return bestStart

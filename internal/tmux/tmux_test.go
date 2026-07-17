@@ -684,6 +684,23 @@ func TestDensestCaptureStartFindsMeaningfulRegionInTallPane(t *testing.T) {
 	}
 }
 
+func TestDensestCaptureStartPrefersSubstantialCurrentAgentTail(t *testing.T) {
+	t.Parallel()
+	rows := make([]string, 162)
+	for index := 0; index < 53; index++ {
+		rows[index] = fmt.Sprintf("older dense transcript row %d", index)
+	}
+	for index := 127; index < 162; index++ {
+		rows[index] = fmt.Sprintf("current agent exchange row %d", index)
+	}
+	rows[154] = "latest agent response"
+
+	start := densestCaptureStart(strings.Join(rows, "\n")+"\n", 162, 64)
+	if start != 98 || 154 < start || 154 >= start+64 {
+		t.Fatalf("current agent tail start = %d, want 98 containing latest row 154", start)
+	}
+}
+
 func TestCaptureLiteralRejectsOversizedPaneBeforeCapture(t *testing.T) {
 	runner := &sequenceRunner{outputs: []string{tmuxRecord("401", "24")}}
 	if _, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64); err == nil || !strings.Contains(err.Error(), "pane width") {
