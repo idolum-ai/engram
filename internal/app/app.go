@@ -495,7 +495,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /"+cmd+" <id>")
 			return
 		}
-		ok, err := a.stopWatching(id)
+		ok, err := a.stopWatching(ctx, id)
 		if err != nil {
 			status = "command_state_failed"
 			a.reply(ctx, msg, "state error: "+err.Error())
@@ -539,7 +539,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	return status
 }
 
-func (a *App) stopWatching(id int) (bool, error) {
+func (a *App) stopWatching(ctx context.Context, id int) (bool, error) {
 	lock := a.anchorMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
@@ -547,6 +547,7 @@ func (a *App) stopWatching(id int) (bool, error) {
 	committed := ok && !updated.WatchEnabled && (err == nil || state.PersistenceReachedReplacement(err))
 	if committed {
 		a.resetConversationEpochLocked(id)
+		a.clearTerminalCapabilities(ctx, updated)
 	}
 	if err != nil && committed {
 		_ = a.audit("state.unwatch", "durability_uncertain", map[string]any{"session_id": id, "error": err.Error()})
@@ -620,6 +621,16 @@ func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 
 func (a *App) visibleReferences(capture string) visibleReferences {
 	return visibleReferencesForCapture(capture, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+}
+
+func (a *App) visibleReferencesForStyledCapture(capture string, hyperlinks []string) visibleReferences {
+	return visibleReferencesForStyledCapture(capture, hyperlinks, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+}
+
+func (a *App) intentionalArtifactPaths(capture string, hyperlinks []string) []string {
+	targets := append([]string(nil), hyperlinks...)
+	targets = append(targets, extractVisibleFileURIs(capture, maxVisiblePaths)...)
+	return visibleReferencesForHyperlinks(targets, maxVisiblePaths, 0, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey).Paths
 }
 
 func (a *App) statusText() string {

@@ -217,6 +217,63 @@ func TestSendTextIfBindingMatchesUsesOneBracketedPaste(t *testing.T) {
 	}
 }
 
+func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
+	t.Parallel()
+	runner := &fakeRunner{}
+	manager := New(runner)
+	if err := manager.AdvertiseEngramIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID, 42); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 4 {
+		t.Fatalf("calls = %#v, want four guarded pane option writes", runner.calls)
+	}
+	wantCommands := []string{
+		"set-option -p -q -t %7 @engram 'v1 watch=42 remote=telegram'",
+		"set-option -p -q -t %7 @engram_watch_id '42'",
+		"set-option -p -q -t %7 @engram_notify 'run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)'",
+		"set-option -p -q -t %7 @engram_artifact 'print a visible file:// URI (OSC 8 optional), then run @engram_notify'",
+	}
+	for index, call := range runner.calls {
+		if len(call) != 7 || call[0] != "if-shell" || call[3] != "%7" || call[5] != wantCommands[index] {
+			t.Fatalf("guarded option call %d = %#v, want command %q", index, call, wantCommands[index])
+		}
+	}
+
+	runner.calls = nil
+	if err := manager.ClearEngramAdvertisementIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID); err != nil {
+		t.Fatal(err)
+	}
+	wantCommands = []string{
+		"set-option -p -q -u -t %7 @engram",
+		"set-option -p -q -u -t %7 @engram_watch_id",
+		"set-option -p -q -u -t %7 @engram_notify",
+		"set-option -p -q -u -t %7 @engram_artifact",
+	}
+	for index, call := range runner.calls {
+		if len(call) != 7 || call[5] != wantCommands[index] {
+			t.Fatalf("guarded option clear %d = %#v, want command %q", index, call, wantCommands[index])
+		}
+	}
+}
+
+func TestExtractOSC8HyperlinksAcceptsTerminalTerminatorsAndDeduplicates(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		"\x1b]8;;file:///tmp/report%20one.txt\x1b\\report\x1b]8;;\x1b\\",
+		"\x1b]8;id=2;https://example.test/build\aweb\x1b]8;;\a",
+		"\x1b]8;;file:///tmp/report%20one.txt\x1b\\duplicate\x1b]8;;\x1b\\",
+		"\x1b]8;;file:///tmp/bad\npath\x1b\\bad",
+		"\x1b]8;;unterminated",
+	}, " ")
+	want := []string{"file:///tmp/report%20one.txt", "https://example.test/build"}
+	if got := extractOSC8Hyperlinks(input, 8); !reflect.DeepEqual(got, want) {
+		t.Fatalf("hyperlinks = %#v, want %#v", got, want)
+	}
+	if got := extractOSC8Hyperlinks(input, 1); !reflect.DeepEqual(got, want[:1]) {
+		t.Fatalf("bounded hyperlinks = %#v, want %#v", got, want[:1])
+	}
+}
+
 func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
 		out: tmuxRecord("main", "$1", "3", "1") + tmuxRecord("other", "$2", "1", "0"),
@@ -548,11 +605,35 @@ func TestCaptureLiteralKeepsCurrentTailForTallPane(t *testing.T) {
 	}
 }
 
+func TestCaptureLiteralSelectsDenseCreatedPaneTranscript(t *testing.T) {
+	t.Parallel()
+	rows := make([]string, 162)
+	for index := 8; index < 46; index++ {
+		rows[index] = fmt.Sprintf("codex transcript row %d", index)
+	}
+	rows[160] = "prompt"
+	runner := &sequenceRunner{outputs: []string{
+		tmuxRecord("289", "162"),
+		strings.Join(rows, "\n") + "\n",
+		"codex transcript row 8\ncompleted response\n",
+	}}
+	got, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "codex transcript row 8\ncompleted response" {
+		t.Fatalf("CaptureLiteral = %q", got)
+	}
+	if len(runner.calls) != 3 || runner.calls[1][0] != "capture-pane" || runner.calls[2][0] != "if-shell" || runner.calls[2][5] != "capture-pane -p -N -S 8 -E 71 -t %7" {
+		t.Fatalf("dense literal capture calls = %#v", runner.calls)
+	}
+}
+
 func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
 	ansi := strings.Repeat("\x1b[32mselected physical row\x1b[0m\n", 64)
 	joined := strings.Repeat("selected logical line\n", 32)
 	metadata := styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "80", "100", "bash", "1", "0")
-	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata}
+	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata, framing: strings.Repeat("\n", 99) + "current tail\n"}
 
 	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
 	if err != nil {
@@ -561,14 +642,45 @@ func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
 	if got.ANSI != ansi || got.JoinedText != strings.TrimSpace(joined) {
 		t.Fatalf("misaligned styled capture: ANSI=%q joined=%q", got.ANSI, got.JoinedText)
 	}
-	if len(runner.calls) != 5 {
+	if len(runner.calls) != 6 {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
-	finalCapture := runner.calls[1]
+	if probe := runner.calls[1]; !reflect.DeepEqual(probe[:8], []string{"capture-pane", "-p", "-N", "-S", "0", "-E", "99", "-t"}) {
+		t.Fatalf("framing probe = %#v", probe)
+	}
+	finalCapture := runner.calls[2]
 	physicalBounds := []string{"-S", "36", "-E", "99"}
 	joinedBounds := []string{"-S", "36", "-E", "99"}
 	if !containsArgs(finalCapture[:11], physicalBounds) || !containsArgs(finalCapture[11:22], joinedBounds) {
 		t.Fatalf("physical and joined captures used different bounds: %#v", finalCapture)
+	}
+}
+
+func TestDensestCaptureStartFindsMeaningfulRegionInTallPane(t *testing.T) {
+	t.Parallel()
+	rows := make([]string, 162)
+	for index := 8; index < 46; index++ {
+		rows[index] = fmt.Sprintf("codex transcript row %d", index)
+	}
+	rows[160] = "prompt"
+	if got := densestCaptureStart(strings.Join(rows, "\n")+"\n", 162, 64); got != 8 {
+		t.Fatalf("dense transcript start = %d, want 8", got)
+	}
+
+	rows = make([]string, 162)
+	for index := 130; index < 162; index++ {
+		rows[index] = fmt.Sprintf("shell tail row %d", index)
+	}
+	if got := densestCaptureStart(strings.Join(rows, "\n")+"\n", 162, 64); got != 98 {
+		t.Fatalf("dense tail start = %d, want 98", got)
+	}
+
+	rows = make([]string, 100)
+	for index := 0; index < 92; index++ {
+		rows[index] = fmt.Sprintf("actively filling row %d", index)
+	}
+	if got := densestCaptureStart(strings.Join(rows, "\n")+"\n", 100, 64); got != 36 {
+		t.Fatalf("active dense pane start = %d, want current tail 36", got)
 	}
 }
 

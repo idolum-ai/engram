@@ -1,12 +1,80 @@
 package app
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestStyledCaptureReferencesPreferValidatedOSC8Targets(t *testing.T) {
+	root := t.TempDir()
+	explicit := filepath.Join(root, "artifact with spaces.txt")
+	fallback := filepath.Join(root, "visible-fallback.txt")
+	for _, path := range []string{explicit, fallback} {
+		if err := os.WriteFile(path, []byte("artifact"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	explicitURI := (&url.URL{Scheme: "file", Path: explicit}).String()
+	refs := visibleReferencesForStyledCapture(
+		fallback+"\nhttps://example.test/fallback",
+		[]string{explicitURI, "https://example.test/explicit"},
+	)
+	if want := []string{explicit, fallback}; !reflect.DeepEqual(refs.Paths, want) {
+		t.Fatalf("paths = %#v, want explicit target first %#v", refs.Paths, want)
+	}
+	if want := []string{"https://example.test/explicit", "https://example.test/fallback"}; !reflect.DeepEqual(refs.URLs, want) {
+		t.Fatalf("URLs = %#v, want explicit target first %#v", refs.URLs, want)
+	}
+}
+
+func TestStyledCaptureReferencesAcceptVisibleExplicitFileURI(t *testing.T) {
+	root := t.TempDir()
+	artifact := filepath.Join(root, "visible artifact.txt")
+	if err := os.WriteFile(artifact, []byte("artifact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifactURI := (&url.URL{Scheme: "file", Path: artifact}).String()
+	refs := visibleReferencesForStyledCapture("artifact: "+artifactURI+"\nplain path is fallback: "+artifact, nil)
+	if !reflect.DeepEqual(refs.Paths, []string{artifact}) {
+		t.Fatalf("visible file URI paths = %#v, want %q once", refs.Paths, artifact)
+	}
+	if got := extractVisibleFileURIs("reject x"+artifactURI+" accept ("+artifactURI+")", 4); !reflect.DeepEqual(got, []string{artifactURI}) {
+		t.Fatalf("visible file URI targets = %#v", got)
+	}
+}
+
+func TestOSC8FileTargetsRejectNonLocalOrNonRegularArtifacts(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "report.txt")
+	symlink := filepath.Join(root, "report-link.txt")
+	secretPath := filepath.Join(root, "TOKEN=terminal-secret")
+	for _, path := range []string{file, secretPath} {
+		if err := os.WriteFile(path, []byte("artifact"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(file, symlink); err != nil {
+		t.Fatal(err)
+	}
+	fileURI := (&url.URL{Scheme: "file", Path: file}).String()
+	symlinkURI := (&url.URL{Scheme: "file", Path: symlink}).String()
+	secretURI := (&url.URL{Scheme: "file", Path: secretPath}).String()
+	refs := visibleReferencesForHyperlinks([]string{
+		fileURI,
+		"file://remote.example" + file,
+		fileURI + "?download=1",
+		fileURI + "#fragment",
+		symlinkURI,
+		secretURI,
+	}, 4, 4)
+	if !reflect.DeepEqual(refs.Paths, []string{file}) {
+		t.Fatalf("validated OSC 8 paths = %#v, want only local regular file %q", refs.Paths, file)
+	}
+}
 
 func TestExtractVisibleURLsValidatesTrimsAndDeduplicates(t *testing.T) {
 	t.Parallel()

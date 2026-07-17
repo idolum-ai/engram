@@ -86,11 +86,23 @@ func run(args []string) int {
 		fmt.Println(string(data))
 		return 0
 	case "signal":
-		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: engram signal <message>")
+		stdout := len(args) >= 2 && args[1] == "--stdout"
+		messageStart := 1
+		if stdout {
+			messageStart = 2
+		}
+		if len(args) <= messageStart {
+			fmt.Fprintln(os.Stderr, "usage: engram signal [--stdout] <message>")
 			return 2
 		}
-		if err := emitSignal(strings.Join(args[1:], " "), openControllingTerminal); err != nil {
+		message := strings.Join(args[messageStart:], " ")
+		var err error
+		if stdout {
+			err = upstream.Write(os.Stdout, message)
+		} else {
+			err = emitSignal(message, openControllingTerminal)
+		}
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "signal:", err)
 			return 1
 		}
@@ -115,7 +127,7 @@ func printHelp() {
   engram inspect sessions
   engram inspect frame <watch-id>
   engram commands
-  engram signal <message>
+  engram signal [--stdout] <message>
   engram version
   engram help
 `)

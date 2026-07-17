@@ -28,8 +28,8 @@ func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 	if !result.OK() || result.Message != "untracked; tmux remains open" {
 		t.Fatalf("close result = %#v", result)
 	}
-	if len(runner.calls) != 0 {
-		t.Fatalf("attached close called tmux: %#v", runner.calls)
+	if len(runner.calls) != 4 || runner.calls[0][0] != "if-shell" || !strings.Contains(runner.calls[0][5], "-u -t %1 @engram") || !strings.Contains(runner.calls[1][5], "-u -t %1 @engram_watch_id") || !strings.Contains(runner.calls[2][5], "-u -t %1 @engram_notify") || !strings.Contains(runner.calls[3][5], "-u -t %1 @engram_artifact") {
+		t.Fatalf("attached close did not only clear Engram pane metadata: %#v", runner.calls)
 	}
 	got, ok := app.Store.FindSession(id)
 	if !ok || got.State != state.TerminalClosed || got.WatchEnabled {

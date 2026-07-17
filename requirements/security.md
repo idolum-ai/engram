@@ -89,6 +89,14 @@ privacy model must stay small and explicit.
   recommendations. Extracted reference text receives best-effort credential
   redaction before Telegram delivery. URLs containing userinfo are omitted;
   recognized credential-bearing query parameters are structurally redacted.
+- OSC 8 hyperlink targets and visible literal `file://` URIs are equally
+  untrusted pane-authored text. Engram may
+  surface HTTP(S) targets under the preceding rules. It may surface `file://`
+  targets only for an empty or `localhost` authority, an absolute path without
+  a query or fragment, and an existing regular non-symlink file whose path
+  passes configured-secret and credential-pattern checks. Discovery never
+  opens or reads the target; upload remains an explicit authorized user action
+  through the existing bounded file-download path.
 
 ## Local Sensitive Data
 

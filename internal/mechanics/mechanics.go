@@ -109,6 +109,14 @@ func (c Controller) CaptureVisibleRaw(ctx context.Context, binding Binding) (tmu
 	return pane, text, nil
 }
 
+func (c Controller) AdvertiseEngram(ctx context.Context, binding Binding, watchID int) error {
+	return c.tmux.AdvertiseEngramIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, watchID)
+}
+
+func (c Controller) ClearEngramAdvertisement(ctx context.Context, binding Binding) error {
+	return c.tmux.ClearEngramAdvertisementIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID)
+}
+
 func (c Controller) DumpScrollback(ctx context.Context, binding Binding, dst io.Writer) (tmux.Pane, error) {
 	if dst == nil {
 		return tmux.Pane{}, fmt.Errorf("missing scrollback destination")

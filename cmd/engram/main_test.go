@@ -36,6 +36,18 @@ func TestEmitSignalUsesOnlyControllingTerminal(t *testing.T) {
 	}
 }
 
+func TestSignalStdoutEmitsRecordForRelayingTerminalHosts(t *testing.T) {
+	stdout, stderr, code := captureCommand(t, func() int {
+		return run([]string{"signal", "--stdout", "tests", "finished"})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("signal --stdout code=%d stderr=%q", code, stderr)
+	}
+	if !strings.HasPrefix(stdout, "\a\r\n[engram:upstream:v1] ") || !strings.HasSuffix(stdout, " 14:tests finished\r\n") {
+		t.Fatalf("signal --stdout = %q", stdout)
+	}
+}
+
 func TestPreflightDoesNotCallTelegramOrGuideProvider(t *testing.T) {
 	env := writeTestEnv(t)
 	stdout, stderr, code := captureCommand(t, func() int {

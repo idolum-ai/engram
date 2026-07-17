@@ -30,6 +30,7 @@ const (
 	maxTerminalFont    = 9.4
 	minTerminalFont    = 7.0
 	terminalLineHeight = 1.4
+	wrappedColumns     = 100
 )
 
 type Input struct {
@@ -173,6 +174,7 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 	}()
 
 	pageURL := (&url.URL{Scheme: "file", Path: htmlPath}).String()
+	logicalWidth := renderWidth(input)
 	logicalHeight := renderHeight(input)
 	args := []string{
 		"--headless",
@@ -188,7 +190,7 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 		"--no-default-browser-check",
 		"--no-first-run",
 		"--force-device-scale-factor=" + strconv.Itoa(PixelRatio),
-		fmt.Sprintf("--window-size=%d,%d", LogicalWidth, logicalHeight),
+		fmt.Sprintf("--window-size=%d,%d", logicalWidth, logicalHeight),
 		"--user-data-dir=" + profileDir,
 		"--screenshot=" + pngPath,
 		pageURL,
@@ -215,8 +217,8 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 	if closeErr != nil {
 		return "", fmt.Errorf("close snapshot PNG: %w", closeErr)
 	}
-	if pngConfig.Width != LogicalWidth*PixelRatio || pngConfig.Height != logicalHeight*PixelRatio {
-		return "", fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, LogicalWidth*PixelRatio, logicalHeight*PixelRatio)
+	if pngConfig.Width != logicalWidth*PixelRatio || pngConfig.Height != logicalHeight*PixelRatio {
+		return "", fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, logicalWidth*PixelRatio, logicalHeight*PixelRatio)
 	}
 	if err := os.Chmod(pngPath, 0o600); err != nil {
 		return "", fmt.Errorf("protect snapshot PNG: %w", err)
@@ -244,7 +246,7 @@ func RenderHTML(input Input, themeName string) string {
 	}
 	columnLabel := fmt.Sprintf("%dx%d visible", input.Columns, input.VisibleRows)
 	if renderColumns < input.Columns {
-		columnLabel = fmt.Sprintf("columns 1–%d of %d · %d visible rows", renderColumns, input.Columns, input.VisibleRows)
+		columnLabel = fmt.Sprintf("full %d columns · wrapped at %d · %d visible rows", input.Columns, renderColumns, input.VisibleRows)
 	}
 	theme := snapshotThemeFor(themeName)
 	if input.Compact {
@@ -254,21 +256,27 @@ func RenderHTML(input Input, themeName string) string {
 	if input.Compact {
 		footer = firstNonEmpty(input.Footer, "quoted terminal text")
 	}
-	highlights := renderHighlights(input.HighlightRows, theme)
 	horizontalOffset := float64(input.ColumnOffset) * fontSize * 0.602
+	highlightLeft := max(0, 8-horizontalOffset)
+	highlights := renderHighlights(input.HighlightRows, theme)
+	whiteSpace, overflowWrap := "pre", "normal"
+	visualRows := bufferRows
+	if !input.Compact && renderColumns < input.Columns {
+		whiteSpace, overflowWrap = "pre-wrap", "anywhere"
+		visualRows = snapshotVisualRows(input.ANSI, bufferRows, renderColumns)
+	}
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
-:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;height:%spx;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:pre;transform:translateX(-%.2fpx)}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
+:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:%.2fpx;right:8px;z-index:0;height:%spx;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:%s;overflow-wrap:%s;transform:translateX(-%.2fpx)}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
 </style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span>%s</span><span>%dx%d visible</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
-		lineHeightCSS, theme.highlightBorder, theme.highlight, renderColumns, float64(bufferRows)*lineHeight, theme.text, fontSize, lineHeightCSS, horizontalOffset, theme.subtleBorder, theme.muted, theme.foot,
+		highlightLeft, lineHeightCSS, theme.highlightBorder, theme.highlight, renderColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, horizontalOffset, theme.subtleBorder, theme.muted, theme.foot,
 		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
 		html.EscapeString(footer), input.Columns, input.VisibleRows)
 }
 
-// RenderedColumns reports how many leading columns fit legibly in the fixed
-// snapshot viewport. The full-width text remains available in the paired raw
-// frame when a wide pane must be clipped for the image.
+// RenderedColumns reports the readable wrap width. Full snapshots soft-wrap
+// wider physical rows instead of clipping them.
 func RenderedColumns(columns int) int {
 	renderColumns, _, _ := readableTerminalLayout(columns)
 	return renderColumns
@@ -282,14 +290,27 @@ func readableTerminalLayout(columns int) (renderColumns int, fontSize, lineHeigh
 	}
 	if fontSize < minTerminalFont {
 		fontSize = minTerminalFont
-		renderColumns = int(math.Floor(terminalWidth / (fontSize * terminalCharRatio)))
+		renderColumns = min(columns, wrappedColumns)
 	}
 	return renderColumns, fontSize, fontSize * terminalLineHeight
 }
 
+func renderWidth(input Input) int {
+	if input.Compact {
+		return LogicalWidth
+	}
+	renderColumns, fontSize, _ := readableTerminalLayout(input.Columns)
+	return max(LogicalWidth, int(math.Ceil(float64(renderColumns)*fontSize*terminalCharRatio))+24)
+}
+
 func renderHeight(input Input) int {
 	if !input.Compact {
-		return LogicalHeight
+		renderColumns, _, lineHeight := readableTerminalLayout(input.Columns)
+		if renderColumns >= input.Columns {
+			return LogicalHeight
+		}
+		visualRows := snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
+		return max(LogicalHeight, 66+int(math.Ceil(float64(visualRows)*lineHeight)))
 	}
 	height := 86 + int(math.Ceil(float64(input.BufferRows)*13.2))
 	if height < 180 {
@@ -299,6 +320,78 @@ func renderHeight(input Input) int {
 		return LogicalHeight
 	}
 	return height
+}
+
+func snapshotVisualRows(ansi string, bufferRows, columns int) int {
+	if bufferRows <= 0 || columns <= 0 {
+		return max(bufferRows, 1)
+	}
+	plain := plainANSIText(ansi)
+	rows := strings.Split(strings.TrimSuffix(plain, "\n"), "\n")
+	if plain == "" {
+		rows = nil
+	}
+	visualRows := 0
+	for _, row := range rows {
+		// tmux -N preserves padding; padding occupies the existing physical
+		// row and must not manufacture extra soft-wrapped rows.
+		row = strings.TrimRight(row, " \t")
+		cells := 0
+		for _, r := range row {
+			if r == '\t' {
+				cells += 8 - cells%8
+			} else {
+				// UTF-8 byte length intentionally overestimates non-ASCII cell
+				// width so dynamic image height fails open rather than clipping.
+				cells += len(string(r))
+			}
+		}
+		visualRows += max(1, int(math.Ceil(float64(cells)/float64(columns))))
+	}
+	visualRows += max(0, bufferRows-len(rows))
+	return max(visualRows, bufferRows)
+}
+
+func plainANSIText(input string) string {
+	var out strings.Builder
+	for i := 0; i < len(input); {
+		if input[i] == 0x1b {
+			if i+1 < len(input) && input[i+1] == '[' {
+				end := i + 2
+				for end < len(input) && (input[end] < 0x40 || input[end] > 0x7e) {
+					end++
+				}
+				if end < len(input) {
+					i = end + 1
+					continue
+				}
+			}
+			if i+1 < len(input) && input[i+1] == ']' {
+				i += 2
+				for i < len(input) {
+					if input[i] == 0x07 {
+						i++
+						break
+					}
+					if input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\' {
+						i += 2
+						break
+					}
+					i++
+				}
+				continue
+			}
+			i++
+			continue
+		}
+		end := i
+		for end < len(input) && input[end] != 0x1b {
+			end++
+		}
+		out.WriteString(cleanText(input[i:end]))
+		i = end
+	}
+	return out.String()
 }
 
 func renderHighlights(rows []int, theme snapshotTheme) string {

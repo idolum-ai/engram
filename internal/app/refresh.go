@@ -78,7 +78,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, ts, capture)
-	refs := a.visibleReferences(presentationText)
+	refs := a.visibleReferencesForStyledCapture(presentationText, capture.Hyperlinks)
 	hash := guideCaptureHash(presentationText, ts.Title, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
@@ -671,6 +671,7 @@ func (a *App) scheduler(ctx context.Context) {
 		if ts.AnchorMessageID != 0 {
 			a.reconcileAnchorControls(ctx, ts.ID)
 			if ts.State == state.TerminalRunning && ts.WatchEnabled {
+				a.advertiseTerminalCapabilities(ctx, ts)
 				// Anchor file bindings and conversation continuity are process-local.
 				// Re-render once after restart so unchanged cards regain both.
 				a.queueManualRefresh(ts.ID)

@@ -24,19 +24,23 @@ func observeUpstreamSignal(capture tmux.StyledCapture) upstream.Observation {
 func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalSession, capture tmux.StyledCapture) string {
 	observation := observeUpstreamSignal(capture)
 	if observation.Found {
-		a.deliverUpstreamSignal(ctx, observed, observation.Latest)
+		a.deliverUpstreamSignalWithArtifacts(ctx, observed, observation.Latest, a.intentionalArtifactPaths(observation.PresentationText, capture.Hyperlinks))
 	}
 	return observation.PresentationText
 }
 
 func (a *App) deliverUpstreamSignal(ctx context.Context, observed state.TerminalSession, record upstream.Record) {
+	a.deliverUpstreamSignalWithArtifacts(ctx, observed, record, nil)
+}
+
+func (a *App) deliverUpstreamSignalWithArtifacts(ctx context.Context, observed state.TerminalSession, record upstream.Record, artifacts []string) {
 	lock := a.anchorMutex(observed.ID)
 	lock.Lock()
 	defer lock.Unlock()
-	a.deliverUpstreamSignalLocked(ctx, observed, record)
+	a.deliverUpstreamSignalLocked(ctx, observed, record, artifacts)
 }
 
-func (a *App) deliverUpstreamSignalLocked(ctx context.Context, observed state.TerminalSession, record upstream.Record) {
+func (a *App) deliverUpstreamSignalLocked(ctx context.Context, observed state.TerminalSession, record upstream.Record, artifacts []string) {
 	latest, ok := a.Store.FindSession(observed.ID)
 	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorChatID == 0 || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, observed) {
 		_ = a.audit("terminal.upstream_signal", "superseded", map[string]any{"session_id": observed.ID, "record_id": record.ID})
@@ -59,6 +63,14 @@ func (a *App) deliverUpstreamSignalLocked(ctx context.Context, observed state.Te
 		return
 	}
 	text := fmt.Sprintf("[%d] terminal-authored signal\n\n%s", latest.ID, redacted)
+	if len(artifacts) != 0 {
+		var artifactText strings.Builder
+		artifactText.WriteString("\n\nartifacts:")
+		for index, path := range artifacts {
+			fmt.Fprintf(&artifactText, "\n%d. %s", index+1, path)
+		}
+		text += artifactText.String()
+	}
 	message, err := a.Telegram.SendMessage(ctx, latest.AnchorChatID, text, latest.AnchorMessageID, nil)
 	standalone := false
 	if isTelegramReplyUnavailable(err) {

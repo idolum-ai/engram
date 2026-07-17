@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -507,6 +508,39 @@ func TestDeliverUpstreamSignalRedactsCoalescesAndReplacesReplyAlias(t *testing.T
 	second, _ := store.FindSession(session.ID)
 	if second.UpstreamMessageID != 89 || !reflect.DeepEqual(second.SeenUpstreamSignalIDs, []string{firstSignalID, secondSignalID}) || !reflect.DeepEqual(second.StaleAlternateMessageIDs, []int{88}) {
 		t.Fatalf("replacement signal state = %#v", second)
+	}
+}
+
+func TestCapturedSignalIncludesIntentionalOSC8FileArtifact(t *testing.T) {
+	store, session := newUpstreamStore(t)
+	artifact := filepath.Join(t.TempDir(), "test report.txt")
+	if err := os.WriteFile(artifact, []byte("passed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifactURI := (&url.URL{Scheme: "file", Path: artifact}).String()
+	var text string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		text = body["text"].(string)
+		return telegramTestResponse(t, http.StatusOK, map[string]any{
+			"ok": true, "result": map[string]any{"message_id": 88, "chat": map[string]any{"id": 100}},
+		}), nil
+	})}
+	a := &App{Store: store, Telegram: client}
+	capture := tmux.StyledCapture{
+		JoinedText: "before\nartifact: " + artifactURI + "\n[engram:upstream] " + firstSignalID + " report ready\nafter",
+	}
+	if got := a.processCapturedFrame(context.Background(), session, capture); got != "before\nartifact: "+artifactURI+"\nafter" {
+		t.Fatalf("presentation = %q, want signal removed", got)
+	}
+	want := "[1] terminal-authored signal\n\nreport ready\n\nartifacts:\n1. " + artifact
+	if text != want {
+		t.Fatalf("Telegram text = %q, want %q", text, want)
 	}
 }
 

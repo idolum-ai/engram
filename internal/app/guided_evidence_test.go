@@ -538,7 +538,7 @@ func TestUnwatchWaitsForInFlightTelegramPublication(t *testing.T) {
 	<-started
 	unwatchDone := make(chan error, 1)
 	go func() {
-		_, err := a.stopWatching(session.ID)
+		_, err := a.stopWatching(context.Background(), session.ID)
 		unwatchDone <- err
 	}()
 	select {

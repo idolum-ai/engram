@@ -39,7 +39,7 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 	}
 }
 
-func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
+func TestRenderHTMLWrapsWidePanesWithoutClipping(t *testing.T) {
 	t.Parallel()
 	page := RenderHTML(Input{
 		ANSI:        "wide terminal content\n",
@@ -51,10 +51,12 @@ func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
 		BufferRows:  64,
 	}, "contrast-dark")
 	for _, want := range []string{
-		"width:96ch",
+		"width:100ch",
 		"font:7.00px/9.80px",
+		"white-space:pre-wrap",
+		"overflow-wrap:anywhere",
 		"64-row bounded frame",
-		"columns 1–96 of 289 · 162 visible rows",
+		"full 289 columns · wrapped at 100 · 162 visible rows",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide-pane HTML missing %q: %s", want, page)
@@ -62,7 +64,7 @@ func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
 	}
 }
 
-func TestRenderedColumnsClipsOnlyBeyondReadableBoundary(t *testing.T) {
+func TestRenderedColumnsReportsSoftWrapBoundary(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		columns int
@@ -70,12 +72,37 @@ func TestRenderedColumnsClipsOnlyBeyondReadableBoundary(t *testing.T) {
 	}{
 		{columns: 80, want: 80},
 		{columns: 96, want: 96},
-		{columns: 97, want: 96},
-		{columns: 289, want: 96},
+		{columns: 97, want: 97},
+		{columns: 100, want: 100},
+		{columns: 101, want: 100},
+		{columns: 289, want: 100},
 	} {
 		if got := RenderedColumns(test.columns); got != test.want {
 			t.Errorf("RenderedColumns(%d) = %d, want %d", test.columns, got, test.want)
 		}
+	}
+}
+
+func TestWideSnapshotDimensionsPreserveAllColumnsWithinTelegramPhotoBounds(t *testing.T) {
+	t.Parallel()
+	for _, columns := range []int{101, 289, 400} {
+		ansi := strings.Repeat(strings.Repeat("x", columns)+"\n", 64)
+		input := Input{ANSI: ansi, Columns: columns, VisibleRows: 162, BufferRows: 64}
+		width, height := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio
+		if width+height > 10000 || width > height*20 || height > width*20 {
+			t.Fatalf("%d-column snapshot dimensions %dx%d exceed Telegram photo bounds", columns, width, height)
+		}
+	}
+	input := Input{ANSI: strings.Repeat(strings.Repeat("x", 289)+"\n", 64), Columns: 289, VisibleRows: 162, BufferRows: 64}
+	if got, want := renderWidth(input), 446; got != want {
+		t.Fatalf("wide render width = %d, want %d", got, want)
+	}
+	if got, want := renderHeight(input), 1948; got != want {
+		t.Fatalf("wide render height = %d, want %d", got, want)
+	}
+	sparse := Input{ANSI: "short line\n", Columns: 289, VisibleRows: 162, BufferRows: 64}
+	if got := renderHeight(sparse); got != LogicalHeight {
+		t.Fatalf("sparse wide render height = %d, want minimum %d", got, LogicalHeight)
 	}
 }
 
@@ -124,7 +151,7 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 		Columns: 71, VisibleRows: 37, BufferRows: 3, Compact: true, HighlightRows: []int{1},
 	}
 	page := RenderHTML(input, "contrast-dark")
-	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px`) || !strings.Contains(page, "quoted terminal text") {
+	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px`) || !strings.Contains(page, "left:8.00px") || !strings.Contains(page, "quoted terminal text") {
 		t.Fatalf("compact evidence HTML = %s", page)
 	}
 	if got := renderHeight(input); got != 180 {
@@ -137,7 +164,7 @@ func TestCompactEvidenceKeepsWidePanesReadableAndEscapesFooter(t *testing.T) {
 		ANSI: "important", Title: "build", Target: "[3]", CWD: "/tmp",
 		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, ColumnOffset: 100, Footer: `<unsafe & footer>`,
 	}, "terminal")
-	for _, want := range []string{"font:9.40px/13.2px", "transform:translateX(-", "&lt;unsafe &amp; footer&gt;"} {
+	for _, want := range []string{"font:9.40px/13.2px", "left:0.00px", "transform:translateX(-", "&lt;unsafe &amp; footer&gt;"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide compact HTML missing %q: %s", want, page)
 		}
@@ -321,6 +348,36 @@ func TestLiveChromiumRender(t *testing.T) {
 	}
 	if config.Width != LogicalWidth*PixelRatio || config.Height != LogicalHeight*PixelRatio {
 		t.Fatalf("snapshot size = %dx%d", config.Width, config.Height)
+	}
+}
+
+func TestLiveChromiumWideRender(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	const columns = 289
+	ansi := strings.Repeat("\x1b[36m"+strings.Repeat("x", columns)+"\x1b[0m\n", 64)
+	input := Input{
+		ANSI: ansi, Title: "wide live render", Target: "[7]", CWD: "/tmp",
+		Columns: columns, VisibleRows: 162, BufferRows: 64,
+	}
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
+	path, err := renderer.Render(context.Background(), input, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	config, err := png.DecodeConfig(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantWidth, wantHeight := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio; config.Width != wantWidth || config.Height != wantHeight {
+		t.Fatalf("wide snapshot size = %dx%d, want %dx%d", config.Width, config.Height, wantWidth, wantHeight)
 	}
 }
 

@@ -208,7 +208,7 @@ func TestSnapshotAnchorCaptionUsesExplicitPresentationTextWithoutURLRewrite(t *t
 	}
 }
 
-func TestSnapshotAnchorCaptionDisclosesWideImageClipping(t *testing.T) {
+func TestSnapshotAnchorCaptionDisclosesFullWidthWrapping(t *testing.T) {
 	t.Parallel()
 	capture := tmux.StyledCapture{
 		Title:       "wide review",
@@ -220,14 +220,14 @@ func TestSnapshotAnchorCaptionDisclosesWideImageClipping(t *testing.T) {
 	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: "wide review"}
 
 	caption, _ := (&App{}).snapshotAnchorCaption(session, capture, visibleReferences{})
-	if !strings.Contains(caption, "image columns 1–96 of 289 · Raw contains full width") {
-		t.Fatalf("snapshot caption omitted accessible clipping disclosure: %q", caption)
+	if !strings.Contains(caption, "full-width image · rows wrap at 100 columns") {
+		t.Fatalf("snapshot caption omitted full-width wrapping disclosure: %q", caption)
 	}
 
 	capture.Columns = 96
 	caption, _ = (&App{}).snapshotAnchorCaption(session, capture, visibleReferences{})
-	if strings.Contains(caption, "image columns") {
-		t.Fatalf("unclipped snapshot caption claimed clipping: %q", caption)
+	if strings.Contains(caption, "rows wrap") {
+		t.Fatalf("narrow snapshot caption claimed wrapping: %q", caption)
 	}
 }
 
@@ -271,7 +271,7 @@ func TestSnapshotAnchorCaptionBoundsVisibleTextBeforeHTMLEscaping(t *testing.T) 
 	}
 	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: capture.Title}
 	caption, files := (&App{}).snapshotAnchorCaption(session, capture, visibleReferences{})
-	if len(caption) > 960 || !utf8.ValidString(caption) || len(files) != 0 || !strings.Contains(caption, "image columns 1–96 of 289 · Raw contains full width") {
+	if len(caption) > 960 || !utf8.ValidString(caption) || len(files) != 0 || !strings.Contains(caption, "full-width image · rows wrap at 100 columns") {
 		t.Fatalf("caption bytes=%d valid=%v files=%#v", len(caption), utf8.ValidString(caption), files)
 	}
 	if html := telegram.MarkdownToHTML(caption); strings.ContainsAny(html, "<>") {

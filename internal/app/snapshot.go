@@ -143,14 +143,10 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	_ = a.audit("terminal.snapshot", "sent", map[string]any{"session_id": latest.ID, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
 }
 
-func snapshotFrameDescription(capture tmux.StyledCapture, rawCompanion bool) string {
+func snapshotFrameDescription(capture tmux.StyledCapture, _ bool) string {
 	description := fmt.Sprintf("%d buffer rows · %dx%d visible", capture.BufferRows, capture.Columns, capture.VisibleRows)
 	if rendered := terminalshot.RenderedColumns(capture.Columns); rendered < capture.Columns {
-		widthDisclosure := "full width not shown"
-		if rawCompanion {
-			widthDisclosure = "Raw contains full width"
-		}
-		description += fmt.Sprintf("\nimage columns 1–%d of %d · %s", rendered, capture.Columns, widthDisclosure)
+		description += fmt.Sprintf("\nfull-width image · rows wrap at %d columns", rendered)
 	}
 	return description
 }

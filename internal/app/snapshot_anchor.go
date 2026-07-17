@@ -100,7 +100,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	refs := a.visibleReferences(presentationText)
+	refs := a.visibleReferencesForStyledCapture(presentationText, capture.Hyperlinks)
 	caption, files := a.snapshotAnchorCaption(current, capture, refs)
 	captureHash := snapshotAnchorHash(current, capture, presentationText, caption, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {

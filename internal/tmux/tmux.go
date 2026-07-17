@@ -104,6 +104,7 @@ type StyledCapture struct {
 	ANSI        string
 	Text        string
 	JoinedText  string
+	Hyperlinks  []string
 	ServerID    string
 	WindowID    string
 	PaneID      string
@@ -121,6 +122,13 @@ const paneRecordFormat = "#{n:session_id}:#{session_id}#{n:window_id}:#{window_i
 
 const serverIDOption = "@engram_server_id"
 const identityMismatchMarker = "ENGRAM_IDENTITY_MISMATCH"
+
+const (
+	EngramPaneOption     = "@engram"
+	EngramWatchIDOption  = "@engram_watch_id"
+	EngramNotifyOption   = "@engram_notify"
+	EngramArtifactOption = "@engram_artifact"
+)
 
 type IdentityError struct {
 	Reason string
@@ -481,6 +489,43 @@ func (m Manager) SendKeysIfBindingMatches(ctx context.Context, paneID, windowID,
 	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(parts, " "))
 }
 
+// AdvertiseEngramIfBindingMatches publishes a small, terminal-native capability
+// description on the watched pane. tmux user options are deliberately used as
+// durable, inspectable environment metadata rather than injecting text or shell
+// configuration into the pane.
+func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, windowID, serverID string, watchID int) error {
+	if watchID <= 0 {
+		return fmt.Errorf("invalid Engram watch ID %d", watchID)
+	}
+	for _, option := range []struct {
+		name  string
+		value string
+	}{
+		{EngramPaneOption, fmt.Sprintf("v1 watch=%d remote=telegram", watchID)},
+		{EngramWatchIDOption, strconv.Itoa(watchID)},
+		{EngramNotifyOption, "run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)"},
+		{EngramArtifactOption, "print a visible file:// URI (OSC 8 optional), then run @engram_notify"},
+	} {
+		command := "set-option -p -q -t " + paneID + " " + option.name + " " + ShellQuote(option.value)
+		if err := m.runIfBindingMatches(ctx, paneID, windowID, serverID, command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ClearEngramAdvertisementIfBindingMatches removes capability metadata without
+// affecting the pane's program, environment, title, or other user options.
+func (m Manager) ClearEngramAdvertisementIfBindingMatches(ctx context.Context, paneID, windowID, serverID string) error {
+	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption} {
+		command := "set-option -p -q -u -t " + paneID + " " + option
+		if err := m.runIfBindingMatches(ctx, paneID, windowID, serverID, command); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m Manager) runIfBindingMatches(ctx context.Context, paneID, windowID, serverID, command string) error {
 	condition := bindingCondition(windowID, serverID)
 	falseCommand := "display-message -p " + identityMismatchMarker
@@ -538,7 +583,10 @@ func (m Manager) CaptureLiteral(ctx context.Context, paneID, windowID, serverID 
 	if err != nil || visibleRows <= 0 || visibleRows > 400 {
 		return "", fmt.Errorf("invalid tmux pane height %q", parts[1])
 	}
-	start, end := captureBounds(visibleRows, targetRows)
+	start, end, err := m.selectCaptureBounds(ctx, paneID, visibleRows, targetRows)
+	if err != nil {
+		return "", err
+	}
 	command := strings.Join([]string{"capture-pane", "-p", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID}, " ")
 	out, err := m.captureIfBindingMatches(ctx, paneID, windowID, serverID, command)
 	if err != nil {
@@ -583,7 +631,10 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		return StyledCapture{}, err
 	}
 	columns, visibleRows := before.Columns, before.VisibleRows
-	start, end := captureBounds(visibleRows, targetRows)
+	start, end, err := m.selectCaptureBounds(ctx, paneID, visibleRows, targetRows)
+	if err != nil {
+		return StyledCapture{}, err
+	}
 	nonce, err := captureNonce()
 	if err != nil {
 		return StyledCapture{}, err
@@ -629,6 +680,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		ANSI:        ansi,
 		Text:        physicalSemanticCapture(ansi),
 		JoinedText:  semanticCapture(joined),
+		Hyperlinks:  extractOSC8Hyperlinks(ansi, 16),
 		ServerID:    after.ServerID,
 		WindowID:    after.WindowID,
 		PaneID:      after.PaneID,
@@ -641,6 +693,56 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		Title:       after.Title,
 		CurrentPath: after.CurrentPath,
 	}, nil
+}
+
+func extractOSC8Hyperlinks(input string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	const prefix = "\x1b]8;"
+	const maxURIBytes = 2048
+	seen := make(map[string]bool)
+	links := make([]string, 0, min(limit, 4))
+	for offset := 0; offset < len(input) && len(links) < limit; {
+		start := strings.Index(input[offset:], prefix)
+		if start < 0 {
+			break
+		}
+		start += offset + len(prefix)
+		parameterEnd := strings.IndexByte(input[start:], ';')
+		if parameterEnd < 0 {
+			break
+		}
+		uriStart := start + parameterEnd + 1
+		uriEnd, next, ok := terminalStringEnd(input, uriStart)
+		if !ok {
+			offset = uriStart
+			continue
+		}
+		uri := input[uriStart:uriEnd]
+		if uri != "" && len(uri) <= maxURIBytes && utf8.ValidString(uri) && !strings.ContainsAny(uri, "\x00\r\n") && !seen[uri] {
+			seen[uri] = true
+			links = append(links, uri)
+		}
+		offset = next
+	}
+	return links
+}
+
+func terminalStringEnd(input string, start int) (end, next int, ok bool) {
+	for i := start; i < len(input); i++ {
+		switch {
+		case input[i] == '\a':
+			return i, i + 1, true
+		case input[i] == 0x9c:
+			return i, i + 1, true
+		case input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\':
+			return i, i + 2, true
+		case input[i] == 0xc2 && i+1 < len(input) && input[i+1] == 0x9c:
+			return i, i + 2, true
+		}
+	}
+	return 0, start, false
 }
 
 type captureMetadata struct {
@@ -695,6 +797,61 @@ func validTmuxFlag(value string) bool { return value == "0" || value == "1" }
 
 func captureBounds(visibleRows, targetRows int) (start, end int) {
 	return visibleRows - targetRows, visibleRows - 1
+}
+
+func (m Manager) selectCaptureBounds(ctx context.Context, paneID string, visibleRows, targetRows int) (start, end int, err error) {
+	if visibleRows <= targetRows {
+		start, end = captureBounds(visibleRows, targetRows)
+		return start, end, nil
+	}
+	probe, err := m.Runner.Run(ctx, "capture-pane", "-p", "-N", "-S", "0", "-E", strconv.Itoa(visibleRows-1), "-t", paneID)
+	if err != nil {
+		return 0, 0, err
+	}
+	start = densestCaptureStart(probe, visibleRows, targetRows)
+	return start, start + targetRows - 1, nil
+}
+
+func densestCaptureStart(capture string, visibleRows, targetRows int) int {
+	if visibleRows <= targetRows || targetRows <= 0 {
+		return visibleRows - targetRows
+	}
+	rows := strings.Split(strings.TrimSuffix(capture, "\n"), "\n")
+	if len(rows) < visibleRows {
+		rows = append(rows, make([]string, visibleRows-len(rows))...)
+	} else if len(rows) > visibleRows {
+		rows = rows[len(rows)-visibleRows:]
+	}
+	scores := make([]int, visibleRows)
+	for index, row := range rows {
+		trimmed := strings.TrimSpace(row)
+		if trimmed != "" {
+			// Meaningful row count dominates density; bounded content length
+			// breaks ties without allowing one decorative rule to win.
+			scores[index] = 1000 + min(len([]rune(trimmed)), 400)
+		}
+	}
+	windowScore := 0
+	for _, score := range scores[:targetRows] {
+		windowScore += score
+	}
+	windowScores := []int{windowScore}
+	bestStart, bestScore := 0, windowScore
+	for start := 1; start+targetRows <= visibleRows; start++ {
+		windowScore += scores[start+targetRows-1] - scores[start-1]
+		windowScores = append(windowScores, windowScore)
+		if windowScore >= bestScore {
+			bestStart, bestScore = start, windowScore
+		}
+	}
+	// Prefer the current screen tail when it retains nearly all of the best
+	// evidence. This keeps a pane that is actively filling stable between the
+	// framing probe and the final atomic styled capture, while a sparse
+	// full-screen UI with a genuinely blank tail still selects its dense block.
+	if windowScores[len(windowScores)-1] >= bestScore*4/5 {
+		return len(windowScores) - 1
+	}
+	return bestStart
 }
 
 func captureNonce() (string, error) {
