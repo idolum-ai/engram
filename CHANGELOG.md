@@ -40,6 +40,9 @@ Notable user-visible and operational changes are recorded here.
 
 ### Fixed
 
+- Use current Telegram `reply_parameters` and `link_preview_options` payloads
+  for outgoing text and snapshot replies, with the hermetic simulator enforcing
+  reply identity against known messages.
 - Recognize the missing-server diagnostic emitted by tmux 3.3a on a clean
   socket root, allowing Engram to create its configured tmux session instead
   of rejecting the first new window.

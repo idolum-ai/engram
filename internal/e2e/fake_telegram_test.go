@@ -25,6 +25,7 @@ const (
 type telegramMessage struct {
 	ID       int
 	ChatID   int64
+	ReplyTo  int
 	Text     string
 	Caption  string
 	Markup   telegram.InlineKeyboardMarkup
@@ -83,6 +84,14 @@ func (f *fakeTelegram) apiBase() string { return f.server.URL + "/telegram" }
 
 func (f *fakeTelegram) queue(update telegram.Update) {
 	f.mu.Lock()
+	if update.Message != nil {
+		message := update.Message
+		f.messages[message.MessageID] = telegramMessage{
+			ID:     message.MessageID,
+			ChatID: message.Chat.ID,
+			Text:   message.Text,
+		}
+	}
 	f.updates = append(f.updates, update)
 	f.mu.Unlock()
 	select {
@@ -130,7 +139,7 @@ func (f *fakeTelegram) diagnostic() string {
 	messages := make([]string, 0, len(ids))
 	for _, id := range ids {
 		message := snapshot.Messages[id]
-		messages = append(messages, fmt.Sprintf("id=%d chat=%d text=%q caption=%q photo=%d document=%d", id, message.ChatID, message.Text, message.Caption, len(message.Photo), len(message.Document)))
+		messages = append(messages, fmt.Sprintf("id=%d chat=%d reply_to=%d text=%q caption=%q photo=%d document=%d", id, message.ChatID, message.ReplyTo, message.Text, message.Caption, len(message.Photo), len(message.Document)))
 	}
 	counts := make(map[string]int)
 	for _, call := range snapshot.Calls {
@@ -215,11 +224,19 @@ func (f *fakeTelegram) updatesAt(offset int) []telegram.Update {
 
 func (f *fakeTelegram) handleJSONMessage(w http.ResponseWriter, r *http.Request, method string) {
 	var body struct {
-		ChatID    int64                         `json:"chat_id"`
-		MessageID int                           `json:"message_id"`
-		Text      string                        `json:"text"`
-		Caption   string                        `json:"caption"`
-		Markup    telegram.InlineKeyboardMarkup `json:"reply_markup"`
+		ChatID          int64                         `json:"chat_id"`
+		MessageID       int                           `json:"message_id"`
+		Text            string                        `json:"text"`
+		Caption         string                        `json:"caption"`
+		Markup          telegram.InlineKeyboardMarkup `json:"reply_markup"`
+		ReplyParameters struct {
+			MessageID int `json:"message_id"`
+		} `json:"reply_parameters"`
+		LinkPreview struct {
+			Disabled bool `json:"is_disabled"`
+		} `json:"link_preview_options"`
+		LegacyReply   json.RawMessage `json:"reply_to_message_id"`
+		LegacyPreview json.RawMessage `json:"disable_web_page_preview"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		f.fail(w, "decode "+method+": "+err.Error())
@@ -227,6 +244,10 @@ func (f *fakeTelegram) handleJSONMessage(w http.ResponseWriter, r *http.Request,
 	}
 	if body.ChatID != testChatID {
 		f.fail(w, fmt.Sprintf("%s targeted chat %d", method, body.ChatID))
+		return
+	}
+	if (method == "sendMessage" || method == "editMessageText") && (len(body.LegacyPreview) != 0 || !body.LinkPreview.Disabled) {
+		f.fail(w, method+" did not use disabled link_preview_options")
 		return
 	}
 	f.mu.Lock()
@@ -241,6 +262,20 @@ func (f *fakeTelegram) handleJSONMessage(w http.ResponseWriter, r *http.Request,
 		id = f.nextMessageID
 		f.nextMessageID++
 		message = telegramMessage{ID: id, ChatID: body.ChatID}
+		if len(body.LegacyReply) != 0 {
+			f.mu.Unlock()
+			f.fail(w, "sendMessage used legacy reply_to_message_id")
+			return
+		}
+		if body.ReplyParameters.MessageID != 0 {
+			target, exists := f.messages[body.ReplyParameters.MessageID]
+			if !exists || target.ChatID != body.ChatID {
+				f.mu.Unlock()
+				f.fail(w, fmt.Sprintf("sendMessage replied to unknown message %d", body.ReplyParameters.MessageID))
+				return
+			}
+			message.ReplyTo = body.ReplyParameters.MessageID
+		}
 	} else {
 		var ok bool
 		message, ok = f.messages[id]
@@ -335,10 +370,15 @@ func (f *fakeTelegram) handleSendMedia(w http.ResponseWriter, r *http.Request, f
 		f.fail(w, "decode send markup: "+err.Error())
 		return
 	}
+	replyTo, err := f.parseMediaReply(r, chatID)
+	if err != nil {
+		f.fail(w, "send media: "+err.Error())
+		return
+	}
 	f.mu.Lock()
 	id := f.nextMessageID
 	f.nextMessageID++
-	message := telegramMessage{ID: id, ChatID: chatID, Caption: r.FormValue("caption"), Markup: markup, Filename: filename}
+	message := telegramMessage{ID: id, ChatID: chatID, ReplyTo: replyTo, Caption: r.FormValue("caption"), Markup: markup, Filename: filename}
 	if field == "photo" {
 		message.Photo = data
 	} else {
@@ -348,6 +388,29 @@ func (f *fakeTelegram) handleSendMedia(w http.ResponseWriter, r *http.Request, f
 	f.events = append(f.events, telegramEvent{Method: "send" + strings.ToUpper(field[:1]) + field[1:], ChatID: chatID, MessageID: id})
 	f.mu.Unlock()
 	writeResult(w, telegram.Message{MessageID: id, Chat: telegram.Chat{ID: chatID, Type: "private"}})
+}
+
+func (f *fakeTelegram) parseMediaReply(r *http.Request, chatID int64) (int, error) {
+	if legacy := r.FormValue("reply_to_message_id"); legacy != "" {
+		return 0, fmt.Errorf("used legacy reply_to_message_id")
+	}
+	raw := r.FormValue("reply_parameters")
+	if raw == "" {
+		return 0, nil
+	}
+	var reply struct {
+		MessageID int `json:"message_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &reply); err != nil || reply.MessageID <= 0 {
+		return 0, fmt.Errorf("invalid reply_parameters")
+	}
+	f.mu.Lock()
+	target, exists := f.messages[reply.MessageID]
+	f.mu.Unlock()
+	if !exists || target.ChatID != chatID {
+		return 0, fmt.Errorf("replied to unknown message %d", reply.MessageID)
+	}
+	return reply.MessageID, nil
 }
 
 func (f *fakeTelegram) handlePin(w http.ResponseWriter, r *http.Request, method string, pinned bool) {

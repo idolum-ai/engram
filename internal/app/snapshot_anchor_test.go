@@ -64,7 +64,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 				return nil, err
 			}
-			if body["text"] != "[1] terminal-authored signal\n\nbuild needs review https://signal.invalid/hidden" || body["reply_to_message_id"] != float64(77) {
+			if body["text"] != "[1] terminal-authored signal\n\nbuild needs review https://signal.invalid/hidden" || telegramReplyMessageID(body) != 77 {
 				return nil, errors.New("incorrect upstream notification")
 			}
 			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil

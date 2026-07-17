@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -23,6 +24,8 @@ type evidenceManifest struct {
 	SnapshotArtifact   string            `json:"snapshot_artifact,omitempty"`
 	TranscriptArtifact string            `json:"transcript_artifact,omitempty"`
 	TextArtifact       string            `json:"text_artifact,omitempty"`
+	SnapshotSHA256     string            `json:"snapshot_sha256,omitempty"`
+	TextSHA256         string            `json:"text_sha256,omitempty"`
 	Failure            string            `json:"failure,omitempty"`
 }
 
@@ -63,8 +66,14 @@ func writeEvidence(dir string, snapshot fakeTelegramSnapshot, anchorID int, proc
 		SnapshotArtifact:   "snapshot.png",
 		TranscriptArtifact: "transcript.png",
 		TextArtifact:       "snapshot.txt",
+		SnapshotSHA256:     sha256Hex(anchor.Photo),
+		TextSHA256:         sha256Hex([]byte(terminalText)),
 	}
 	return writeManifest(dir, manifest)
+}
+
+func sha256Hex(data []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 func writeFailureEvidence(dir string, assertions []string, processLog, telegramDiagnostic string, versions map[string]string) error {

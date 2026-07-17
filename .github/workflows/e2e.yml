@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
-          [[ "${TARGET_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "${TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]]
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -67,6 +67,7 @@ jobs:
           set -euo pipefail
           test "${E2E_SUITE}" = "hermetic"
           mkdir -p e2e-artifacts
+          : > e2e-artifacts/process.log
           trap 'status=$?; if [[ ! -f e2e-artifacts/manifest.json ]]; then printf "%s\n" "{\"suite\":\"hermetic\",\"status\":\"failed\",\"assertions\":[],\"failure\":\"workflow failed before test evidence\"}" > e2e-artifacts/manifest.json; fi; exit "${status}"' EXIT
           browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
           test -n "${browser}"

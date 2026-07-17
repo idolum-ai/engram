@@ -291,9 +291,13 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int)
 }
 
 func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
-	body := map[string]any{"chat_id": chatID, "text": clampText(text), "disable_web_page_preview": true}
+	body := map[string]any{
+		"chat_id":              chatID,
+		"text":                 clampText(text),
+		"link_preview_options": map[string]any{"is_disabled": true},
+	}
 	if replyTo != 0 {
-		body["reply_to_message_id"] = replyTo
+		body["reply_parameters"] = map[string]any{"message_id": replyTo}
 	}
 	if markup != nil {
 		body["reply_markup"] = markup
@@ -314,7 +318,12 @@ func (c *Client) EditHTMLMessage(ctx context.Context, chatID int64, messageID in
 }
 
 func (c *Client) editMessage(ctx context.Context, chatID int64, messageID int, text string, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
-	body := map[string]any{"chat_id": chatID, "message_id": messageID, "text": clampText(text), "disable_web_page_preview": true}
+	body := map[string]any{
+		"chat_id":              chatID,
+		"message_id":           messageID,
+		"text":                 clampText(text),
+		"link_preview_options": map[string]any{"is_disabled": true},
+	}
 	if markup != nil {
 		body["reply_markup"] = markup
 	}
@@ -742,7 +751,12 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 			}
 		}
 		if replyTo > 0 {
-			if writeErr = writer.WriteField("reply_to_message_id", strconv.Itoa(replyTo)); writeErr != nil {
+			replyParameters, err := json.Marshal(map[string]int{"message_id": replyTo})
+			if err != nil {
+				writeErr = err
+				return
+			}
+			if writeErr = writer.WriteField("reply_parameters", string(replyParameters)); writeErr != nil {
 				return
 			}
 		}

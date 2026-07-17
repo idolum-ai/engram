@@ -24,7 +24,8 @@ fixture and the test proves it was ignored. The private server PID is tracked,
 normally stopped through `kill-server`, and verified gone. The Telegram
 simulator listens only inside the test process, uses distinct fixture user and
 chat identifiers, and rejects wrong destinations, unknown messages, malformed
-media edits, and repeated polling behavior that Telegram would reject.
+media edits, and reply targets that Telegram would reject. Requested polling
+offsets are retained so the test can detect replayed effects.
 
 ## Running It
 
@@ -62,11 +63,12 @@ below. A local test writes the same evidence bundle to
 `ENGRAM_E2E_ARTIFACT_DIR` without applying a retention policy.
 
 - `snapshot.png`, the exact canonical terminal image uploaded to the simulator;
-- `snapshot.txt`, its deterministic terminal-text companion for inspection and
-  assistive technology;
+- `snapshot.txt`, the plain-text form of the same production-equivalent 64-row
+  capture used for the image, for inspection and assistive technology;
 - `transcript.html` and `transcript.png`, a phone-sized rendering of that card;
 - `manifest.json`, the completed assertions, observed Telegram method counts,
-  and resolved Go, runner, tmux, and browser versions;
+  resolved Go, runner, tmux, and browser versions, and hashes binding the image
+  and text evidence;
 - `process.log` and `test.log`, including empty or failed runs; and
 - `telegram.log` when a failed test needs simulator diagnostics.
 

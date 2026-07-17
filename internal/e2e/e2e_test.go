@@ -21,6 +21,7 @@ import (
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/terminalshot"
+	engramtmux "github.com/idolum-ai/engram/internal/tmux"
 )
 
 const hostConfigMarker = "HOST_TMUX_CONFIG_LEAKED"
@@ -29,18 +30,36 @@ func TestHermeticGoldenPath(t *testing.T) {
 	if os.Getenv("ENGRAM_E2E") != "1" {
 		t.Skip("set ENGRAM_E2E=1 to run the process-level tmux, Chromium, and Telegram test")
 	}
-	binary := requiredAbsolutePath(t, "ENGRAM_E2E_BINARY")
-	browser := requiredExecutable(t, "ENGRAM_SNAPSHOT_BROWSER")
-	tmuxBinary := requiredExecutable(t, "ENGRAM_E2E_TMUX", "tmux")
 	artifactDir := requiredAbsolutePath(t, "ENGRAM_E2E_ARTIFACT_DIR")
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	var processLog bytes.Buffer
+	var fake *fakeTelegram
+	versions := make(map[string]string)
+	assertions := make([]string, 0, 8)
+	evidenceWritten := false
 	for _, name := range []string{"manifest.json", "process.log", "snapshot.png", "snapshot.txt", "telegram.log", "transcript.html", "transcript.png"} {
 		if err := os.Remove(filepath.Join(artifactDir, name)); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
 	}
+	defer func() {
+		if evidenceWritten {
+			return
+		}
+		diagnostic := "fake Telegram did not start"
+		if fake != nil {
+			diagnostic = fake.diagnostic()
+		}
+		if err := writeFailureEvidence(artifactDir, assertions, processLog.String(), diagnostic, versions); err != nil {
+			t.Errorf("write failure evidence: %v", err)
+		}
+	}()
+
+	binary := requiredAbsolutePath(t, "ENGRAM_E2E_BINARY")
+	browser := requiredExecutable(t, "ENGRAM_SNAPSHOT_BROWSER")
+	tmuxBinary := requiredExecutable(t, "ENGRAM_E2E_TMUX", "tmux")
 
 	root := t.TempDir()
 	stateHome := privateDir(t, root, "state")
@@ -67,7 +86,6 @@ printf 'Link: https://github.com/idolum-ai/engram\n'
 printf '\nWaiting for remote input.\n'
 `, outputFile), 0o700)
 	writeFile(t, replyScript, fmt.Sprintf(`#!/bin/sh
-printf '\033[3J\033[H\033[2J'
 printf 'REMOTE_INPUT_REACHED_TMUX\n\n'
 printf 'Status: reply routed through the canonical anchor\n'
 printf 'File: %s\n'
@@ -75,7 +93,7 @@ printf 'Link: https://github.com/idolum-ai/engram\n'
 printf 'The golden path is complete.\n'
 `, outputFile), 0o700)
 
-	fake := newFakeTelegram()
+	fake = newFakeTelegram()
 	defer fake.close()
 	envPath := filepath.Join(root, ".env")
 	writeFile(t, envPath, strings.Join([]string{
@@ -95,7 +113,7 @@ printf 'The golden path is complete.\n'
 	}, "\n"), 0o600)
 
 	processEnv := isolatedEnvironment(binDir, userHome, configHome, cacheHome, runtimeDir, tmuxDir)
-	versions := runtimeVersions(browser, processEnv)
+	versions = runtimeVersions(browser, processEnv)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, "run", "--env", envPath)
@@ -103,7 +121,6 @@ printf 'The golden path is complete.\n'
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return signalProcessGroup(cmd.Process, syscall.SIGKILL) }
 	cmd.WaitDelay = 2 * time.Second
-	var processLog bytes.Buffer
 	cmd.Stdout = &processLog
 	cmd.Stderr = &processLog
 	if err := cmd.Start(); err != nil {
@@ -113,23 +130,16 @@ printf 'The golden path is complete.\n'
 	go func() { waitCh <- cmd.Wait() }()
 	stopped := false
 	tmuxStopped := false
-	evidenceWritten := false
 	tmuxPID := 0
-	assertions := make([]string, 0, 8)
 	defer func() {
 		if !stopped {
-			if err := stopProcessGroup(cmd, waitCh, 5*time.Second); err != nil && !t.Failed() {
+			if err := stopProcessGroup(cmd, waitCh, 5*time.Second); err != nil {
 				t.Errorf("cleanup Engram: %v", err)
 			}
 		}
 		if !tmuxStopped {
-			if err := stopTmuxServer(processEnv, tmuxPID); err != nil && !t.Failed() {
+			if err := stopTmuxServer(processEnv, tmuxPID); err != nil {
 				t.Errorf("cleanup tmux: %v", err)
-			}
-		}
-		if !evidenceWritten {
-			if err := writeFailureEvidence(artifactDir, assertions, processLog.String(), fake.diagnostic(), versions); err != nil {
-				t.Errorf("write failure evidence: %v", err)
 			}
 		}
 	}()
@@ -180,6 +190,15 @@ printf 'The golden path is complete.\n'
 		latest := fake.snapshot().Messages[anchor.ID]
 		return latest.ChatID == testChatID && len(latest.Photo) > 0 && !bytes.Equal(latest.Photo, initialPhoto) && strings.Contains(latest.Caption, outputFile)
 	}, "reply-driven canonical snapshot edit")
+	terminalText, err = captureTmuxEvidence(processEnv, persisted.TerminalSessions[0].TmuxPaneID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Status: snapshot rendering ready", "REMOTE_INPUT_REACHED_TMUX", "The golden path is complete."} {
+		if !strings.Contains(terminalText, want) {
+			t.Fatalf("64-row text evidence omitted %q: %q", want, terminalText)
+		}
+	}
 	waitForOffset(t, fake, updateID)
 	assertions = append(assertions, "reply input reached the tracked pane and changed its canonical snapshot")
 
@@ -194,7 +213,11 @@ printf 'The golden path is complete.\n'
 
 	t.Log("downloading an exact file through its numbered callback")
 	latest := fake.snapshot().Messages[anchor.ID]
-	fileCallback := callbackWithPrefix(latest.Markup, "file:1:")
+	fileIndex := fileIndexForPath(latest.Caption, outputFile)
+	if fileIndex == 0 {
+		t.Fatalf("snapshot caption did not enumerate %q: %q", outputFile, latest.Caption)
+	}
+	fileCallback := callbackForFileIndex(latest.Markup, fileIndex)
 	if fileCallback == "" {
 		t.Fatalf("snapshot anchor omitted file download callback: %#v", latest.Markup)
 	}
@@ -279,6 +302,9 @@ func assertSnapshotAnchor(t *testing.T, anchor telegramMessage, outputFile strin
 	if anchor.ChatID != testChatID {
 		t.Fatalf("snapshot anchor chat = %d", anchor.ChatID)
 	}
+	if anchor.ReplyTo != 1 {
+		t.Fatalf("snapshot anchor reply target = %d, want fixture message 1", anchor.ReplyTo)
+	}
 	for _, want := range []string{"[1]", outputFile, "https://github.com/idolum-ai/engram"} {
 		if !strings.Contains(anchor.Caption, want) {
 			t.Fatalf("snapshot caption omitted %q: %q", want, anchor.Caption)
@@ -315,6 +341,33 @@ func callbackWithPrefix(markup telegram.InlineKeyboardMarkup, prefix string) str
 	for _, row := range markup.InlineKeyboard {
 		for _, button := range row {
 			if strings.HasPrefix(button.CallbackData, prefix) {
+				return button.CallbackData
+			}
+		}
+	}
+	return ""
+}
+
+func fileIndexForPath(caption, path string) int {
+	for _, line := range strings.Split(caption, "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "<pre>"), "</pre>"))
+		indexText, candidate, found := strings.Cut(line, ". ")
+		if !found || candidate != path {
+			continue
+		}
+		index, err := strconv.Atoi(indexText)
+		if err == nil && index > 0 {
+			return index
+		}
+	}
+	return 0
+}
+
+func callbackForFileIndex(markup telegram.InlineKeyboardMarkup, index int) string {
+	suffix := ":" + strconv.Itoa(index)
+	for _, row := range markup.InlineKeyboard {
+		for _, button := range row {
+			if strings.HasPrefix(button.CallbackData, "file:") && strings.HasSuffix(button.CallbackData, suffix) {
 				return button.CallbackData
 			}
 		}
@@ -392,6 +445,30 @@ func captureTmux(env []string, paneID string) (string, error) {
 	return string(data), nil
 }
 
+type environmentTmuxRunner struct {
+	env []string
+}
+
+func (r environmentTmuxRunner) Run(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.Env = r.env
+	data, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("tmux %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(data)))
+	}
+	return string(data), nil
+}
+
+func captureTmuxEvidence(env []string, paneID string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	capture, err := engramtmux.New(environmentTmuxRunner{env: env}).CaptureStyled(ctx, paneID, 64)
+	if err != nil {
+		return "", fmt.Errorf("capture production-equivalent tmux evidence: %w", err)
+	}
+	return capture.Text, nil
+}
+
 func waitForTmuxServerPID(t *testing.T, env []string) int {
 	t.Helper()
 	pid := 0
@@ -434,17 +511,10 @@ func stopTmuxServer(env []string, expectedPID int) error {
 	if expectedPID <= 1 && killErr != nil && missingTmuxServerText(string(output)) {
 		return nil
 	}
-	if expectedPID > 1 {
-		_ = syscall.Kill(expectedPID, syscall.SIGTERM)
-		if !waitForProcessExit(expectedPID, time.Second) {
-			_ = syscall.Kill(expectedPID, syscall.SIGKILL)
-			_ = waitForProcessExit(expectedPID, time.Second)
-		}
-	}
 	if killErr != nil {
 		return fmt.Errorf("tmux kill-server: %w: %s", killErr, strings.TrimSpace(string(output)))
 	}
-	return fmt.Errorf("tmux server PID %d survived kill-server and required signal fallback", expectedPID)
+	return fmt.Errorf("tmux server PID %d still appears live after kill-server; refusing unsafe raw-PID fallback", expectedPID)
 }
 
 func missingTmuxServerText(output string) bool {

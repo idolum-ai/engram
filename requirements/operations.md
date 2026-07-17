@@ -108,9 +108,10 @@ runtime state.
   content, but must exclude generated configuration, state, audit logs, tmux
   sockets, browser profiles, and private temporary roots.
 - Completed E2E tests must retain success or failure manifests and bounded
-  diagnostics. Success evidence includes a terminal-text alternative and the
-  resolved runner, Go, tmux, and browser versions; screenshots are not
-  byte-stable visual goldens.
+  diagnostics. Success evidence includes plain text from the same
+  production-equivalent 64-row capture as the image, SHA-256 hashes binding
+  both artifacts, and the resolved runner, Go, tmux, and browser versions;
+  screenshots are not byte-stable visual goldens.
 
 ## Scope
 
