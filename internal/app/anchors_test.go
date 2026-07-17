@@ -269,6 +269,7 @@ func TestAnchorRetirementBoundsOversizedTitleBeforeMediaTombstone(t *testing.T) 
 		t.Fatal(err)
 	}
 	var paths []string
+	var tombstone string
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -285,7 +286,8 @@ func TestAnchorRetirementBoundsOversizedTitleBeforeMediaTombstone(t *testing.T) 
 				t.Fatal(err)
 			}
 			caption, _ := media["caption"].(string)
-			if plain := html.UnescapeString(caption); len(plain) > 1024 {
+			tombstone = html.UnescapeString(caption)
+			if len(tombstone) > 1024 {
 				return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: caption is too long"}), nil
 			}
 			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
@@ -298,8 +300,8 @@ func TestAnchorRetirementBoundsOversizedTitleBeforeMediaTombstone(t *testing.T) 
 	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client}
 	a.finishAnchorRotationLocked(context.Background(), session.ID)
 	got, _ := store.FindSession(session.ID)
-	if got.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{77}) || !reflect.DeepEqual(paths, []string{"/botTOKEN/deleteMessage", "/botTOKEN/editMessageMedia", "/botTOKEN/unpinChatMessage"}) {
-		t.Fatalf("oversized-title retirement state=%#v paths=%#v", got, paths)
+	if got.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{77}) || !reflect.DeepEqual(paths, []string{"/botTOKEN/deleteMessage", "/botTOKEN/editMessageMedia", "/botTOKEN/unpinChatMessage"}) || len(tombstone) > 900 || !strings.HasSuffix(tombstone, "\ncontinued in the newer live anchor") {
+		t.Fatalf("oversized-title retirement state=%#v paths=%#v tombstone=%q", got, paths, tombstone)
 	}
 }
 
