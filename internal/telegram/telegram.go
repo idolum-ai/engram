@@ -467,7 +467,7 @@ func (c *Client) EditHTMLCaption(ctx context.Context, chatID int64, messageID in
 }
 
 func (c *Client) editCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
-	body := map[string]any{"chat_id": chatID, "message_id": messageID, "caption": clampCaption(caption)}
+	body := map[string]any{"chat_id": chatID, "message_id": messageID, "caption": mediaCaption(caption, parseMode)}
 	if markup != nil {
 		body["reply_markup"] = markup
 	}

@@ -123,6 +123,9 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 		return accepted == nil || accepted()
 	}
 	if renderHash == latest.LastRenderHash && !force {
+		// The image already displayed by Telegram is this exact crop. Rebuild its
+		// process-local text companion after restart before taking the quiet path.
+		a.rememberAnchorTextFrame(latest, crop.plain, crop.hash)
 		return finish()
 	}
 	if !force && time.Since(latest.LastAnchorEditAt) < 10*time.Second {
@@ -180,13 +183,12 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 		}
 		a.finishAnchorRotationLocked(ctx, latest.ID)
 		_ = a.audit("terminal.guided_evidence", "replaced", map[string]any{"session_id": latest.ID, "source": crop.source, "rows": crop.input.BufferRows})
-		done := finish()
-		if done {
-			if current, found := a.Store.FindSession(latest.ID); found {
-				a.rememberAnchorTextFrame(current, crop.plain, crop.hash)
-			}
+		if current, found := a.Store.FindSession(latest.ID); found {
+			// Telegram already exposes Raw on the replacement card. Keep its exact
+			// companion available even if later continuity acceptance loses a race.
+			a.rememberAnchorTextFrame(current, crop.plain, crop.hash)
 		}
-		return done
+		return finish()
 	}
 	// Telegram now displays this crop under the existing message identity. Keep
 	// its exact text companion coherent even if later state acceptance fails.

@@ -347,6 +347,55 @@ func TestGuidedEvidenceReplacesUnavailableAnchorAndDeletesMediaPredecessor(t *te
 	}
 }
 
+func TestGuidedEvidenceReplacementKeepsRawWhenAcceptanceLosesRace(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.AnchorFormat = anchorFormatGuideEvidence
+		current.WatchEnabled = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/botTOKEN/editMessageMedia":
+			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be edited"}), nil
+		case "/botTOKEN/sendPhoto":
+			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/deleteMessage":
+			return snapshotJSONResponse(`true`), nil
+		default:
+			return nil, fmt.Errorf("unexpected Telegram endpoint %s", request.URL.Path)
+		}
+	})}
+	a := &App{
+		Config: config.Config{Home: dir, TelegramChatID: 100, SnapshotTheme: "contrast-dark"}, Store: store, Telegram: client,
+		Snapshots: &fakeSnapshotRenderer{}, mode: "guide", snapshotReady: true,
+	}
+	capture := tmux.StyledCapture{Text: "tests passed successfully", ANSI: "tests passed successfully", Columns: 71, VisibleRows: 37, BufferRows: 1, CurrentPath: "/tmp"}
+	if a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, func() bool { return false }) {
+		t.Fatal("lost acceptance race reported success")
+	}
+	got, _ := store.FindSession(session.ID)
+	frame, frameOK := a.snapshotTextFrame(got)
+	if got.AnchorMessageID != 88 || !frameOK || frame.MessageID != 88 || frame.JoinedText != capture.Text {
+		t.Fatalf("replacement state=%#v frame=%#v ok=%v", got, frame, frameOK)
+	}
+}
+
 func TestUnchangedGuidedCardReconcilesFileBindingsWithoutRendering(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))

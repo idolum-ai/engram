@@ -739,6 +739,28 @@ func TestHTMLPhotoCaptionIsNotByteTruncatedAfterEscaping(t *testing.T) {
 	}
 }
 
+func TestHTMLCaptionEditIsNotByteTruncatedAfterEscaping(t *testing.T) {
+	caption := strings.Repeat("&amp;", 240)
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := body["caption"].(string); got != caption {
+			t.Fatalf("HTML caption bytes=%d suffix=%q, want intact bytes=%d", len(got), tailForTest(got, 20), len(caption))
+		}
+		if body["parse_mode"] != "HTML" {
+			t.Fatalf("parse mode = %#v", body["parse_mode"])
+		}
+		return jsonResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}}}), nil
+	})}
+	if _, err := client.EditHTMLCaption(context.Background(), 5, 14, caption, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func tailForTest(text string, count int) string {
 	if len(text) <= count {
 		return text

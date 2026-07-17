@@ -120,8 +120,8 @@ func TestUnchangedGuideEvidenceRefreshRestoresCompanionAfterRestart(t *testing.T
 		session.AnchorChatID = 100
 		session.AnchorMessageID = 77
 		session.AnchorFormat = anchorFormatGuideEvidence
+		session.LastKnownCWD = "/tmp"
 		session.LastRawCaptureHash = wantHash
-		session.LastRenderHash = "persisted-card"
 		session.LastSummary = "Ordinary output is visible."
 		session.LastAnchorEditAt = time.Now().Add(-time.Minute)
 	}); err != nil {
@@ -141,15 +141,26 @@ func TestUnchangedGuideEvidenceRefreshRestoresCompanionAfterRestart(t *testing.T
 	a.snapshotReady = true
 	a.mode = config.AnchorModeGuide
 	a.renderSlots = make(chan struct{}, 1)
+	persisted, _ := a.Store.FindSession(id)
+	capture := tmux.StyledCapture{
+		ANSI: runner.capturePhysical, Text: "ordinary output", JoinedText: "ordinary output",
+		ServerID: appTestServerID, WindowID: "@1", PaneID: "%1", CurrentCmd: "bash",
+		AlternateOn: "1", PaneInMode: "0", Columns: 71, VisibleRows: 37, BufferRows: 1,
+		Title: "build pane", CurrentPath: "/tmp",
+	}
+	crop := a.selectGuidedEvidenceCrop(persisted, capture, conversationFrame{}, "ordinary output", nil)
+	caption, _ := a.guidedEvidenceCaption(persisted, persisted.LastSummary, visibleReferences{})
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.LastRenderHash = sha(caption + "\x00" + crop.hash)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	telegramCalls := 0
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		telegramCalls++
-		if request.URL.Path != "/botTOKEN/editMessageMedia" {
-			return nil, errors.New("unexpected Telegram method: " + request.URL.Path)
-		}
-		return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+		return nil, errors.New("coherent persisted card should not be edited: " + request.URL.Path)
 	})}
 	a.Telegram = client
 
@@ -157,7 +168,7 @@ func TestUnchangedGuideEvidenceRefreshRestoresCompanionAfterRestart(t *testing.T
 
 	got, _ := a.Store.FindSession(id)
 	frame, frameOK := a.snapshotTextFrame(got)
-	if modelCalls != 1 || renderer.renders != 1 || telegramCalls != 1 || !frameOK || frame.JoinedText != "ordinary output" {
+	if modelCalls != 1 || renderer.renders != 1 || telegramCalls != 0 || !frameOK || frame.JoinedText != "ordinary output" {
 		t.Fatalf("companion recovery: model=%d renders=%d telegram=%d frame=%#v ok=%v", modelCalls, renderer.renders, telegramCalls, frame, frameOK)
 	}
 }
