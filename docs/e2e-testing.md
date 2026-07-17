@@ -69,7 +69,8 @@ below. A local test writes the same evidence bundle to
 - `manifest.json`, the completed assertions, observed Telegram method counts,
   resolved Go, runner, tmux, and browser versions, and hashes binding the image
   and text evidence;
-- `process.log` and `test.log`, including empty or failed runs; and
+- `process.log`, streamed directly so output survives hard test termination;
+- `test.log` for workflow runs, including failed runs; and
 - `telegram.log` when a failed test needs simulator diagnostics.
 
 Failed test invocations write a failed manifest before returning. Missing

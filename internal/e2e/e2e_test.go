@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,10 @@ func TestHermeticGoldenPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	processFile, processWriter, err := openProcessLog(artifactDir, &processLog)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		if evidenceWritten {
 			return
@@ -56,6 +61,7 @@ func TestHermeticGoldenPath(t *testing.T) {
 			t.Errorf("write failure evidence: %v", err)
 		}
 	}()
+	defer processFile.Close()
 
 	binary := requiredAbsolutePath(t, "ENGRAM_E2E_BINARY")
 	browser := requiredExecutable(t, "ENGRAM_SNAPSHOT_BROWSER")
@@ -121,19 +127,17 @@ printf 'The golden path is complete.\n'
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return signalProcessGroup(cmd.Process, syscall.SIGKILL) }
 	cmd.WaitDelay = 2 * time.Second
-	cmd.Stdout = &processLog
-	cmd.Stderr = &processLog
+	cmd.Stdout = processWriter
+	cmd.Stderr = processWriter
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
 	stopped := false
 	tmuxStopped := false
 	tmuxPID := 0
 	defer func() {
 		if !stopped {
-			if err := stopProcessGroup(cmd, waitCh, 5*time.Second); err != nil {
+			if err := stopProcessGroup(cmd, 5*time.Second); err != nil {
 				t.Errorf("cleanup Engram: %v", err)
 			}
 		}
@@ -203,8 +207,12 @@ printf 'The golden path is complete.\n'
 	assertions = append(assertions, "reply input reached the tracked pane and changed its canonical snapshot")
 
 	t.Log("refreshing the canonical anchor through its callback")
+	refreshCallback := callbackWithPrefix(fake.snapshot().Messages[anchor.ID].Markup, "refresh:")
+	if refreshCallback == "" {
+		t.Fatal("canonical anchor omitted its refresh callback")
+	}
 	updateID++
-	fake.queue(callbackUpdate(updateID, "refresh-e2e", "refresh:1", anchor.ID))
+	fake.queue(callbackUpdate(updateID, "refresh-e2e", refreshCallback, anchor.ID))
 	eventually(t, 20*time.Second, func() bool {
 		return editAfterCallback(fake.snapshot(), "refresh-e2e", testChatID, anchor.ID)
 	}, "manual refresh edit after callback answer")
@@ -234,10 +242,11 @@ printf 'The golden path is complete.\n'
 	assertions = append(assertions, "numbered file callback delivered exact bytes and filename once to the authorized chat")
 
 	t.Log("stopping Engram and its private tmux server")
-	if err := stopProcessGroup(cmd, waitCh, 10*time.Second); err != nil {
-		t.Fatalf("Engram exited unsuccessfully: %v\n%s", err, processLog.String())
-	}
+	stopErr := stopProcessGroup(cmd, 10*time.Second)
 	stopped = true
+	if stopErr != nil {
+		t.Fatalf("Engram exited unsuccessfully: %v\n%s", stopErr, processLog.String())
+	}
 	if err := stopTmuxServer(processEnv, tmuxPID); err != nil {
 		t.Fatalf("tmux cleanup failed: %v", err)
 	}
@@ -538,8 +547,10 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-func stopProcessGroup(cmd *exec.Cmd, waitCh <-chan error, timeout time.Duration) error {
+func stopProcessGroup(cmd *exec.Cmd, timeout time.Duration) error {
 	_ = signalProcessGroup(cmd.Process, syscall.SIGTERM)
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
@@ -553,6 +564,14 @@ func stopProcessGroup(cmd *exec.Cmd, waitCh <-chan error, timeout time.Duration)
 		}
 		return fmt.Errorf("process group did not stop within %s", timeout)
 	}
+}
+
+func openProcessLog(dir string, memory *bytes.Buffer) (*os.File, io.Writer, error) {
+	file, err := os.OpenFile(filepath.Join(dir, "process.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, nil, err
+	}
+	return file, io.MultiWriter(memory, file), nil
 }
 
 func signalProcessGroup(process *os.Process, signal syscall.Signal) error {

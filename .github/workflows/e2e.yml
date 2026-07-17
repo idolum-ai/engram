@@ -68,7 +68,7 @@ jobs:
           test "${E2E_SUITE}" = "hermetic"
           mkdir -p e2e-artifacts
           : > e2e-artifacts/process.log
-          trap 'status=$?; if [[ ! -f e2e-artifacts/manifest.json ]]; then printf "%s\n" "{\"suite\":\"hermetic\",\"status\":\"failed\",\"assertions\":[],\"failure\":\"workflow failed before test evidence\"}" > e2e-artifacts/manifest.json; fi; exit "${status}"' EXIT
+          trap 'status=$?; if [[ ! -f e2e-artifacts/process.log ]]; then : > e2e-artifacts/process.log; fi; if [[ ! -f e2e-artifacts/manifest.json ]]; then printf "%s\n" "{\"suite\":\"hermetic\",\"status\":\"failed\",\"assertions\":[],\"failure\":\"workflow failed before test evidence\"}" > e2e-artifacts/manifest.json; fi; exit "${status}"' EXIT
           browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
           test -n "${browser}"
           set +e

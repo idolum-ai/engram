@@ -1,7 +1,10 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +43,41 @@ func TestEarlySetupFailureRetainsEvidence(t *testing.T) {
 	if err := json.Unmarshal(data, &manifest); err != nil || manifest.Status != "failed" {
 		t.Fatalf("early failure manifest = %#v, err=%v", manifest, err)
 	}
+}
+
+func TestProcessLogSurvivesHardExit(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestProcessLogHardExitHelper$")
+	cmd.Env = append(withoutEnvironment(os.Environ(), "ENGRAM_E2E_HARD_EXIT_DIR"), "ENGRAM_E2E_HARD_EXIT_DIR="+dir)
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 23 {
+		t.Fatalf("hard-exit helper error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "process.log"))
+	if err != nil || string(data) != "output before hard exit\n" {
+		t.Fatalf("hard-exit process.log = %q, err=%v", data, err)
+	}
+}
+
+func TestProcessLogHardExitHelper(t *testing.T) {
+	dir := os.Getenv("ENGRAM_E2E_HARD_EXIT_DIR")
+	if dir == "" {
+		t.Skip("subprocess helper")
+	}
+	var memory bytes.Buffer
+	file, writer, err := openProcessLog(dir, &memory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(writer, "output before hard exit\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(23)
 }
 
 func withoutEnvironment(environment []string, keys ...string) []string {
