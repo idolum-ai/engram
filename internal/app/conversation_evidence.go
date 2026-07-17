@@ -19,7 +19,11 @@ func conversationEvidence(text string) string {
 	for end >= 0 && strings.TrimSpace(lines[end]) == "" {
 		end--
 	}
-	return strings.TrimRight(strings.Join(lines[:end+1], "\n"), "\n")
+	filtered := strings.TrimRight(strings.Join(lines[:end+1], "\n"), "\n")
+	if strings.TrimSpace(filtered) == "" {
+		return text
+	}
+	return filtered
 }
 
 func lastNonBlankLine(lines []string) int {

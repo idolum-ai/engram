@@ -102,6 +102,42 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_telegram_failed"
 		}
 		return result.status("callback")
+	case "raw":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		anchorLock := a.anchorMutex(id)
+		anchorLock.Lock()
+		current, currentOK := a.Store.FindSession(id)
+		if !currentOK || current.AnchorChatID != cb.Message.Chat.ID || current.AnchorMessageID != cb.Message.MessageID || !sameTerminalBinding(current, ts) {
+			anchorLock.Unlock()
+			a.answerCallback(ctx, cb.ID, "anchor moved; use the newer live message")
+			return "callback_user_error"
+		}
+		ts = current
+		if ts.State != state.TerminalRunning || ts.AnchorFormat != "snapshot" || ts.RetiringAnchorMessageID != 0 {
+			anchorLock.Unlock()
+			a.answerCallback(ctx, cb.ID, "raw view is unavailable")
+			return "callback_user_error"
+		}
+		frame, ok := a.snapshotTextFrame(ts)
+		anchorLock.Unlock()
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "raw view is refreshing")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "preparing raw view") {
+			return "callback_telegram_failed"
+		}
+		msg := *cb.Message
+		msg.From = &cb.From
+		return a.queueAccessibleSnapshotFrame(ctx, msg, ts, frame).status("callback")
 	case "recover":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -139,9 +175,14 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "unknown key")
 			return "failed_unknown_callback_key"
 		}
-		result := a.sendKeyGroupsExpected(ctx, id, action.Groups, action.Label, action.Delay, &validated)
-		if !a.answerCallback(ctx, cb.ID, result.Message) {
+		if !a.answerCallback(ctx, cb.ID, "sending "+action.Label) {
 			return "callback_telegram_failed"
+		}
+		result := a.sendKeyGroupsExpected(ctx, id, action.Groups, action.Label, action.Delay, &validated)
+		if !result.OK() {
+			msg := *cb.Message
+			msg.From = &cb.From
+			a.reply(ctx, msg, result.Message)
 		}
 		return result.status("callback")
 	case "file":

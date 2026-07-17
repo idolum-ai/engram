@@ -496,6 +496,7 @@ func (m Message) FileAttachment() (Document, bool) {
 type AnchorMarkupOptions struct {
 	Image     bool
 	Voice     bool
+	Raw       bool
 	Arrows    bool
 	FileToken string
 	FileCount int
@@ -504,10 +505,13 @@ type AnchorMarkupOptions struct {
 func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
 	actions := []InlineKeyboardButton{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}}
 	if options.Image {
-		actions = append(actions, InlineKeyboardButton{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
+		actions = append(actions, InlineKeyboardButton{Text: "🖼️ Snapshot", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
 	}
 	if options.Voice {
-		actions = append(actions, InlineKeyboardButton{Text: "🗣️", CallbackData: fmt.Sprintf("voice:%d", sessionID)})
+		actions = append(actions, InlineKeyboardButton{Text: "🗣️ Explain", CallbackData: fmt.Sprintf("voice:%d", sessionID)})
+	}
+	if options.Raw {
+		actions = append(actions, InlineKeyboardButton{Text: "📄 Raw", CallbackData: fmt.Sprintf("raw:%d", sessionID)})
 	}
 	rows := [][]InlineKeyboardButton{actions}
 	if options.FileToken != "" && options.FileCount > 0 {
@@ -700,7 +704,7 @@ func (c *Client) mediaRequest(ctx context.Context, method, field string, chatID 
 			return
 		}
 		if caption != "" {
-			if writeErr = writer.WriteField("caption", clampCaption(caption)); writeErr != nil {
+			if writeErr = writer.WriteField("caption", mediaCaption(caption, parseMode)); writeErr != nil {
 				return
 			}
 		}
@@ -766,7 +770,7 @@ func (c *Client) editPhotoRequest(ctx context.Context, chatID int64, messageID i
 			"chat_id":    strconv.FormatInt(chatID, 10),
 			"message_id": strconv.Itoa(messageID),
 		}
-		mediaFields := map[string]any{"type": "photo", "media": "attach://photo", "caption": clampCaption(caption)}
+		mediaFields := map[string]any{"type": "photo", "media": "attach://photo", "caption": mediaCaption(caption, parseMode)}
 		if parseMode != "" {
 			mediaFields["parse_mode"] = parseMode
 		}
@@ -950,6 +954,15 @@ func clampCaption(text string) string {
 		cut--
 	}
 	return text[:cut] + "\n[truncated]"
+}
+
+func mediaCaption(text, parseMode string) string {
+	// Telegram applies the limit after parsing entities. Engram bounds HTML
+	// captions before escaping, so a raw-byte clamp could split an entity/tag.
+	if parseMode == "HTML" {
+		return text
+	}
+	return clampCaption(text)
 }
 
 func MarkdownToHTML(text string) string {

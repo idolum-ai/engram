@@ -47,6 +47,23 @@ func (a *App) sendInputExpected(ctx context.Context, id int, text, mode string, 
 	return a.finishInput(ctx, id, completion)
 }
 
+func (a *App) sendReplyInput(ctx context.Context, expected state.TerminalSession, chatID int64, messageID int, text string) actionResult {
+	sessionLock := a.sessionMutex(expected.ID)
+	sessionLock.Lock()
+	anchorLock := a.anchorMutex(expected.ID)
+	anchorLock.Lock()
+	current, targetState, found := a.Store.FindReplyTarget(chatID, messageID)
+	if !found || targetState != state.ReplyTargetCurrent || !sameTerminalBinding(current, expected) {
+		anchorLock.Unlock()
+		sessionLock.Unlock()
+		return actionResult{Outcome: actionUserError, Message: staleAlternateReply(expected.ID)}
+	}
+	completion := a.sendInputExpectedLocked(ctx, expected.ID, text, "command", true, &expected)
+	anchorLock.Unlock()
+	sessionLock.Unlock()
+	return a.finishInput(ctx, expected.ID, completion)
+}
+
 type inputCompletion struct {
 	result         actionResult
 	anchorNotice   string
@@ -124,6 +141,9 @@ func (a *App) finishInput(ctx context.Context, id int, completion inputCompletio
 		a.recordIdentityLoss(ctx, completion.identitySource, completion.identityError)
 	}
 	if completion.anchorNotice != "" {
+		if completion.identityError == nil {
+			a.invalidatePresentationHashes(completion.noticeBinding)
+		}
 		a.updateAnchorLocalGuarded(ctx, id, completion.anchorNotice, true, func() bool {
 			current, ok := a.Store.FindSession(id)
 			return ok && sameTerminalBinding(current, completion.noticeBinding)
@@ -174,6 +194,9 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 		validated, err := a.terminalMechanics().SendKeys(tctx, terminalBinding(ts), keys)
 		if err != nil {
 			a.recordIdentityLoss(ctx, ts, err)
+			if !tmux.IsIdentityLoss(err) {
+				a.invalidatePresentationHashes(ts)
+			}
 			a.updateAnchorLocal(ctx, id, "tmux key error: "+err.Error(), true)
 			if tmux.IsIdentityLoss(err) {
 				return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
@@ -195,6 +218,7 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	})
 	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": "keys", "error": err.Error()})
+		a.invalidatePresentationHashes(ts)
 		a.updateAnchorLocal(ctx, id, "state update error after tmux keys: "+err.Error(), true)
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux keys: " + err.Error()}
 	}
@@ -203,6 +227,16 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))}
+}
+
+func (a *App) invalidatePresentationHashes(expected state.TerminalSession) {
+	_, found, applied, err := a.updateSessionIfCurrent(expected, func(session *state.TerminalSession) {
+		session.LastRawCaptureHash = ""
+		session.LastSnapshotCaptureHash = ""
+	})
+	if err != nil || !found || !applied {
+		_ = a.audit("state.presentation", "invalidate_failed", map[string]any{"session_id": expected.ID, "error": firstNonEmpty(errorText(err), "superseded")})
+	}
 }
 
 func (a *App) sessionMutex(id int) *keyedMutexHandle {

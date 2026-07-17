@@ -253,6 +253,70 @@ func TestDeferredInputNoticeDoesNotReachReattachedBinding(t *testing.T) {
 	}
 }
 
+func TestReplyInputRejectsBindingChangedAfterTargetResolution(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxPaneID = "%2"
+		current.TmuxWindowID = "@2"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &slashEscapeRunner{}
+	app := &App{Store: store, Tmux: tmux.New(runner)}
+	result := app.sendInputExpected(context.Background(), session.ID, "must not cross", "reply", true, &session)
+	if result.OK() || result.Message != "session changed before input could be sent" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("stale reply reached reattached pane: %#v", runner.calls)
+	}
+}
+
+func TestReplyInputRejectsAlternateRetiredAfterTargetResolution(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.SummaryMessageID = 88
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expected, targetState, found := store.FindReplyTarget(100, 88)
+	if !found || targetState != state.ReplyTargetCurrent {
+		t.Fatal("initial alternate is not current")
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		recordAlternateMessage(current, "summary", 89)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &slashEscapeRunner{}
+	app := &App{Store: store, Tmux: tmux.New(runner)}
+	result := app.sendReplyInput(context.Background(), expected, 100, 88, "must not cross")
+	if result.OK() || !strings.Contains(result.Message, "no longer current") {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("retired alternate reached tmux: %#v", runner.calls)
+	}
+}
+
 type slashEscapeRunner struct {
 	calls    [][]string
 	inputErr error

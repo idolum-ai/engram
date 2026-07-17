@@ -69,6 +69,7 @@ type App struct {
 	anchorLocks          keyedMutexSet
 	disclosureLocks      keyedMutexSet
 	signalRetries        sync.Map
+	snapshotTextFrames   sync.Map
 	sleepHook            func(time.Duration)
 	refreshHook          func(context.Context, int, bool)
 }
@@ -298,7 +299,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if input, ok := escapedSlashInput(text); ok {
 		if msg.ReplyToMessage != nil {
 			if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-				result := a.sendInput(ctx, ts.ID, input, "command", true)
+				result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, input)
 				if !result.OK() {
 					a.reply(ctx, msg, result.Message)
 				}
@@ -316,7 +317,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	if msg.ReplyToMessage != nil {
 		if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-			result := a.sendInput(ctx, ts.ID, text, "command", true)
+			result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, text)
 			if !result.OK() {
 				a.reply(ctx, msg, result.Message)
 			}

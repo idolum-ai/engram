@@ -2,14 +2,14 @@
   {
     "name": "completed repository checks",
     "terminal_text": "~/workspace/engram $ make check\ngofmt: clean\ngo vet ./...: clean\ngo test -race ./...\nok example.test/engram/internal/app  6.12s\n~/workspace/engram $",
-    "reference": "Everything is clean: formatting, vetting, and the race-enabled test suite all passed. The repository is back at the shell and ready for the next change.",
+    "reference": "Formatting, vetting, and the race-enabled test suite all passed.",
     "concepts": [
       ["clean", "passed", "successful"],
       ["formatting", "format", "gofmt"],
       ["vet", "vetting"],
       ["tests", "test", "test suite", "race-enabled", "race-condition test"]
     ],
-    "forbidden": ["status:", "recommendation:", "evidence:", "tap refresh", "engram control"],
+    "forbidden": ["status:", "recommendation:", "evidence:", "tap refresh", "engram control", "ready for the next change", "back at the shell"],
     "contradicts": ["tests did not pass", "checks failed", "workspace is not ready"]
   },
   {

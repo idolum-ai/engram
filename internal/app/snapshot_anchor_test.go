@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/config"
@@ -233,6 +234,25 @@ func TestSnapshotAnchorCaptionKeepsRedactionURLSafe(t *testing.T) {
 	}
 	if strings.Contains(caption, "malformed.example") {
 		t.Fatalf("snapshot caption repaired a malformed sensitive query: %q", caption)
+	}
+}
+
+func TestSnapshotAnchorCaptionBoundsVisibleTextBeforeHTMLEscaping(t *testing.T) {
+	t.Parallel()
+	capture := tmux.StyledCapture{
+		Title:       strings.Repeat("<&", 800),
+		CurrentPath: "/" + strings.Repeat("long&path/", 200),
+		Columns:     80,
+		VisibleRows: 24,
+		BufferRows:  64,
+	}
+	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: capture.Title}
+	caption, files := (&App{}).snapshotAnchorCaption(session, capture, visibleReferences{})
+	if len(caption) > 960 || !utf8.ValidString(caption) || len(files) != 0 {
+		t.Fatalf("caption bytes=%d valid=%v files=%#v", len(caption), utf8.ValidString(caption), files)
+	}
+	if html := telegram.MarkdownToHTML(caption); strings.ContainsAny(html, "<>") || !strings.HasSuffix(html, ";") {
+		t.Fatalf("escaped caption is not complete HTML text: %q", html[len(html)-20:])
 	}
 }
 

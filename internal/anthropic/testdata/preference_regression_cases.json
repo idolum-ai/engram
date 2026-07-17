@@ -51,5 +51,20 @@
     ],
     "forbidden": ["github-app.pem", "app id", "app_id", "installation id", "installation_id", "1234", "5678", "expires", "automation-bot", "main branch", "on main", "checkout is clean", "tracking origin/main", "remote url", "https://github.com/example/agent-wire-node", "idle", "/review"],
     "contradicts": ["token was persisted", "clone failed", "authentication failed"]
+  },
+  {
+    "name": "preference authenticated material deployment destination",
+    "terminal_text": "GitHub App PEM readable: /home/operator/secrets/github-app.pem\nMinted automation-bot installation token with app_id=1234 installation_id=5678 expires=2026-07-16T14:06:15Z; value withheld.\nToken authenticated successfully.\nPushed release commit to remote production branch emergency-fix.\ntracking=origin/main clean=true\ntemporary_token_persisted=false\n\n› Run /review",
+    "reference": "The token worked, and the release commit was pushed to the `emergency-fix` branch on the `production` remote. The temporary token was not persisted.",
+    "concepts": [
+      ["token worked", "authenticated successfully"],
+      ["release commit"],
+      ["pushed"],
+      ["emergency-fix"],
+      ["production remote", "remote production"],
+      ["not persisted", "was not persisted"]
+    ],
+    "forbidden": ["github-app.pem", "app id", "app_id", "installation id", "installation_id", "1234", "5678", "expires", "automation-bot", "origin/main", "clean", "run /review"],
+    "contradicts": ["push failed", "token was persisted", "main branch"]
   }
 ]

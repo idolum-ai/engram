@@ -48,9 +48,9 @@ func TestWriteRecordEstablishesBoundaryAndObservationKeepsLatestIdentity(t *test
 	}
 }
 
-func TestObserveStripsMalformedFramingWithoutTreatingItAsSignal(t *testing.T) {
+func TestObserveKeepsMalformedFramingAsTerminalEvidence(t *testing.T) {
 	got := Observe("safe\n" + Prefix + "not-an-id injected path /tmp/nope\nafter")
-	if got.Found || got.PresentationText != "safe\nafter" {
+	if got.Found || got.PresentationText != "safe\n"+Prefix+"not-an-id injected path /tmp/nope\nafter" {
 		t.Fatalf("Observe malformed = %#v", got)
 	}
 }
@@ -87,7 +87,7 @@ func TestObserveDoesNotJoinContinuationToColumnZeroRecord(t *testing.T) {
 
 func TestObserveKeepsIncompleteLengthFramedSignalUnrecognized(t *testing.T) {
 	got := Observe("    " + VersionedPrefix + testRecordID + " 40:short\n    ordinary output\n    second line")
-	if got.Found || got.PresentationText != "    ordinary output\n    second line" {
+	if got.Found || got.PresentationText != "    "+VersionedPrefix+testRecordID+" 40:short\n    ordinary output\n    second line" {
 		t.Fatalf("Observe incomplete = %#v", got)
 	}
 }

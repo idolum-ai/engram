@@ -18,7 +18,9 @@ type voiceTranscriber interface {
 	Transcribe(context.Context, string) (string, error)
 }
 
-const maxVoiceTranscriptBytes = 4096
+// Leave room for the exact post-delivery verification reply within Telegram's
+// message bound; the acknowledged transcript must never differ from pane input.
+const maxVoiceTranscriptBytes = 3600
 
 func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) actionResult {
 	mode := a.Config.EffectiveVoiceInputMode()
@@ -164,10 +166,12 @@ func (a *App) transcribeVoiceReply(ctx context.Context, msg telegram.Message, ex
 		a.reply(ctx, msg, "The voice transcript was not safe to send as terminal input; no input was sent.")
 		return
 	}
-	result := a.deliverVoiceInput(ctx, msg, expected, targetMessageID, "(transcribed) "+transcript)
+	input := "(transcribed) " + transcript
+	result := a.deliverVoiceInput(ctx, msg, expected, targetMessageID, input)
 	if !result.OK() {
 		return
 	}
+	a.reply(ctx, msg, fmt.Sprintf("Sent to [%d]:\n\n%s", expected.ID, input))
 	_ = a.audit("voice.transcribe", "ok", map[string]any{"session_id": expected.ID})
 }
 

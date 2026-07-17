@@ -13,6 +13,35 @@ import (
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
+type snapshotTextFrame struct {
+	ChatID     int64
+	MessageID  int
+	ServerID   string
+	WindowID   string
+	PaneID     string
+	FrameHash  string
+	JoinedText string
+}
+
+func (a *App) rememberSnapshotTextFrame(ts state.TerminalSession, capture tmux.StyledCapture) {
+	a.snapshotTextFrames.Store(ts.ID, snapshotTextFrame{
+		ChatID: ts.AnchorChatID, MessageID: ts.AnchorMessageID,
+		ServerID: ts.TmuxServerID, WindowID: ts.TmuxWindowID, PaneID: ts.TmuxPaneID,
+		FrameHash:  sha(capture.ANSI + "\x00" + capture.JoinedText),
+		JoinedText: capture.JoinedText,
+	})
+}
+
+func (a *App) snapshotTextFrame(ts state.TerminalSession) (snapshotTextFrame, bool) {
+	value, ok := a.snapshotTextFrames.Load(ts.ID)
+	if !ok {
+		return snapshotTextFrame{}, false
+	}
+	frame, ok := value.(snapshotTextFrame)
+	return frame, ok && frame.ChatID == ts.AnchorChatID && frame.MessageID == ts.AnchorMessageID &&
+		frame.ServerID == ts.TmuxServerID && frame.WindowID == ts.TmuxWindowID && frame.PaneID == ts.TmuxPaneID
+}
+
 func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	manual := a.consumeManualRefresh(id)
 	ts, ok := a.Store.FindSession(id)
@@ -99,6 +128,9 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
+	disclosureLock := a.disclosureMutex(id)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	anchorLock := a.anchorMutex(id)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
@@ -164,11 +196,18 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 			a.ensureCurrentAnchorPinnedLocked(ctx, updated)
 		}
 		a.finishAnchorRotationLocked(ctx, id)
+		if currentAnchor, found := a.Store.FindSession(id); found {
+			a.rememberSnapshotTextFrame(currentAnchor, capture)
+		}
 		return
 	}
+	// Telegram has published this exact image. Advance its process-local text
+	// companion before persistence so a state-write failure cannot pair the new
+	// image with the previous frame.
+	a.rememberSnapshotTextFrame(latest, capture)
 
 	updated := false
-	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+	stored, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		if a.snapshotAnchors() && session.AnchorMessageID == latest.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
 			session.AnchorFormat = "snapshot"
 			session.LastSnapshotCaptureHash = captureHash
@@ -178,7 +217,8 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 			setAnchorFiles(session, files)
 			updated = true
 		}
-	}); err != nil {
+	})
+	if err != nil {
 		_ = a.audit("state.snapshot_anchor", "failed", map[string]any{"session_id": id, "error": err.Error()})
 		return
 	}
@@ -186,6 +226,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		_ = a.audit("terminal.snapshot_anchor", "superseded", map[string]any{"session_id": id})
 		return
 	}
+	a.rememberSnapshotTextFrame(stored, capture)
 	_ = a.audit("terminal.snapshot_anchor", "updated", map[string]any{"session_id": id, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
 }
 
@@ -204,9 +245,12 @@ func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, pr
 
 func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture, refs visibleReferences) (string, []string) {
 	const safeCaptionBytes = 960
-	title := a.redactText(firstNonEmpty(ts.Title, capture.Title, "terminal"))
-	cwd := a.redactText(capture.CurrentPath)
+	title := strings.Join(strings.Fields(a.redactText(firstNonEmpty(ts.Title, capture.Title, "terminal"))), " ")
+	cwd := strings.Join(strings.Fields(a.redactText(capture.CurrentPath)), " ")
 	caption := fmt.Sprintf("[%d] %s · %s\n%s\n%d buffer rows · %dx%d visible", ts.ID, ts.State, title, cwd, capture.BufferRows, capture.Columns, capture.VisibleRows)
+	if len(caption) > safeCaptionBytes {
+		return headUTF8(caption, safeCaptionBytes), nil
+	}
 	if references, files := renderSnapshotReferenceSetWithFiles(refs, safeCaptionBytes-len(caption)-2); references != "" {
 		caption += "\n\n" + references
 		return caption, files

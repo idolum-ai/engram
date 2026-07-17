@@ -49,15 +49,23 @@ Telegram is Engram's only user interface.
   token records the immutable tmux binding and becomes stale after reattachment.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
 - Guide anchors expose refresh, the compact non-directional key controls, and
-  `🖼️` only when Chromium is ready. Snapshot anchors additionally expose a
-  distinct `← ↑ ↓ →` row and `🗣️` only when a guide is configured.
+  `🖼️ Snapshot` only when Chromium is ready. Snapshot anchors additionally expose a
+  distinct `← ↑ ↓ →` row, `📄 Raw` for a bounded plain-text attachment, and `🗣️ Explain` only when a
+  guide is configured.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
+- `📄 Raw` uploads the process-local plain-text companion captured with the
+  exact canonical snapshot image. It never performs a later tmux capture; when
+  restart has cleared that companion, the control asks the user to wait for the
+  startup refresh.
+- Key callbacks answer immediately before tmux work begins. A later tmux failure
+  is delivered as a normal reply rather than leaving Telegram's progress state
+  spinning until the terminal timeout.
 - When a canonical anchor displays files, one `⬇️ n` button is shown for each
   numbered entry. The callback contains no path: it resolves through the
   current anchor's exact process-local file-list token and then uses the same
   validation, bounded snapshot, queue, and upload path as `/download`.
-- `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one model
+- `🖼️ Snapshot` queues a one-off image reply to a guide anchor. `🗣️ Explain` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces
   the canonical anchor.
@@ -79,6 +87,8 @@ Telegram is Engram's only user interface.
   transcription. Closed targets are rejected before download or provider use;
   asynchronous closure or rotation is rechecked before terminal input. Anchor
   error presentation occurs only after delivery locks are released.
+  Successful transcription delivery is followed by a bounded reply containing
+  the normalized `(transcribed)` input so recognition errors remain visible.
   A stale, unknown, oversized, unsafe, failed, or identity-changed voice reply
   sends no terminal input. A transcription failure does not fall back to a path.
 - Voice notes that are not replies retain ordinary attachment behavior. Voice

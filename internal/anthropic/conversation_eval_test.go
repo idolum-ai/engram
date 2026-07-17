@@ -22,7 +22,7 @@ type conversationCase struct {
 	Contradicts   []string   `json:"contradicts,omitempty"`
 }
 
-const minimumLiveConceptCoverage = 0.6
+const minimumLiveConceptCoverage = 1.0
 const maximumLiveSemanticDistance = 0.7
 const maxConversationParagraphRunes = 320
 

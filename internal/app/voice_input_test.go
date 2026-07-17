@@ -35,7 +35,7 @@ func TestCurrentVoiceReplyTranscribesAndRoutesOnce(t *testing.T) {
 	if len(runner.calls) != 4 || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "(transcribed) please run the tests" || !strings.Contains(runner.calls[2][5], "paste-buffer -p -r -d") || !strings.Contains(runner.calls[3][5], "'Enter'") {
 		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
-	if got := strings.Join(*telegramCalls, ","); got != "getFile,downloadFile" {
+	if got := strings.Join(*telegramCalls, ","); got != "getFile,downloadFile,sendMessage" {
 		t.Fatalf("Telegram calls = %q", got)
 	}
 }

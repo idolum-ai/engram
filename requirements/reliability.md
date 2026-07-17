@@ -88,6 +88,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
   pin state. Restart resets pin knowledge and reconciles presentation without
   discarding canonical ownership.
+- Startup queues one immediate render for each active watched anchor. This
+  restores process-local conversational continuity and exact numbered file
+  bindings even when the tmux frame itself has not changed across restart.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the

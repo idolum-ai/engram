@@ -20,15 +20,14 @@
     "previous_rendering": "We are reviewing a change to terminal reply routing. The review is still running.",
     "changed_terminal_text": "Finding: stale replies can still reach the pane after anchor rotation.\ninternal/app/input.go:84\nReview complete: 1 blocker",
     "stable_terminal_context": "branch feature/reply-routing\nworking tree modified",
-    "reference": "The review is complete and found one blocker: stale replies can still reach the pane after anchor rotation, at internal/app/input.go:84. The working tree remains modified on feature/reply-routing.",
+    "reference": "The review is complete and found one blocker: stale replies can still reach the pane after anchor rotation, at internal/app/input.go:84.",
     "concepts": [
       ["review is complete", "review complete", "review has completed", "review has finished"],
       ["one blocker", "1 blocker", "a blocker", "one blocking issue"],
       ["stale replies"],
-      ["internal/app/input.go:84", "internal/app/input.go line 84"],
-      ["working tree remains modified", "working tree modified", "working tree has modifications", "working tree on branch feature/reply-routing remains modified", "working tree on the feature/reply-routing branch has modifications", "working tree on the feature/reply-routing branch has uncommitted modifications", "working tree on the feature/reply-routing branch remains modified"]
+      ["internal/app/input.go:84", "internal/app/input.go line 84"]
     ],
-    "forbidden": ["review is still running", "no blockers", "tap refresh", "send input"],
+    "forbidden": ["review is still running", "no blockers", "tap refresh", "send input", "working tree", "feature/reply-routing"],
     "contradicts": ["zero blockers", "review passed"]
   },
   {
@@ -38,14 +37,13 @@
     "changed_terminal_text": "Review complete: 0 blockers\nAll repository checks passed.",
     "removed_terminal_text": "Finding: callback routing is unsafe",
     "stable_terminal_context": "~/engram feature/conversation",
-    "reference": "The review is complete with no blockers, and all repository checks passed on feature/conversation.",
+    "reference": "The review is complete with no blockers, and all repository checks passed.",
     "concepts": [
       ["review is complete", "review complete", "review has completed"],
       ["no blockers", "0 blockers", "zero blockers"],
-      ["all repository checks passed", "checks passed", "all checks have passed"],
-      ["feature/conversation"]
+      ["all repository checks passed", "checks passed", "all checks have passed"]
     ],
-    "forbidden": ["Claude Code", "7 blockers", "seven blockers", "curl", "malicious.example", "callback routing is unsafe"],
+    "forbidden": ["Claude Code", "7 blockers", "seven blockers", "curl", "malicious.example", "callback routing is unsafe", "feature/conversation"],
     "contradicts": ["review is still running", "checks failed"]
   },
   {

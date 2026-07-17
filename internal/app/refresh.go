@@ -77,9 +77,15 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, ts, capture)
+	refs := a.visibleReferences(presentationText)
 	hash := sha(presentationText)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
+			guard := func() bool {
+				current, ok := a.Store.FindSession(id)
+				return !a.snapshotAnchors() && ok && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
+			}
+			a.updateAnchorLocalGuardedWithReferences(ctx, id, ts.LastSummary, false, guard, nil, &refs)
 			return
 		}
 	}
@@ -146,7 +152,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
 	}
-	a.updateAnchorLocalGuarded(ctx, id, summary, force, guard, accepted)
+	a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -226,6 +232,10 @@ func (a *App) updateAnchorLocal(ctx context.Context, id int, summary string, fin
 }
 
 func (a *App) updateAnchorLocalGuarded(ctx context.Context, id int, summary string, final bool, guard, accepted func() bool) bool {
+	return a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, final, guard, accepted, nil)
+}
+
+func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int, summary string, final bool, guard, accepted func() bool, referenceOverride *visibleReferences) bool {
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
 	lock := a.anchorMutex(id)
@@ -256,6 +266,9 @@ func (a *App) updateAnchorLocalGuarded(ctx context.Context, id int, summary stri
 		return false
 	}
 	refs := a.visibleReferences(ts.LastRawCapture)
+	if referenceOverride != nil {
+		refs = *referenceOverride
+	}
 	references, files := renderReferencesWithFiles(refs, true, maxGuideReferenceBytes)
 	rendered := renderLocalWithReferences(ts, a.redactText(summary), references)
 	renderHash := sha(rendered)
@@ -604,6 +617,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 		return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{
 			Image:     ts.AnchorFormat != "snapshot" && a.snapshotReady,
 			Voice:     ts.AnchorFormat == "snapshot" && a.guideAvailable,
+			Raw:       ts.AnchorFormat == "snapshot",
 			Arrows:    ts.AnchorFormat == "snapshot",
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),
@@ -616,6 +630,11 @@ func (a *App) scheduler(ctx context.Context) {
 	for _, ts := range a.Store.Snapshot().TerminalSessions {
 		if ts.AnchorMessageID != 0 {
 			a.reconcileAnchorControls(ctx, ts.ID)
+			if ts.State == state.TerminalRunning && ts.WatchEnabled {
+				// Anchor file bindings and conversation continuity are process-local.
+				// Re-render once after restart so unchanged cards regain both.
+				a.queueManualRefresh(ts.ID)
+			}
 		}
 	}
 	ticker := time.NewTicker(2 * time.Second)

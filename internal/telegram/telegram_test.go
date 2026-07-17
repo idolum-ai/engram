@@ -99,7 +99,7 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
 	}
-	if got.InlineKeyboard[0][1].Text != "🖼️" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+	if got.InlineKeyboard[0][1].Text != "🖼️ Snapshot" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
 	want := []InlineKeyboardButton{
@@ -139,6 +139,22 @@ func TestGuideAnchorMarkupOmitsArrowButtons(t *testing.T) {
 	got := AnchorMarkup(7, AnchorMarkupOptions{Image: true})
 	if got == nil || len(got.InlineKeyboard) != 2 {
 		t.Fatalf("AnchorMarkup rows = %#v, want action and key rows", got)
+	}
+}
+
+func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{Voice: true, Raw: true, Arrows: true})
+	if got == nil || len(got.InlineKeyboard[0]) != 3 {
+		t.Fatalf("AnchorMarkup actions = %#v", got)
+	}
+	if want := (InlineKeyboardButton{Text: "🗣️ Explain", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
+		t.Fatalf("explain action = %#v, want %#v", got.InlineKeyboard[0][1], want)
+	}
+	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
+	if got.InlineKeyboard[0][2] != want {
+		t.Fatalf("raw action = %#v, want %#v", got.InlineKeyboard[0][2], want)
 	}
 }
 
@@ -696,6 +712,35 @@ func TestEditHTMLPhotoUsesAttachedMediaMarkupAndParseMode(t *testing.T) {
 	if err != nil || msg.MessageID != 77 {
 		t.Fatalf("EditPhoto message = %#v err=%v", msg, err)
 	}
+}
+
+func TestHTMLPhotoCaptionIsNotByteTruncatedAfterEscaping(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.png")
+	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	caption := strings.Repeat("&amp;", 240)
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		if got := req.FormValue("caption"); got != caption {
+			t.Fatalf("HTML caption bytes=%d suffix=%q, want intact bytes=%d", len(got), tailForTest(got, 20), len(caption))
+		}
+		return jsonResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}}}), nil
+	})}
+	if _, err := client.SendHTMLPhotoWithMarkup(context.Background(), 5, path, caption, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tailForTest(text string, count int) string {
+	if len(text) <= count {
+		return text
+	}
+	return text[len(text)-count:]
 }
 
 func TestSafeDocumentFilenameRemovesControlCharacters(t *testing.T) {

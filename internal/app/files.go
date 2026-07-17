@@ -140,6 +140,54 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 	}
 }
 
+func (a *App) queueAccessibleSnapshotFrame(ctx context.Context, msg telegram.Message, expected state.TerminalSession, frame snapshotTextFrame) actionResult {
+	if !a.queueTransfer(func(transferCtx context.Context) {
+		a.uploadAccessibleSnapshotFrame(transferCtx, msg, expected, frame)
+	}) {
+		a.reply(ctx, msg, "raw view is temporarily unavailable because Engram is stopping or its transfer queue is full")
+		return actionResult{Outcome: actionStateFailed, Message: "raw view unavailable"}
+	}
+	return actionResult{Outcome: actionOK, Message: "raw view queued"}
+}
+
+func (a *App) uploadAccessibleSnapshotFrame(ctx context.Context, msg telegram.Message, expected state.TerminalSession, frame snapshotTextFrame) {
+	disclosureLock := a.disclosureMutex(expected.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
+	sessionLock := a.sessionMutex(expected.ID)
+	sessionLock.Lock()
+	current, ok := a.Store.FindSession(expected.ID)
+	if !ok || current.State != state.TerminalRunning || current.AnchorFormat != "snapshot" || current.AnchorMessageID != expected.AnchorMessageID || !sameTerminalBinding(current, expected) {
+		sessionLock.Unlock()
+		a.reply(ctx, msg, "raw view canceled: the session changed while this request was queued")
+		return
+	}
+	currentFrame, frameOK := a.snapshotTextFrame(current)
+	if !frameOK || currentFrame.FrameHash != frame.FrameHash {
+		sessionLock.Unlock()
+		a.reply(ctx, msg, "raw view canceled: the snapshot changed while this request was queued")
+		return
+	}
+	sessionLock.Unlock()
+	filename := fmt.Sprintf("engram-text-%d-%s.txt", expected.ID, time.Now().UTC().Format("20060102T150405Z"))
+	file, path, err := createPredictableArtifact(a.Config.ArtifactDir(), filename)
+	if err != nil {
+		a.reply(ctx, msg, "write error: "+err.Error())
+		return
+	}
+	_, writeErr := io.WriteString(file, frame.JoinedText)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+		a.reply(ctx, msg, "write error: "+firstError(writeErr, closeErr).Error())
+		return
+	}
+	defer os.Remove(path)
+	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, fmt.Sprintf("[%d] snapshot text", expected.ID)); err != nil {
+		a.reply(ctx, msg, "upload error: "+err.Error())
+	}
+}
+
 func (a *App) disclosureMutex(id int) *keyedMutexHandle {
 	return a.disclosureLocks.handle(id)
 }

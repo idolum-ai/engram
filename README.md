@@ -224,7 +224,7 @@ the bot channel and must be revoked immediately.
   running when Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.
-- **Local snapshot browser:** In guide mode, tapping `🖼️` renders an on-demand
+- **Local snapshot browser:** In guide mode, tapping `🖼️ Snapshot` renders an on-demand
   image when Chromium passed startup readiness. In snapshot mode, the renderer
   produces the canonical live anchor whenever its capture changes. Engram
   renders a frame capped at 64 ANSI-preserving rows into a
@@ -233,6 +233,9 @@ the bot channel and must be revoked immediately.
   contrast themes use a color-vision-safe ANSI palette, remove opacity-based
   dim text, and correct low-contrast terminal colors to at least a 4.5:1
   contrast ratio.
+  Every snapshot anchor also offers `📄 Raw`, which returns the exact delivered
+  image frame as a bounded plain UTF-8 text attachment for screen readers or
+  exact inspection. It does not recapture a newer terminal state on click.
 - **Conversational guide:** Guide anchors start from the same frame as Chromium
   and send its joined logical text, capped at 64 rows, in one non-streaming request.
   Recognized upstream records, the trailing model-status footer, and a small
@@ -245,7 +248,7 @@ the bot channel and must be revoked immediately.
   Completed model prose is deterministically bounded to 180 words before
   delivery.
   `LLM_PROVIDER` selects Anthropic Haiku 4.5 or OpenAI Luna; both receive the
-  same prompt and bounded evidence. In snapshot mode, tapping `🗣️` makes the
+  same prompt and bounded evidence. In snapshot mode, tapping `🗣️ Explain` makes the
   same one-off request and sends its conversational result as a reply without
   replacing the photo anchor. Captures are not credential-redacted before they
   are sent.
@@ -258,7 +261,9 @@ the bot channel and must be revoked immediately.
   bounded control-free line, prefixes `(transcribed)`, and removes the audio;
   transcript text is not persisted. A stale reply, changed tmux identity, or
   transcription failure sends no input. Engram never silently crosses from
-  transcription to path delivery after an error.
+  transcription to path delivery after an error. After successful delivery,
+  Engram replies with the normalized transcript so the user can verify what
+  reached the pane.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram

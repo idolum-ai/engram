@@ -125,8 +125,12 @@ func Observe(joinedText string) Observation {
 				i = continuationEnd
 				latest = record
 				found = true
+				continue
 			}
 		}
+		// A framing-looking line is ordinary terminal evidence until the whole
+		// record validates. This keeps malformed or truncated output visible.
+		kept = append(kept, line)
 	}
 	return Observation{
 		PresentationText: strings.Trim(strings.Join(kept, "\n"), "\n"),

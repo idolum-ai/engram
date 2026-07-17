@@ -169,6 +169,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 			s.LastUpstreamSignalAt = time.Time{}
 			s.UpstreamRetryAt = time.Time{}
 			retireAlternateReplyTargets(s)
+			setAnchorFiles(s, nil)
 		})
 		committed := found && applied && (updateErr == nil || state.PersistenceReachedReplacement(updateErr))
 		if updateErr != nil && committed {
