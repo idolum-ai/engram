@@ -591,12 +591,17 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalLost {
 		return telegram.RecoverMarkup(ts.ID)
 	}
-	return telegram.AnchorMarkup(ts.ID, false, false)
+	return telegram.AnchorMarkup(ts.ID, false, false, false)
 }
 
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalRunning {
-		return telegram.AnchorMarkup(ts.ID, ts.AnchorFormat != "snapshot" && a.snapshotReady, ts.AnchorFormat == "snapshot" && a.guideAvailable)
+		return telegram.AnchorMarkup(
+			ts.ID,
+			ts.AnchorFormat != "snapshot" && a.snapshotReady,
+			ts.AnchorFormat == "snapshot" && a.guideAvailable,
+			ts.AnchorFormat == "snapshot",
+		)
 	}
 	return anchorMarkup(ts)
 }

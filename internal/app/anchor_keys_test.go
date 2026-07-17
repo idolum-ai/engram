@@ -57,6 +57,11 @@ func TestKeyCallbacksSendDirectionalKeys(t *testing.T) {
 	} {
 		t.Run(test.preset, func(t *testing.T) {
 			app, runner, _ := newAnchorKeyTestApp(t)
+			if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
+				s.AnchorFormat = "snapshot"
+			}); err != nil {
+				t.Fatal(err)
+			}
 			status := app.handleCallback(context.Background(), telegram.CallbackQuery{
 				ID: "cb", From: telegram.User{ID: 42},
 				Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
@@ -69,6 +74,21 @@ func TestKeyCallbacksSendDirectionalKeys(t *testing.T) {
 				t.Fatalf("tmux calls = %#v", runner.calls)
 			}
 		})
+	}
+}
+
+func TestDirectionalKeyCallbackRejectedOutsideSnapshotMode(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "cb", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+		Data:    "key:1:up",
+	})
+	if status != "callback_user_error" {
+		t.Fatalf("handleCallback status = %q", status)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("guide arrow callback touched tmux: %#v", runner.calls)
 	}
 }
 

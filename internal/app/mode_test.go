@@ -62,6 +62,9 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	if got := guide.InlineKeyboard[0]; len(got) != 2 || got[1].CallbackData != "snapshot:7" {
 		t.Fatalf("guide actions = %#v", got)
 	}
+	if len(guide.InlineKeyboard) != 2 {
+		t.Fatalf("guide rows = %#v, want no arrow row", guide.InlineKeyboard)
+	}
 	app.setAnchorMode(config.AnchorModeSnapshot)
 	app.guideAvailable = true
 	ts.AnchorFormat = "snapshot"
@@ -69,8 +72,15 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	if got := snapshot.InlineKeyboard[0]; len(got) != 2 || got[1].CallbackData != "voice:7" {
 		t.Fatalf("snapshot actions = %#v", got)
 	}
+	if len(snapshot.InlineKeyboard) != 3 || snapshot.InlineKeyboard[2][0].CallbackData != "key:7:left" {
+		t.Fatalf("snapshot rows = %#v, want directional row", snapshot.InlineKeyboard)
+	}
 	app.guideAvailable = false
-	if got := app.anchorMarkup(ts).InlineKeyboard[0]; len(got) != 1 {
+	withoutGuide := app.anchorMarkup(ts)
+	if got := withoutGuide.InlineKeyboard[0]; len(got) != 1 {
 		t.Fatalf("unavailable alternate leaked into markup: %#v", got)
+	}
+	if len(withoutGuide.InlineKeyboard) != 3 {
+		t.Fatalf("snapshot arrows depend on guide availability: %#v", withoutGuide.InlineKeyboard)
 	}
 }

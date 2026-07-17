@@ -481,7 +481,7 @@ func (m Message) FileAttachment() (Document, bool) {
 	return Document{}, false
 }
 
-func AnchorMarkup(sessionID int, includeImage, includeVoice bool) *InlineKeyboardMarkup {
+func AnchorMarkup(sessionID int, includeImage, includeVoice, includeArrows bool) *InlineKeyboardMarkup {
 	actions := []InlineKeyboardButton{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}}
 	if includeImage {
 		actions = append(actions, InlineKeyboardButton{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
@@ -489,7 +489,7 @@ func AnchorMarkup(sessionID int, includeImage, includeVoice bool) *InlineKeyboar
 	if includeVoice {
 		actions = append(actions, InlineKeyboardButton{Text: "🗣️", CallbackData: fmt.Sprintf("voice:%d", sessionID)})
 	}
-	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+	rows := [][]InlineKeyboardButton{
 		actions,
 		{
 			{Text: "Esc", CallbackData: fmt.Sprintf("key:%d:esc", sessionID)},
@@ -498,13 +498,16 @@ func AnchorMarkup(sessionID int, includeImage, includeVoice bool) *InlineKeyboar
 			{Text: "^D", CallbackData: fmt.Sprintf("key:%d:ctrl-d", sessionID)},
 			{Text: "Enter", CallbackData: fmt.Sprintf("key:%d:enter", sessionID)},
 		},
-		{
+	}
+	if includeArrows {
+		rows = append(rows, []InlineKeyboardButton{
 			{Text: "←", CallbackData: fmt.Sprintf("key:%d:left", sessionID)},
 			{Text: "↑", CallbackData: fmt.Sprintf("key:%d:up", sessionID)},
 			{Text: "↓", CallbackData: fmt.Sprintf("key:%d:down", sessionID)},
 			{Text: "→", CallbackData: fmt.Sprintf("key:%d:right", sessionID)},
-		},
-	}}
+		})
+	}
+	return &InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func ClearMarkup() *InlineKeyboardMarkup {

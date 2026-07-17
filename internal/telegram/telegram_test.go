@@ -89,10 +89,10 @@ func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	}
 }
 
-func TestAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
+func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
 	t.Parallel()
 
-	got := AnchorMarkup(7, true, false)
+	got := AnchorMarkup(7, true, false, true)
 	if got == nil || len(got.InlineKeyboard) != 3 || len(got.InlineKeyboard[0]) != 2 {
 		t.Fatalf("AnchorMarkup rows = %#v, want action, key, and arrow rows", got)
 	}
@@ -130,6 +130,15 @@ func TestAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
 		if got.InlineKeyboard[2][i] != wantArrows[i] {
 			t.Fatalf("arrow button %d = %#v, want %#v", i, got.InlineKeyboard[2][i], wantArrows[i])
 		}
+	}
+}
+
+func TestGuideAnchorMarkupOmitsArrowButtons(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, true, false, false)
+	if got == nil || len(got.InlineKeyboard) != 2 {
+		t.Fatalf("AnchorMarkup rows = %#v, want action and key rows", got)
 	}
 }
 
@@ -245,7 +254,7 @@ func TestSendHTMLMessagePayload(t *testing.T) {
 		}), nil
 	})}
 
-	if _, err := client.SendHTMLMessage(context.Background(), 5, "<b>ok</b>", 7, AnchorMarkup(1, true, false)); err != nil {
+	if _, err := client.SendHTMLMessage(context.Background(), 5, "<b>ok</b>", 7, AnchorMarkup(1, true, false, false)); err != nil {
 		t.Fatal(err)
 	}
 	if got["parse_mode"] != "HTML" {
@@ -623,7 +632,7 @@ func TestSendPhotoIncludesMarkupWithoutReplyTarget(t *testing.T) {
 			"result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}},
 		}), nil
 	})}
-	if _, err := client.SendPhotoWithMarkup(context.Background(), 5, path, "terminal snapshot", 0, AnchorMarkup(7, false, true)); err != nil {
+	if _, err := client.SendPhotoWithMarkup(context.Background(), 5, path, "terminal snapshot", 0, AnchorMarkup(7, false, true, true)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -664,7 +673,7 @@ func TestEditPhotoUsesAttachedMediaAndMarkup(t *testing.T) {
 			"result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 5}},
 		}), nil
 	})}
-	msg, err := client.EditPhoto(context.Background(), 5, 77, path, "live terminal", AnchorMarkup(7, false, true))
+	msg, err := client.EditPhoto(context.Background(), 5, 77, path, "live terminal", AnchorMarkup(7, false, true, true))
 	if err != nil || msg.MessageID != 77 {
 		t.Fatalf("EditPhoto message = %#v err=%v", msg, err)
 	}

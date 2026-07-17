@@ -444,8 +444,9 @@ snapshot replies. The latest upstream-signal notification is another reply
 route to the same outer pane. Replacing any alternate of the same kind makes
 its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
-The anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, `Enter`,
-and a separate `← ↑ ↓ →` directional row.
+Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
+`Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
+directional row.
 
 ### Nested environments
 

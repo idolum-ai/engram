@@ -129,6 +129,10 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if status != "" {
 			return status
 		}
+		if directionalKeyPreset(preset) && validated.AnchorFormat != "snapshot" {
+			a.answerCallback(ctx, cb.ID, "arrows are available in snapshot mode")
+			return "callback_user_error"
+		}
 		action, ok := anchorKeyAction(preset)
 		if !ok {
 			a.answerCallback(ctx, cb.ID, "unknown key")
@@ -199,6 +203,15 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 	default:
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
+	}
+}
+
+func directionalKeyPreset(preset string) bool {
+	switch preset {
+	case "left", "up", "down", "right":
+		return true
+	default:
+		return false
 	}
 }
 

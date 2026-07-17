@@ -48,10 +48,11 @@ Telegram is Engram's only user interface.
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
-- Guide anchors expose refresh, allowed keys including a distinct `← ↑ ↓ →`
-  directional row, and `🖼️` only when Chromium is
-  ready. Snapshot anchors expose refresh, allowed keys, and `🗣️` only when
-  a guide is configured.
+- Guide anchors expose refresh, the compact non-directional key controls, and
+  `🖼️` only when Chromium is ready. Snapshot anchors additionally expose a
+  distinct `← ↑ ↓ →` row and `🗣️` only when a guide is configured.
+- Directional callbacks are accepted only from the current snapshot anchor, so
+  a delayed callback cannot move a terminal after its card returns to guide mode.
 - `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces

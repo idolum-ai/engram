@@ -12,7 +12,7 @@ Notable user-visible and operational changes are recorded here.
 
 ### Input
 
-- Add a distinct `← ↑ ↓ →` row to current session anchors for direct tmux
+- Add a distinct `← ↑ ↓ →` row to current snapshot anchors for direct tmux
   directional input under the existing authenticated callback boundary.
 - Send long and multiline Telegram replies as one bracketed tmux paste followed
   by one Enter, allowing terminal applications to receive the complete input as
