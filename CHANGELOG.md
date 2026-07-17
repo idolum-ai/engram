@@ -40,6 +40,10 @@ Notable user-visible and operational changes are recorded here.
 
 ### Fixed
 
+- Avoid silently launching desktop Chrome or Chromium for snapshot rendering on
+  macOS. Automatic discovery now requires a dedicated headless executable there,
+  while Linux retains its existing browser fallbacks and explicit configuration
+  remains available on both platforms.
 - Use current Telegram `reply_parameters` and `link_preview_options` payloads
   for outgoing text and snapshot replies, with the hermetic simulator enforcing
   reply identity against known messages.

@@ -240,6 +240,40 @@ func TestRendererRejectsMissingConfiguredBrowser(t *testing.T) {
 	}
 }
 
+func TestBrowserPathDarwinRequiresDedicatedHeadlessBrowserByDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeExecutable(t, filepath.Join(dir, "google-chrome"))
+	t.Setenv("PATH", dir)
+
+	if browser, err := browserPathForOS("", "darwin"); err == nil || browser != "" || !strings.Contains(err.Error(), "dedicated headless") {
+		t.Fatalf("desktop Chrome was auto-selected on macOS: browser=%q err=%v", browser, err)
+	}
+
+	headless := filepath.Join(dir, "chrome-headless-shell")
+	writeExecutable(t, headless)
+	if browser, err := browserPathForOS("", "darwin"); err != nil || browser != headless {
+		t.Fatalf("dedicated headless browser was not selected on macOS: browser=%q err=%v", browser, err)
+	}
+}
+
+func TestBrowserPathDarwinAllowsExplicitDesktopBrowser(t *testing.T) {
+	desktop := filepath.Join(t.TempDir(), "Google Chrome")
+	writeExecutable(t, desktop)
+	if browser, err := browserPathForOS(desktop, "darwin"); err != nil || browser != desktop {
+		t.Fatalf("explicit desktop browser was not honored: browser=%q err=%v", browser, err)
+	}
+}
+
+func TestBrowserPathLinuxKeepsChromiumCompatibleFallback(t *testing.T) {
+	dir := t.TempDir()
+	chrome := filepath.Join(dir, "google-chrome")
+	writeExecutable(t, chrome)
+	t.Setenv("PATH", dir)
+	if browser, err := browserPathForOS("", "linux"); err != nil || browser != chrome {
+		t.Fatalf("Linux Chrome fallback was not selected: browser=%q err=%v", browser, err)
+	}
+}
+
 func TestRendererProbeRequiresPNGCapability(t *testing.T) {
 	t.Parallel()
 	executable, err := os.Executable()
@@ -344,3 +378,10 @@ func (r *fakeBrowserRunner) Run(_ context.Context, _ string, args ...string) err
 type noOutputBrowserRunner struct{}
 
 func (noOutputBrowserRunner) Run(context.Context, string, ...string) error { return nil }
+
+func writeExecutable(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}

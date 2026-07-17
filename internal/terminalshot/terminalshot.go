@@ -337,6 +337,10 @@ func validateInput(input Input) error {
 }
 
 func browserPath(configured string) (string, error) {
+	return browserPathForOS(configured, runtime.GOOS)
+}
+
+func browserPathForOS(configured, goos string) (string, error) {
 	configured = strings.TrimSpace(configured)
 	if configured != "" {
 		if strings.ContainsRune(configured, filepath.Separator) || filepath.IsAbs(configured) {
@@ -352,20 +356,17 @@ func browserPath(configured string) (string, error) {
 		}
 		return path, nil
 	}
-	for _, candidate := range []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"} {
+	candidates := []string{"chrome-headless-shell", "chromium-headless-shell", "headless_shell"}
+	if goos != "darwin" {
+		candidates = append(candidates, "chromium", "chromium-browser", "google-chrome", "google-chrome-stable")
+	}
+	for _, candidate := range candidates {
 		if path, err := exec.LookPath(candidate); err == nil {
 			return path, nil
 		}
 	}
-	if runtime.GOOS == "darwin" {
-		for _, candidate := range []string{
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Chromium.app/Contents/MacOS/Chromium",
-		} {
-			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-				return candidate, nil
-			}
-		}
+	if goos == "darwin" {
+		return "", fmt.Errorf("no dedicated headless Chromium snapshot browser found; install chrome-headless-shell or set ENGRAM_SNAPSHOT_BROWSER explicitly")
 	}
 	return "", fmt.Errorf("no Chromium-compatible snapshot browser found")
 }

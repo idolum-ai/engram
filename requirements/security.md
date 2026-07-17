@@ -66,6 +66,10 @@ privacy model must stay small and explicit.
   to a local headless browser and then to the configured Telegram DM, never to
   a model provider. Terminal text must be HTML-escaped; browser networking, extensions,
   and persistent profiles must be disabled.
+- On macOS, automatic snapshot-browser discovery must not select desktop Chrome
+  or Chromium applications. Those applications have broader host integration
+  and privacy surfaces than a dedicated headless renderer. Explicit browser
+  configuration remains an operator-controlled exception.
 - Guide crops refuse styled rows containing configured credentials and redact
   title and working-directory chrome. This is a narrow configured-secret check,
   not general transcript sanitization. Their exact plain-text companions remain

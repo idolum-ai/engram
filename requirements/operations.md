@@ -34,8 +34,10 @@ runtime state.
   without restarting. Its response says switching has begun; each anchor keeps
   its current format until migration succeeds.
 - `ENGRAM_SNAPSHOT_BROWSER` may name or point to a Chromium-compatible
-  executable. When unset, Engram searches common Chromium and Chrome names and
-  standard macOS application paths.
+  executable. When unset, Engram prefers common dedicated headless-shell names.
+  Linux retains Chromium and Chrome fallbacks. macOS automatic detection must
+  not launch a desktop browser application; an operator may opt into one by
+  configuring its executable explicitly.
 
 ## Linux Installation And Service
 
