@@ -3,6 +3,10 @@ name: Manual E2E
 on:
   workflow_dispatch:
     inputs:
+      target_ref:
+        description: Same-repository branch whose tip is the target SHA
+        required: true
+        type: string
       target_sha:
         description: Full same-repository commit SHA to test
         required: true
@@ -30,16 +34,28 @@ jobs:
     steps:
       - name: Validate trusted dispatch
         env:
+          TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
         run: |
           set -euo pipefail
           test "${GITHUB_REF}" = "refs/heads/main"
+          git check-ref-format "refs/heads/${TARGET_REF}"
           [[ "${TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]]
 
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-          ref: ${{ inputs.target_sha }}
+          ref: main
+
+      - name: Resolve same-repository target
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "refs/heads/${TARGET_REF}:refs/remotes/origin/e2e-target"
+          test "$(git rev-parse refs/remotes/origin/e2e-target)" = "${TARGET_SHA}"
+          git checkout --detach "${TARGET_SHA}"
 
       - name: Verify target checkout
         env:

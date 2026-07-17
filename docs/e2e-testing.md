@@ -21,7 +21,9 @@ The harness gives tmux a private socket root, private home and configuration
 roots, a deterministic shell identity, and a wrapper that invokes the absolute
 tmux binary with `-f /dev/null`. A planted user configuration is part of the
 fixture and the test proves it was ignored. The private server PID is tracked,
-normally stopped through `kill-server`, and verified gone. The Telegram
+normally stopped through `kill-server`, and verified gone. An external stdlib
+supervisor owns Engram and tmux cleanup through a control pipe, so Go test
+timeouts and hard parent exits cannot strand either resource. The Telegram
 simulator listens only inside the test process, uses distinct fixture user and
 chat identifiers, and rejects wrong destinations, unknown messages, malformed
 media edits, and reply targets that Telegram would reject. Requested polling
@@ -31,15 +33,17 @@ offsets are retained so the test can detect replayed effects.
 
 From GitHub, open **Actions**, select **Manual E2E**, choose **Run workflow**,
 and select `main` as the workflow branch. Enter the complete 40-character
-commit SHA to test and keep the `hermetic` suite selected. The trusted workflow
-definition always comes from `main`; its checkout step then verifies that it is
-running the requested commit. Do not select a pull-request branch in the
-workflow branch menu.
+lowercase commit SHA to test, enter the same-repository branch whose current tip
+is that SHA, and keep the `hermetic` suite selected. The trusted workflow
+definition always comes from `main`; it fetches that real branch ref, verifies
+its tip, and only then detaches at the requested commit. Do not select a
+pull-request branch in the workflow branch menu.
 
-The target commit must be reachable in `idolum-ai/engram`. A fork-only commit
-cannot be selected by this workflow. Review it locally or deliberately mirror
-the reviewed commit into a same-repository branch first; never work around the
-boundary by dispatching workflow YAML from an untrusted fork or PR branch.
+The target commit must be the tip of a branch in `idolum-ai/engram`. Hidden
+pull-request refs and fork-only commits cannot satisfy this check. Review them
+locally or deliberately mirror the reviewed commit into a same-repository
+branch first; never work around the boundary by dispatching workflow YAML from
+an untrusted fork or PR branch.
 
 The equivalent local command is:
 

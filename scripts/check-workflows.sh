@@ -54,10 +54,11 @@ done
 
 required_e2e_phrases=(
   'workflow_dispatch:'
+  'target_ref:'
   'target_sha:'
   'test "${GITHUB_REF}" = "refs/heads/main"'
   'persist-credentials: false'
-  'ref: ${{ inputs.target_sha }}'
+  'refs/heads/${TARGET_REF}:refs/remotes/origin/e2e-target'
   'runs-on: ubuntu-24.04'
   'go-version: 1.22.12'
   'ENGRAM_E2E=1'

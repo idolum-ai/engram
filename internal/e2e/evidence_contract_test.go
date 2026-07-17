@@ -1,15 +1,17 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestEarlySetupFailureRetainsEvidence(t *testing.T) {
@@ -48,36 +50,73 @@ func TestEarlySetupFailureRetainsEvidence(t *testing.T) {
 func TestProcessLogSurvivesHardExit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestProcessLogHardExitHelper$")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestSupervisorOwnerHardExitHelper$")
 	cmd.Env = append(withoutEnvironment(os.Environ(), "ENGRAM_E2E_HARD_EXIT_DIR"), "ENGRAM_E2E_HARD_EXIT_DIR="+dir)
 	err := cmd.Run()
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 23 {
 		t.Fatalf("hard-exit helper error = %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "process.log"))
-	if err != nil || string(data) != "output before hard exit\n" {
-		t.Fatalf("hard-exit process.log = %q, err=%v", data, err)
+	pidData, err := os.ReadFile(filepath.Join(dir, "child.pid"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	childPID, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, func() bool {
+		data, readErr := os.ReadFile(filepath.Join(dir, "process.log"))
+		return readErr == nil && strings.Contains(string(data), "output after owner hard exit") && !processAlive(childPID)
+	}, "supervisor child cleanup and direct log after owner hard exit")
+	supervisorData, err := os.ReadFile(filepath.Join(dir, "supervisor.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisorPID, err := strconv.Atoi(strings.TrimSpace(string(supervisorData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, func() bool { return !processAlive(supervisorPID) }, "orphaned supervisor exit")
 }
 
-func TestProcessLogHardExitHelper(t *testing.T) {
+func TestSupervisorOwnerHardExitHelper(t *testing.T) {
 	dir := os.Getenv("ENGRAM_E2E_HARD_EXIT_DIR")
 	if dir == "" {
 		t.Skip("subprocess helper")
 	}
-	var memory bytes.Buffer
-	file, writer, err := openProcessLog(dir, &memory)
-	if err != nil {
+	logPath := filepath.Join(dir, "process.log")
+	childReady := filepath.Join(dir, "child.ready")
+	env := append(withoutEnvironment(os.Environ(), "ENGRAM_E2E_SUPERVISED_CHILD", "ENGRAM_E2E_SUPERVISED_CHILD_READY"),
+		"ENGRAM_E2E_SUPERVISED_CHILD=1",
+		"ENGRAM_E2E_SUPERVISED_CHILD_READY="+childReady,
+	)
+	process := startSupervisedProcess(t, env, []string{os.Args[0], "-test.run=^TestSupervisedChildHelper$", "-test.v"}, logPath, false)
+	eventually(t, 5*time.Second, func() bool {
+		_, err := os.Stat(childReady)
+		return err == nil
+	}, "supervised child signal readiness")
+	if err := os.WriteFile(filepath.Join(dir, "child.pid"), []byte(strconv.Itoa(process.childPID)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := io.WriteString(writer, "output before hard exit\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := file.Sync(); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "supervisor.pid"), []byte(strconv.Itoa(process.cmd.Process.Pid)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	os.Exit(23)
+}
+
+func TestSupervisedChildHelper(t *testing.T) {
+	if os.Getenv("ENGRAM_E2E_SUPERVISED_CHILD") != "1" {
+		t.Skip("subprocess helper")
+	}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	if err := os.WriteFile(os.Getenv("ENGRAM_E2E_SUPERVISED_CHILD_READY"), []byte("ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	<-signals
+	println("output after owner hard exit")
 }
 
 func withoutEnvironment(environment []string, keys ...string) []string {

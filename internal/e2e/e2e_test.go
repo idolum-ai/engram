@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"image"
 	"image/png"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,7 +34,6 @@ func TestHermeticGoldenPath(t *testing.T) {
 	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	var processLog bytes.Buffer
 	var fake *fakeTelegram
 	versions := make(map[string]string)
 	assertions := make([]string, 0, 8)
@@ -45,8 +43,8 @@ func TestHermeticGoldenPath(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	processFile, processWriter, err := openProcessLog(artifactDir, &processLog)
-	if err != nil {
+	processLogPath := filepath.Join(artifactDir, "process.log")
+	if err := os.WriteFile(processLogPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
@@ -57,11 +55,10 @@ func TestHermeticGoldenPath(t *testing.T) {
 		if fake != nil {
 			diagnostic = fake.diagnostic()
 		}
-		if err := writeFailureEvidence(artifactDir, assertions, processLog.String(), diagnostic, versions); err != nil {
+		if err := writeFailureEvidence(artifactDir, assertions, readProcessLog(processLogPath), diagnostic, versions); err != nil {
 			t.Errorf("write failure evidence: %v", err)
 		}
 	}()
-	defer processFile.Close()
 
 	binary := requiredAbsolutePath(t, "ENGRAM_E2E_BINARY")
 	browser := requiredExecutable(t, "ENGRAM_SNAPSHOT_BROWSER")
@@ -120,30 +117,13 @@ printf 'The golden path is complete.\n'
 
 	processEnv := isolatedEnvironment(binDir, userHome, configHome, cacheHome, runtimeDir, tmuxDir)
 	versions = runtimeVersions(browser, processEnv)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "run", "--env", envPath)
-	cmd.Env = processEnv
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return signalProcessGroup(cmd.Process, syscall.SIGKILL) }
-	cmd.WaitDelay = 2 * time.Second
-	cmd.Stdout = processWriter
-	cmd.Stderr = processWriter
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	stopped := false
-	tmuxStopped := false
+	supervisor := startSupervisedProcess(t, processEnv, []string{binary, "run", "--env", envPath}, processLogPath, true)
+	supervisorStopped := false
 	tmuxPID := 0
 	defer func() {
-		if !stopped {
-			if err := stopProcessGroup(cmd, 5*time.Second); err != nil {
-				t.Errorf("cleanup Engram: %v", err)
-			}
-		}
-		if !tmuxStopped {
-			if err := stopTmuxServer(processEnv, tmuxPID); err != nil {
-				t.Errorf("cleanup tmux: %v", err)
+		if !supervisorStopped {
+			if err := stopSupervisedProcess(supervisor, 10*time.Second); err != nil {
+				t.Errorf("cleanup external E2E supervisor: %v", err)
 			}
 		}
 	}()
@@ -242,19 +222,18 @@ printf 'The golden path is complete.\n'
 	assertions = append(assertions, "numbered file callback delivered exact bytes and filename once to the authorized chat")
 
 	t.Log("stopping Engram and its private tmux server")
-	stopErr := stopProcessGroup(cmd, 10*time.Second)
-	stopped = true
+	stopErr := stopSupervisedProcess(supervisor, 10*time.Second)
+	supervisorStopped = true
 	if stopErr != nil {
-		t.Fatalf("Engram exited unsuccessfully: %v\n%s", stopErr, processLog.String())
+		t.Fatalf("Engram supervisor exited unsuccessfully: %v\n%s", stopErr, readProcessLog(processLogPath))
 	}
-	if err := stopTmuxServer(processEnv, tmuxPID); err != nil {
-		t.Fatalf("tmux cleanup failed: %v", err)
+	if !waitForProcessExit(tmuxPID, 3*time.Second) {
+		t.Fatalf("external supervisor left tmux server PID %d alive", tmuxPID)
 	}
-	tmuxStopped = true
 	if len(finalSnapshot.Errors) != 0 {
-		t.Fatalf("fake Telegram API errors: %v\nprocess log:\n%s", finalSnapshot.Errors, processLog.String())
+		t.Fatalf("fake Telegram API errors: %v\nprocess log:\n%s", finalSnapshot.Errors, readProcessLog(processLogPath))
 	}
-	if err := writeEvidence(artifactDir, finalSnapshot, anchor.ID, processLog.String(), terminalText, browser, assertions, versions); err != nil {
+	if err := writeEvidence(artifactDir, finalSnapshot, anchor.ID, readProcessLog(processLogPath), terminalText, browser, assertions, versions); err != nil {
 		t.Fatal(err)
 	}
 	evidenceWritten = true
@@ -547,31 +526,12 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-func stopProcessGroup(cmd *exec.Cmd, timeout time.Duration) error {
-	_ = signalProcessGroup(cmd.Process, syscall.SIGTERM)
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case err := <-waitCh:
-		return err
-	case <-timer.C:
-		_ = signalProcessGroup(cmd.Process, syscall.SIGKILL)
-		select {
-		case <-waitCh:
-		case <-time.After(2 * time.Second):
-		}
-		return fmt.Errorf("process group did not stop within %s", timeout)
-	}
-}
-
-func openProcessLog(dir string, memory *bytes.Buffer) (*os.File, io.Writer, error) {
-	file, err := os.OpenFile(filepath.Join(dir, "process.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+func readProcessLog(path string) string {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, nil, err
+		return "process log unavailable: " + err.Error()
 	}
-	return file, io.MultiWriter(memory, file), nil
+	return string(data)
 }
 
 func signalProcessGroup(process *os.Process, signal syscall.Signal) error {

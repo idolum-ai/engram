@@ -195,10 +195,16 @@ privacy model must stay small and explicit.
   user configuration and hooks. The simulator must enforce the exact fixture
   chat and existing message identities before accepting edits, pins, deletes,
   or uploads.
+- An external subprocess supervisor must own the E2E service process group and
+  private tmux cleanup. Closing its inherited control pipe, including through a
+  hard test-process exit, triggers bounded cleanup without relying on test
+  defers or signaling stale numeric identities.
 - The manual dispatcher must run the trusted `main` workflow definition and
-  treat the requested same-repository commit SHA only as untrusted code under
-  test. The job receives read-only contents permission and references no
-  repository secrets or protected environment.
+  verify the requested SHA is the tip of an actual same-repository branch,
+  rather than trusting exact-SHA fetch behavior that can expose hidden fork
+  pull refs. The job treats the verified target as untrusted code under test,
+  receives read-only contents permission, and references no repository secrets
+  or protected environment.
 
 ## Vulnerability Handling
 
