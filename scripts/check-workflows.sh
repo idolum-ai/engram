@@ -52,6 +52,28 @@ for phrase in "${required_publish_phrases[@]}"; do
   fi
 done
 
+required_e2e_phrases=(
+  'workflow_dispatch:'
+  'target_ref:'
+  'target_sha:'
+  'test "${GITHUB_REF}" = "refs/heads/main"'
+  'persist-credentials: false'
+  'refs/heads/${TARGET_REF}:refs/remotes/origin/e2e-target'
+  'runs-on: ubuntu-24.04'
+  'go-version: 1.22.12'
+  'ENGRAM_E2E=1'
+  '.supervisor-done'
+  "go test ./internal/e2e -run '^TestHermeticGoldenPath$'"
+  'if-no-files-found: error'
+  'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
+)
+for phrase in "${required_e2e_phrases[@]}"; do
+  if ! grep -F -- "${phrase}" .github/workflows/e2e.yml >/dev/null; then
+    echo "manual E2E workflow is missing required behavior: ${phrase}" >&2
+    exit 1
+  fi
+done
+
 if grep -R -E 'uses:[[:space:]]+actions/(checkout|setup-go|upload-artifact|download-artifact)@v[0-9]+' \
   .github/workflows >/dev/null; then
   echo "workflows must pin official actions by full commit SHA" >&2

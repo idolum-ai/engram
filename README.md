@@ -605,6 +605,9 @@ scan, and a smoke build. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change
 guidance, [`docs/release-strategy.md`](docs/release-strategy.md) for the reviewed
 release path, [`CHANGELOG.md`](CHANGELOG.md) for accumulated user-visible
 changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
+The manually dispatched [hermetic E2E golden path](docs/e2e-testing.md) drives
+the compiled service through a local Telegram simulator, isolated real tmux,
+and real Chromium, then retains reviewable visual evidence.
 
 The private boundary between Telegram orchestration and tmux truth is
 described in

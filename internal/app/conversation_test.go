@@ -75,7 +75,7 @@ func TestConversationUsesSnapshotFrameAndRepliesToCanonicalAnchor(t *testing.T) 
 	if !strings.Contains(modelPrompt, "green") || strings.Count(modelPrompt, "green") != 64 {
 		t.Fatalf("model did not receive the 64-row snapshot frame: %q", modelPrompt)
 	}
-	if telegramBody["reply_to_message_id"] != float64(77) || !strings.Contains(telegramBody["text"].(string), "build is green") {
+	if telegramReplyMessageID(telegramBody) != 77 || !strings.Contains(telegramBody["text"].(string), "build is green") {
 		t.Fatalf("Telegram body = %#v", telegramBody)
 	}
 	updated, _ := store.FindSession(session.ID)
@@ -149,7 +149,7 @@ func TestConversationReportsModelFailureToTheAnchor(t *testing.T) {
 
 	app := &App{Store: store, Telegram: tg, Guide: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", guideAvailable: true}
 	app.sendConversation(context.Background(), session)
-	if notice["reply_to_message_id"] != float64(77) || !strings.Contains(notice["text"].(string), "couldn't finish") {
+	if telegramReplyMessageID(notice) != 77 || !strings.Contains(notice["text"].(string), "couldn't finish") {
 		t.Fatalf("failure notice = %#v", notice)
 	}
 }
@@ -180,7 +180,7 @@ func TestConversationReportsSupersededAnchorPolitely(t *testing.T) {
 
 	app := &App{Store: store, Telegram: tg, Guide: model, Tmux: tmux.New(snapshotTmuxRunner{}), mode: "snapshot", guideAvailable: true}
 	app.sendConversation(context.Background(), session)
-	if notice["reply_to_message_id"] != float64(78) || !strings.Contains(notice["text"].(string), "newer view") {
+	if telegramReplyMessageID(notice) != 78 || !strings.Contains(notice["text"].(string), "newer view") {
 		t.Fatalf("superseded notice = %#v", notice)
 	}
 }

@@ -563,7 +563,7 @@ func TestDeletedReplyTargetFallsBackToStandaloneRoutableSignal(t *testing.T) {
 	a.deliverUpstreamSignal(context.Background(), session, upstream.Record{ID: firstSignalID, Payload: "needs attention"})
 	a.refreshWG.Wait()
 	got, targetState, ok := store.FindReplyTarget(100, 88)
-	if len(bodies) != 2 || bodies[0]["reply_to_message_id"] != float64(77) || bodies[1]["reply_to_message_id"] != nil || !ok || targetState != state.ReplyTargetCurrent || got.ID != session.ID || len(recovered) != 1 {
+	if len(bodies) != 2 || telegramReplyMessageID(bodies[0]) != 77 || telegramReplyMessageID(bodies[1]) != 0 || !ok || targetState != state.ReplyTargetCurrent || got.ID != session.ID || len(recovered) != 1 {
 		t.Fatalf("fallback bodies=%#v route=%#v %q ok=%v", bodies, got, targetState, ok)
 	}
 }

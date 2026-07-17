@@ -96,6 +96,31 @@ runtime state.
   tracked-file secret checks.
 - Local quality gates must also enforce stdlib-only dependencies and docs
   freshness.
+- A manually dispatched hermetic E2E workflow must exercise the compiled
+  Engram process against an isolated real tmux server, a real Chromium
+  renderer, and a faithful local Telegram API simulator. It must require no
+  Telegram or model-provider credentials.
+- Operators must dispatch the trusted workflow definition from `main` and pass
+  an explicit lowercase commit SHA plus a same-repository branch whose tip is
+  that SHA. The workflow must verify the real branch ref before executing the
+  detached target. Selecting PR-authored workflow YAML is outside the supported
+  E2E path.
+- The hermetic E2E package must skip during ordinary test runs. Its retained
+  evidence is explicitly review-only and may include rendered fixture terminal
+  content, but must exclude generated configuration, state, audit logs, tmux
+  sockets, browser profiles, and private temporary roots.
+- Completed E2E tests must retain success or failure manifests and bounded
+  diagnostics. Success evidence includes plain text from the same
+  production-equivalent 64-row capture as the image, SHA-256 hashes binding
+  both artifacts, and the resolved runner, Go, tmux, and browser versions;
+  screenshots are not byte-stable visual goldens.
+- The E2E service and private tmux server must have an external cleanup owner
+  that survives test-process termination and reacts to control-pipe EOF within
+  a bounded interval. Child output must be connected directly to retained
+  `process.log`, without a parent-owned copy pipe.
+- Hard-exit cleanup must publish an atomic completion marker after child, log,
+  and tmux cleanup. The workflow must wait for that marker within a deadline
+  longer than the supervisor's complete cleanup budget before uploading.
 
 ## Scope
 

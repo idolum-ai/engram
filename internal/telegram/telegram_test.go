@@ -325,8 +325,13 @@ func TestSendHTMLMessagePayload(t *testing.T) {
 	if got["parse_mode"] != "HTML" {
 		t.Fatalf("parse_mode = %#v, want HTML", got["parse_mode"])
 	}
-	if got["reply_to_message_id"] != float64(7) {
-		t.Fatalf("reply_to_message_id = %#v, want 7", got["reply_to_message_id"])
+	reply, ok := got["reply_parameters"].(map[string]any)
+	if !ok || reply["message_id"] != float64(7) {
+		t.Fatalf("reply_parameters = %#v, want message_id 7", got["reply_parameters"])
+	}
+	preview, ok := got["link_preview_options"].(map[string]any)
+	if !ok || preview["is_disabled"] != true {
+		t.Fatalf("link_preview_options = %#v, want disabled", got["link_preview_options"])
 	}
 	if _, ok := got["reply_markup"].(map[string]any); !ok {
 		t.Fatalf("reply_markup = %#v, want object", got["reply_markup"])
@@ -657,8 +662,9 @@ func TestSendPhotoRepliesToCanonicalAnchor(t *testing.T) {
 		if len(files) != 1 || files[0].Filename != "engram-window.png" {
 			t.Fatalf("photo files = %#v", files)
 		}
-		if got := req.FormValue("reply_to_message_id"); got != "77" {
-			t.Fatalf("photo reply = %q", got)
+		var reply map[string]int
+		if err := json.Unmarshal([]byte(req.FormValue("reply_parameters")), &reply); err != nil || reply["message_id"] != 77 {
+			t.Fatalf("photo reply_parameters = %q, err=%v", req.FormValue("reply_parameters"), err)
 		}
 		if got := req.FormValue("caption"); got != "terminal snapshot" {
 			t.Fatalf("photo caption = %q", got)
@@ -686,7 +692,7 @@ func TestSendHTMLPhotoIncludesMarkupParseModeAndStablePlacementWithoutReplyTarge
 		if err := req.ParseMultipartForm(1024); err != nil {
 			t.Fatal(err)
 		}
-		if got := req.FormValue("reply_to_message_id"); got != "" {
+		if got := req.FormValue("reply_parameters"); got != "" {
 			t.Fatalf("photo reply = %q, want empty", got)
 		}
 		if got := req.FormValue("parse_mode"); got != "HTML" {
