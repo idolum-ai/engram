@@ -73,7 +73,6 @@ type styledCaptureRunner struct {
 	ansi      string
 	joined    string
 	metadata  string
-	framing   string
 	afterMeta string
 }
 
@@ -154,9 +153,6 @@ func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, er
 		return styledCaptureMetadata("bash", "1", "0"), nil
 	}
 	if len(args) > 0 && args[0] == "capture-pane" {
-		if !containsString(args, "-b") && r.framing != "" {
-			return r.framing, nil
-		}
 		if r.afterMeta != "" {
 			return r.afterMeta, nil
 		}
@@ -664,27 +660,21 @@ func TestCaptureLiteralKeepsCurrentTailForTallPane(t *testing.T) {
 	}
 }
 
-func TestCaptureLiteralSelectsDenseCreatedPaneTranscript(t *testing.T) {
+func TestCaptureLiteralTallPaneUsesCurrentTailWithoutContentProbe(t *testing.T) {
 	t.Parallel()
-	rows := make([]string, 162)
-	for index := 8; index < 46; index++ {
-		rows[index] = fmt.Sprintf("codex transcript row %d", index)
-	}
-	rows[160] = "prompt"
 	runner := &sequenceRunner{outputs: []string{
 		tmuxRecord("289", "162"),
-		strings.Join(rows, "\n") + "\n",
-		"codex transcript row 8\ncompleted response\n",
+		"current prompt\nfailure footer\n",
 	}}
 	got, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "codex transcript row 8\ncompleted response" {
+	if got != "current prompt\nfailure footer" {
 		t.Fatalf("CaptureLiteral = %q", got)
 	}
-	if len(runner.calls) != 3 || runner.calls[1][0] != "capture-pane" || runner.calls[2][0] != "if-shell" || runner.calls[2][5] != "capture-pane -p -N -S 8 -E 71 -t %7" {
-		t.Fatalf("dense literal capture calls = %#v", runner.calls)
+	if len(runner.calls) != 2 || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S 98 -E 161 -t %7" {
+		t.Fatalf("current-tail literal capture calls = %#v", runner.calls)
 	}
 }
 
@@ -692,7 +682,7 @@ func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
 	ansi := strings.Repeat("\x1b[32mselected physical row\x1b[0m\n", 64)
 	joined := strings.Repeat("selected logical line\n", 32)
 	metadata := styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "80", "100", "bash", "1", "0")
-	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata, framing: strings.Repeat("\n", 99) + "current tail\n"}
+	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata}
 
 	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
 	if err != nil {
@@ -701,62 +691,14 @@ func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
 	if got.ANSI != ansi || got.JoinedText != strings.TrimSpace(joined) {
 		t.Fatalf("misaligned styled capture: ANSI=%q joined=%q", got.ANSI, got.JoinedText)
 	}
-	if len(runner.calls) != 6 {
+	if len(runner.calls) != 5 {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
-	if probe := runner.calls[1]; !reflect.DeepEqual(probe[:8], []string{"capture-pane", "-p", "-N", "-S", "0", "-E", "99", "-t"}) {
-		t.Fatalf("framing probe = %#v", probe)
-	}
-	finalCapture := runner.calls[2]
+	finalCapture := runner.calls[1]
 	physicalBounds := []string{"-S", "36", "-E", "99"}
 	joinedBounds := []string{"-S", "36", "-E", "99"}
 	if !containsArgs(finalCapture[:11], physicalBounds) || !containsArgs(finalCapture[11:22], joinedBounds) {
 		t.Fatalf("physical and joined captures used different bounds: %#v", finalCapture)
-	}
-}
-
-func TestDensestCaptureStartFindsMeaningfulRegionInTallPane(t *testing.T) {
-	t.Parallel()
-	rows := make([]string, 162)
-	for index := 8; index < 46; index++ {
-		rows[index] = fmt.Sprintf("codex transcript row %d", index)
-	}
-	rows[160] = "prompt"
-	if got := densestCaptureStart(strings.Join(rows, "\n")+"\n", 162, 64); got != 8 {
-		t.Fatalf("dense transcript start = %d, want 8", got)
-	}
-
-	rows = make([]string, 162)
-	for index := 130; index < 162; index++ {
-		rows[index] = fmt.Sprintf("shell tail row %d", index)
-	}
-	if got := densestCaptureStart(strings.Join(rows, "\n")+"\n", 162, 64); got != 98 {
-		t.Fatalf("dense tail start = %d, want 98", got)
-	}
-
-	rows = make([]string, 100)
-	for index := 0; index < 92; index++ {
-		rows[index] = fmt.Sprintf("actively filling row %d", index)
-	}
-	if got := densestCaptureStart(strings.Join(rows, "\n")+"\n", 100, 64); got != 36 {
-		t.Fatalf("active dense pane start = %d, want current tail 36", got)
-	}
-}
-
-func TestDensestCaptureStartPrefersSubstantialCurrentAgentTail(t *testing.T) {
-	t.Parallel()
-	rows := make([]string, 162)
-	for index := 0; index < 53; index++ {
-		rows[index] = fmt.Sprintf("older dense transcript row %d", index)
-	}
-	for index := 127; index < 162; index++ {
-		rows[index] = fmt.Sprintf("current agent exchange row %d", index)
-	}
-	rows[154] = "latest agent response"
-
-	start := densestCaptureStart(strings.Join(rows, "\n")+"\n", 162, 64)
-	if start != 98 || 154 < start || 154 >= start+64 {
-		t.Fatalf("current agent tail start = %d, want 98 containing latest row 154", start)
 	}
 }
 

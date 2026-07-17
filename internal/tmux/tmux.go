@@ -612,10 +612,7 @@ func (m Manager) CaptureLiteral(ctx context.Context, paneID, windowID, serverID 
 	if err != nil || visibleRows <= 0 || visibleRows > 400 {
 		return "", fmt.Errorf("invalid tmux pane height %q", parts[1])
 	}
-	start, end, err := m.selectCaptureBounds(ctx, paneID, visibleRows, targetRows)
-	if err != nil {
-		return "", err
-	}
+	start, end := captureBounds(visibleRows, targetRows)
 	command := strings.Join([]string{"capture-pane", "-p", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID}, " ")
 	out, err := m.captureIfBindingMatches(ctx, paneID, windowID, serverID, command)
 	if err != nil {
@@ -660,10 +657,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		return StyledCapture{}, err
 	}
 	columns, visibleRows := before.Columns, before.VisibleRows
-	start, end, err := m.selectCaptureBounds(ctx, paneID, visibleRows, targetRows)
-	if err != nil {
-		return StyledCapture{}, err
-	}
+	start, end := captureBounds(visibleRows, targetRows)
 	nonce, err := captureNonce()
 	if err != nil {
 		return StyledCapture{}, err
@@ -834,62 +828,6 @@ func validTmuxFlag(value string) bool { return value == "0" || value == "1" }
 
 func captureBounds(visibleRows, targetRows int) (start, end int) {
 	return visibleRows - targetRows, visibleRows - 1
-}
-
-func (m Manager) selectCaptureBounds(ctx context.Context, paneID string, visibleRows, targetRows int) (start, end int, err error) {
-	if visibleRows <= targetRows {
-		start, end = captureBounds(visibleRows, targetRows)
-		return start, end, nil
-	}
-	probe, err := m.Runner.Run(ctx, "capture-pane", "-p", "-N", "-S", "0", "-E", strconv.Itoa(visibleRows-1), "-t", paneID)
-	if err != nil {
-		return 0, 0, err
-	}
-	start = densestCaptureStart(probe, visibleRows, targetRows)
-	return start, start + targetRows - 1, nil
-}
-
-func densestCaptureStart(capture string, visibleRows, targetRows int) int {
-	if visibleRows <= targetRows || targetRows <= 0 {
-		return visibleRows - targetRows
-	}
-	rows := strings.Split(strings.TrimSuffix(capture, "\n"), "\n")
-	if len(rows) < visibleRows {
-		rows = append(rows, make([]string, visibleRows-len(rows))...)
-	} else if len(rows) > visibleRows {
-		rows = rows[len(rows)-visibleRows:]
-	}
-	scores := make([]int, visibleRows)
-	for index, row := range rows {
-		trimmed := strings.TrimSpace(row)
-		if trimmed != "" {
-			// Meaningful row count dominates density; bounded content length
-			// breaks ties without allowing one decorative rule to win.
-			scores[index] = 1000 + min(len([]rune(trimmed)), 400)
-		}
-	}
-	windowScore := 0
-	for _, score := range scores[:targetRows] {
-		windowScore += score
-	}
-	windowScores := []int{windowScore}
-	bestStart, bestScore := 0, windowScore
-	for start := 1; start+targetRows <= visibleRows; start++ {
-		windowScore += scores[start+targetRows-1] - scores[start-1]
-		windowScores = append(windowScores, windowScore)
-		if windowScore >= bestScore {
-			bestStart, bestScore = start, windowScore
-		}
-	}
-	// Prefer a substantially populated current screen tail over denser history.
-	// Full-screen agent UIs often leave more transcript rows near the top while
-	// their latest exchange occupies a shorter block near the bottom. Requiring
-	// near-equal density freezes captures on that history. A genuinely sparse or
-	// blank tail still falls back to the densest meaningful block.
-	if windowScores[len(windowScores)-1] >= bestScore*3/5 {
-		return len(windowScores) - 1
-	}
-	return bestStart
 }
 
 func captureNonce() (string, error) {

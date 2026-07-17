@@ -64,11 +64,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 ## Capture And Presentation
 
 - Both anchor modes use the same ANSI-preserving `CaptureStyled` result. It
-  targets and caps at 64 rows. Panes no taller than that use available recent
-  scrollback and end at the pane bottom. Taller panes first select the densest
-  meaningful 64-row interval from the visible screen so full-screen programs
-  with large blank regions do not render an empty frame. The final physical ANSI
-  and joined captures use that exact interval in one tmux command batch. Engram
+  targets and caps at 64 rows ending at the pane bottom, using available recent
+  scrollback when the pane is shorter. Taller panes always use the current
+  bottom 64 physical rows; historical density never outranks the current tail.
+  The bounds are derived from pane geometry without a separate content probe,
+  and the physical ANSI and joined captures use that exact interval in one tmux command batch. Engram
   samples identity, dimensions, foreground
   command, alternate-screen state, and copy-mode state immediately before and
   after the capture and rejects a frame when any sampled boundary changes.
