@@ -25,6 +25,7 @@ const guidedViewportColumns = 71
 const (
 	guidedEvidenceExcerpt = "model_excerpt"
 	guidedEvidenceChanged = "changed_region"
+	guidedEvidenceRelated = "summary_related"
 	guidedEvidenceTail    = "terminal_tail"
 	guidedEvidencePlain   = "plain_tail"
 	guidedEvidenceGuide   = "guide_only"
@@ -83,7 +84,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	if !a.snapshotReady || a.Snapshots == nil || a.snapshotAnchors() {
 		return false
 	}
-	crop := a.selectGuidedEvidenceCrop(expected, capture, previous, semanticText, excerpts)
+	crop := a.selectGuidedEvidenceCrop(expected, capture, previous, semanticText, summary, excerpts)
 	if !acquireSlot(ctx, a.renderSlots) {
 		return false
 	}
@@ -263,7 +264,7 @@ func truncateAtWord(text string, maxBytes int) string {
 	return trimmed + "..."
 }
 
-func (a *App) selectGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText string, excerpts []string) guidedEvidenceCrop {
+func (a *App) selectGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, excerpts []string) guidedEvidenceCrop {
 	session.Title = a.redactText(session.Title)
 	capture.Title = a.redactText(capture.Title)
 	capture.CurrentPath = a.redactText(capture.CurrentPath)
@@ -285,6 +286,9 @@ func (a *App) selectGuidedEvidenceCrop(session state.TerminalSession, capture tm
 			return buildGuidedRecentActivityCrop(session, trimPassiveCapture(capture), previous, a.Config.SnapshotTheme)
 		},
 		func() (guidedEvidenceCrop, bool) {
+			return buildGuidedSummaryRelatedCrop(session, capture, semanticText, summary, a.Config.SnapshotTheme)
+		},
+		func() (guidedEvidenceCrop, bool) {
 			return buildGuidedTailCrop(session, trimPassiveCapture(capture), a.Config.SnapshotTheme)
 		},
 	}
@@ -298,6 +302,108 @@ func (a *App) selectGuidedEvidenceCrop(session state.TerminalSession, capture tm
 		return crop
 	}
 	return buildGuidedOnlyFrame(session, capture, a.Config.SnapshotTheme)
+}
+
+type guidedBlockCandidate struct {
+	text  string
+	score int
+	start int
+}
+
+func buildGuidedSummaryRelatedCrop(session state.TerminalSession, capture tmux.StyledCapture, semanticText, summary, theme string) (guidedEvidenceCrop, bool) {
+	summaryTerms := guidedTermSet(summary)
+	semanticRows := captureRows(semanticText)
+	candidates := make([]guidedBlockCandidate, 0, 8)
+	for start := 0; start < len(semanticRows); {
+		for start < len(semanticRows) && strings.TrimSpace(semanticRows[start]) == "" {
+			start++
+		}
+		if start == len(semanticRows) {
+			break
+		}
+		end := start
+		for end+1 < len(semanticRows) && strings.TrimSpace(semanticRows[end+1]) != "" {
+			end++
+		}
+		rows := semanticRows[start : end+1]
+		text := strings.Join(rows, "\n")
+		if len(rows) <= guidedEvidenceMaxRows && !passiveGuidedBlock(rows) {
+			overlap := guidedTermOverlap(summaryTerms, guidedTermSet(text))
+			hasReference := strings.Contains(text, "https://") || strings.Contains(text, "http://")
+			if overlap >= 2 || hasReference {
+				score := overlap*10 + min(len([]rune(strings.Join(strings.Fields(text), " ")))/80, 5)
+				if hasReference {
+					score += 25
+				}
+				candidates = append(candidates, guidedBlockCandidate{text: text, score: score, start: start})
+			}
+		}
+		start = end + 1
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].start > candidates[j].start
+	})
+	for _, candidate := range candidates {
+		crop, ok := buildGuidedEvidenceCrop(session, capture, []string{candidate.text}, theme)
+		if !ok {
+			continue
+		}
+		crop.input.Footer = "related terminal text"
+		crop.source = guidedEvidenceRelated
+		crop.hash = guidedCropHash(crop.input, theme, crop.source)
+		return crop, true
+	}
+	return guidedEvidenceCrop{}, false
+}
+
+func passiveGuidedBlock(rows []string) bool {
+	if len(rows) == 0 {
+		return true
+	}
+	first := strings.ToLower(strings.TrimSpace(strings.TrimLeft(rows[0], "•*-✓✔ ")))
+	if strings.HasPrefix(first, "updated plan") {
+		return true
+	}
+	for _, row := range rows {
+		trimmed := strings.TrimSpace(row)
+		if isPassiveTerminalFooter(trimmed) {
+			return true
+		}
+		if strings.HasPrefix(trimmed, "›") && isPassivePromptSuggestion(strings.ToLower(strings.Join(strings.Fields(strings.TrimPrefix(trimmed, "›")), " "))) {
+			return true
+		}
+	}
+	return false
+}
+
+func guidedTermSet(text string) map[string]bool {
+	stop := map[string]bool{
+		"and": true, "are": true, "but": true, "for": true, "from": true, "has": true,
+		"have": true, "into": true, "its": true, "not": true, "the": true, "then": true,
+		"this": true, "was": true, "were": true, "with": true, "you": true,
+	}
+	terms := make(map[string]bool)
+	for _, term := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		if len([]rune(term)) >= 3 && !stop[term] {
+			terms[term] = true
+		}
+	}
+	return terms
+}
+
+func guidedTermOverlap(left, right map[string]bool) int {
+	overlap := 0
+	for term := range left {
+		if right[term] {
+			overlap++
+		}
+	}
+	return overlap
 }
 
 func buildGuidedOnlyFrame(session state.TerminalSession, capture tmux.StyledCapture, theme string) guidedEvidenceCrop {

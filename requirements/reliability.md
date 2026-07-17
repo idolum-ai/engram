@@ -134,15 +134,17 @@ exports a bounded recent tail, not an unbounded full audit file.
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.
 - Chromium readiness controls both snapshot startup and whether guide anchors
-  expose `🖼️` or allow `/mode snapshot`. A later capture, render,
+  expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session
   unchanged for retry.
 - Guided evidence uses the guide capture and the shared render concurrency
   limit. Engram edits the canonical message media and bounded caption together,
   preserving its ID. An unverifiable or broad model crop falls back to the
-  last on-screen physical-row change against the last accepted aligned frame, then to
-  a bounded current terminal tail. Each source is labeled and only quoted or
-  locally changed rows are highlighted. Model-selected excerpts are admitted
+  last on-screen physical-row change against the last accepted aligned frame,
+  then to a bounded summary-related physical paragraph with a visible-link
+  preference, and finally to a bounded current terminal tail. Each source is
+  labeled and quoted, locally changed, or summary-related rows are highlighted.
+  Model-selected excerpts are admitted
   only when they also occur uniquely in the provider's semantic input.
   Secret-redaction-conflicting or
   structurally unaligned candidates render a redacted plain-text tail; empty

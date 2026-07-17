@@ -121,8 +121,10 @@ prose remains readable and copyable below the media without a
 second message. The model cannot choose pixels or expand the observation
 boundary. Engram adds bounded surrounding rows. When matching fails, it falls
 back deterministically to the last changed on-screen physical-row region since the
-last accepted frame, then to the current terminal tail. The footer says which
-basis was used; only quoted or locally changed rows are highlighted. Exact
+last accepted frame, then to a bounded physical paragraph with lexical affinity
+to the summary, favoring visible links, and finally to the current terminal tail.
+The footer says which basis was used; quoted, locally changed, or summary-related
+rows are highlighted. Exact
 occurrence is not presented as semantic verification. If
 styled rows cannot be delivered safely, the bounded tail is redacted and
 rendered without styling. A truly empty terminal receives a quiet guide-only
@@ -132,8 +134,8 @@ message identity, pin, controls, and reply route remain stable.
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying
 session. A snapshot
-anchor may offer `🗣️ Explain` for a one-off conversational reply; a guide anchor may
-offer `🖼️` for a one-off image. Alternate views are shown only when Engram can
+anchor may offer `🗣️ Talk` for a one-off conversational reply; a guide anchor may
+offer `🖼️ View` for a one-off image. Alternate views are shown only when Engram can
 actually deliver them, and they never become a second canonical anchor. The
 latest alternate of each kind may act as a reply handle for its session; an
 older alternate is explicitly stale and cannot route input.

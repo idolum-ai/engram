@@ -21,7 +21,7 @@ substrate for a small remote-work tool.
 
 | Conversational guide | Chromium |
 | --- | --- |
-| **Experience:** the selected model conveys the bounded terminal frame as compact, natural conversation.<br><br>**Pros:** quick to absorb across many sessions; plain language can make dense output legible.<br><br>**Cons:** a model can misunderstand the pane; raw bounded terminal text leaves the machine.<br><br>**Dependencies:** Anthropic Haiku 4.5 or OpenAI Luna, selected with `LLM_PROVIDER`, plus that provider's API key and network access. Chromium is optional and enables `🖼️` plus `/mode snapshot`. | **Experience:** Chromium renders the same bounded frame as an iPhone-sized, ANSI-preserving terminal image.<br><br>**Pros:** literal and deterministic; no model interpretation is required.<br><br>**Cons:** exact terminal content is uploaded to Telegram; rendering uses more local CPU and each frame is denser to inspect.<br><br>**Dependencies:** a local Chromium-compatible executable, optionally selected with `ENGRAM_SNAPSHOT_BROWSER`. A configured guide provider is optional and enables `🗣️` plus `/mode guide`. |
+| **Experience:** the selected model conveys the bounded terminal frame as compact, natural conversation.<br><br>**Pros:** quick to absorb across many sessions; plain language can make dense output legible.<br><br>**Cons:** a model can misunderstand the pane; raw bounded terminal text leaves the machine.<br><br>**Dependencies:** Anthropic Haiku 4.5 or OpenAI Luna, selected with `LLM_PROVIDER`, plus that provider's API key and network access. Chromium is optional and enables `🖼️ View` plus `/mode snapshot`. | **Experience:** Chromium renders the same bounded frame as an iPhone-sized, ANSI-preserving terminal image.<br><br>**Pros:** literal and deterministic; no model interpretation is required.<br><br>**Cons:** exact terminal content is uploaded to Telegram; rendering uses more local CPU and each frame is denser to inspect.<br><br>**Dependencies:** a local Chromium-compatible executable, optionally selected with `ENGRAM_SNAPSHOT_BROWSER`. A configured guide provider is optional and enables `🗣️ Talk` plus `/mode guide`. |
 
 `ENGRAM_ANCHOR_MODE` is the startup fallback when no usable persisted choice
 exists. The selected guide is available when configured; Chromium is locally probed.
@@ -40,7 +40,7 @@ You need:
 - A Telegram account
 - For **guide mode**, either an Anthropic API key with access to Claude Haiku
   4.5 or an OpenAI API key with access to Luna; Chromium is optional and
-  enables the `🖼️` button
+  enables the `🖼️ View` button
 - For automatic **voice transcription**, an OpenAI API key with access to
   `gpt-4o-transcribe`, independent of the selected guide provider; without it,
   voice replies can remain local files
@@ -224,7 +224,7 @@ the bot channel and must be revoked immediately.
   running when Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.
-- **Local snapshot browser:** In guide mode, tapping `🖼️` renders an on-demand
+- **Local snapshot browser:** In guide mode, tapping `🖼️ View` renders an on-demand
   image when Chromium passed startup readiness. In snapshot mode, the renderer
   produces the canonical live anchor whenever its capture changes. Engram
   renders a frame capped at 64 ANSI-preserving rows into a
@@ -241,13 +241,14 @@ the bot channel and must be revoked immediately.
   bounded context, and highlights the matched rows. The footer calls these
   quoted terminal text rather than implying semantic verification. If a model
   excerpt cannot be admitted, Engram deterministically shows the last changed
-  on-screen physical-row region from the last accepted frame,
-  or the current terminal tail when no aligned frame exists. Each crop labels
+  on-screen physical-row region from the last accepted frame, then a bounded
+  physical paragraph related lexically to the summary (favoring visible links),
+  or the current terminal tail. Each crop labels
   its provenance. If styled rows contain a configured secret or cannot be
   aligned safely, Engram renders the bounded tail as redacted plain text. A
   truly empty terminal uses a quiet guide-only frame so the prose remains the
   focus. Compact crops keep a readable 71-cell viewport around the exact quote
-  or meaningful tail, account for wide and combining characters, preserve
+  or meaningful paragraph or tail, account for wide and combining characters, preserve
   inherited terminal styling, and enforce the accessible contrast floor. The message ID,
   pin, controls, and reply route do not change.
   Every media anchor also offers `📄 Raw`, which returns the exact delivered
@@ -268,7 +269,7 @@ the bot channel and must be revoked immediately.
   Completed model prose is deterministically bounded to 180 words before
   delivery.
   `LLM_PROVIDER` selects Anthropic Haiku 4.5 or OpenAI Luna; both receive the
-  same prompt and bounded evidence. In snapshot mode, tapping `🗣️ Explain` makes the
+  same prompt and bounded evidence. In snapshot mode, tapping `🗣️ Talk` makes the
   same one-off request and sends its conversational result as a reply without
   replacing the photo anchor. Captures are not credential-redacted before they
   are sent.
@@ -527,7 +528,7 @@ between windows. Those hints never override the current frame. A capture
 boundary, weak alignment, manual refresh, mode switch, reattachment, service
 restart, or failed canonical delivery discards or withholds continuity. This
 memory-only path still uses one non-streaming model request per rendering. If
-Chromium passed startup readiness, `🖼️` replies with an iPhone-sized image of
+Chromium passed startup readiness, `🖼️ View` replies with an iPhone-sized image of
 that frame.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its

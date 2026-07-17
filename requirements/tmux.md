@@ -144,7 +144,7 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.
-- A guide anchor includes `🖼️` only when Chromium passed startup readiness. A
+- A guide anchor includes `🖼️ View` only when Chromium passed startup readiness. A
   snapshot anchor includes `🗣️` only when a guide is configured. These produce
   one-off replies and never replace the canonical anchor.
 - Both modes append locally extracted references. `files` contains at most four

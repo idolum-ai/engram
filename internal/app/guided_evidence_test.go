@@ -168,7 +168,7 @@ func TestGuidedEvidenceRejectsExcerptOutsideModelInput(t *testing.T) {
 		Text: "substantive build result\nRun /review on my current changes", ANSI: "substantive build result\nRun /review on my current changes",
 		Columns: 71, VisibleRows: 37, BufferRows: 2,
 	}
-	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2}, capture, conversationFrame{}, "substantive build result", []string{"Run /review on my current changes"})
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2}, capture, conversationFrame{}, "substantive build result", "The build produced a substantive result.", []string{"Run /review on my current changes"})
 	if crop.source == guidedEvidenceExcerpt {
 		t.Fatalf("out-of-evidence excerpt was selected: %#v", crop)
 	}
@@ -221,6 +221,41 @@ func TestGuidedTailOmitsRecognizedPassiveChrome(t *testing.T) {
 	}
 }
 
+func TestGuidedFallbackPrefersSummaryRelatedParagraphOverModelFooter(t *testing.T) {
+	text := strings.Join([]string{
+		"• Updated Plan",
+		"  The full direct-anchor middle cover is generated and all checks pass.",
+		"  ✓ Run drift checks, document the result, commit, and push",
+		"",
+		"• Map",
+		"  We crossed the middle-window scale gate. Direct midpoint anchors",
+		"  reduced cache uncertainty to 3.55e-9.",
+		"  All 164 generated packets and the joined 41-cell certificate",
+		"  compile in Lean.",
+		"  The projected shared remainder is approximately 3.106e-7.",
+		"",
+		"The remaining split is the exact payment ledger and a sign-preserving",
+		"aggregate evaluator is recommended.",
+		"",
+		"Everything is pushed to PR #11",
+		"(https://github.com/idolum-ai/riemann-venue/pull/11).",
+		"Regeneration and strict-source checks pass.",
+		"",
+		"› Write tests for @filename",
+		"",
+		"gpt-5.6-sol high · ~ · Main [default]",
+	}, "\n")
+	summary := "The full direct-anchor middle cover is complete. All 164 packet modules and the joined 41-cell certificate compile in Lean. Direct midpoint anchors reduced cache uncertainty to 3.55e-9, with a projected total of approximately 3.106e-7."
+	capture := tmux.StyledCapture{Text: text, ANSI: text, Columns: 71, VisibleRows: 37, BufferRows: len(captureRows(text)), CurrentPath: "/work"}
+	app := &App{Config: config.Config{SnapshotTheme: "contrast-dark"}}
+
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 3, Title: "riemann"}, capture, conversationFrame{}, text, summary, nil)
+
+	if crop.source != guidedEvidenceRelated || !strings.Contains(crop.plain, "164 generated packets") || !strings.Contains(crop.plain, "projected shared remainder") || strings.Contains(crop.plain, "gpt-5.6-sol") || len(crop.input.HighlightRows) == 0 {
+		t.Fatalf("summary-related fallback=%#v", crop)
+	}
+}
+
 func TestGuidedTailCropUsesLastMeaningfulBlockWithoutHighlight(t *testing.T) {
 	text := "older output\n\nlast result\nnext action\n\n"
 	capture := tmux.StyledCapture{Text: text, ANSI: text, Columns: 71, VisibleRows: 37, BufferRows: 5, CurrentPath: "/work"}
@@ -233,7 +268,7 @@ func TestGuidedTailCropUsesLastMeaningfulBlockWithoutHighlight(t *testing.T) {
 func TestGuidedFallbackNeverSelectsKnownSecretPixels(t *testing.T) {
 	app := &App{Config: config.Config{TelegramBotToken: "known-secret", SnapshotTheme: "contrast-dark"}}
 	capture := tmux.StyledCapture{Text: "result known-secret", ANSI: "result known-secret", CurrentPath: "/tmp/known-secret", Columns: 71, VisibleRows: 37, BufferRows: 1}
-	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "known-secret build"}, capture, conversationFrame{}, capture.Text, nil)
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "known-secret build"}, capture, conversationFrame{}, capture.Text, "The result is visible.", nil)
 	if crop.source != guidedEvidencePlain || crop.input.Footer != "current terminal tail" || strings.Contains(crop.input.ANSI+crop.input.Title+crop.input.CWD, "known-secret") || !strings.Contains(crop.input.ANSI, "<redacted>") {
 		t.Fatalf("secret fallback crop=%#v", crop)
 	}
@@ -242,7 +277,7 @@ func TestGuidedFallbackNeverSelectsKnownSecretPixels(t *testing.T) {
 func TestGuidedFallbackKeepsEmptyFrameQuiet(t *testing.T) {
 	app := &App{Config: config.Config{SnapshotTheme: "contrast-dark"}}
 	capture := tmux.StyledCapture{Columns: 71, VisibleRows: 37}
-	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "work"}, capture, conversationFrame{}, capture.Text, nil)
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "work"}, capture, conversationFrame{}, capture.Text, "The work is complete.", nil)
 	if crop.source != guidedEvidenceGuide || crop.input.Footer != "guided view" || strings.TrimSpace(crop.input.ANSI) != "" {
 		t.Fatalf("empty fallback crop=%#v", crop)
 	}

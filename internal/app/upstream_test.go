@@ -148,7 +148,7 @@ func TestUnchangedGuideEvidenceRefreshRestoresCompanionAfterRestart(t *testing.T
 		AlternateOn: "1", PaneInMode: "0", Columns: 71, VisibleRows: 37, BufferRows: 1,
 		Title: "build pane", CurrentPath: "/tmp",
 	}
-	crop := a.selectGuidedEvidenceCrop(persisted, capture, conversationFrame{}, "ordinary output", nil)
+	crop := a.selectGuidedEvidenceCrop(persisted, capture, conversationFrame{}, "ordinary output", persisted.LastSummary, nil)
 	caption, _ := a.guidedEvidenceCaption(persisted, persisted.LastSummary, visibleReferences{})
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		session.LastRenderHash = sha(caption + "\x00" + crop.hash)
