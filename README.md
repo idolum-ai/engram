@@ -503,7 +503,9 @@ tmux show-options -pv @engram_notify
 tmux show-options -pv @engram_artifact
 ```
 
-The versioned value reports the Telegram surface and watch ID. The other two
+The versioned `@engram` value is the commit marker and reports the Telegram
+surface and watch ID. Ignore the auxiliary options unless that marker is present
+and its watch ID agrees with `@engram_watch_id`. The other two
 options state the exact terminal-native notification command and the artifact
 sequence: print a visible `file://` URI, optionally as OSC 8, then signal. Because these are
 ordinary tmux metadata and terminal standards, an onlooking agent can discover

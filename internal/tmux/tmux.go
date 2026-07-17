@@ -525,26 +525,29 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 	if watchID <= 0 {
 		return fmt.Errorf("invalid Engram watch ID %d", watchID)
 	}
-	commands := make([]string, 0, 4)
+	marker := fmt.Sprintf("v1 watch=%d remote=telegram", watchID)
+	commands := []string{"set-option -p -q -u -t " + paneID + " " + EngramPaneOption}
 	for _, option := range []struct {
 		name  string
 		value string
 	}{
-		{EngramPaneOption, fmt.Sprintf("v1 watch=%d remote=telegram", watchID)},
 		{EngramWatchIDOption, strconv.Itoa(watchID)},
 		{EngramNotifyOption, "run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)"},
 		{EngramArtifactOption, "print a visible file:// URI (OSC 8 optional), then run @engram_notify"},
 	} {
 		commands = append(commands, "set-option -p -q -t "+paneID+" "+option.name+" "+ShellQuote(option.value))
 	}
-	// One guarded tmux command list makes the four-option capability contract
-	// visible as one queue operation rather than exposing partial metadata.
+	// @engram is the commit marker: consumers ignore auxiliary fields while it
+	// is absent. Publish it only after every auxiliary value is in place.
+	commands = append(commands, "set-option -p -q -t "+paneID+" "+EngramPaneOption+" "+ShellQuote(marker))
 	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(commands, " ; "))
 }
 
 // ClearEngramAdvertisementIfBindingMatches removes capability metadata without
 // affecting the pane's program, environment, title, or other user options.
 func (m Manager) ClearEngramAdvertisementIfBindingMatches(ctx context.Context, paneID, windowID, serverID string) error {
+	// Clear the commit marker first so stale auxiliary values are never treated
+	// as a live capability advertisement if a later clear is interrupted.
 	commands := make([]string, 0, 4)
 	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption} {
 		commands = append(commands, "set-option -p -q -u -t "+paneID+" "+option)
@@ -756,17 +759,25 @@ func extractOSC8Hyperlinks(input string, limit int) []string {
 }
 
 func terminalStringEnd(input string, start int) (end, next int, ok bool) {
-	for i := start; i < len(input); i++ {
+	for i := start; i < len(input); {
 		switch {
 		case input[i] == '\a':
 			return i, i + 1, true
-		case input[i] == 0x9c:
-			return i, i + 1, true
 		case input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\':
 			return i, i + 2, true
-		case input[i] == 0xc2 && i+1 < len(input) && input[i+1] == 0x9c:
-			return i, i + 2, true
 		}
+		r, size := utf8.DecodeRuneInString(input[i:])
+		if r == '\u009c' {
+			return i, i + size, true
+		}
+		if r == utf8.RuneError && size == 1 {
+			if input[i] == 0x9c {
+				return i, i + 1, true
+			}
+			i++
+			continue
+		}
+		i += size
 	}
 	return 0, start, false
 }

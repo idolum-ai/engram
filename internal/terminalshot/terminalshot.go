@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -401,17 +402,25 @@ func plainANSIText(input string) string {
 // terminalStringEnd recognizes every string terminator tmux may preserve for
 // OSC sequences: BEL, the 7-bit ST escape, raw C1 ST, and UTF-8 C1 ST.
 func terminalStringEnd(input string, start int) (end, next int, ok bool) {
-	for i := start; i < len(input); i++ {
+	for i := start; i < len(input); {
 		switch {
 		case input[i] == 0x07:
 			return i, i + 1, true
 		case input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\':
 			return i, i + 2, true
-		case input[i] == 0x9c:
-			return i, i + 1, true
-		case input[i] == 0xc2 && i+1 < len(input) && input[i+1] == 0x9c:
-			return i, i + 2, true
 		}
+		r, size := utf8.DecodeRuneInString(input[i:])
+		if r == '\u009c' {
+			return i, i + size, true
+		}
+		if r == utf8.RuneError && size == 1 {
+			if input[i] == 0x9c {
+				return i, i + 1, true
+			}
+			i++
+			continue
+		}
+		i += size
 	}
 	return len(input), len(input), false
 }

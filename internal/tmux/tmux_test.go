@@ -246,10 +246,11 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		t.Fatalf("calls = %#v, want one guarded pane option transaction", runner.calls)
 	}
 	wantCommands := []string{
-		"set-option -p -q -t %7 @engram 'v1 watch=42 remote=telegram'",
+		"set-option -p -q -u -t %7 @engram",
 		"set-option -p -q -t %7 @engram_watch_id '42'",
 		"set-option -p -q -t %7 @engram_notify 'run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)'",
 		"set-option -p -q -t %7 @engram_artifact 'print a visible file:// URI (OSC 8 optional), then run @engram_notify'",
+		"set-option -p -q -t %7 @engram 'v1 watch=42 remote=telegram'",
 	}
 	call := runner.calls[0]
 	if len(call) != 7 || call[0] != "if-shell" || call[3] != "%7" {
@@ -259,6 +260,14 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		if !strings.Contains(call[5], command) {
 			t.Fatalf("guarded option transaction = %q, missing %q", call[5], command)
 		}
+	}
+	last := -1
+	for _, command := range wantCommands {
+		index := strings.Index(call[5], command)
+		if index <= last {
+			t.Fatalf("guarded option transaction order = %q, %q was not after its predecessor", call[5], command)
+		}
+		last = index
 	}
 
 	runner.calls = nil
@@ -286,11 +295,12 @@ func TestExtractOSC8HyperlinksAcceptsTerminalTerminatorsAndDeduplicates(t *testi
 	input := strings.Join([]string{
 		"\x1b]8;;file:///tmp/report%20one.txt\x1b\\report\x1b]8;;\x1b\\",
 		"\x1b]8;id=2;https://example.test/build\aweb\x1b]8;;\a",
+		"\x1b]8;;file:///tmp/М-report.txt\x1b\\unicode\x1b]8;;\x1b\\",
 		"\x1b]8;;file:///tmp/report%20one.txt\x1b\\duplicate\x1b]8;;\x1b\\",
 		"\x1b]8;;file:///tmp/bad\npath\x1b\\bad",
 		"\x1b]8;;unterminated",
 	}, " ")
-	want := []string{"file:///tmp/report%20one.txt", "https://example.test/build"}
+	want := []string{"file:///tmp/report%20one.txt", "https://example.test/build", "file:///tmp/М-report.txt"}
 	if got := extractOSC8Hyperlinks(input, 8); !reflect.DeepEqual(got, want) {
 		t.Fatalf("hyperlinks = %#v, want %#v", got, want)
 	}

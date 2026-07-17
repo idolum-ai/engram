@@ -44,8 +44,8 @@ func TestTerminalCapabilityReconciliationConvergesActiveAndInactiveSessions(t *t
 		t.Fatal("session not found")
 	}
 
-	app.reconcileTerminalCapabilities(context.Background(), session)
-	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" || strings.Contains(runner.calls[0][5], " -u ") {
+	app.reconcileTerminalCapabilities(context.Background(), id)
+	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" {
 		t.Fatalf("active capability reconciliation = %#v, want one guarded advertisement", runner.calls)
 	}
 	for _, option := range []string{"@engram ", "@engram_watch_id ", "@engram_notify ", "@engram_artifact "} {
@@ -54,14 +54,20 @@ func TestTerminalCapabilityReconciliationConvergesActiveAndInactiveSessions(t *t
 		}
 	}
 
-	updated, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
+	if !strings.HasSuffix(runner.calls[0][5], "set-option -p -q -t %1 @engram 'v1 watch=1 remote=telegram'") {
+		t.Fatalf("active capability marker was not committed last: %#v", runner.calls)
+	}
+
+	_, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
 		current.WatchEnabled = false
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner.calls = nil
-	app.reconcileTerminalCapabilities(context.Background(), updated)
+	// The caller still holds the pre-unwatch snapshot. Reconciliation must read
+	// current state and clear rather than republishing that stale watch.
+	app.advertiseTerminalCapabilities(context.Background(), session)
 	if len(runner.calls) != 1 || runner.calls[0][0] != "if-shell" {
 		t.Fatalf("inactive capability reconciliation = %#v, want one guarded clear", runner.calls)
 	}
@@ -69,6 +75,30 @@ func TestTerminalCapabilityReconciliationConvergesActiveAndInactiveSessions(t *t
 		if !strings.Contains(runner.calls[0][5], "-u -t %1 "+option) {
 			t.Fatalf("inactive capability transaction missing clear for %q: %#v", option, runner.calls)
 		}
+	}
+}
+
+func TestTerminalCapabilityFailuresRetryOnlyDirtySession(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginAttached)
+	session, _ := app.Store.FindSession(id)
+	runner.capabilityErr = errors.New("temporary tmux failure")
+	app.advertiseTerminalCapabilities(context.Background(), session)
+
+	app.capabilityRetryMu.Lock()
+	retry, pending := app.capabilityRetries[id]
+	app.capabilityRetryMu.Unlock()
+	if !pending || retry.delay != terminalCapabilityInitialRetry {
+		t.Fatalf("capability retry = %#v pending=%v", retry, pending)
+	}
+
+	runner.capabilityErr = nil
+	runner.calls = nil
+	app.reconcileDueTerminalCapabilities(context.Background(), time.Now().Add(terminalCapabilityMaxRetry))
+	app.capabilityRetryMu.Lock()
+	_, pending = app.capabilityRetries[id]
+	app.capabilityRetryMu.Unlock()
+	if pending || len(runner.calls) != 1 {
+		t.Fatalf("successful retry pending=%v calls=%#v", pending, runner.calls)
 	}
 }
 
@@ -556,6 +586,7 @@ type safetyRunner struct {
 	capturePhysical string
 	captureJoined   string
 	failKill        bool
+	capabilityErr   error
 	onIdentity      func()
 }
 
@@ -582,6 +613,9 @@ func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) 
 
 func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "if-shell" && r.capabilityErr != nil {
+		return "", r.capabilityErr
+	}
 	if len(args) > 0 && args[0] == "show-options" {
 		return appTestServerID + "\n", nil
 	}

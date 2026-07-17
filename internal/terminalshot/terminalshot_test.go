@@ -249,6 +249,15 @@ func TestOSCTerminatorsPreserveFollowingRenderedTextAndRowCounts(t *testing.T) {
 			}
 		})
 	}
+	unicodeTarget := "file:///tmp/М-report.txt"
+	ansi := "\x1b]8;;" + unicodeTarget + "\x1b\\UNICODE-LABEL"
+	page := RenderHTML(Input{ANSI: ansi, Columns: 71, VisibleRows: 1, BufferRows: 1}, "contrast-dark")
+	if !strings.Contains(page, "UNICODE-LABEL") || strings.Contains(page, unicodeTarget) || strings.Contains(page, "-report.txt") {
+		t.Fatalf("multibyte OSC target leaked or hid its label: %s", page)
+	}
+	if got := snapshotRowVisualCounts(ansi, 1, 71); !reflect.DeepEqual(got, []int{1}) {
+		t.Fatalf("multibyte OSC visual row counts = %#v, want [1]", got)
+	}
 }
 
 func TestSupportedScreenshotSurfacesContainTheirVisibleAreas(t *testing.T) {
@@ -607,7 +616,14 @@ func TestLiveChromiumWideRender(t *testing.T) {
 		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
 	}
 	const columns = 289
-	ansi := strings.Repeat("\x1b[36m"+strings.Repeat("x", columns)+"\x1b[0m\n", 64)
+	rows := make([]string, 64)
+	for index := range rows {
+		rows[index] = strings.Repeat("x", columns)
+	}
+	// Only the final soft-wrapped fragment is cyan. A check that accidentally
+	// reaches the preceding line can no longer hide bottom-edge clipping.
+	rows[len(rows)-1] = strings.Repeat("x", 200) + "\x1b[36m" + strings.Repeat("Z", 89) + "\x1b[0m"
+	ansi := strings.Join(rows, "\n")
 	input := Input{
 		ANSI: ansi, Title: "wide live render", Target: "[7]", CWD: "/tmp",
 		Columns: columns, VisibleRows: 162, BufferRows: 64,
@@ -631,7 +647,7 @@ func TestLiveChromiumWideRender(t *testing.T) {
 		t.Fatalf("wide snapshot size = %dx%d, want %dx%d", img.Bounds().Dx(), img.Bounds().Dy(), wantWidth, wantHeight)
 	}
 	logicalHeight := renderHeight(input)
-	if !regionContainsCyan(img, image.Rect(8, logicalHeight-36, renderWidth(input)-8, logicalHeight-22)) {
+	if !regionContainsCyan(img, image.Rect(8, logicalHeight-32, renderWidth(input)-8, logicalHeight-22)) {
 		t.Fatal("final wrapped terminal row is not visible immediately above the footer")
 	}
 }

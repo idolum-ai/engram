@@ -668,7 +668,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 
 func (a *App) scheduler(ctx context.Context) {
 	for _, ts := range a.Store.Snapshot().TerminalSessions {
-		a.reconcileTerminalCapabilities(ctx, ts)
+		a.queueTerminalCapabilityReconcile(ts.ID)
 		if ts.AnchorMessageID != 0 {
 			a.reconcileAnchorControls(ctx, ts.ID)
 			if ts.State == state.TerminalRunning && ts.WatchEnabled {
@@ -678,10 +678,10 @@ func (a *App) scheduler(ctx context.Context) {
 			}
 		}
 	}
+	a.reconcileDueTerminalCapabilities(ctx, time.Now())
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	nextCapture := map[int]time.Time{}
-	nextCapabilityReconcile := time.Now().Add(terminalCapabilityReconcileInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -689,14 +689,8 @@ func (a *App) scheduler(ctx context.Context) {
 		case <-ticker.C:
 			st := a.Store.Snapshot()
 			now := time.Now()
-			reconcileCapabilities := !now.Before(nextCapabilityReconcile)
-			if reconcileCapabilities {
-				nextCapabilityReconcile = now.Add(terminalCapabilityReconcileInterval)
-			}
+			a.reconcileDueTerminalCapabilities(ctx, now)
 			for _, ts := range st.TerminalSessions {
-				if reconcileCapabilities {
-					a.reconcileTerminalCapabilities(ctx, ts)
-				}
 				if ts.AnchorMessageID != 0 {
 					a.reconcileAnchorPresentation(ctx, ts.ID)
 				}

@@ -87,8 +87,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   and rendered terminal pixels.
 - A running watched pane publishes `@engram`, `@engram_watch_id`,
   `@engram_notify`, and `@engram_artifact` tmux pane user options behind the
-  same immutable server/window binding guard used for input. The versioned
-  summary advertises the remote surface; the other options give a human-readable
+  same immutable server/window binding guard used for input. `@engram` is the
+  commit marker: Engram clears it before changing auxiliary values, publishes
+  it last, and clears it first on removal. Consumers ignore auxiliary options
+  unless the marker is present and its watch ID agrees with `@engram_watch_id`.
+  The versioned summary advertises the remote surface; the other options give a human-readable
   notification command and the standard OSC 8 artifact sequence. Startup
   repairs metadata for persisted running watches; normal unwatch or
   attached-pane untracking removes it without changing the pane program,
