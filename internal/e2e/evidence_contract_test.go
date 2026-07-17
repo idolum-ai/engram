@@ -49,7 +49,7 @@ func TestEarlySetupFailureRetainsEvidence(t *testing.T) {
 
 func TestProcessLogSurvivesHardExit(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSupervisorOwnerHardExitHelper$")
 	cmd.Env = append(withoutEnvironment(os.Environ(), "ENGRAM_E2E_HARD_EXIT_DIR"), "ENGRAM_E2E_HARD_EXIT_DIR="+dir)
 	err := cmd.Run()
@@ -227,7 +227,11 @@ func TestSupervisorFailureIsRetained(t *testing.T) {
 
 func TestSupervisorRejectsEarlyCleanExit(t *testing.T) {
 	dir := t.TempDir()
-	process := startSupervisedProcess(t, os.Environ(), []string{"/bin/true"}, filepath.Join(dir, "process.log"), false)
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	process := startSupervisedProcess(t, os.Environ(), []string{truePath}, filepath.Join(dir, "process.log"), false)
 	time.Sleep(100 * time.Millisecond)
 	if err := stopSupervisedProcess(process, 10*time.Second); err == nil {
 		t.Fatal("early clean exit unexpectedly passed")
