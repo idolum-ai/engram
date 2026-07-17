@@ -17,17 +17,28 @@ authorized user then:
 4. taps refresh and verifies the canonical message is edited; and
 5. taps a numbered file control and verifies the exact local bytes are sent.
 
-The harness removes `TMUX` from the child environment and gives tmux a private
-socket root. It cannot see or mutate the runner's ordinary tmux server. The
-Telegram simulator listens only inside the test process and accepts only the
-fixture token, user, and chat.
+The harness gives tmux a private socket root, private home and configuration
+roots, a deterministic shell identity, and a wrapper that invokes the absolute
+tmux binary with `-f /dev/null`. A planted user configuration is part of the
+fixture and the test proves it was ignored. The private server PID is tracked,
+normally stopped through `kill-server`, and verified gone. The Telegram
+simulator listens only inside the test process, uses distinct fixture user and
+chat identifiers, and rejects wrong destinations, unknown messages, malformed
+media edits, and repeated polling behavior that Telegram would reject.
 
 ## Running It
 
 From GitHub, open **Actions**, select **Manual E2E**, choose **Run workflow**,
-select the branch to test, and keep the `hermetic` suite selected. Because the
-workflow already exists on the default branch, it can be dispatched against a
-pull-request branch before merge.
+and select `main` as the workflow branch. Enter the complete 40-character
+commit SHA to test and keep the `hermetic` suite selected. The trusted workflow
+definition always comes from `main`; its checkout step then verifies that it is
+running the requested commit. Do not select a pull-request branch in the
+workflow branch menu.
+
+The target commit must be reachable in `idolum-ai/engram`. A fork-only commit
+cannot be selected by this workflow. Review it locally or deliberately mirror
+the reviewed commit into a same-repository branch first; never work around the
+boundary by dispatching workflow YAML from an untrusted fork or PR branch.
 
 The equivalent local command is:
 
@@ -46,19 +57,31 @@ installed. The test is skipped during ordinary `go test ./...` and `make check`.
 
 ## Evidence
 
-Every dispatched run retains a 30-day artifact containing:
+Every completed workflow test uploads a 30-day artifact containing the files
+below. A local test writes the same evidence bundle to
+`ENGRAM_E2E_ARTIFACT_DIR` without applying a retention policy.
 
 - `snapshot.png`, the exact canonical terminal image uploaded to the simulator;
+- `snapshot.txt`, its deterministic terminal-text companion for inspection and
+  assistive technology;
 - `transcript.html` and `transcript.png`, a phone-sized rendering of that card;
-- `manifest.json`, the passed assertions and observed Telegram method counts;
-- `process.log` only when the hermetic Engram process wrote output.
+- `manifest.json`, the completed assertions, observed Telegram method counts,
+  and resolved Go, runner, tmux, and browser versions;
+- `process.log` and `test.log`, including empty or failed runs; and
+- `telegram.log` when a failed test needs simulator diagnostics.
+
+Failed test invocations write a failed manifest before returning. Missing
+evidence is itself a workflow error. Dispatch validation or checkout failures
+can occur before the test has an artifact directory and remain visible in the
+workflow log.
 
 These files are review evidence, not automatically approved documentation.
 Promoting an image into the README requires a human to inspect the complete
 artifact and deliberately copy the chosen asset into the repository.
 
-The workflow never reads repository secrets and never contacts Telegram,
-Anthropic, or OpenAI. It does not upload the generated `.env`, Engram state,
-audit log, tmux socket, browser profile, or raw temporary directory. A separate
-real-Telegram lane, if ever justified, must have its own threat model and
-approval boundary rather than silently extending this workflow.
+The trusted workflow references no repository secrets or environment and never
+contacts Telegram, Anthropic, or OpenAI. It does not upload the generated
+`.env`, Engram state, audit log, tmux socket, browser profile, or raw temporary
+directory. A separate real-Telegram lane, if ever justified, must have its own
+threat model and approval boundary rather than silently extending this
+workflow.

@@ -189,6 +189,16 @@ privacy model must stay small and explicit.
   runtime paths, and no model provider. Its uploaded evidence must not contain
   generated configuration, state, audit logs, sockets, browser profiles, or
   arbitrary host terminal data.
+- The E2E child uses a private allowlisted environment, private home and XDG
+  roots, deterministic shell identity, and an absolute tmux wrapper with
+  `-f /dev/null`; socket isolation alone is insufficient because tmux can load
+  user configuration and hooks. The simulator must enforce the exact fixture
+  chat and existing message identities before accepting edits, pins, deletes,
+  or uploads.
+- The manual dispatcher must run the trusted `main` workflow definition and
+  treat the requested same-repository commit SHA only as untrusted code under
+  test. The job receives read-only contents permission and references no
+  repository secrets or protected environment.
 
 ## Vulnerability Handling
 

@@ -54,9 +54,15 @@ done
 
 required_e2e_phrases=(
   'workflow_dispatch:'
+  'target_sha:'
+  'test "${GITHUB_REF}" = "refs/heads/main"'
   'persist-credentials: false'
+  'ref: ${{ inputs.target_sha }}'
+  'runs-on: ubuntu-24.04'
+  'go-version: 1.22.12'
   'ENGRAM_E2E=1'
   "go test ./internal/e2e -run '^TestHermeticGoldenPath$'"
+  'if-no-files-found: error'
   'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
 )
 for phrase in "${required_e2e_phrases[@]}"; do

@@ -100,10 +100,17 @@ runtime state.
   Engram process against an isolated real tmux server, a real Chromium
   renderer, and a faithful local Telegram API simulator. It must require no
   Telegram or model-provider credentials.
+- Operators must dispatch the trusted workflow definition from `main` and pass
+  an explicit full same-repository commit SHA for checkout and verification.
+  Selecting PR-authored workflow YAML is outside the supported E2E path.
 - The hermetic E2E package must skip during ordinary test runs. Its retained
   evidence is explicitly review-only and may include rendered fixture terminal
   content, but must exclude generated configuration, state, audit logs, tmux
   sockets, browser profiles, and private temporary roots.
+- Completed E2E tests must retain success or failure manifests and bounded
+  diagnostics. Success evidence includes a terminal-text alternative and the
+  resolved runner, Go, tmux, and browser versions; screenshots are not
+  byte-stable visual goldens.
 
 ## Scope
 

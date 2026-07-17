@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,11 +19,12 @@ import (
 const (
 	testBotToken = "e2e-token"
 	testChatID   = int64(424242)
-	testUserID   = int64(424242)
+	testUserID   = int64(424241)
 )
 
 type telegramMessage struct {
 	ID       int
+	ChatID   int64
 	Text     string
 	Caption  string
 	Markup   telegram.InlineKeyboardMarkup
@@ -31,11 +33,21 @@ type telegramMessage struct {
 	Filename string
 }
 
+type telegramEvent struct {
+	Method     string
+	ChatID     int64
+	MessageID  int
+	CallbackID string
+	Offset     int
+}
+
 type fakeTelegramSnapshot struct {
 	Messages        map[int]telegramMessage
 	Calls           []string
+	Events          []telegramEvent
 	Pinned          map[int]bool
 	CallbackAnswers []string
+	PollOffsets     []int
 	Errors          []string
 }
 
@@ -47,9 +59,10 @@ type fakeTelegram struct {
 	wake            chan struct{}
 	nextMessageID   int
 	messages        map[int]telegramMessage
-	calls           []string
+	events          []telegramEvent
 	pinned          map[int]bool
 	callbackAnswers []string
+	pollOffsets     []int
 	errors          []string
 }
 
@@ -91,22 +104,39 @@ func (f *fakeTelegram) snapshot() fakeTelegramSnapshot {
 	for id, value := range f.pinned {
 		pinned[id] = value
 	}
+	events := append([]telegramEvent(nil), f.events...)
+	calls := make([]string, 0, len(events))
+	for _, event := range events {
+		calls = append(calls, event.Method)
+	}
 	return fakeTelegramSnapshot{
 		Messages:        messages,
-		Calls:           append([]string(nil), f.calls...),
+		Calls:           calls,
+		Events:          events,
 		Pinned:          pinned,
 		CallbackAnswers: append([]string(nil), f.callbackAnswers...),
+		PollOffsets:     append([]int(nil), f.pollOffsets...),
 		Errors:          append([]string(nil), f.errors...),
 	}
 }
 
 func (f *fakeTelegram) diagnostic() string {
 	snapshot := f.snapshot()
-	var messages []string
-	for id, message := range snapshot.Messages {
-		messages = append(messages, fmt.Sprintf("id=%d text=%q caption=%q photo=%d document=%d", id, message.Text, message.Caption, len(message.Photo), len(message.Document)))
+	ids := make([]int, 0, len(snapshot.Messages))
+	for id := range snapshot.Messages {
+		ids = append(ids, id)
 	}
-	return fmt.Sprintf("calls=%v messages=[%s] pinned=%v answers=%v errors=%v", snapshot.Calls, strings.Join(messages, "; "), snapshot.Pinned, snapshot.CallbackAnswers, snapshot.Errors)
+	sort.Ints(ids)
+	messages := make([]string, 0, len(ids))
+	for _, id := range ids {
+		message := snapshot.Messages[id]
+		messages = append(messages, fmt.Sprintf("id=%d chat=%d text=%q caption=%q photo=%d document=%d", id, message.ChatID, message.Text, message.Caption, len(message.Photo), len(message.Document)))
+	}
+	counts := make(map[string]int)
+	for _, call := range snapshot.Calls {
+		counts[call]++
+	}
+	return fmt.Sprintf("calls=%v offsets=%v messages=[%s] pinned=%v answers=%v errors=%v", counts, snapshot.PollOffsets, strings.Join(messages, "; "), snapshot.Pinned, snapshot.CallbackAnswers, snapshot.Errors)
 }
 
 func (f *fakeTelegram) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -116,14 +146,11 @@ func (f *fakeTelegram) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	method := strings.TrimPrefix(r.URL.Path, prefix)
-	f.mu.Lock()
-	f.calls = append(f.calls, method)
-	f.mu.Unlock()
-
 	switch method {
 	case "getUpdates":
 		f.getUpdates(w, r)
 	case "setMyCommands":
+		f.record(telegramEvent{Method: method})
 		writeResult(w, true)
 	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageReplyMarkup":
 		f.handleJSONMessage(w, r, method)
@@ -134,7 +161,7 @@ func (f *fakeTelegram) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case "sendDocument":
 		f.handleSendMedia(w, r, "document")
 	case "pinChatMessage", "unpinChatMessage":
-		f.handlePin(w, r, method == "pinChatMessage")
+		f.handlePin(w, r, method, method == "pinChatMessage")
 	case "deleteMessage":
 		f.handleDelete(w, r)
 	case "answerCallbackQuery":
@@ -149,11 +176,19 @@ func (f *fakeTelegram) getUpdates(w http.ResponseWriter, r *http.Request) {
 		f.fail(w, "parse getUpdates: "+err.Error())
 		return
 	}
-	offset, _ := strconv.Atoi(r.FormValue("offset"))
+	offset, err := strconv.Atoi(r.FormValue("offset"))
+	if err != nil && r.FormValue("offset") != "" {
+		f.fail(w, "invalid getUpdates offset")
+		return
+	}
+	f.mu.Lock()
+	f.pollOffsets = append(f.pollOffsets, offset)
+	f.events = append(f.events, telegramEvent{Method: "getUpdates", Offset: offset})
+	f.mu.Unlock()
 	updates := f.updatesAt(offset)
 	if len(updates) == 0 {
 		pollDelay := time.Second
-		if seconds, err := strconv.Atoi(r.FormValue("timeout")); err == nil && seconds > 0 {
+		if seconds, parseErr := strconv.Atoi(r.FormValue("timeout")); parseErr == nil && seconds > 0 {
 			pollDelay = min(time.Duration(seconds)*time.Second, time.Second)
 		}
 		select {
@@ -190,24 +225,42 @@ func (f *fakeTelegram) handleJSONMessage(w http.ResponseWriter, r *http.Request,
 		f.fail(w, "decode "+method+": "+err.Error())
 		return
 	}
+	if body.ChatID != testChatID {
+		f.fail(w, fmt.Sprintf("%s targeted chat %d", method, body.ChatID))
+		return
+	}
 	f.mu.Lock()
 	id := body.MessageID
-	if id == 0 {
+	message := telegramMessage{}
+	if method == "sendMessage" {
+		if id != 0 {
+			f.mu.Unlock()
+			f.fail(w, "sendMessage supplied message_id")
+			return
+		}
 		id = f.nextMessageID
 		f.nextMessageID++
+		message = telegramMessage{ID: id, ChatID: body.ChatID}
+	} else {
+		var ok bool
+		message, ok = f.messages[id]
+		if id <= 0 || !ok || message.ChatID != body.ChatID {
+			f.mu.Unlock()
+			f.fail(w, fmt.Sprintf("%s targeted unknown message %d", method, id))
+			return
+		}
 	}
-	message := f.messages[id]
-	message.ID = id
-	if body.Text != "" {
+	switch method {
+	case "sendMessage", "editMessageText":
 		message.Text = body.Text
-	}
-	if body.Caption != "" {
+	case "editMessageCaption":
 		message.Caption = body.Caption
 	}
 	if body.Markup.InlineKeyboard != nil {
 		message.Markup = body.Markup
 	}
 	f.messages[id] = message
+	f.events = append(f.events, telegramEvent{Method: method, ChatID: body.ChatID, MessageID: id})
 	f.mu.Unlock()
 	writeResult(w, telegram.Message{MessageID: id, Chat: telegram.Chat{ID: body.ChatID, Type: "private"}})
 }
@@ -217,32 +270,47 @@ func (f *fakeTelegram) handleEditMedia(w http.ResponseWriter, r *http.Request) {
 		f.fail(w, "parse editMessageMedia: "+err.Error())
 		return
 	}
-	id, _ := strconv.Atoi(r.FormValue("message_id"))
-	chatID, _ := strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
+	id, chatID, ok := parseMediaTarget(r)
+	if !ok || chatID != testChatID {
+		f.fail(w, "editMessageMedia has an invalid target")
+		return
+	}
 	var media struct {
+		Type    string `json:"type"`
+		Media   string `json:"media"`
 		Caption string `json:"caption"`
 	}
-	var markup telegram.InlineKeyboardMarkup
 	if err := json.Unmarshal([]byte(r.FormValue("media")), &media); err != nil {
 		f.fail(w, "decode edit media: "+err.Error())
 		return
 	}
+	const attachPrefix = "attach://"
+	if media.Type != "photo" || !strings.HasPrefix(media.Media, attachPrefix) || strings.TrimPrefix(media.Media, attachPrefix) == "" {
+		f.fail(w, "editMessageMedia has an invalid photo descriptor")
+		return
+	}
+	var markup telegram.InlineKeyboardMarkup
 	if err := decodeOptionalMarkup(r.FormValue("reply_markup"), &markup); err != nil {
 		f.fail(w, "decode edit markup: "+err.Error())
 		return
 	}
-	photo, _, err := readMultipartFile(r.MultipartForm, "photo")
+	photo, _, err := readMultipartFile(r.MultipartForm, strings.TrimPrefix(media.Media, attachPrefix))
 	if err != nil {
 		f.fail(w, "read edited photo: "+err.Error())
 		return
 	}
 	f.mu.Lock()
-	message := f.messages[id]
-	message.ID = id
+	message, exists := f.messages[id]
+	if !exists || message.ChatID != chatID {
+		f.mu.Unlock()
+		f.fail(w, fmt.Sprintf("editMessageMedia targeted unknown message %d", id))
+		return
+	}
 	message.Caption = media.Caption
 	message.Markup = markup
 	message.Photo = photo
 	f.messages[id] = message
+	f.events = append(f.events, telegramEvent{Method: "editMessageMedia", ChatID: chatID, MessageID: id})
 	f.mu.Unlock()
 	writeResult(w, telegram.Message{MessageID: id, Chat: telegram.Chat{ID: chatID, Type: "private"}})
 }
@@ -252,7 +320,11 @@ func (f *fakeTelegram) handleSendMedia(w http.ResponseWriter, r *http.Request, f
 		f.fail(w, "parse send media: "+err.Error())
 		return
 	}
-	chatID, _ := strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
+	chatID, err := strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
+	if err != nil || chatID != testChatID {
+		f.fail(w, "send media has an invalid chat")
+		return
+	}
 	data, filename, err := readMultipartFile(r.MultipartForm, field)
 	if err != nil {
 		f.fail(w, "read "+field+": "+err.Error())
@@ -266,42 +338,59 @@ func (f *fakeTelegram) handleSendMedia(w http.ResponseWriter, r *http.Request, f
 	f.mu.Lock()
 	id := f.nextMessageID
 	f.nextMessageID++
-	message := telegramMessage{ID: id, Caption: r.FormValue("caption"), Markup: markup, Filename: filename}
+	message := telegramMessage{ID: id, ChatID: chatID, Caption: r.FormValue("caption"), Markup: markup, Filename: filename}
 	if field == "photo" {
 		message.Photo = data
 	} else {
 		message.Document = data
 	}
 	f.messages[id] = message
+	f.events = append(f.events, telegramEvent{Method: "send" + strings.ToUpper(field[:1]) + field[1:], ChatID: chatID, MessageID: id})
 	f.mu.Unlock()
 	writeResult(w, telegram.Message{MessageID: id, Chat: telegram.Chat{ID: chatID, Type: "private"}})
 }
 
-func (f *fakeTelegram) handlePin(w http.ResponseWriter, r *http.Request, pinned bool) {
+func (f *fakeTelegram) handlePin(w http.ResponseWriter, r *http.Request, method string, pinned bool) {
 	var body struct {
-		MessageID int `json:"message_id"`
+		ChatID    int64 `json:"chat_id"`
+		MessageID int   `json:"message_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		f.fail(w, "decode pin: "+err.Error())
 		return
 	}
 	f.mu.Lock()
+	message, exists := f.messages[body.MessageID]
+	if body.ChatID != testChatID || !exists || message.ChatID != body.ChatID {
+		f.mu.Unlock()
+		f.fail(w, fmt.Sprintf("%s targeted unknown message %d", method, body.MessageID))
+		return
+	}
 	f.pinned[body.MessageID] = pinned
+	f.events = append(f.events, telegramEvent{Method: method, ChatID: body.ChatID, MessageID: body.MessageID})
 	f.mu.Unlock()
 	writeResult(w, true)
 }
 
 func (f *fakeTelegram) handleDelete(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		MessageID int `json:"message_id"`
+		ChatID    int64 `json:"chat_id"`
+		MessageID int   `json:"message_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		f.fail(w, "decode delete: "+err.Error())
 		return
 	}
 	f.mu.Lock()
+	message, exists := f.messages[body.MessageID]
+	if body.ChatID != testChatID || !exists || message.ChatID != body.ChatID {
+		f.mu.Unlock()
+		f.fail(w, fmt.Sprintf("deleteMessage targeted unknown message %d", body.MessageID))
+		return
+	}
 	delete(f.messages, body.MessageID)
 	delete(f.pinned, body.MessageID)
+	f.events = append(f.events, telegramEvent{Method: "deleteMessage", ChatID: body.ChatID, MessageID: body.MessageID})
 	f.mu.Unlock()
 	writeResult(w, true)
 }
@@ -315,23 +404,41 @@ func (f *fakeTelegram) handleCallbackAnswer(w http.ResponseWriter, r *http.Reque
 		f.fail(w, "decode callback answer: "+err.Error())
 		return
 	}
+	if body.ID == "" {
+		f.fail(w, "answerCallbackQuery omitted callback_query_id")
+		return
+	}
 	f.mu.Lock()
 	f.callbackAnswers = append(f.callbackAnswers, body.ID+":"+body.Text)
+	f.events = append(f.events, telegramEvent{Method: "answerCallbackQuery", CallbackID: body.ID})
 	f.mu.Unlock()
 	writeResult(w, true)
+}
+
+func (f *fakeTelegram) record(event telegramEvent) {
+	f.mu.Lock()
+	f.events = append(f.events, event)
+	f.mu.Unlock()
 }
 
 func (f *fakeTelegram) fail(w http.ResponseWriter, message string) {
 	f.mu.Lock()
 	f.errors = append(f.errors, message)
 	f.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": message})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": 400, "description": message})
 }
 
 func writeResult(w http.ResponseWriter, result any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": result})
+}
+
+func parseMediaTarget(r *http.Request) (int, int64, bool) {
+	id, idErr := strconv.Atoi(r.FormValue("message_id"))
+	chatID, chatErr := strconv.ParseInt(r.FormValue("chat_id"), 10, 64)
+	return id, chatID, idErr == nil && chatErr == nil && id > 0
 }
 
 func decodeOptionalMarkup(value string, target *telegram.InlineKeyboardMarkup) error {
