@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +50,7 @@ func (ExecRunner) Run(ctx context.Context, args ...string) (string, error) {
 
 func (ExecRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.Env = tmuxCommandEnvironment(os.Environ(), runtime.GOOS)
 	var errOut bytes.Buffer
 	cmd.Stdout = dst
 	cmd.Stderr = &errOut
@@ -56,6 +59,46 @@ func (ExecRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string
 		return &commandError{args: append([]string(nil), args...), err: err, stderr: errOut.String()}
 	}
 	return nil
+}
+
+func tmuxCommandEnvironment(environ []string, goos string) []string {
+	if utf8Locale(effectiveLocale(environ)) {
+		return environ
+	}
+	fallback := "C.UTF-8"
+	if goos == "darwin" {
+		fallback = "en_US.UTF-8"
+	}
+	return setEnvironment(environ, "LC_ALL", fallback)
+}
+
+func effectiveLocale(environ []string) string {
+	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		for _, entry := range environ {
+			if value, ok := strings.CutPrefix(entry, key+"="); ok && value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func utf8Locale(locale string) bool {
+	locale = strings.ToLower(locale)
+	locale = strings.ReplaceAll(locale, "-", "")
+	return strings.Contains(locale, "utf8")
+}
+
+func setEnvironment(environ []string, key, value string) []string {
+	updated := append([]string(nil), environ...)
+	prefix := key + "="
+	for i, entry := range updated {
+		if strings.HasPrefix(entry, prefix) {
+			updated[i] = prefix + value
+			return updated
+		}
+	}
+	return append(updated, prefix+value)
 }
 
 type Manager struct {

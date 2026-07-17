@@ -19,6 +19,41 @@ func tmuxRecord(values ...string) string {
 	return out.String() + "\n"
 }
 
+func TestTmuxCommandEnvironmentEnsuresUTF8Locale(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		environ []string
+		goos    string
+		want    string
+	}{
+		{name: "darwin launchd", environ: []string{"HOME=/tmp", "PATH=/bin"}, goos: "darwin", want: "LC_ALL=en_US.UTF-8"},
+		{name: "linux service", environ: []string{"LANG=C"}, goos: "linux", want: "LC_ALL=C.UTF-8"},
+		{name: "override non UTF-8 LC_ALL", environ: []string{"LC_ALL=C", "LANG=en_US.UTF-8"}, goos: "darwin", want: "LC_ALL=en_US.UTF-8"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := tmuxCommandEnvironment(test.environ, test.goos)
+			if !containsString(got, test.want) {
+				t.Fatalf("tmux environment = %#v, want %q", got, test.want)
+			}
+		})
+	}
+
+	original := []string{"PATH=/bin", "LANG=C.UTF-8"}
+	if got := tmuxCommandEnvironment(original, "darwin"); !reflect.DeepEqual(got, original) {
+		t.Fatalf("existing UTF-8 environment changed: %#v", got)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 type fakeRunner struct {
 	calls [][]string
 	out   string
