@@ -146,27 +146,21 @@ func TestPlannedSupervisorShutdownRejectsNonzeroExit(t *testing.T) {
 	ready := filepath.Join(t.TempDir(), "ready")
 	child := exec.Command("/bin/sh", "-c", "trap 'exit 7' TERM; : > \"$READY\"; while :; do sleep 1; done")
 	child.Env = append(os.Environ(), "READY="+ready)
-	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
+	anchor, waitCh := startAnchoredTestChild(t, child)
 	eventually(t, 3*time.Second, func() bool { _, err := os.Stat(ready); return err == nil }, "nonzero child readiness")
-	if err := cleanupSupervisedChild(child, true); err == nil || !strings.Contains(err.Error(), "exit status 7") {
+	if err := cleanupSupervisedGroup(child, anchor, waitCh, nil, false, true); err == nil || !strings.Contains(err.Error(), "exit status 7") {
 		t.Fatalf("planned nonzero cleanup error = %v", err)
 	}
 }
 
 func TestPlannedSupervisorShutdownRejectsForcedKill(t *testing.T) {
-	oldTerm, oldKill, oldGroup := supervisorTermGrace, supervisorKillGrace, supervisorGroupGrace
-	supervisorTermGrace, supervisorKillGrace, supervisorGroupGrace = 100*time.Millisecond, time.Second, 100*time.Millisecond
-	defer func() { supervisorTermGrace, supervisorKillGrace, supervisorGroupGrace = oldTerm, oldKill, oldGroup }()
+	oldTerm, oldKill := supervisorTermGrace, supervisorKillGrace
+	supervisorTermGrace, supervisorKillGrace = 100*time.Millisecond, time.Second
+	defer func() { supervisorTermGrace, supervisorKillGrace = oldTerm, oldKill }()
 	child := exec.Command("/bin/sh", "-c", "trap '' TERM; while :; do sleep 1; done")
-	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
+	anchor, waitCh := startAnchoredTestChild(t, child)
 	time.Sleep(100 * time.Millisecond)
-	if err := cleanupSupervisedChild(child, true); err == nil || !strings.Contains(err.Error(), "required SIGKILL") {
+	if err := cleanupSupervisedGroup(child, anchor, waitCh, nil, false, true); err == nil || !strings.Contains(err.Error(), "required SIGKILL") {
 		t.Fatalf("forced cleanup error = %v", err)
 	}
 }
@@ -176,21 +170,46 @@ func TestSupervisorRemovesDescendantAfterLeaderExit(t *testing.T) {
 	pidPath := filepath.Join(dir, "descendant.pid")
 	child := exec.Command("/bin/sh", "-c", "sh -c 'trap \"\" TERM; sleep 30' & echo $! > \"$PID_PATH\"")
 	child.Env = append(os.Environ(), "PID_PATH="+pidPath)
-	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
+	anchor, waitCh := startAnchoredTestChild(t, child)
 	var descendantPID int
 	eventually(t, 3*time.Second, func() bool {
 		data, err := os.ReadFile(pidPath)
 		descendantPID, err = strconv.Atoi(strings.TrimSpace(string(data)))
 		return err == nil && descendantPID > 1
 	}, "TERM-ignoring descendant readiness")
-	err := cleanupSupervisedChild(child, true)
-	if err == nil || !strings.Contains(err.Error(), "required SIGKILL") {
+	var waitErr error
+	childExited := false
+	select {
+	case waitErr = <-waitCh:
+		childExited = true
+	case <-time.After(time.Second):
+	}
+	err := cleanupSupervisedGroup(child, anchor, waitCh, waitErr, childExited, true)
+	if err == nil || !strings.Contains(err.Error(), "before supervisor cleanup") {
 		t.Fatalf("descendant cleanup error = %v", err)
 	}
 	eventually(t, 3*time.Second, func() bool { return !processAlive(descendantPID) }, "TERM-ignoring descendant exit")
+}
+
+func startAnchoredTestChild(t *testing.T, child *exec.Cmd) (*exec.Cmd, <-chan error) {
+	t.Helper()
+	ready := filepath.Join(t.TempDir(), "anchor.ready")
+	anchor := exec.Command(os.Args[0], "-test.run=^TestE2EProcessGroupAnchorHelper$")
+	anchor.Env = append(os.Environ(), supervisorAnchorKey+"=1", supervisorAnchorReadyKey+"="+ready)
+	anchor.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := anchor.Start(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 3*time.Second, func() bool { _, err := os.Stat(ready); return err == nil }, "test process-group anchor")
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: anchor.Process.Pid}
+	if err := child.Start(); err != nil {
+		_ = anchor.Process.Kill()
+		_ = anchor.Wait()
+		t.Fatal(err)
+	}
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- child.Wait() }()
+	return anchor, waitCh
 }
 
 func TestSupervisorFailureIsRetained(t *testing.T) {
@@ -202,6 +221,19 @@ func TestSupervisorFailureIsRetained(t *testing.T) {
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "supervisor.log"))
 	if err != nil || !strings.Contains(string(data), "exit status 7") {
+		t.Fatalf("supervisor.log = %q, err=%v", data, err)
+	}
+}
+
+func TestSupervisorRejectsEarlyCleanExit(t *testing.T) {
+	dir := t.TempDir()
+	process := startSupervisedProcess(t, os.Environ(), []string{"/bin/true"}, filepath.Join(dir, "process.log"), false)
+	time.Sleep(100 * time.Millisecond)
+	if err := stopSupervisedProcess(process, 10*time.Second); err == nil {
+		t.Fatal("early clean exit unexpectedly passed")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "supervisor.log"))
+	if err != nil || !strings.Contains(string(data), "before supervisor cleanup") {
 		t.Fatalf("supervisor.log = %q, err=%v", data, err)
 	}
 }
