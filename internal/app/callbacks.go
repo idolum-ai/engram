@@ -121,7 +121,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_user_error"
 		}
 		ts = current
-		if ts.State != state.TerminalRunning || ts.AnchorFormat != "snapshot" || ts.RetiringAnchorMessageID != 0 {
+		if ts.State != state.TerminalRunning || !mediaAnchorFormat(ts.AnchorFormat) || ts.RetiringAnchorMessageID != 0 {
 			anchorLock.Unlock()
 			a.answerCallback(ctx, cb.ID, "raw view is unavailable")
 			return "callback_user_error"

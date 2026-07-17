@@ -120,9 +120,10 @@ photo card. Highlighted terminal rows provide inspectable evidence first; the
 prose remains readable and copyable below the media without a
 second message. The model cannot choose pixels or expand the observation
 boundary. Engram adds bounded surrounding rows. When matching fails, it falls
-back deterministically to the newest changed physical-row cluster since the
+back deterministically to the last changed on-screen physical-row region since the
 last accepted frame, then to the current terminal tail. The footer says which
-basis was used; only verified and locally changed rows are highlighted. If
+basis was used; only quoted or locally changed rows are highlighted. Exact
+occurrence is not presented as semantic verification. If
 styled rows cannot be delivered safely, the bounded tail is redacted and
 rendered without styling. A truly empty terminal receives a quiet guide-only
 frame rather than a warning that competes with the summary. The canonical

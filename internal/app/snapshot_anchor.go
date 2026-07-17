@@ -24,11 +24,15 @@ type snapshotTextFrame struct {
 }
 
 func (a *App) rememberSnapshotTextFrame(ts state.TerminalSession, capture tmux.StyledCapture) {
+	a.rememberAnchorTextFrame(ts, capture.JoinedText, sha(capture.ANSI+"\x00"+capture.JoinedText))
+}
+
+func (a *App) rememberAnchorTextFrame(ts state.TerminalSession, text, frameHash string) {
 	a.snapshotTextFrames.Store(ts.ID, snapshotTextFrame{
 		ChatID: ts.AnchorChatID, MessageID: ts.AnchorMessageID,
 		ServerID: ts.TmuxServerID, WindowID: ts.TmuxWindowID, PaneID: ts.TmuxPaneID,
-		FrameHash:  sha(capture.ANSI + "\x00" + capture.JoinedText),
-		JoinedText: capture.JoinedText,
+		FrameHash:  frameHash,
+		JoinedText: text,
 	})
 }
 
@@ -294,6 +298,7 @@ func (a *App) updateMediaAnchorCaptionLocked(ctx context.Context, ts state.Termi
 
 func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.TerminalSession, rendered, renderHash string, guard func() bool) {
 	oldID := ts.AnchorMessageID
+	oldFormat := ts.AnchorFormat
 	presented := ts
 	presented.AnchorFormat = "text"
 	msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(presented))
@@ -302,7 +307,7 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 		return
 	}
 	if guard != nil && !guard() {
-		a.deactivateProspectiveAnchor(ctx, ts.AnchorChatID, msg.MessageID, retiredAnchorText(ts))
+		a.deactivateProspectiveAnchor(ctx, ts.AnchorChatID, msg.MessageID, a.retiredAnchorText(ts))
 		return
 	}
 	rotated := false
@@ -311,7 +316,7 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 			session.AnchorMessageID = msg.MessageID
 			session.AnchorFormat = "text"
 			session.RetiringAnchorMessageID = oldID
-			session.RetiringAnchorFormat = "snapshot"
+			session.RetiringAnchorFormat = oldFormat
 			session.AnchorPinned = false
 			session.AnchorPinKnown = false
 			session.LastRenderHash = renderHash
@@ -322,7 +327,7 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 	})
 	committed := rotated && (stateErr == nil || state.PersistenceReachedReplacement(stateErr))
 	if !committed {
-		a.deactivateProspectiveAnchor(ctx, ts.AnchorChatID, msg.MessageID, retiredAnchorText(ts))
+		a.deactivateProspectiveAnchor(ctx, ts.AnchorChatID, msg.MessageID, a.retiredAnchorText(ts))
 		_ = a.audit("state.anchor_mode", "guide_rotation_failed", map[string]any{"session_id": ts.ID, "error": firstNonEmpty(errorText(stateErr), "superseded")})
 		return
 	}
@@ -336,8 +341,19 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 }
 
 func (a *App) deactivateProspectiveMediaAnchor(ctx context.Context, chatID int64, messageID int) {
-	_, _ = a.Telegram.EditCaption(ctx, chatID, messageID, "inactive snapshot anchor", telegram.ClearMarkup())
-	_ = a.Telegram.UnpinChatMessage(ctx, chatID, messageID)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := a.Telegram.DeleteMessage(cleanupCtx, chatID, messageID); err == nil || isTelegramMessageGone(err) {
+		return
+	} else {
+		_ = a.audit("telegram.prospective_media", "delete_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if _, err := a.Telegram.EditCaption(cleanupCtx, chatID, messageID, "inactive media", telegram.ClearMarkup()); err != nil && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_media", "deactivate_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if err := a.Telegram.UnpinChatMessage(cleanupCtx, chatID, messageID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_media", "unpin_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
 }
 
 func errorText(err error) string {

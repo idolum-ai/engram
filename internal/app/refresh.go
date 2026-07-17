@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -78,9 +79,12 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	presentationText := a.processCapturedFrame(ctx, ts, capture)
 	refs := a.visibleReferences(presentationText)
-	hash := sha(presentationText)
+	hash := guideCaptureHash(presentationText, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
+			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotReady {
+				return
+			}
 			guard := func() bool {
 				current, ok := a.Store.FindSession(id)
 				return !a.snapshotAnchors() && ok && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
@@ -154,13 +158,26 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	updated := false
 	if a.snapshotReady {
-		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, summary, refs, evidence, force, guard, accepted)
+		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, force, guard, accepted)
 	} else {
 		updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
 	}
 	if updated && guideErr == nil {
 		_ = a.audit("terminal.guide", "updated", map[string]any{"session_id": id})
 	}
+}
+
+func guideCaptureHash(text string, capture tmux.StyledCapture) string {
+	return sha(strings.Join([]string{
+		text,
+		capture.Title,
+		capture.CurrentPath,
+		strings.TrimSpace(capture.CurrentCmd),
+		capture.AlternateOn,
+		capture.PaneInMode,
+		strconv.Itoa(capture.Columns),
+		strconv.Itoa(capture.VisibleRows),
+	}, "\x00"))
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -632,7 +649,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 		return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{
 			Image:     ts.AnchorFormat != anchorFormatSnapshot && a.snapshotReady,
 			Voice:     ts.AnchorFormat == anchorFormatSnapshot && a.guideAvailable,
-			Raw:       ts.AnchorFormat == anchorFormatSnapshot,
+			Raw:       mediaAnchorFormat(ts.AnchorFormat),
 			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),

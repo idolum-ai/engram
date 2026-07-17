@@ -135,7 +135,7 @@ func (a *App) conversationTurnCurrent(session state.TerminalSession, turn conver
 		return false
 	}
 	latest, ok := a.Store.FindSession(session.ID)
-	if !ok || latest.State != state.TerminalRunning || latest.TmuxServerID != session.TmuxServerID ||
+	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.TmuxServerID != session.TmuxServerID ||
 		latest.TmuxWindowID != session.TmuxWindowID || latest.TmuxPaneID != session.TmuxPaneID {
 		return false
 	}

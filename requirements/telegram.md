@@ -48,16 +48,17 @@ Telegram is Engram's only user interface.
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
-- Guide anchors expose refresh, the compact non-directional key controls, and
-  `🖼️ Snapshot` only when Chromium is ready. Snapshot anchors additionally expose a
-  distinct `← ↑ ↓ →` row, `📄 Raw` for a bounded plain-text attachment, and `🗣️ Explain` only when a
-  guide is configured.
+- Guide anchors expose refresh, the compact non-directional key controls,
+  `📄 Raw` for their exact displayed crop, and `🖼️ Snapshot` only when Chromium
+  is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
+  `🗣️ Explain` only when a guide is configured.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
 - `📄 Raw` uploads the process-local plain-text companion captured with the
-  exact canonical snapshot image. It never performs a later tmux capture; when
-  restart has cleared that companion, the control asks the user to wait for the
-  startup refresh.
+  exact canonical media image: the complete bounded snapshot frame in snapshot
+  mode or the displayed crop in guide mode. It never performs a later tmux
+  capture; when restart has cleared that companion, the control asks the user
+  to wait for the startup refresh.
 - Key callbacks answer immediately before tmux work begins. A later tmux failure
   is delivered as a normal reply rather than leaving Telegram's progress state
   spinning until the terminal timeout.
@@ -70,14 +71,20 @@ Telegram is Engram's only user interface.
   conversationally to a snapshot anchor. Neither blocks polling or replaces
   the canonical anchor.
 - When guide mode and Chromium are both available, the canonical anchor is a
-  single photo card with a verified compact evidence crop above bounded
+  single photo card with a compact terminal crop above bounded
   conversational prose. Telegram media edits preserve the canonical message ID, pin,
   controls, and reply route. Missing or unverifiable model evidence falls back
-  to locally computed recent terminal activity, then to the current terminal
-  tail. Every crop labels its provenance. If styled candidates cannot be
+  to a locally computed changed terminal region, then to the current terminal
+  tail. Model-selected excerpts must occur uniquely in both the semantic text
+  sent to the provider and the physical capture. Every crop labels its
+  provenance without claiming semantic verification. If styled candidates cannot be
   delivered safely, Engram renders the bounded tail as redacted plain text; a
   truly empty terminal receives a quiet guide-only frame. Engram never preserves
   stale pixels, guesses semantic importance, or creates a second message.
+- Obsolete media predecessors are deleted when Telegram permits it. If Telegram
+  refuses deletion, Engram clears their controls, replaces the caption with a
+  redacted inactive label, unpins them, and audits that the historical pixels
+  remain in Telegram.
 - The latest conversational reply and latest screenshot reply for each session
   route Telegram replies to that session. The latest upstream-signal reply has
   the same routing behavior. The canonical guide-evidence card routes through

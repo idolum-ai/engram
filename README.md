@@ -236,18 +236,23 @@ the bot channel and must be revoked immediately.
   When guide mode and Chromium are both available, the conversational anchor is
   one photo card: a compact evidence crop appears above bounded guide prose in
   the same canonical Telegram message. The selected model identifies short
-  verbatim excerpts in its existing request; Engram verifies them against
-  unique physical terminal rows, adds bounded context, and highlights the
-  matched rows. If model evidence cannot be verified, Engram deterministically
-  shows the newest changed physical-row cluster from the last accepted frame,
+  verbatim excerpts in its existing request; Engram requires them to occur
+  uniquely in both the model's cleaned input and physical terminal rows, adds
+  bounded context, and highlights the matched rows. The footer calls these
+  quoted terminal text rather than implying semantic verification. If a model
+  excerpt cannot be admitted, Engram deterministically shows the last changed
+  on-screen physical-row region from the last accepted frame,
   or the current terminal tail when no aligned frame exists. Each crop labels
   its provenance. If styled rows contain a configured secret or cannot be
   aligned safely, Engram renders the bounded tail as redacted plain text. A
   truly empty terminal uses a quiet guide-only frame so the prose remains the
-  focus. The message ID, pin, controls, and reply route do not change.
-  Every snapshot anchor also offers `📄 Raw`, which returns the exact delivered
-  image frame as a bounded plain UTF-8 text attachment for screen readers or
-  exact inspection. It does not recapture a newer terminal state on click.
+  focus. Compact crops keep a readable 71-column viewport, preserve inherited
+  terminal styling, and enforce the accessible contrast floor. The message ID,
+  pin, controls, and reply route do not change.
+  Every media anchor also offers `📄 Raw`, which returns the exact delivered
+  snapshot frame or guide crop as a bounded plain UTF-8 text attachment for
+  screen readers or exact inspection. It does not recapture a newer terminal
+  state on click.
 - **Conversational guide:** Guide anchors start from the same frame as Chromium
   and send its joined logical text, capped at 64 rows, in one non-streaming request.
   Recognized upstream records, the trailing model-status footer, and a small
@@ -257,7 +262,7 @@ the bot channel and must be revoked immediately.
   aligned requests may also carry prior prose and deterministic changed,
   removed, and neighboring lines as attention hints. There is no model history,
   no second request, and no remembered Telegram input. A private evidence
-  trailer is removed before delivery and can only select a verified compact
+  trailer is removed before delivery and can only select a uniquely matched compact
   Chromium crop; it is never accepted as terminal truth.
   Completed model prose is deterministically bounded to 180 words before
   delivery.

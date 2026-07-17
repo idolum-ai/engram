@@ -62,7 +62,7 @@ func TestAnchorMarkupUsesActualAnchorFormat(t *testing.T) {
 		reject     string
 	}{
 		{name: "text offers image", format: "text", wantAction: "snapshot:1", reject: "voice:1"},
-		{name: "guided media offers image", format: anchorFormatGuideEvidence, wantAction: "snapshot:1", reject: "voice:1"},
+		{name: "guided media offers image and raw text", format: anchorFormatGuideEvidence, wantAction: "raw:1", reject: "voice:1"},
 		{name: "snapshot offers voice", format: "snapshot", wantAction: "voice:1", reject: "snapshot:1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -71,6 +71,16 @@ func TestAnchorMarkupUsesActualAnchorFormat(t *testing.T) {
 				t.Fatalf("markup for %s anchor = %s", test.format, markup)
 			}
 		})
+	}
+}
+
+func TestRetiredAnchorTextRedactsConfiguredCredentials(t *testing.T) {
+	a := &App{Config: config.Config{TelegramBotToken: "telegram-secret", AnthropicAPIKey: "anthropic-secret", OpenAIAPIKey: "openai-secret"}}
+	text := a.retiredAnchorText(state.TerminalSession{ID: 3, Title: "telegram-secret anthropic-secret openai-secret"})
+	for _, secret := range []string{"telegram-secret", "anthropic-secret", "openai-secret"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("retirement text leaked %q: %s", secret, text)
+		}
 	}
 }
 
@@ -141,11 +151,15 @@ func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testin
 		t.Fatal(err)
 	}
 	captionEdits := 0
+	deleteCalls := 0
 	unpins := 0
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
+		case "/botTOKEN/deleteMessage":
+			deleteCalls++
+			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be deleted"}), nil
 		case "/botTOKEN/editMessageCaption":
 			captionEdits++
 			if captionEdits == 1 {
@@ -171,8 +185,8 @@ func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testin
 		t.Fatalf("retirement was not retained after unpin failure: %#v", pending)
 	}
 	app.finishAnchorRotationLocked(context.Background(), session.ID)
-	if captionEdits != 1 || unpins != 1 {
-		t.Fatalf("retirement ignored retry backoff: edits=%d unpins=%d", captionEdits, unpins)
+	if deleteCalls != 1 || captionEdits != 1 || unpins != 1 {
+		t.Fatalf("retirement ignored retry backoff: deletes=%d edits=%d unpins=%d", deleteCalls, captionEdits, unpins)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.RetiringAnchorRetryAt = time.Now().Add(-time.Second)
@@ -181,8 +195,8 @@ func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testin
 	}
 	app.finishAnchorRotationLocked(context.Background(), session.ID)
 	retired, _ := store.FindSession(session.ID)
-	if retired.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(retired.StaleAlternateMessageIDs, []int{77}) || captionEdits != 2 || unpins != 2 {
-		t.Fatalf("retry retirement = %#v edits=%d unpins=%d", retired, captionEdits, unpins)
+	if retired.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(retired.StaleAlternateMessageIDs, []int{77}) || deleteCalls != 2 || captionEdits != 2 || unpins != 2 {
+		t.Fatalf("retry retirement = %#v deletes=%d edits=%d unpins=%d", retired, deleteCalls, captionEdits, unpins)
 	}
 }
 

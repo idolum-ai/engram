@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -61,8 +62,53 @@ func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 
 	a.refreshSession(context.Background(), id, true)
 	got, _ := a.Store.FindSession(id)
-	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != sha("ordinary output") {
-		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, sha("ordinary output"))
+	wantHash := guideCaptureHash("ordinary output", tmux.StyledCapture{Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != wantHash {
+		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, wantHash)
+	}
+}
+
+func TestUnchangedGuideEvidenceRefreshPreservesCanonicalCard(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.capturePhysical = "ordinary output\n"
+	runner.captureJoined = runner.capturePhysical
+	wantHash := guideCaptureHash("ordinary output", tmux.StyledCapture{Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = anchorFormatGuideEvidence
+		session.LastRawCaptureHash = wantHash
+		session.LastRenderHash = "coherent-card"
+		session.LastSummary = "Ordinary output is visible."
+		session.LastAnchorEditAt = time.Now().Add(-time.Minute)
+		setAnchorFiles(session, []string{"/tmp/result.txt"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	telegramCalls := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		telegramCalls++
+		return nil, errors.New("unchanged card should not be edited")
+	})}
+	a.Telegram = client
+	a.snapshotReady = true
+	a.mode = config.AnchorModeGuide
+
+	a.refreshSession(context.Background(), id, false)
+	got, _ := a.Store.FindSession(id)
+	if telegramCalls != 0 || got.LastRenderHash != "coherent-card" || !reflect.DeepEqual(got.AnchorFiles, []string{"/tmp/result.txt"}) || got.AnchorFileToken == "" {
+		t.Fatalf("unchanged refresh degraded card: calls=%d session=%#v", telegramCalls, got)
+	}
+}
+
+func TestGuideCaptureHashIncludesRenderGeometry(t *testing.T) {
+	first := tmux.StyledCapture{Columns: 71, VisibleRows: 37, CurrentPath: "/tmp", Title: "build"}
+	second := first
+	second.Columns = 120
+	if guideCaptureHash("same text", first) == guideCaptureHash("same text", second) {
+		t.Fatal("pane resize did not change the guide capture fingerprint")
 	}
 }
 

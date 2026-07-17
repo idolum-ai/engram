@@ -140,14 +140,21 @@ exports a bounded recent tail, not an unbounded full audit file.
 - Guided evidence uses the guide capture and the shared render concurrency
   limit. Engram edits the canonical message media and bounded caption together,
   preserving its ID. An unverifiable or broad model crop falls back to the
-  latest physical-row change against the last accepted aligned frame, then to
-  a bounded current terminal tail. Each source is labeled and only verified or
-  locally changed rows are highlighted. Secret-redaction-conflicting or
+  last on-screen physical-row change against the last accepted aligned frame, then to
+  a bounded current terminal tail. Each source is labeled and only quoted or
+  locally changed rows are highlighted. Model-selected excerpts are admitted
+  only when they also occur uniquely in the provider's semantic input.
+  Secret-redaction-conflicting or
   structurally unaligned candidates render a redacted plain-text tail; empty
   terminals render a quiet guide-only frame, so stale pixels cannot remain
   authoritative. A render or upload failure leaves the previous coherent card
   unchanged for retry. If Telegram reports the anchor unavailable, replacement
-  follows the ordinary send, persist, pin, compact, and unpin lifecycle.
+  follows the ordinary send, persist, pin, delete-or-compact, and unpin lifecycle.
+- An unchanged guide capture already represented by a guide-evidence anchor
+  performs no generic caption edit. A changed pane width, visible height,
+  command, title, or working directory changes the guide capture fingerprint.
+  Disabling watch invalidates an in-flight guide turn before it may publish or
+  advance continuity.
 - Snapshot refreshes hash styled capture, metadata, and the derived caption
   before invoking Chromium, coalesce per session, use bounded capture/render
   concurrency, and edit automatically no more than once every ten seconds when

@@ -57,9 +57,15 @@ func TestParseResultSeparatesAndBoundsPrivateEvidence(t *testing.T) {
 }
 
 func TestParseResultDropsMalformedPrivateMetadata(t *testing.T) {
-	got := ParseResult("The tests passed.\n<engram-evidence>{not json}</engram-evidence>")
-	if got.Text != "The tests passed." || len(got.Evidence) != 0 || strings.Contains(got.Text, "engram-evidence") {
-		t.Fatalf("ParseResult() = %#v", got)
+	for _, raw := range []string{
+		"The tests passed.\n<engram-evidence>{not json}</engram-evidence>",
+		"Build failed <engram-evidence> but rollback succeeded",
+		"Literal <engram-evidence>{}\x3c/engram-evidence> trailing prose",
+	} {
+		got := ParseResult(raw)
+		if got.Text != raw || len(got.Evidence) != 0 {
+			t.Fatalf("ParseResult(%q) = %#v", raw, got)
+		}
 	}
 }
 

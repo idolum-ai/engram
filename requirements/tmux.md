@@ -120,17 +120,24 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   430x932 logical-pixel image at 3x density.
 - Guide mode may render its canonical anchor as a compact evidence photo card
   from the same captured frame, with bounded prose below the media.
-  Every model excerpt must match one unique physical row range after whitespace
+  Every model excerpt must first match one unique range in the cleaned semantic
+  text sent to the provider, then one unique physical row range after whitespace
   normalization. Engram adds at most two context rows on each side, highlights
   only matched rows, and rejects a crop spanning more than 18 rows. Ambiguous,
-  fabricated, or widely separated model evidence falls back to the newest
-  changed physical-row cluster under the same continuity boundaries, then to
+  fabricated, or widely separated model evidence falls back to the last
+  changed on-screen physical-row region under the same continuity boundaries, then to
   the last meaningful non-empty terminal block capped at 10 rows. The crop
-  footer identifies `verified terminal evidence`, `recent terminal activity`,
-  or `current terminal tail`; tail rows are not highlighted. If the styled tail
+  footer identifies `quoted terminal text`, `changed terminal region`, or
+  `current terminal tail`; tail rows are not highlighted. A crop carries the
+  active SGR state from preceding rows. Compact crops preserve a readable
+  71-column viewport around highlighted text and enforce the accessible
+  contrast floor regardless of the full-snapshot theme. If the styled tail
   cannot be delivered safely, Engram renders the same bounded range as redacted
   plain text. Empty terminals use a quiet `guided view` frame. Engram never
   preserves stale pixels or falls back to a larger automatic screenshot.
+- The exact plain text corresponding to the displayed guide crop is retained
+  only in process memory and is available through `📄 Raw` while that canonical
+  message remains current.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.

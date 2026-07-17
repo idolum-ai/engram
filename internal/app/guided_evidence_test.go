@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
+	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
@@ -104,7 +107,7 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 		Snapshots: renderer, mode: "guide", snapshotReady: true, renderSlots: make(chan struct{}, 1),
 	}
 	first := tmux.StyledCapture{Text: "context\ntests passed successfully\nprompt", ANSI: "context\n\x1b[32mtests passed successfully\x1b[0m\nprompt", Columns: 71, VisibleRows: 37, BufferRows: 3, CurrentPath: "/tmp"}
-	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, conversationFrame{}, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, conversationFrame{}, first.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
 		t.Fatal("guided anchor was not updated")
 	}
 	current, _ := store.FindSession(session.ID)
@@ -114,11 +117,15 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 	if routed, targetState, ok := store.FindReplyTarget(100, 77); !ok || targetState != state.ReplyTargetCurrent || routed.ID != session.ID {
 		t.Fatalf("evidence reply target = %#v %q ok=%v", routed, targetState, ok)
 	}
+	frame, frameOK := a.snapshotTextFrame(current)
+	if !frameOK || frame.JoinedText != first.Text || !strings.Contains(string(mustJSON(a.anchorMarkup(current))), "raw:1") {
+		t.Fatalf("evidence text companion=%#v ok=%v markup=%s", frame, frameOK, mustJSON(a.anchorMarkup(current)))
+	}
 
 	second := first
 	second.Text = "context\nnew decisive result\nprompt"
 	second.ANSI = second.Text
-	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, conversationFrame{}, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, true, nil, nil) {
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, conversationFrame{}, second.Text, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, true, nil, nil) {
 		t.Fatal("fallback anchor was not updated")
 	}
 	fallback, _ := store.FindSession(session.ID)
@@ -127,7 +134,7 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 	}
 }
 
-func TestGuidedRecentActivityCropChoosesNewestChangedCluster(t *testing.T) {
+func TestGuidedRecentActivityCropChoosesLastChangedRegion(t *testing.T) {
 	previousText := strings.Join([]string{"header", "old early", "stable one", "stable two", "stable three", "old latest", "prompt"}, "\n")
 	currentText := strings.Join([]string{"header", "new early", "stable one", "stable two", "stable three", "new latest", "prompt"}, "\n")
 	previous := conversationFrame{
@@ -138,8 +145,48 @@ func TestGuidedRecentActivityCropChoosesNewestChangedCluster(t *testing.T) {
 		Columns: 71, VisibleRows: 37, BufferRows: 7, CurrentPath: "/work",
 	}
 	crop, ok := buildGuidedRecentActivityCrop(state.TerminalSession{ID: 2, Title: "work"}, capture, previous, "contrast-dark")
-	if !ok || crop.source != guidedEvidenceRecent || crop.input.Footer != "recent terminal activity" || !strings.Contains(crop.plain, "new latest") || strings.Contains(crop.plain, "new early") || len(crop.input.HighlightRows) != 1 {
+	if !ok || crop.source != guidedEvidenceChanged || crop.input.Footer != "changed terminal region" || !strings.Contains(crop.plain, "new latest") || strings.Contains(crop.plain, "new early") || len(crop.input.HighlightRows) != 1 {
 		t.Fatalf("recent crop=%#v ok=%v", crop, ok)
+	}
+}
+
+func TestGuidedEvidenceRejectsExcerptOutsideModelInput(t *testing.T) {
+	app := &App{Config: config.Config{SnapshotTheme: "contrast-dark"}}
+	capture := tmux.StyledCapture{
+		Text: "substantive build result\nRun /review on my current changes", ANSI: "substantive build result\nRun /review on my current changes",
+		Columns: 71, VisibleRows: 37, BufferRows: 2,
+	}
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2}, capture, conversationFrame{}, "substantive build result", []string{"Run /review on my current changes"})
+	if crop.source == guidedEvidenceExcerpt {
+		t.Fatalf("out-of-evidence excerpt was selected: %#v", crop)
+	}
+}
+
+func TestGuidedRangeCropCarriesInheritedANSIState(t *testing.T) {
+	plain := []string{"red one", "red two", "plain"}
+	ansi := []string{"\x1b[31mred one", "red two", "\x1b[39mplain"}
+	capture := tmux.StyledCapture{Columns: 71, VisibleRows: 37}
+	crop := buildGuidedRangeCrop(state.TerminalSession{ID: 2}, capture, plain, ansi, 1, 1, []int{0}, "quoted terminal text", guidedEvidenceExcerpt, "terminal")
+	if !strings.HasPrefix(crop.input.ANSI, "\x1b[31m") || !strings.Contains(crop.input.ANSI, "red two") {
+		t.Fatalf("inherited ANSI state was lost: %q", crop.input.ANSI)
+	}
+}
+
+func TestGuidedEvidenceHorizontallyFramesQuotedText(t *testing.T) {
+	line := strings.Repeat(" ", 145) + "decisive result near the right edge"
+	capture := tmux.StyledCapture{Text: line, ANSI: line, Columns: 200, VisibleRows: 50, BufferRows: 1}
+	crop, ok := buildGuidedEvidenceCrop(state.TerminalSession{ID: 2}, capture, []string{"decisive result near the right edge"}, "terminal")
+	if !ok || crop.input.ColumnOffset <= 0 || crop.input.ColumnOffset > 128 {
+		t.Fatalf("wide quoted crop=%#v ok=%v", crop, ok)
+	}
+}
+
+func TestGuidedTailOmitsRecognizedPassiveChrome(t *testing.T) {
+	text := "build completed\n\n› Find and fix a bug in @filename\ngpt-5.6-sol · normal · [ready]"
+	capture := trimPassiveCapture(tmux.StyledCapture{Text: text, ANSI: text, Columns: 71, VisibleRows: 37, BufferRows: 4})
+	crop, ok := buildGuidedTailCrop(state.TerminalSession{ID: 2}, capture, "terminal")
+	if !ok || crop.plain != "build completed" {
+		t.Fatalf("passive chrome remained in fallback: %#v ok=%v", crop, ok)
 	}
 }
 
@@ -155,7 +202,7 @@ func TestGuidedTailCropUsesLastMeaningfulBlockWithoutHighlight(t *testing.T) {
 func TestGuidedFallbackNeverSelectsKnownSecretPixels(t *testing.T) {
 	app := &App{Config: config.Config{TelegramBotToken: "known-secret", SnapshotTheme: "contrast-dark"}}
 	capture := tmux.StyledCapture{Text: "result known-secret", ANSI: "result known-secret", CurrentPath: "/tmp/known-secret", Columns: 71, VisibleRows: 37, BufferRows: 1}
-	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "known-secret build"}, capture, conversationFrame{}, nil)
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "known-secret build"}, capture, conversationFrame{}, capture.Text, nil)
 	if crop.source != guidedEvidencePlain || crop.input.Footer != "current terminal tail" || strings.Contains(crop.input.ANSI+crop.input.Title+crop.input.CWD, "known-secret") || !strings.Contains(crop.input.ANSI, "<redacted>") {
 		t.Fatalf("secret fallback crop=%#v", crop)
 	}
@@ -164,8 +211,144 @@ func TestGuidedFallbackNeverSelectsKnownSecretPixels(t *testing.T) {
 func TestGuidedFallbackKeepsEmptyFrameQuiet(t *testing.T) {
 	app := &App{Config: config.Config{SnapshotTheme: "contrast-dark"}}
 	capture := tmux.StyledCapture{Columns: 71, VisibleRows: 37}
-	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "work"}, capture, conversationFrame{}, nil)
+	crop := app.selectGuidedEvidenceCrop(state.TerminalSession{ID: 2, Title: "work"}, capture, conversationFrame{}, capture.Text, nil)
 	if crop.source != guidedEvidenceGuide || crop.input.Footer != "guided view" || strings.TrimSpace(crop.input.ANSI) != "" {
 		t.Fatalf("empty fallback crop=%#v", crop)
 	}
+}
+
+func TestUnwatchSupersedesBlockedGuidedRender(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.AnchorFormat = "text"
+		current.WatchEnabled = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := &blockingSnapshotRenderer{started: make(chan struct{}), release: make(chan struct{})}
+	telegramCalls := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		telegramCalls++
+		return nil, errors.New("unwatched render reached Telegram")
+	})}
+	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client, Snapshots: renderer, mode: "guide", snapshotReady: true}
+	capture := tmux.StyledCapture{Text: "tests passed", ANSI: "tests passed", Columns: 71, VisibleRows: 37, BufferRows: 1}
+	done := make(chan bool, 1)
+	go func() {
+		done <- a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed"}, true, nil, nil)
+	}()
+	<-renderer.started
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) { current.WatchEnabled = false }); err != nil {
+		t.Fatal(err)
+	}
+	close(renderer.release)
+	if <-done || telegramCalls != 0 {
+		t.Fatalf("unwatched render published: calls=%d", telegramCalls)
+	}
+}
+
+func TestGuidedEvidenceReplacesUnavailableAnchorAndDeletesMediaPredecessor(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.AnchorFormat = anchorFormatGuideEvidence
+		current.WatchEnabled = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		paths = append(paths, request.URL.Path)
+		switch request.URL.Path {
+		case "/botTOKEN/editMessageMedia":
+			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be edited"}), nil
+		case "/botTOKEN/sendPhoto":
+			return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/deleteMessage":
+			return snapshotJSONResponse(`true`), nil
+		default:
+			return nil, fmt.Errorf("unexpected Telegram endpoint %s", request.URL.Path)
+		}
+	})}
+	a := &App{
+		Config: config.Config{Home: dir, TelegramChatID: 100, SnapshotTheme: "contrast-dark"}, Store: store, Telegram: client,
+		Snapshots: &fakeSnapshotRenderer{}, mode: "guide", snapshotReady: true,
+	}
+	capture := tmux.StyledCapture{Text: "tests passed successfully", ANSI: "\x1b[32mtests passed successfully", Columns: 71, VisibleRows: 37, BufferRows: 1, CurrentPath: "/tmp"}
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
+		t.Fatal("replacement guided anchor was not accepted")
+	}
+	got, _ := store.FindSession(session.ID)
+	frame, frameOK := a.snapshotTextFrame(got)
+	if got.AnchorMessageID != 88 || got.AnchorFormat != anchorFormatGuideEvidence || got.RetiringAnchorMessageID != 0 || !got.AnchorPinned || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{77}) || !frameOK || frame.MessageID != 88 {
+		t.Fatalf("replacement state=%#v frame=%#v ok=%v", got, frame, frameOK)
+	}
+	want := []string{"/botTOKEN/editMessageMedia", "/botTOKEN/sendPhoto", "/botTOKEN/pinChatMessage", "/botTOKEN/deleteMessage"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("replacement paths=%#v want=%#v", paths, want)
+	}
+}
+
+func TestProspectiveMediaCleanupOutlivesCallerCancellation(t *testing.T) {
+	calls := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if request.Context().Err() != nil || request.URL.Path != "/botTOKEN/deleteMessage" {
+			t.Fatalf("cleanup request path=%s err=%v", request.URL.Path, request.Context().Err())
+		}
+		return snapshotJSONResponse(`true`), nil
+	})}
+	a := &App{Telegram: client}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.deactivateProspectiveMediaAnchor(ctx, 100, 88)
+	if calls != 1 {
+		t.Fatalf("cleanup calls=%d", calls)
+	}
+}
+
+type blockingSnapshotRenderer struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingSnapshotRenderer) Available() (string, error) { return "/usr/bin/chromium", nil }
+
+func (r *blockingSnapshotRenderer) Render(_ context.Context, _ terminalshot.Input, dir string) (string, error) {
+	close(r.started)
+	<-r.release
+	path := filepath.Join(dir, "blocked.png")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return path, os.WriteFile(path, []byte("png"), 0o600)
 }

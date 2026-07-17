@@ -157,7 +157,7 @@ func (a *App) uploadAccessibleSnapshotFrame(ctx context.Context, msg telegram.Me
 	sessionLock := a.sessionMutex(expected.ID)
 	sessionLock.Lock()
 	current, ok := a.Store.FindSession(expected.ID)
-	if !ok || current.State != state.TerminalRunning || current.AnchorFormat != "snapshot" || current.AnchorMessageID != expected.AnchorMessageID || !sameTerminalBinding(current, expected) {
+	if !ok || current.State != state.TerminalRunning || !mediaAnchorFormat(current.AnchorFormat) || current.AnchorMessageID != expected.AnchorMessageID || !sameTerminalBinding(current, expected) {
 		sessionLock.Unlock()
 		a.reply(ctx, msg, "raw view canceled: the session changed while this request was queued")
 		return
@@ -183,7 +183,7 @@ func (a *App) uploadAccessibleSnapshotFrame(ctx context.Context, msg telegram.Me
 		return
 	}
 	defer os.Remove(path)
-	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, fmt.Sprintf("[%d] snapshot text", expected.ID)); err != nil {
+	if _, err := a.Telegram.SendDocument(ctx, msg.Chat.ID, path, fmt.Sprintf("[%d] displayed terminal text", expected.ID)); err != nil {
 		a.reply(ctx, msg, "upload error: "+err.Error())
 	}
 }

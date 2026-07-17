@@ -137,7 +137,6 @@ func ParseResult(raw string) Result {
 	if start < 0 {
 		return result
 	}
-	result.Text = strings.TrimSpace(raw[:start])
 	metadata := raw[start+len(evidenceOpen):]
 	end := strings.Index(metadata, evidenceClose)
 	if end < 0 || strings.TrimSpace(metadata[end+len(evidenceClose):]) != "" {
@@ -149,6 +148,7 @@ func ParseResult(raw string) Result {
 	if err := json.Unmarshal([]byte(metadata[:end]), &trailer); err != nil {
 		return result
 	}
+	result.Text = strings.TrimSpace(raw[:start])
 	seen := make(map[string]bool, len(trailer.Excerpts))
 	for _, excerpt := range trailer.Excerpts {
 		excerpt = strings.TrimSpace(excerpt)

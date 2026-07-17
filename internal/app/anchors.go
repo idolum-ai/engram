@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
@@ -67,10 +69,18 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 		return
 	}
 	var retireErr error
+	removed := false
 	if mediaAnchorFormat(ts.RetiringAnchorFormat) {
-		_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
+		retireErr = a.Telegram.DeleteMessage(ctx, ts.AnchorChatID, oldID)
+		if retireErr == nil || isTelegramMessageGone(retireErr) {
+			removed = true
+			retireErr = nil
+		} else {
+			_ = a.audit("telegram.anchor_retire", "delete_failed", map[string]any{"session_id": id, "message_id": oldID, "error": retireErr.Error()})
+			_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts), telegram.ClearMarkup())
+		}
 	} else {
-		_, retireErr = a.editAnchor(ctx, ts.AnchorChatID, oldID, retiredAnchorText(ts), telegram.ClearMarkup())
+		_, retireErr = a.editAnchor(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts), telegram.ClearMarkup())
 	}
 	if retireErr != nil && !telegram.IsMessageNotModified(retireErr) {
 		if !isTelegramAnchorUnavailable(retireErr) {
@@ -79,10 +89,12 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 			return
 		}
 	}
-	if err := a.Telegram.UnpinChatMessage(ctx, ts.AnchorChatID, oldID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
-		_ = a.audit("telegram.anchor_retire", "failed", map[string]any{"session_id": id, "message_id": oldID, "stage": "unpin", "error": err.Error()})
-		a.deferAnchorRetirement(id, oldID)
-		return
+	if !removed {
+		if err := a.Telegram.UnpinChatMessage(ctx, ts.AnchorChatID, oldID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
+			_ = a.audit("telegram.anchor_retire", "failed", map[string]any{"session_id": id, "message_id": oldID, "stage": "unpin", "error": err.Error()})
+			a.deferAnchorRetirement(id, oldID)
+			return
+		}
 	}
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		if session.RetiringAnchorMessageID == oldID {
@@ -163,16 +175,39 @@ func (a *App) ensureCurrentAnchorUnpinnedLocked(ctx context.Context, ts state.Te
 }
 
 func (a *App) deactivateProspectiveAnchor(ctx context.Context, chatID int64, messageID int, text string) {
-	_, _ = a.editAnchor(ctx, chatID, messageID, text, telegram.ClearMarkup())
-	_ = a.Telegram.UnpinChatMessage(ctx, chatID, messageID)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := a.Telegram.DeleteMessage(cleanupCtx, chatID, messageID); err == nil || isTelegramMessageGone(err) {
+		return
+	} else {
+		_ = a.audit("telegram.prospective_anchor", "delete_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if _, err := a.editAnchor(cleanupCtx, chatID, messageID, text, telegram.ClearMarkup()); err != nil && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_anchor", "deactivate_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if err := a.Telegram.UnpinChatMessage(cleanupCtx, chatID, messageID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_anchor", "unpin_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
 }
 
 func anchorShouldBePinned(ts state.TerminalSession) bool {
 	return ts.State == state.TerminalRunning && ts.WatchEnabled && ts.AnchorMessageID != 0
 }
 
-func retiredAnchorText(ts state.TerminalSession) string {
-	return fmt.Sprintf("[%d] %s\ncontinued in the newer live anchor", ts.ID, firstNonEmpty(ts.Title, "session"))
+func (a *App) retiredAnchorText(ts state.TerminalSession) string {
+	return fmt.Sprintf("[%d] %s\ncontinued in the newer live anchor", ts.ID, a.redactText(firstNonEmpty(ts.Title, "session")))
+}
+
+func isTelegramMessageGone(err error) bool {
+	if isTelegramAnchorUnavailable(err) {
+		return true
+	}
+	var telegramErr *telegram.Error
+	if !errors.As(err, &telegramErr) {
+		return false
+	}
+	description := strings.ToLower(telegramErr.Description)
+	return strings.Contains(description, "message to delete not found")
 }
 
 func (a *App) anchorMutex(id int) *keyedMutexHandle {
