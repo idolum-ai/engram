@@ -37,6 +37,48 @@ type guidedEvidenceCrop struct {
 	source string
 }
 
+func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.TerminalSession, refs visibleReferences) bool {
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
+	disclosureLock := a.disclosureMutex(expected.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
+	anchorLock := a.anchorMutex(expected.ID)
+	anchorLock.Lock()
+	defer anchorLock.Unlock()
+	current, ok := a.Store.FindSession(expected.ID)
+	if !ok || current.State != state.TerminalRunning || !current.WatchEnabled || current.AnchorFormat != anchorFormatGuideEvidence || current.RetiringAnchorMessageID != 0 || !sameTerminalBinding(current, expected) {
+		return false
+	}
+	frame, ok := a.snapshotTextFrame(current)
+	if !ok {
+		return false
+	}
+	caption, files := a.guidedEvidenceCaption(current, current.LastSummary, refs)
+	renderHash := sha(caption + "\x00" + frame.FrameHash)
+	if renderHash == current.LastRenderHash {
+		return true
+	}
+	presented := bindAnchorFiles(current, files)
+	if _, err := a.Telegram.EditHTMLCaption(ctx, current.AnchorChatID, current.AnchorMessageID, telegram.MarkdownToHTML(caption), a.anchorMarkup(presented)); err != nil && !telegram.IsMessageNotModified(err) {
+		_ = a.audit("telegram.guided_references", "failed", map[string]any{"session_id": current.ID, "error": err.Error()})
+		return false
+	}
+	updated := false
+	if _, _, err := a.Store.UpdateSession(current.ID, func(session *state.TerminalSession) {
+		if session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == current.AnchorMessageID && session.AnchorFormat == anchorFormatGuideEvidence && session.RetiringAnchorMessageID == 0 && sameTerminalBinding(*session, current) {
+			session.LastRenderHash = renderHash
+			session.LastAnchorEditAt = time.Now().UTC()
+			setAnchorFiles(session, files)
+			updated = true
+		}
+	}); err != nil {
+		_ = a.audit("state.guided_references", "failed", map[string]any{"session_id": current.ID, "error": err.Error()})
+		return false
+	}
+	return updated
+}
+
 func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, refs visibleReferences, excerpts []string, force bool, guard, accepted func() bool) bool {
 	if !a.snapshotReady || a.Snapshots == nil || a.snapshotAnchors() {
 		return false
@@ -57,6 +99,9 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
+	disclosureLock := a.disclosureMutex(expected.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	anchorLock := a.anchorMutex(expected.ID)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
@@ -143,6 +188,9 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 		}
 		return done
 	}
+	// Telegram now displays this crop under the existing message identity. Keep
+	// its exact text companion coherent even if later state acceptance fails.
+	a.rememberAnchorTextFrame(latest, crop.plain, crop.hash)
 	if guard != nil && !guard() {
 		return false
 	}
@@ -168,13 +216,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 		return false
 	}
 	_ = a.audit("terminal.guided_evidence", "updated", map[string]any{"session_id": latest.ID, "source": crop.source, "rows": crop.input.BufferRows})
-	done := finish()
-	if done {
-		if current, found := a.Store.FindSession(latest.ID); found {
-			a.rememberAnchorTextFrame(current, crop.plain, crop.hash)
-		}
-	}
-	return done
+	return finish()
 }
 
 func (a *App) guidedEvidenceCaption(session state.TerminalSession, summary string, refs visibleReferences) (string, []string) {
@@ -272,14 +314,17 @@ func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledC
 		return guidedEvidenceCrop{}, false
 	}
 	selected := make(map[int]bool)
+	focusStart, focusEnd := capture.Columns, -1
 	for _, excerpt := range excerpts {
-		rows, ok := matchEvidenceRows(plainRows, excerpt)
+		match, ok := matchEvidenceSpan(plainRows, excerpt)
 		if !ok {
 			continue
 		}
-		for row := rows[0]; row <= rows[1]; row++ {
+		for row := match.rows[0]; row <= match.rows[1]; row++ {
 			selected[row] = true
 		}
+		focusStart = min(focusStart, match.columns[0])
+		focusEnd = max(focusEnd, match.columns[1])
 	}
 	if len(selected) == 0 {
 		return guidedEvidenceCrop{}, false
@@ -306,7 +351,11 @@ func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledC
 	for _, row := range indices {
 		highlights = append(highlights, row-start)
 	}
-	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, highlights, "quoted terminal text", guidedEvidenceExcerpt, theme), true
+	if focusEnd < focusStart || focusEnd-focusStart+1 > guidedViewportColumns {
+		return guidedEvidenceCrop{}, false
+	}
+	focus := [2]int{focusStart, focusEnd}
+	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, highlights, &focus, "quoted terminal text", guidedEvidenceExcerpt, theme), true
 }
 
 func buildGuidedRecentActivityCrop(session state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, theme string) (guidedEvidenceCrop, bool) {
@@ -359,7 +408,7 @@ func buildGuidedRecentActivityCrop(session state.TerminalSession, capture tmux.S
 	if len(highlights) == 0 {
 		return guidedEvidenceCrop{}, false
 	}
-	return buildGuidedRangeCrop(session, capture, newRows, ansiRows, start, end, highlights, "changed terminal region", guidedEvidenceChanged, theme), true
+	return buildGuidedRangeCrop(session, capture, newRows, ansiRows, start, end, highlights, nil, "changed terminal region", guidedEvidenceChanged, theme), true
 }
 
 func buildGuidedTailCrop(session state.TerminalSession, capture tmux.StyledCapture, theme string) (guidedEvidenceCrop, bool) {
@@ -379,7 +428,7 @@ func buildGuidedTailCrop(session state.TerminalSession, capture tmux.StyledCaptu
 	for start > 0 && end-start+1 < guidedTailRows && strings.TrimSpace(plainRows[start-1]) != "" {
 		start--
 	}
-	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, nil, "current terminal tail", guidedEvidenceTail, theme), true
+	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, nil, nil, "current terminal tail", guidedEvidenceTail, theme), true
 }
 
 func buildGuidedPlainTailCrop(session state.TerminalSession, capture tmux.StyledCapture, text, theme string) (guidedEvidenceCrop, bool) {
@@ -395,21 +444,29 @@ func buildGuidedPlainTailCrop(session state.TerminalSession, capture tmux.Styled
 	for start > 0 && end-start+1 < guidedTailRows && strings.TrimSpace(rows[start-1]) != "" {
 		start--
 	}
-	return buildGuidedRangeCrop(session, capture, rows, rows, start, end, nil, "current terminal tail", guidedEvidencePlain, theme), true
+	return buildGuidedRangeCrop(session, capture, rows, rows, start, end, nil, nil, "current terminal tail", guidedEvidencePlain, theme), true
 }
 
-func buildGuidedRangeCrop(session state.TerminalSession, capture tmux.StyledCapture, plainRows, ansiRows []string, start, end int, highlights []int, footer, source, theme string) guidedEvidenceCrop {
+func buildGuidedRangeCrop(session state.TerminalSession, capture tmux.StyledCapture, plainRows, ansiRows []string, start, end int, highlights []int, focus *[2]int, footer, source, theme string) guidedEvidenceCrop {
 	cropANSI := append([]string(nil), ansiRows[start:end+1]...)
 	if prefix := inheritedSGRPrefix(ansiRows[:start]); prefix != "" && len(cropANSI) > 0 {
 		cropANSI[0] = prefix + cropANSI[0]
 	}
 	cropPlain := append([]string(nil), plainRows[start:end+1]...)
+	offset := guidedContentOffset(cropPlain, highlights, capture.Columns)
+	if focus != nil {
+		offset = guidedSpanOffset(*focus, capture.Columns)
+	}
 	input := terminalshot.Input{
 		ANSI: strings.Join(cropANSI, "\n"), Title: firstNonEmpty(session.Title, capture.Title), Target: fmt.Sprintf("[%d]", session.ID),
 		CWD: capture.CurrentPath, Columns: capture.Columns, VisibleRows: capture.VisibleRows, BufferRows: end - start + 1,
-		Compact: true, HighlightRows: highlights, ColumnOffset: guidedColumnOffset(cropPlain, highlights, capture.Columns), Footer: footer,
+		Compact: true, HighlightRows: highlights, ColumnOffset: offset, Footer: footer,
 	}
-	return guidedEvidenceCrop{input: input, plain: strings.Join(cropPlain, "\n"), source: source, hash: guidedCropHash(input, theme, source)}
+	visiblePlain := make([]string, len(cropPlain))
+	for index, row := range cropPlain {
+		visiblePlain[index] = terminalCellSlice(row, offset, min(guidedViewportColumns, capture.Columns))
+	}
+	return guidedEvidenceCrop{input: input, plain: strings.Join(visiblePlain, "\n"), source: source, hash: guidedCropHash(input, theme, source)}
 }
 
 func guidedCropHash(input terminalshot.Input, theme, source string) string {
@@ -458,80 +515,204 @@ func inheritedSGRPrefix(rows []string) string {
 	return out.String()
 }
 
-func guidedColumnOffset(rows []string, highlights []int, columns int) int {
-	if columns <= guidedViewportColumns || len(highlights) == 0 {
+func guidedSpanOffset(span [2]int, columns int) int {
+	if columns <= guidedViewportColumns {
 		return 0
 	}
-	left, right := columns, -1
-	for _, index := range highlights {
-		if index < 0 || index >= len(rows) {
-			continue
-		}
-		runes := []rune(rows[index])
-		first, last := -1, -1
-		for column, r := range runes {
-			if !unicode.IsSpace(r) {
-				if first < 0 {
-					first = column
-				}
-				last = column
-			}
-		}
-		if first >= 0 {
-			left = min(left, first)
-			right = max(right, last)
-		}
-	}
-	if right < 0 {
-		return 0
-	}
-	offset := left
-	if width := right - left + 1; width < guidedViewportColumns {
-		offset = max(0, left-(guidedViewportColumns-width)/2)
-	}
+	width := span[1] - span[0] + 1
+	offset := max(0, span[0]-(guidedViewportColumns-width)/2)
 	return min(offset, columns-guidedViewportColumns)
 }
 
-func matchEvidenceRows(rows []string, excerpt string) ([2]int, bool) {
-	needle := strings.Join(strings.Fields(excerpt), " ")
-	if len(needle) < guidedEvidenceMinExcerptBytes || len(strings.Fields(needle)) < 2 {
-		return [2]int{}, false
+func guidedContentOffset(rows []string, highlights []int, columns int) int {
+	if columns <= guidedViewportColumns {
+		return 0
 	}
-	normalized := make([]string, len(rows))
-	starts := make([]int, len(rows))
-	ends := make([]int, len(rows))
-	var flat strings.Builder
-	for i, row := range rows {
-		normalized[i] = strings.Join(strings.Fields(row), " ")
-		if i > 0 {
-			flat.WriteByte(' ')
+	if len(highlights) == 0 {
+		lastContent := 0
+		for _, row := range rows {
+			column := 0
+			for _, r := range row {
+				column += terminalRuneWidth(r, column)
+				if !unicode.IsSpace(r) {
+					lastContent = max(lastContent, column)
+				}
+			}
 		}
-		starts[i] = flat.Len()
-		flat.WriteString(normalized[i])
-		ends[i] = flat.Len()
+		return min(max(0, lastContent-guidedViewportColumns), columns-guidedViewportColumns)
 	}
-	haystack := flat.String()
-	match := strings.Index(haystack, needle)
-	if match < 0 || strings.Index(haystack[match+1:], needle) >= 0 {
-		return [2]int{}, false
+	selected := make(map[int]bool, len(highlights))
+	for _, row := range highlights {
+		selected[row] = true
 	}
-	matchEnd := match + len(needle)
-	first, last := -1, -1
-	for i := range rows {
-		if normalized[i] == "" {
+	scores := make([]int, columns)
+	for rowIndex, row := range rows {
+		if len(selected) > 0 && !selected[rowIndex] {
 			continue
 		}
-		if ends[i] > match && starts[i] < matchEnd {
-			if first < 0 {
-				first = i
+		column := 0
+		for _, r := range row {
+			width := terminalRuneWidth(r, column)
+			if !unicode.IsSpace(r) {
+				for cell := column; cell < min(column+width, columns); cell++ {
+					scores[cell]++
+				}
 			}
-			last = i
+			column += width
 		}
 	}
-	if first < 0 || last < first {
-		return [2]int{}, false
+	bestOffset, bestScore := 0, -1
+	for offset := 0; offset <= columns-guidedViewportColumns; offset++ {
+		score := 0
+		for _, value := range scores[offset : offset+guidedViewportColumns] {
+			score += value
+		}
+		if score >= bestScore {
+			bestOffset, bestScore = offset, score
+		}
 	}
-	return [2]int{first, last}, true
+	return bestOffset
+}
+
+type terminalPosition struct {
+	row    int
+	column int
+	width  int
+}
+
+type evidenceMatch struct {
+	rows    [2]int
+	columns [2]int
+}
+
+func matchEvidenceRows(rows []string, excerpt string) ([2]int, bool) {
+	match, ok := matchEvidenceSpan(rows, excerpt)
+	return match.rows, ok
+}
+
+func matchEvidenceSpan(rows []string, excerpt string) (evidenceMatch, bool) {
+	needle := strings.Join(strings.Fields(excerpt), " ")
+	if len(needle) < guidedEvidenceMinExcerptBytes || len(strings.Fields(needle)) < 2 {
+		return evidenceMatch{}, false
+	}
+	haystack, positions := normalizeTerminalRows(rows)
+	needleRunes := []rune(needle)
+	matchStart := runeSliceIndex(haystack, needleRunes, 0)
+	if matchStart < 0 || runeSliceIndex(haystack, needleRunes, matchStart+1) >= 0 {
+		return evidenceMatch{}, false
+	}
+	matchEnd := matchStart + len(needleRunes)
+	firstRow, lastRow := positions[matchStart].row, positions[matchEnd-1].row
+	left, right := positions[matchStart].column, positions[matchStart].column
+	for _, position := range positions[matchStart:matchEnd] {
+		left = min(left, position.column)
+		right = max(right, position.column+max(position.width, 1)-1)
+	}
+	return evidenceMatch{rows: [2]int{firstRow, lastRow}, columns: [2]int{left, right}}, true
+}
+
+func normalizeTerminalRows(rows []string) ([]rune, []terminalPosition) {
+	var normalized []rune
+	var positions []terminalPosition
+	pendingSpace := false
+	for rowIndex, row := range rows {
+		column := 0
+		for _, r := range row {
+			width := terminalRuneWidth(r, column)
+			if unicode.IsSpace(r) {
+				if len(normalized) > 0 {
+					pendingSpace = true
+				}
+				column += width
+				continue
+			}
+			if pendingSpace {
+				normalized = append(normalized, ' ')
+				positions = append(positions, terminalPosition{row: rowIndex, column: column, width: 1})
+				pendingSpace = false
+			}
+			normalized = append(normalized, r)
+			positions = append(positions, terminalPosition{row: rowIndex, column: column, width: width})
+			column += width
+		}
+		if len(normalized) > 0 {
+			pendingSpace = true
+		}
+	}
+	return normalized, positions
+}
+
+func runeSliceIndex(haystack, needle []rune, start int) int {
+	for index := max(0, start); index+len(needle) <= len(haystack); index++ {
+		match := true
+		for offset := range needle {
+			if haystack[index+offset] != needle[offset] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return index
+		}
+	}
+	return -1
+}
+
+func terminalCellSlice(row string, start, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	end := start + width
+	column := 0
+	var out strings.Builder
+	included := false
+	for _, r := range row {
+		cellWidth := terminalRuneWidth(r, column)
+		if cellWidth == 0 {
+			if included {
+				out.WriteRune(r)
+			}
+			continue
+		}
+		if column >= end {
+			break
+		}
+		if r == '\t' {
+			for cell := max(column, start); cell < min(column+cellWidth, end); cell++ {
+				out.WriteByte(' ')
+				included = true
+			}
+		} else if column >= start && column+cellWidth <= end {
+			out.WriteRune(r)
+			included = true
+		} else if column < end && column+cellWidth > start {
+			out.WriteByte(' ')
+			included = true
+		}
+		column += cellWidth
+	}
+	return strings.TrimRight(out.String(), " ")
+}
+
+func terminalRuneWidth(r rune, column int) int {
+	if r == '\t' {
+		return 8 - column%8
+	}
+	if r == 0 || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r) {
+		return 0
+	}
+	if r < 0x20 || r == 0x7f {
+		return 0
+	}
+	if r >= 0x1100 && (r <= 0x115f || r == 0x2329 || r == 0x232a ||
+		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f ||
+		r >= 0xac00 && r <= 0xd7a3 || r >= 0xf900 && r <= 0xfaff ||
+		r >= 0xfe10 && r <= 0xfe19 || r >= 0xfe30 && r <= 0xfe6f ||
+		r >= 0xff00 && r <= 0xff60 || r >= 0xffe0 && r <= 0xffe6 ||
+		r >= 0x1f300 && r <= 0x1faff || r >= 0x20000 && r <= 0x3fffd) {
+		return 2
+	}
+	return 1
 }
 
 func captureRows(text string) []string {

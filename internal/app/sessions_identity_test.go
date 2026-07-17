@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -16,6 +17,25 @@ import (
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+func TestGuideEvidenceReattachNeutralizationRedactsTitle(t *testing.T) {
+	var body map[string]any
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+	})}
+	a := &App{Config: config.Config{TelegramBotToken: "configured-secret"}, Telegram: client}
+	err := a.neutralizeAnchorForReattachLocked(context.Background(), state.TerminalSession{
+		ID: 3, Title: "configured-secret work", AnchorChatID: 100, AnchorMessageID: 77, AnchorFormat: anchorFormatGuideEvidence,
+	})
+	if err != nil || strings.Contains(fmt.Sprint(body["caption"]), "configured-secret") || !strings.Contains(fmt.Sprint(body["caption"]), "<redacted>") {
+		t.Fatalf("neutralization body=%#v err=%v", body, err)
+	}
+}
 
 func TestSessionsOffersExplicitReattachForLegacyBinding(t *testing.T) {
 	store, legacy := legacyBindingStore(t)

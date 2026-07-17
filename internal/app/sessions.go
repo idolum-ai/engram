@@ -253,7 +253,7 @@ func (a *App) neutralizeAnchorForReattachLocked(ctx context.Context, session sta
 	if session.AnchorMessageID == 0 || a.Telegram == nil {
 		return nil
 	}
-	text := fmt.Sprintf("[%d] %s\nreattaching to a new tmux binding", session.ID, firstNonEmpty(session.Title, "session"))
+	text := fmt.Sprintf("[%d] %s\nreattaching to a new tmux binding", session.ID, a.redactText(firstNonEmpty(session.Title, "session")))
 	var err error
 	if mediaAnchorFormat(session.AnchorFormat) {
 		_, err = a.Telegram.EditCaption(ctx, session.AnchorChatID, session.AnchorMessageID, text, telegram.ClearMarkup())
@@ -293,6 +293,7 @@ func (a *App) rename(ctx context.Context, id int, name string, msg telegram.Mess
 		a.reply(ctx, msg, "session not found")
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
+	a.queueManualRefresh(id)
 	a.reply(ctx, msg, fmt.Sprintf("[%d] renamed to %s", id, strings.TrimSpace(name)))
 	return actionResult{Outcome: actionOK, Message: "renamed"}
 }

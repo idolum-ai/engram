@@ -4,6 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
+	"os"
 	"strings"
 	"time"
 
@@ -77,7 +83,11 @@ func (a *App) finishAnchorRotationLocked(ctx context.Context, id int) {
 			retireErr = nil
 		} else {
 			_ = a.audit("telegram.anchor_retire", "delete_failed", map[string]any{"session_id": id, "message_id": oldID, "error": retireErr.Error()})
-			_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts), telegram.ClearMarkup())
+			retireErr = a.replaceMediaWithTombstone(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts))
+			if retireErr != nil && isTelegramAnchorUnavailable(retireErr) {
+				_ = a.audit("telegram.anchor_retire", "media_retained", map[string]any{"session_id": id, "message_id": oldID, "error": retireErr.Error()})
+				_, retireErr = a.Telegram.EditCaption(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts), telegram.ClearMarkup())
+			}
 		}
 	} else {
 		_, retireErr = a.editAnchor(ctx, ts.AnchorChatID, oldID, a.retiredAnchorText(ts), telegram.ClearMarkup())
@@ -190,6 +200,44 @@ func (a *App) deactivateProspectiveAnchor(ctx context.Context, chatID int64, mes
 	}
 }
 
+func (a *App) replaceMediaWithTombstone(ctx context.Context, chatID int64, messageID int, text string) error {
+	path, err := neutralAnchorImage(a.Config.ArtifactDir())
+	if err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	_, err = a.Telegram.EditHTMLPhoto(ctx, chatID, messageID, path, html.EscapeString(text), telegram.ClearMarkup())
+	return err
+}
+
+func neutralAnchorImage(dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create neutral media directory: %w", err)
+	}
+	file, err := os.CreateTemp(dir, ".engram-neutral-*.png")
+	if err != nil {
+		return "", fmt.Errorf("create neutral media: %w", err)
+	}
+	path := file.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(path)
+		}
+	}()
+	canvas := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	draw.Draw(canvas, canvas.Bounds(), &image.Uniform{C: color.RGBA{R: 17, G: 20, B: 24, A: 255}}, image.Point{}, draw.Src)
+	if err := png.Encode(file, canvas); err != nil {
+		file.Close()
+		return "", fmt.Errorf("encode neutral media: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close neutral media: %w", err)
+	}
+	keep = true
+	return path, nil
+}
+
 func anchorShouldBePinned(ts state.TerminalSession) bool {
 	return ts.State == state.TerminalRunning && ts.WatchEnabled && ts.AnchorMessageID != 0
 }
@@ -199,15 +247,12 @@ func (a *App) retiredAnchorText(ts state.TerminalSession) string {
 }
 
 func isTelegramMessageGone(err error) bool {
-	if isTelegramAnchorUnavailable(err) {
-		return true
-	}
 	var telegramErr *telegram.Error
-	if !errors.As(err, &telegramErr) {
+	if !errors.As(err, &telegramErr) || (telegramErr.ErrorCode != 400 && telegramErr.StatusCode != 400) {
 		return false
 	}
 	description := strings.ToLower(telegramErr.Description)
-	return strings.Contains(description, "message to delete not found")
+	return strings.Contains(description, "message to delete not found") || strings.Contains(description, "message not found")
 }
 
 func (a *App) anchorMutex(id int) *keyedMutexHandle {

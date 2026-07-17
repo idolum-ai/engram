@@ -459,9 +459,20 @@ func (c *Client) editPhoto(ctx context.Context, chatID int64, messageID int, pat
 }
 
 func (c *Client) EditCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.editCaption(ctx, chatID, messageID, caption, markup, "")
+}
+
+func (c *Client) EditHTMLCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.editCaption(ctx, chatID, messageID, caption, markup, "HTML")
+}
+
+func (c *Client) editCaption(ctx context.Context, chatID int64, messageID int, caption string, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
 	body := map[string]any{"chat_id": chatID, "message_id": messageID, "caption": clampCaption(caption)}
 	if markup != nil {
 		body["reply_markup"] = markup
+	}
+	if parseMode != "" {
+		body["parse_mode"] = parseMode
 	}
 	var out Message
 	return out, c.postJSON(ctx, "editMessageCaption", body, &out)

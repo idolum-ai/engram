@@ -62,7 +62,7 @@ func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 
 	a.refreshSession(context.Background(), id, true)
 	got, _ := a.Store.FindSession(id)
-	wantHash := guideCaptureHash("ordinary output", tmux.StyledCapture{Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
 	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != wantHash {
 		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, wantHash)
 	}
@@ -72,7 +72,7 @@ func TestUnchangedGuideEvidenceRefreshPreservesCanonicalCard(t *testing.T) {
 	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	runner.capturePhysical = "ordinary output\n"
 	runner.captureJoined = runner.capturePhysical
-	wantHash := guideCaptureHash("ordinary output", tmux.StyledCapture{Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		session.AnchorChatID = 100
 		session.AnchorMessageID = 77
@@ -107,8 +107,16 @@ func TestGuideCaptureHashIncludesRenderGeometry(t *testing.T) {
 	first := tmux.StyledCapture{Columns: 71, VisibleRows: 37, CurrentPath: "/tmp", Title: "build"}
 	second := first
 	second.Columns = 120
-	if guideCaptureHash("same text", first) == guideCaptureHash("same text", second) {
+	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "build", second) {
 		t.Fatal("pane resize did not change the guide capture fingerprint")
+	}
+	styled := first
+	styled.ANSI = "\x1b[31msame text"
+	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "build", styled) {
+		t.Fatal("ANSI-only change did not change the guide capture fingerprint")
+	}
+	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "renamed", first) {
+		t.Fatal("Engram title change did not change the guide capture fingerprint")
 	}
 }
 

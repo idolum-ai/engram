@@ -81,10 +81,12 @@ Telegram is Engram's only user interface.
   delivered safely, Engram renders the bounded tail as redacted plain text; a
   truly empty terminal receives a quiet guide-only frame. Engram never preserves
   stale pixels, guesses semantic importance, or creates a second message.
-- Obsolete media predecessors are deleted when Telegram permits it. If Telegram
-  refuses deletion, Engram clears their controls, replaces the caption with a
-  redacted inactive label, unpins them, and audits that the historical pixels
-  remain in Telegram.
+- Obsolete media predecessors are deleted when Telegram permits it. If deletion
+  fails, Engram replaces their media with a locally generated neutral image,
+  clears controls, applies a redacted inactive label, and unpins them. If
+  Telegram also refuses media replacement because the message is too old,
+  Engram falls back to caption neutralization and audits that historical pixels
+  remain outside its control.
 - The latest conversational reply and latest screenshot reply for each session
   route Telegram replies to that session. The latest upstream-signal reply has
   the same routing behavior. The canonical guide-evidence card routes through

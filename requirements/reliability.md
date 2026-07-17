@@ -151,8 +151,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   unchanged for retry. If Telegram reports the anchor unavailable, replacement
   follows the ordinary send, persist, pin, delete-or-compact, and unpin lifecycle.
 - An unchanged guide capture already represented by a guide-evidence anchor
-  performs no generic caption edit. A changed pane width, visible height,
-  command, title, or working directory changes the guide capture fingerprint.
+  performs no generic caption edit or model/render work. It may reconcile
+  process-local file bindings through a caption-only media edit. A change to
+  ANSI styling, pane width, visible height, command, tmux title, Engram title,
+  or working directory changes the guide capture fingerprint.
   Disabling watch invalidates an in-flight guide turn before it may publish or
   advance continuity.
 - Snapshot refreshes hash styled capture, metadata, and the derived caption

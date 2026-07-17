@@ -348,8 +348,11 @@ func (a *App) deactivateProspectiveMediaAnchor(ctx context.Context, chatID int64
 	} else {
 		_ = a.audit("telegram.prospective_media", "delete_failed", map[string]any{"message_id": messageID, "error": err.Error()})
 	}
-	if _, err := a.Telegram.EditCaption(cleanupCtx, chatID, messageID, "inactive media", telegram.ClearMarkup()); err != nil && !isTelegramAnchorUnavailable(err) {
+	if err := a.replaceMediaWithTombstone(cleanupCtx, chatID, messageID, "inactive media"); err != nil {
 		_ = a.audit("telegram.prospective_media", "deactivate_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+		if _, captionErr := a.Telegram.EditCaption(cleanupCtx, chatID, messageID, "inactive media", telegram.ClearMarkup()); captionErr != nil && !isTelegramAnchorUnavailable(captionErr) {
+			_ = a.audit("telegram.prospective_media", "caption_failed", map[string]any{"message_id": messageID, "error": captionErr.Error()})
+		}
 	}
 	if err := a.Telegram.UnpinChatMessage(cleanupCtx, chatID, messageID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
 		_ = a.audit("telegram.prospective_media", "unpin_failed", map[string]any{"message_id": messageID, "error": err.Error()})

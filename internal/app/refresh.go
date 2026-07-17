@@ -79,10 +79,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	presentationText := a.processCapturedFrame(ctx, ts, capture)
 	refs := a.visibleReferences(presentationText)
-	hash := guideCaptureHash(presentationText, capture)
+	hash := guideCaptureHash(presentationText, ts.Title, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
 			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotReady {
+				a.updateGuidedAnchorReferences(ctx, ts, refs)
 				return
 			}
 			guard := func() bool {
@@ -167,9 +168,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 }
 
-func guideCaptureHash(text string, capture tmux.StyledCapture) string {
+func guideCaptureHash(text, sessionTitle string, capture tmux.StyledCapture) string {
 	return sha(strings.Join([]string{
 		text,
+		sessionTitle,
+		capture.ANSI,
 		capture.Title,
 		capture.CurrentPath,
 		strings.TrimSpace(capture.CurrentCmd),

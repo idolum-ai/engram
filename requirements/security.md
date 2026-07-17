@@ -71,10 +71,12 @@ privacy model must stay small and explicit.
   not general transcript sanitization. Their exact plain-text companions remain
   process-local and are uploaded only after a current-anchor `📄 Raw` callback.
 - When a canonical media anchor is replaced, Engram attempts to delete the old
-  photo before retiring its identity. Telegram may refuse deletion of older
-  messages; in that case Engram clears controls, applies a redacted inactive
-  caption, unpins the message, and audits that deletion failed. Telegram history
-  remains a disclosure boundary outside Engram's local retention controls.
+  photo before retiring its identity. A failed deletion triggers replacement
+  with a locally generated neutral image. Telegram may refuse both operations
+  for older messages; in that case Engram clears controls where possible,
+  applies a redacted inactive caption, unpins the message, and audits that pixels
+  remain. Telegram history is a disclosure boundary outside Engram's local
+  retention controls.
 - In `snapshot` mode, exact terminal images are sent automatically whenever a
   changed live anchor is rendered. The selected provider is called only when the user taps
   `🗣️`, if that capability was configured and enabled at startup.

@@ -246,8 +246,9 @@ the bot channel and must be revoked immediately.
   its provenance. If styled rows contain a configured secret or cannot be
   aligned safely, Engram renders the bounded tail as redacted plain text. A
   truly empty terminal uses a quiet guide-only frame so the prose remains the
-  focus. Compact crops keep a readable 71-column viewport, preserve inherited
-  terminal styling, and enforce the accessible contrast floor. The message ID,
+  focus. Compact crops keep a readable 71-cell viewport around the exact quote
+  or meaningful tail, account for wide and combining characters, preserve
+  inherited terminal styling, and enforce the accessible contrast floor. The message ID,
   pin, controls, and reply route do not change.
   Every media anchor also offers `📄 Raw`, which returns the exact delivered
   snapshot frame or guide crop as a bounded plain UTF-8 text attachment for
