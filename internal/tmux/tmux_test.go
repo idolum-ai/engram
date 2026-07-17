@@ -414,6 +414,28 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	}
 }
 
+func TestCaptureStyledKeepsPlainAndStyledPhysicalRowsAligned(t *testing.T) {
+	t.Parallel()
+	ansi := "\n\x1b[31museful terminal result\x1b[0m\n\n\n"
+	runner := &styledCaptureRunner{ansi: ansi, joined: "useful terminal result\n"}
+
+	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainRows := strings.Split(strings.TrimSuffix(got.Text, "\n"), "\n")
+	styledRows := strings.Split(strings.TrimSuffix(got.ANSI, "\n"), "\n")
+	if len(plainRows) != len(styledRows) || len(plainRows) != 4 {
+		t.Fatalf("physical rows plain=%d styled=%d; text=%q", len(plainRows), len(styledRows), got.Text)
+	}
+	if plainRows[0] != "" || plainRows[1] != "useful terminal result" || plainRows[2] != "" || plainRows[3] != "" {
+		t.Fatalf("plain physical rows = %#v", plainRows)
+	}
+	if got.JoinedText != "useful terminal result" {
+		t.Fatalf("joined text = %q", got.JoinedText)
+	}
+}
+
 func TestCaptureStyledRejectsBoundaryChange(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
