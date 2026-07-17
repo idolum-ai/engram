@@ -543,9 +543,14 @@ func (a *App) stopWatching(id int) (bool, error) {
 	lock := a.anchorMutex(id)
 	lock.Lock()
 	defer lock.Unlock()
-	_, ok, err := a.Store.UpdateSession(id, func(ts *state.TerminalSession) { ts.WatchEnabled = false })
-	if ok && err == nil {
+	updated, ok, err := a.Store.UpdateSession(id, func(ts *state.TerminalSession) { ts.WatchEnabled = false })
+	committed := ok && !updated.WatchEnabled && (err == nil || state.PersistenceReachedReplacement(err))
+	if committed {
 		a.resetConversationEpochLocked(id)
+	}
+	if err != nil && committed {
+		_ = a.audit("state.unwatch", "durability_uncertain", map[string]any{"session_id": id, "error": err.Error()})
+		return true, nil
 	}
 	return ok, err
 }
