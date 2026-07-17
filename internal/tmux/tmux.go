@@ -544,9 +544,6 @@ func (m Manager) CaptureLiteral(ctx context.Context, paneID, windowID, serverID 
 	if err != nil {
 		return "", err
 	}
-	if visibleRows > targetRows {
-		out = cropToMeaningfulWindow(out, targetRows)
-	}
 	return semanticCapture(out), nil
 }
 
@@ -587,14 +584,6 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	}
 	columns, visibleRows := before.Columns, before.VisibleRows
 	start, end := captureBounds(visibleRows, targetRows)
-	if visibleRows > targetRows {
-		framing, framingErr := m.Runner.Run(ctx, "capture-pane", "-p", "-N", "-S", "0", "-E", strconv.Itoa(visibleRows-1), "-t", paneID)
-		if framingErr != nil {
-			return StyledCapture{}, framingErr
-		}
-		start = meaningfulWindowStart(framing, targetRows)
-		end = start + targetRows - 1
-	}
 	nonce, err := captureNonce()
 	if err != nil {
 		return StyledCapture{}, err
@@ -705,55 +694,7 @@ func sameCaptureIdentity(before, after captureMetadata) bool {
 func validTmuxFlag(value string) bool { return value == "0" || value == "1" }
 
 func captureBounds(visibleRows, targetRows int) (start, end int) {
-	if visibleRows <= targetRows {
-		return visibleRows - targetRows, visibleRows - 1
-	}
-	return 0, visibleRows - 1
-}
-
-func cropToMeaningfulWindow(text string, targetRows int) string {
-	if targetRows <= 0 || text == "" {
-		return text
-	}
-	rows := captureRows(text)
-	if len(rows) <= targetRows {
-		return text
-	}
-	start := meaningfulWindowStart(text, targetRows)
-	return strings.Join(rows[start:start+targetRows], "")
-}
-
-func meaningfulWindowStart(text string, targetRows int) int {
-	rows := captureRows(text)
-	if targetRows <= 0 || len(rows) <= targetRows {
-		return 0
-	}
-	meaningful := make([]int, len(rows))
-	for i, row := range rows {
-		if strings.TrimSpace(semanticCapture(row)) != "" {
-			meaningful[i] = 1
-		}
-	}
-	score := 0
-	for _, value := range meaningful[:targetRows] {
-		score += value
-	}
-	bestStart, bestScore := 0, score
-	for start := 1; start+targetRows <= len(rows); start++ {
-		score += meaningful[start+targetRows-1] - meaningful[start-1]
-		if score >= bestScore {
-			bestStart, bestScore = start, score
-		}
-	}
-	return bestStart
-}
-
-func captureRows(text string) []string {
-	rows := strings.SplitAfter(text, "\n")
-	if len(rows) > 0 && rows[len(rows)-1] == "" {
-		rows = rows[:len(rows)-1]
-	}
-	return rows
+	return visibleRows - targetRows, visibleRows - 1
 }
 
 func captureNonce() (string, error) {

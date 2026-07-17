@@ -533,46 +533,26 @@ func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
 	}
 }
 
-func TestCaptureLiteralCropsTallBlankPaneAroundContent(t *testing.T) {
-	fullVisiblePane := "codex\nprompt\n" + strings.Repeat("\n", 98)
-	runner := &sequenceRunner{outputs: []string{tmuxRecord("80", "100"), fullVisiblePane}}
+func TestCaptureLiteralKeepsCurrentTailForTallPane(t *testing.T) {
+	fullVisiblePane := strings.Repeat("old output\n", 36) + "codex\nprompt\n"
+	runner := &sequenceRunner{outputs: []string{tmuxRecord("80", "40"), fullVisiblePane}}
 	got, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "codex\nprompt" {
+	if !strings.Contains(got, "codex\nprompt") {
 		t.Fatalf("CaptureLiteral = %q", got)
 	}
-	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S 0 -E 99 -t %7" {
+	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S -24 -E 39 -t %7" {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 
-func TestCropToMeaningfulWindowUsesANSIStrippedContent(t *testing.T) {
-	input := "\x1b[31mcodex\x1b[0m\n" + strings.Repeat("\n", 98)
-	got := cropToMeaningfulWindow(input, 64)
-	if !strings.Contains(got, "codex") {
-		t.Fatalf("cropped content lost meaningful row: %q", got)
-	}
-	if rows := strings.Count(got, "\n"); rows != 64 {
-		t.Fatalf("cropped rows = %d, want 64", rows)
-	}
-}
-
-func TestCropToMeaningfulWindowPrefersDenseContentOverFooter(t *testing.T) {
-	input := "build output\nimportant failure\n" + strings.Repeat("\n", 97) + "status footer\n"
-	got := cropToMeaningfulWindow(input, 64)
-	if !strings.Contains(got, "important failure") || strings.Contains(got, "status footer") {
-		t.Fatalf("crop did not prefer the densest meaningful region: %q", got)
-	}
-}
-
 func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
-	framing := strings.Repeat("physical row\n", 100)
 	ansi := strings.Repeat("\x1b[32mselected physical row\x1b[0m\n", 64)
 	joined := strings.Repeat("selected logical line\n", 32)
 	metadata := styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "80", "100", "bash", "1", "0")
-	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata, framing: framing}
+	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata}
 
 	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
 	if err != nil {
@@ -581,10 +561,10 @@ func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
 	if got.ANSI != ansi || got.JoinedText != strings.TrimSpace(joined) {
 		t.Fatalf("misaligned styled capture: ANSI=%q joined=%q", got.ANSI, got.JoinedText)
 	}
-	if len(runner.calls) != 6 {
+	if len(runner.calls) != 5 {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
-	finalCapture := runner.calls[2]
+	finalCapture := runner.calls[1]
 	physicalBounds := []string{"-S", "36", "-E", "99"}
 	joinedBounds := []string{"-S", "36", "-E", "99"}
 	if !containsArgs(finalCapture[:11], physicalBounds) || !containsArgs(finalCapture[11:22], joinedBounds) {
