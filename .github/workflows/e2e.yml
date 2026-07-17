@@ -1,0 +1,48 @@
+name: Manual E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: End-to-end suite to run
+        required: true
+        default: hermetic
+        type: choice
+        options:
+          - hermetic
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify E2E bootstrap
+        env:
+          E2E_SUITE: ${{ inputs.suite }}
+        run: |
+          set -euo pipefail
+          test "${E2E_SUITE}" = "hermetic"
+          test -f go.mod
+          bash scripts/check-workflows.sh
+          {
+            echo "## Manual E2E bootstrap"
+            echo
+            echo "The workflow is ready for the hermetic harness."
+            echo "No Telegram credentials or external services were used."
+          } >> "${GITHUB_STEP_SUMMARY}"
