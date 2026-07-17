@@ -229,8 +229,11 @@ the bot channel and must be revoked immediately.
   mode, every changed anchor frame is an exact, unredacted terminal image sent
   automatically to Telegram at most once every ten seconds.
 - **tmux and local processes:** Authorized messages can create windows and send
-  literal shell input or key presses. tmux owns terminal history and continues
-  running when Engram stops unless a window is explicitly closed. A process in
+  literal shell input or key presses. Engram-created windows use tmux's global
+  `default-size`, matching detached tmux operation even when the selected session
+  has a much larger attached client; explicitly attached panes retain their
+  existing geometry. tmux owns terminal history and continues running when
+  Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.
 - **Local snapshot browser:** In guide mode, tapping `🖼️ View` renders an on-demand

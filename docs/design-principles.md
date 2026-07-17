@@ -46,6 +46,9 @@ ways to inspect exact state.
 tmux is a deliberate dependency because its mature, narrow interface has
 effectively crystallized. Low expected API drift lets Engram stay small and
 precise instead of continually adapting to a moving workspace substrate.
+Engram-created windows use tmux's configured default size, so their applications
+render against real tmux geometry consistently across attached and detached
+hosts. Engram does not resize windows that the user explicitly attaches.
 
 ### Phone-first anchors
 

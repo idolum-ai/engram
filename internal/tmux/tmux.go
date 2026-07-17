@@ -199,6 +199,10 @@ func (m Manager) NewWindow(ctx context.Context, sessionID, workdir, title string
 	if !validSessionID(sessionID) {
 		return "", "", fmt.Errorf("invalid tmux session ID %q", sessionID)
 	}
+	columns, rows, err := m.defaultWindowSize(ctx)
+	if err != nil {
+		return "", "", err
+	}
 	format := recordFormat("window_id", "pane_id")
 	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", sessionID+":")
 	if err != nil {
@@ -212,7 +216,31 @@ func (m Manager) NewWindow(ctx context.Context, sessionID, workdir, title string
 	if !validImmutableID(parts[0], '@') || !validImmutableID(parts[1], '%') {
 		return "", "", fmt.Errorf("unexpected tmux new-window identity %q", out)
 	}
-	return parts[0], parts[1], nil
+	windowID, paneID = parts[0], parts[1]
+	if _, err := m.Runner.Run(ctx, "resize-window", "-x", strconv.Itoa(columns), "-y", strconv.Itoa(rows), "-t", windowID); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		_, _ = m.Runner.Run(cleanupCtx, "kill-window", "-t", windowID)
+		cancel()
+		return "", "", fmt.Errorf("size new tmux window to %dx%d: %w", columns, rows, err)
+	}
+	return windowID, paneID, nil
+}
+
+func (m Manager) defaultWindowSize(ctx context.Context) (columns, rows int, err error) {
+	out, err := m.Runner.Run(ctx, "show-options", "-gv", "default-size")
+	if err != nil {
+		return 0, 0, fmt.Errorf("read tmux default-size: %w", err)
+	}
+	width, height, found := strings.Cut(strings.TrimSpace(out), "x")
+	if !found || strings.Contains(height, "x") {
+		return 0, 0, fmt.Errorf("invalid tmux default-size %q", strings.TrimSpace(out))
+	}
+	columns, widthErr := strconv.Atoi(width)
+	rows, heightErr := strconv.Atoi(height)
+	if widthErr != nil || heightErr != nil || columns <= 0 || columns > 400 || rows <= 0 || rows > 400 {
+		return 0, 0, fmt.Errorf("invalid tmux default-size %q", strings.TrimSpace(out))
+	}
+	return columns, rows, nil
 }
 
 func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {

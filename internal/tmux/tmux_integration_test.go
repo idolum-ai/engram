@@ -349,6 +349,9 @@ func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) 
 		}
 	}
 	manager := New(runner)
+	if _, err := runner.Run(ctx, "set-option", "-g", "default-size", "91x33"); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"0", "=foo", "$0"} {
 		sessionID, err := manager.EnsureSession(ctx, name, t.TempDir())
 		if err != nil {
@@ -364,6 +367,17 @@ func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) 
 		}
 		if pane.SessionName != name {
 			t.Fatalf("new pane session = %q, want exact session %q", pane.SessionName, name)
+		}
+		geometry, err := runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_width}x#{pane_height}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		windowSize, err := runner.Run(ctx, "show-options", "-wv", "-t", paneID, "window-size")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(geometry) != "91x33" || strings.TrimSpace(windowSize) != "manual" {
+			t.Fatalf("new pane geometry = %q window-size = %q, want 91x33 and manual", strings.TrimSpace(geometry), strings.TrimSpace(windowSize))
 		}
 	}
 }

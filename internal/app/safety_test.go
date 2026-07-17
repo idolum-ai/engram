@@ -531,6 +531,9 @@ func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) 
 		return framedTmuxRecord("main", "$1", "1", "0"), nil
 	}
 	if len(args) > 0 && args[0] == "show-options" {
+		if args[len(args)-1] == "default-size" {
+			return "80x24\n", nil
+		}
 		return appTestServerID + "\n", nil
 	}
 	if len(args) > 0 && args[0] == "new-window" {

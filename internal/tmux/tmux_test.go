@@ -91,6 +91,24 @@ type ensureRaceRunner struct {
 
 type missingServerRunner struct{ calls [][]string }
 
+type windowResizeFailureRunner struct{ calls [][]string }
+
+func (r *windowResizeFailureRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	switch args[0] {
+	case "show-options":
+		return "80x24\n", nil
+	case "new-window":
+		return tmuxRecord("@9", "%9"), nil
+	case "resize-window":
+		return "", errors.New("resize failed")
+	case "kill-window":
+		return "", nil
+	default:
+		return "", fmt.Errorf("unexpected tmux call: %v", args)
+	}
+}
+
 func (r *missingServerRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(r.calls) == 1 {
@@ -309,17 +327,41 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 	})
 
 	t.Run("new window", func(t *testing.T) {
-		f := &fakeRunner{out: tmuxRecord("@9", "%9")}
-		windowID, paneID, err := New(f).NewWindow(context.Background(), "$4", "/tmp", "probe")
+		runner := &sequenceRunner{outputs: []string{"80x24\n", tmuxRecord("@9", "%9"), ""}}
+		windowID, paneID, err := New(runner).NewWindow(context.Background(), "$4", "/tmp", "probe")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if windowID != "@9" || paneID != "%9" {
 			t.Fatalf("window=%q pane=%q", windowID, paneID)
 		}
-		want := []string{"new-window", "-P", "-F", "#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "$4:"}
-		if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0], want) {
-			t.Fatalf("calls = %#v, want %#v", f.calls, want)
+		want := [][]string{
+			{"show-options", "-gv", "default-size"},
+			{"new-window", "-P", "-F", "#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "$4:"},
+			{"resize-window", "-x", "80", "-y", "24", "-t", "@9"},
+		}
+		if !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+		}
+	})
+
+	t.Run("invalid default size fails before creation", func(t *testing.T) {
+		runner := &sequenceRunner{outputs: []string{"80 by 24\n"}}
+		if _, _, err := New(runner).NewWindow(context.Background(), "$4", "/tmp", "probe"); err == nil || !strings.Contains(err.Error(), "invalid tmux default-size") {
+			t.Fatalf("NewWindow error = %v", err)
+		}
+		if len(runner.calls) != 1 || runner.calls[0][0] != "show-options" {
+			t.Fatalf("invalid size caused a tmux mutation: %#v", runner.calls)
+		}
+	})
+
+	t.Run("resize failure removes created window", func(t *testing.T) {
+		runner := &windowResizeFailureRunner{}
+		if _, _, err := New(runner).NewWindow(context.Background(), "$4", "/tmp", "probe"); err == nil || !strings.Contains(err.Error(), "size new tmux window") {
+			t.Fatalf("NewWindow error = %v", err)
+		}
+		if len(runner.calls) != 4 || !reflect.DeepEqual(runner.calls[3], []string{"kill-window", "-t", "@9"}) {
+			t.Fatalf("resize failure cleanup calls = %#v", runner.calls)
 		}
 	})
 
