@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,6 +100,51 @@ func TestTerminalCapabilityFailuresRetryOnlyDirtySession(t *testing.T) {
 	app.capabilityRetryMu.Unlock()
 	if pending || len(runner.calls) != 1 {
 		t.Fatalf("successful retry pending=%v calls=%#v", pending, runner.calls)
+	}
+}
+
+func TestOlderCapabilitySuccessCannotEraseNewerFailedClearRetry(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginAttached)
+	active, _ := app.Store.FindSession(id)
+	firstFinished := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var hookMu sync.Mutex
+	hookCalls := 0
+	app.capabilityFinishHook = func(_ int, _ error) {
+		hookMu.Lock()
+		hookCalls++
+		call := hookCalls
+		hookMu.Unlock()
+		if call == 1 {
+			close(firstFinished)
+			<-releaseFirst
+		}
+	}
+
+	oldDone := make(chan struct{})
+	go func() {
+		app.advertiseTerminalCapabilities(context.Background(), active)
+		close(oldDone)
+	}()
+	<-firstFinished
+	if _, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
+		current.WatchEnabled = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.capabilityErr = errors.New("new clear failed")
+	app.clearTerminalCapabilities(context.Background(), active)
+
+	app.capabilityRetryMu.Lock()
+	_, pendingBeforeOldFinish := app.capabilityRetries[id]
+	app.capabilityRetryMu.Unlock()
+	close(releaseFirst)
+	<-oldDone
+	app.capabilityRetryMu.Lock()
+	_, pendingAfterOldFinish := app.capabilityRetries[id]
+	app.capabilityRetryMu.Unlock()
+	if !pendingBeforeOldFinish || !pendingAfterOldFinish {
+		t.Fatalf("newer clear retry pending before=%v after older finish=%v", pendingBeforeOldFinish, pendingAfterOldFinish)
 	}
 }
 

@@ -36,8 +36,8 @@ func (a *App) reconcileTerminalCapabilities(ctx context.Context, sessionID int) 
 	lock.Lock()
 	session, ok := a.Store.FindSession(sessionID)
 	if !ok || a.Tmux.Runner == nil || session.TmuxPaneID == "" {
-		lock.Unlock()
 		a.clearTerminalCapabilityRetry(sessionID)
+		lock.Unlock()
 		return
 	}
 	advertise := session.State == state.TerminalRunning && session.WatchEnabled
@@ -49,12 +49,23 @@ func (a *App) reconcileTerminalCapabilities(ctx context.Context, sessionID int) 
 		err = a.terminalMechanics().ClearEngramAdvertisement(tmuxCtx, terminalBinding(session))
 	}
 	cancel()
+	// Retry state is part of the serialized capability result. Finalizing it
+	// before unlock prevents an older success from deleting a newer failure's
+	// pending retry after concurrent watch state changes.
+	if err == nil || tmux.IsIdentityLoss(err) {
+		a.clearTerminalCapabilityRetry(session.ID)
+	} else {
+		a.scheduleTerminalCapabilityRetry(session.ID)
+	}
 	lock.Unlock()
+	if a.capabilityFinishHook != nil {
+		a.capabilityFinishHook(session.ID, err)
+	}
 
-	a.finishTerminalCapabilityReconcile(ctx, session, advertise, err)
+	a.finishTerminalCapabilityReconcile(session, advertise, err)
 }
 
-func (a *App) finishTerminalCapabilityReconcile(ctx context.Context, session state.TerminalSession, advertised bool, err error) {
+func (a *App) finishTerminalCapabilityReconcile(session state.TerminalSession, advertised bool, err error) {
 	action := "cleared"
 	failure := "clear_failed"
 	if advertised {
@@ -62,17 +73,8 @@ func (a *App) finishTerminalCapabilityReconcile(ctx context.Context, session sta
 		failure = "advertise_failed"
 	}
 	if err == nil {
-		a.clearTerminalCapabilityRetry(session.ID)
 		_ = a.audit("tmux.capabilities", action, map[string]any{"session_id": session.ID, "pane_id": session.TmuxPaneID})
 		return
-	}
-	if tmux.IsIdentityLoss(err) {
-		a.clearTerminalCapabilityRetry(session.ID)
-		if advertised {
-			a.recordIdentityLoss(ctx, session, err)
-		}
-	} else {
-		a.scheduleTerminalCapabilityRetry(session.ID)
 	}
 	if advertised || !tmux.IsIdentityLoss(err) {
 		_ = a.audit("tmux.capabilities", failure, map[string]any{"session_id": session.ID, "pane_id": session.TmuxPaneID, "error": err.Error()})

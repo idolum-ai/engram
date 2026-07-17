@@ -71,6 +71,7 @@ type App struct {
 	capabilityLocks      keyedMutexSet
 	capabilityRetryMu    sync.Mutex
 	capabilityRetries    map[int]capabilityRetry
+	capabilityFinishHook func(int, error)
 	signalRetries        sync.Map
 	snapshotTextFrames   sync.Map
 	sleepHook            func(time.Duration)
