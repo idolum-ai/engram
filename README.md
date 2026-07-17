@@ -44,12 +44,21 @@ You need:
 - For automatic **voice transcription**, an OpenAI API key with access to
   `gpt-4o-transcribe`, independent of the selected guide provider; without it,
   voice replies can remain local files
-- For **Chromium mode**, Chromium, Chrome, or another Chromium-compatible
-  executable; a configured guide provider is optional and enables `🗣️`
+- For **Chromium mode**, a Chromium-compatible executable; Engram prefers a
+  dedicated headless shell. On macOS, automatic detection deliberately excludes
+  desktop Chrome and Chromium applications so background snapshots do not
+  trigger their privacy-sensitive application behavior. Set
+  `ENGRAM_SNAPSHOT_BROWSER` explicitly to opt into another executable. A
+  configured guide provider is optional and enables `🗣️`
 
 Linux with a systemd user session is the supported service installation. macOS
 is compile-checked and runs manually in the foreground; Engram does not install
 a launchd service.
+
+On macOS, use the standalone `chrome-headless-shell` published through
+[Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/).
+Put the executable on `PATH` or set its absolute path in
+`ENGRAM_SNAPSHOT_BROWSER`. Engram does not download or update the browser.
 
 Clone and enter the repository:
 
@@ -190,7 +199,7 @@ privacy boundaries below before running commands that may print secrets.
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
-| `ENGRAM_SNAPSHOT_BROWSER` | auto-detected Chromium or Chrome | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. |
+| `ENGRAM_SNAPSHOT_BROWSER` | auto-detected headless shell, with Linux browser fallbacks | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. macOS auto-detection accepts dedicated headless executables only; an explicit value may opt into a desktop browser. |
 | `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Live and on-demand snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `16777216` | no | Incoming attachment soft limit. An exact SHA-256 bypass may authorize up to the 20 MiB cloud Bot API hard limit and available disk. |
 
