@@ -39,6 +39,28 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
+	t.Parallel()
+	page := RenderHTML(Input{
+		ANSI:        "wide terminal content\n",
+		Title:       "codex",
+		Target:      "[5]",
+		CWD:         "/tmp",
+		Columns:     289,
+		VisibleRows: 162,
+		BufferRows:  64,
+	}, "contrast-dark")
+	for _, want := range []string{
+		"width:96ch",
+		"font:7.00px/9.80px",
+		"first 96/289 columns · 162 visible rows",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("wide-pane HTML missing %q: %s", want, page)
+		}
+	}
+}
+
 func TestRenderHTMLAccessibilityThemesCorrectLowContrastText(t *testing.T) {
 	t.Parallel()
 	input := Input{
