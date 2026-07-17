@@ -22,3 +22,6 @@ The requirements documents are the binding source of truth.
 - `make public-readiness` checks public-facing repository hygiene.
 - `make secrets` scans tracked files for likely live secrets.
 - `make check` runs the full local quality gate.
+- The manually dispatched hermetic golden path is documented in
+  [`docs/e2e-testing.md`](../docs/e2e-testing.md); it is intentionally separate
+  from the default local gate.

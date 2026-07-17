@@ -31,6 +31,19 @@ Notable user-visible and operational changes are recorded here.
   code-format them in both modes, and add matching `⬇️ n` buttons that reuse
   `/download` behind current-card and exact-list callback guards.
 
+### Verification
+
+- Add a manually dispatched hermetic golden path that drives the compiled
+  service through a local Telegram simulator, isolated real tmux, and real
+  Chromium, retaining reviewable snapshot and interaction evidence without
+  repository secrets.
+
+### Fixed
+
+- Recognize the missing-server diagnostic emitted by tmux 3.3a on a clean
+  socket root, allowing Engram to create its configured tmux session instead
+  of rejecting the first new window.
+
 ## [v0.4.0] - 2026-07-14
 
 ### Conversational guide

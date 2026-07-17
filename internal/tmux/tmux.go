@@ -389,7 +389,9 @@ func missingTmuxServer(err error) bool {
 	if !errors.As(err, &commandErr) {
 		return false
 	}
-	return strings.Contains(strings.ToLower(commandErr.stderr), "no server running")
+	stderr := strings.ToLower(commandErr.stderr)
+	return strings.Contains(stderr, "no server running") ||
+		(strings.Contains(stderr, "error connecting to") && strings.Contains(stderr, "no such file or directory"))
 }
 
 func (m Manager) SendCommand(ctx context.Context, paneID, text string) error {

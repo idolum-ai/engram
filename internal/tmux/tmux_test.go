@@ -287,6 +287,27 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 	})
 }
 
+func TestMissingTmuxServerRecognizesSupportedDiagnostics(t *testing.T) {
+	for _, stderr := range []string{
+		"no server running on /tmp/tmux/default",
+		"error connecting to /tmp/tmux-1000/default (No such file or directory)",
+	} {
+		err := &commandError{args: []string{"list-sessions"}, err: errors.New("exit status 1"), stderr: stderr}
+		if !missingTmuxServer(err) {
+			t.Fatalf("missing server diagnostic not recognized: %q", stderr)
+		}
+	}
+	for _, stderr := range []string{
+		"error connecting to /tmp/tmux-1000/default (Permission denied)",
+		"no such file or directory",
+	} {
+		err := &commandError{args: []string{"list-sessions"}, err: errors.New("exit status 1"), stderr: stderr}
+		if missingTmuxServer(err) {
+			t.Fatalf("unrelated diagnostic classified as missing server: %q", stderr)
+		}
+	}
+}
+
 func TestListWindowsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
 		out: tmuxRecord("$7", "main", "0", "@1", "code", "1", "%2", "/home/me", "bash"),

@@ -184,6 +184,11 @@ privacy model must stay small and explicit.
   extraction. Their textual notification and audit payload are redacted; an
   exact snapshot can still contain the literal record under the existing
   unredacted snapshot boundary.
+- The hermetic E2E workflow uses fixture-only identifiers and credentials, an
+  in-process loopback Telegram simulator, an isolated tmux socket root, private
+  runtime paths, and no model provider. Its uploaded evidence must not contain
+  generated configuration, state, audit logs, sockets, browser profiles, or
+  arbitrary host terminal data.
 
 ## Vulnerability Handling
 

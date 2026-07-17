@@ -52,6 +52,20 @@ for phrase in "${required_publish_phrases[@]}"; do
   fi
 done
 
+required_e2e_phrases=(
+  'workflow_dispatch:'
+  'persist-credentials: false'
+  'ENGRAM_E2E=1'
+  "go test ./internal/e2e -run '^TestHermeticGoldenPath$'"
+  'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
+)
+for phrase in "${required_e2e_phrases[@]}"; do
+  if ! grep -F -- "${phrase}" .github/workflows/e2e.yml >/dev/null; then
+    echo "manual E2E workflow is missing required behavior: ${phrase}" >&2
+    exit 1
+  fi
+done
+
 if grep -R -E 'uses:[[:space:]]+actions/(checkout|setup-go|upload-artifact|download-artifact)@v[0-9]+' \
   .github/workflows >/dev/null; then
   echo "workflows must pin official actions by full commit SHA" >&2
