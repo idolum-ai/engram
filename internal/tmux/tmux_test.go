@@ -458,6 +458,32 @@ func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
 	}
 }
 
+func TestCaptureLiteralCropsTallBlankPaneAroundContent(t *testing.T) {
+	fullVisiblePane := "codex\nprompt\n" + strings.Repeat("\n", 98)
+	runner := &sequenceRunner{outputs: []string{tmuxRecord("80", "100"), fullVisiblePane}}
+	got, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "codex\nprompt" {
+		t.Fatalf("CaptureLiteral = %q", got)
+	}
+	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S 0 -E 99 -t %7" {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestCropAroundMeaningfulRowsUsesANSIStrippedContent(t *testing.T) {
+	input := "\x1b[31mcodex\x1b[0m\n" + strings.Repeat("\n", 98)
+	got := cropAroundMeaningfulRows(input, 64)
+	if !strings.Contains(got, "codex") {
+		t.Fatalf("cropped content lost meaningful row: %q", got)
+	}
+	if rows := strings.Count(got, "\n"); rows != 64 {
+		t.Fatalf("cropped rows = %d, want 64", rows)
+	}
+}
+
 func TestCaptureLiteralRejectsOversizedPaneBeforeCapture(t *testing.T) {
 	runner := &sequenceRunner{outputs: []string{tmuxRecord("401", "24")}}
 	if _, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64); err == nil || !strings.Contains(err.Error(), "pane width") {
