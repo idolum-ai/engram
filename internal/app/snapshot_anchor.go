@@ -247,10 +247,11 @@ func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.Style
 	const safeCaptionBytes = 960
 	title := strings.Join(strings.Fields(a.redactText(firstNonEmpty(ts.Title, capture.Title, "terminal"))), " ")
 	cwd := strings.Join(strings.Fields(a.redactText(capture.CurrentPath)), " ")
-	caption := fmt.Sprintf("[%d] %s · %s\n%s\n%d buffer rows · %dx%d visible", ts.ID, ts.State, title, cwd, capture.BufferRows, capture.Columns, capture.VisibleRows)
-	if len(caption) > safeCaptionBytes {
-		return headUTF8(caption, safeCaptionBytes), nil
-	}
+	prefix := fmt.Sprintf("[%d] %s · ", ts.ID, ts.State)
+	suffix := "\n" + snapshotFrameDescription(capture, true)
+	details := title + "\n" + cwd
+	detailBytes := max(0, safeCaptionBytes-len(prefix)-len(suffix))
+	caption := prefix + headUTF8(details, detailBytes) + suffix
 	if references, files := renderSnapshotReferenceSetWithFiles(refs, safeCaptionBytes-len(caption)-2); references != "" {
 		caption += "\n\n" + references
 		return caption, files

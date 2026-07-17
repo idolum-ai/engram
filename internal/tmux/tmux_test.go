@@ -19,29 +19,15 @@ func tmuxRecord(values ...string) string {
 	return out.String() + "\n"
 }
 
-func TestTmuxCommandEnvironmentEnsuresUTF8Locale(t *testing.T) {
+func TestTmuxCommandArgumentsForceUTF8WithoutChangingInput(t *testing.T) {
 	t.Parallel()
-	for _, test := range []struct {
-		name    string
-		environ []string
-		goos    string
-		want    string
-	}{
-		{name: "darwin launchd", environ: []string{"HOME=/tmp", "PATH=/bin"}, goos: "darwin", want: "LC_ALL=en_US.UTF-8"},
-		{name: "linux service", environ: []string{"LANG=C"}, goos: "linux", want: "LC_ALL=C.UTF-8"},
-		{name: "override non UTF-8 LC_ALL", environ: []string{"LC_ALL=C", "LANG=en_US.UTF-8"}, goos: "darwin", want: "LC_ALL=en_US.UTF-8"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got := tmuxCommandEnvironment(test.environ, test.goos)
-			if !containsString(got, test.want) {
-				t.Fatalf("tmux environment = %#v, want %q", got, test.want)
-			}
-		})
+	original := []string{"display-message", "-p", "hello"}
+	want := []string{"-u", "display-message", "-p", "hello"}
+	if got := tmuxCommandArguments(original); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmux arguments = %#v, want %#v", got, want)
 	}
-
-	original := []string{"PATH=/bin", "LANG=C.UTF-8"}
-	if got := tmuxCommandEnvironment(original, "darwin"); !reflect.DeepEqual(got, original) {
-		t.Fatalf("existing UTF-8 environment changed: %#v", got)
+	if !reflect.DeepEqual(original, []string{"display-message", "-p", "hello"}) {
+		t.Fatalf("tmux arguments changed caller input: %#v", original)
 	}
 }
 
@@ -86,6 +72,8 @@ type styledCaptureRunner struct {
 	calls     [][]string
 	ansi      string
 	joined    string
+	metadata  string
+	framing   string
 	afterMeta string
 }
 
@@ -142,11 +130,20 @@ func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) 
 func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
+		if r.metadata != "" {
+			return r.metadata, nil
+		}
 		return styledCaptureMetadata("bash", "1", "0"), nil
 	}
 	if len(args) > 0 && args[0] == "capture-pane" {
+		if !containsString(args, "-b") && r.framing != "" {
+			return r.framing, nil
+		}
 		if r.afterMeta != "" {
 			return r.afterMeta, nil
+		}
+		if r.metadata != "" {
+			return r.metadata, nil
 		}
 		return styledCaptureMetadata("bash", "1", "0"), nil
 	}
@@ -508,14 +505,47 @@ func TestCaptureLiteralCropsTallBlankPaneAroundContent(t *testing.T) {
 	}
 }
 
-func TestCropAroundMeaningfulRowsUsesANSIStrippedContent(t *testing.T) {
+func TestCropToMeaningfulWindowUsesANSIStrippedContent(t *testing.T) {
 	input := "\x1b[31mcodex\x1b[0m\n" + strings.Repeat("\n", 98)
-	got := cropAroundMeaningfulRows(input, 64)
+	got := cropToMeaningfulWindow(input, 64)
 	if !strings.Contains(got, "codex") {
 		t.Fatalf("cropped content lost meaningful row: %q", got)
 	}
 	if rows := strings.Count(got, "\n"); rows != 64 {
 		t.Fatalf("cropped rows = %d, want 64", rows)
+	}
+}
+
+func TestCropToMeaningfulWindowPrefersDenseContentOverFooter(t *testing.T) {
+	input := "build output\nimportant failure\n" + strings.Repeat("\n", 97) + "status footer\n"
+	got := cropToMeaningfulWindow(input, 64)
+	if !strings.Contains(got, "important failure") || strings.Contains(got, "status footer") {
+		t.Fatalf("crop did not prefer the densest meaningful region: %q", got)
+	}
+}
+
+func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
+	framing := strings.Repeat("physical row\n", 100)
+	ansi := strings.Repeat("\x1b[32mselected physical row\x1b[0m\n", 64)
+	joined := strings.Repeat("selected logical line\n", 32)
+	metadata := styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "80", "100", "bash", "1", "0")
+	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata, framing: framing}
+
+	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ANSI != ansi || got.JoinedText != strings.TrimSpace(joined) {
+		t.Fatalf("misaligned styled capture: ANSI=%q joined=%q", got.ANSI, got.JoinedText)
+	}
+	if len(runner.calls) != 6 {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	finalCapture := runner.calls[2]
+	physicalBounds := []string{"-S", "36", "-E", "99"}
+	joinedBounds := []string{"-S", "36", "-E", "99"}
+	if !containsArgs(finalCapture[:11], physicalBounds) || !containsArgs(finalCapture[11:22], joinedBounds) {
+		t.Fatalf("physical and joined captures used different bounds: %#v", finalCapture)
 	}
 }
 

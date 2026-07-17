@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -49,8 +47,7 @@ func (ExecRunner) Run(ctx context.Context, args ...string) (string, error) {
 }
 
 func (ExecRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string) error {
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	cmd.Env = tmuxCommandEnvironment(os.Environ(), runtime.GOOS)
+	cmd := exec.CommandContext(ctx, "tmux", tmuxCommandArguments(args)...)
 	var errOut bytes.Buffer
 	cmd.Stdout = dst
 	cmd.Stderr = &errOut
@@ -61,44 +58,8 @@ func (ExecRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string
 	return nil
 }
 
-func tmuxCommandEnvironment(environ []string, goos string) []string {
-	if utf8Locale(effectiveLocale(environ)) {
-		return environ
-	}
-	fallback := "C.UTF-8"
-	if goos == "darwin" {
-		fallback = "en_US.UTF-8"
-	}
-	return setEnvironment(environ, "LC_ALL", fallback)
-}
-
-func effectiveLocale(environ []string) string {
-	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
-		for _, entry := range environ {
-			if value, ok := strings.CutPrefix(entry, key+"="); ok && value != "" {
-				return value
-			}
-		}
-	}
-	return ""
-}
-
-func utf8Locale(locale string) bool {
-	locale = strings.ToLower(locale)
-	locale = strings.ReplaceAll(locale, "-", "")
-	return strings.Contains(locale, "utf8")
-}
-
-func setEnvironment(environ []string, key, value string) []string {
-	updated := append([]string(nil), environ...)
-	prefix := key + "="
-	for i, entry := range updated {
-		if strings.HasPrefix(entry, prefix) {
-			updated[i] = prefix + value
-			return updated
-		}
-	}
-	return append(updated, prefix+value)
+func tmuxCommandArguments(args []string) []string {
+	return append([]string{"-u"}, args...)
 }
 
 type Manager struct {
@@ -575,14 +536,14 @@ func (m Manager) CaptureLiteral(ctx context.Context, paneID, windowID, serverID 
 	if err != nil || visibleRows <= 0 || visibleRows > 400 {
 		return "", fmt.Errorf("invalid tmux pane height %q", parts[1])
 	}
-	start, end, crop := captureBounds(visibleRows, targetRows)
+	start, end := captureBounds(visibleRows, targetRows)
 	command := strings.Join([]string{"capture-pane", "-p", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID}, " ")
 	out, err := m.captureIfBindingMatches(ctx, paneID, windowID, serverID, command)
 	if err != nil {
 		return "", err
 	}
-	if crop {
-		out = cropAroundMeaningfulRows(out, targetRows)
+	if visibleRows > targetRows {
+		out = cropToMeaningfulWindow(out, targetRows)
 	}
 	return semanticCapture(out), nil
 }
@@ -623,7 +584,15 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		return StyledCapture{}, err
 	}
 	columns, visibleRows := before.Columns, before.VisibleRows
-	start, end, crop := captureBounds(visibleRows, targetRows)
+	start, end := captureBounds(visibleRows, targetRows)
+	if visibleRows > targetRows {
+		framing, framingErr := m.Runner.Run(ctx, "capture-pane", "-p", "-N", "-S", "0", "-E", strconv.Itoa(visibleRows-1), "-t", paneID)
+		if framingErr != nil {
+			return StyledCapture{}, framingErr
+		}
+		start = meaningfulWindowStart(framing, targetRows)
+		end = start + targetRows - 1
+	}
 	nonce, err := captureNonce()
 	if err != nil {
 		return StyledCapture{}, err
@@ -657,10 +626,6 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	joined, err := m.Runner.Run(ctx, "show-buffer", "-b", joinedBuffer)
 	if err != nil {
 		return StyledCapture{}, err
-	}
-	if crop {
-		ansi = cropAroundMeaningfulRows(ansi, targetRows)
-		joined = cropAroundMeaningfulRows(joined, targetRows)
 	}
 	bufferRows := strings.Count(ansi, "\n")
 	if ansi != "" && !strings.HasSuffix(ansi, "\n") {
@@ -737,43 +702,56 @@ func sameCaptureIdentity(before, after captureMetadata) bool {
 
 func validTmuxFlag(value string) bool { return value == "0" || value == "1" }
 
-func captureBounds(visibleRows, targetRows int) (start, end int, crop bool) {
+func captureBounds(visibleRows, targetRows int) (start, end int) {
 	if visibleRows <= targetRows {
-		return visibleRows - targetRows, visibleRows - 1, false
+		return visibleRows - targetRows, visibleRows - 1
 	}
-	return 0, visibleRows - 1, true
+	return 0, visibleRows - 1
 }
 
-func cropAroundMeaningfulRows(text string, targetRows int) string {
+func cropToMeaningfulWindow(text string, targetRows int) string {
 	if targetRows <= 0 || text == "" {
 		return text
 	}
+	rows := captureRows(text)
+	if len(rows) <= targetRows {
+		return text
+	}
+	start := meaningfulWindowStart(text, targetRows)
+	return strings.Join(rows[start:start+targetRows], "")
+}
+
+func meaningfulWindowStart(text string, targetRows int) int {
+	rows := captureRows(text)
+	if targetRows <= 0 || len(rows) <= targetRows {
+		return 0
+	}
+	meaningful := make([]int, len(rows))
+	for i, row := range rows {
+		if strings.TrimSpace(semanticCapture(row)) != "" {
+			meaningful[i] = 1
+		}
+	}
+	score := 0
+	for _, value := range meaningful[:targetRows] {
+		score += value
+	}
+	bestStart, bestScore := 0, score
+	for start := 1; start+targetRows <= len(rows); start++ {
+		score += meaningful[start+targetRows-1] - meaningful[start-1]
+		if score >= bestScore {
+			bestStart, bestScore = start, score
+		}
+	}
+	return bestStart
+}
+
+func captureRows(text string) []string {
 	rows := strings.SplitAfter(text, "\n")
 	if len(rows) > 0 && rows[len(rows)-1] == "" {
 		rows = rows[:len(rows)-1]
 	}
-	if len(rows) <= targetRows {
-		return text
-	}
-	lastMeaningful := -1
-	for i, row := range rows {
-		if strings.TrimSpace(semanticCapture(row)) != "" {
-			lastMeaningful = i
-		}
-	}
-	if lastMeaningful == -1 {
-		return strings.Join(rows[:targetRows], "")
-	}
-	start := lastMeaningful - targetRows + 1
-	if start < 0 {
-		start = 0
-	}
-	end := start + targetRows
-	if end > len(rows) {
-		end = len(rows)
-		start = max(0, end-targetRows)
-	}
-	return strings.Join(rows[start:end], "")
+	return rows
 }
 
 func captureNonce() (string, error) {
