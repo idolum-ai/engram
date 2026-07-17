@@ -62,10 +62,10 @@ func (a *App) reconcileTerminalCapabilities(ctx context.Context, sessionID int) 
 		a.capabilityFinishHook(session.ID, err)
 	}
 
-	a.finishTerminalCapabilityReconcile(session, advertise, err)
+	a.finishTerminalCapabilityReconcile(ctx, session, advertise, err)
 }
 
-func (a *App) finishTerminalCapabilityReconcile(session state.TerminalSession, advertised bool, err error) {
+func (a *App) finishTerminalCapabilityReconcile(ctx context.Context, session state.TerminalSession, advertised bool, err error) {
 	action := "cleared"
 	failure := "clear_failed"
 	if advertised {
@@ -75,6 +75,9 @@ func (a *App) finishTerminalCapabilityReconcile(session state.TerminalSession, a
 	if err == nil {
 		_ = a.audit("tmux.capabilities", action, map[string]any{"session_id": session.ID, "pane_id": session.TmuxPaneID})
 		return
+	}
+	if advertised && tmux.IsIdentityLoss(err) {
+		a.markWatchedSessionLost(ctx, session, err)
 	}
 	if advertised || !tmux.IsIdentityLoss(err) {
 		_ = a.audit("tmux.capabilities", failure, map[string]any{"session_id": session.ID, "pane_id": session.TmuxPaneID, "error": err.Error()})

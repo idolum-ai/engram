@@ -148,6 +148,54 @@ func TestOlderCapabilitySuccessCannotEraseNewerFailedClearRetry(t *testing.T) {
 	}
 }
 
+func TestCapabilityAdvertisementIdentityLossMarksCurrentWatchLost(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginAttached)
+	session, _ := app.Store.FindSession(id)
+	runner.capabilityErr = &tmux.IdentityError{Reason: "pane disappeared"}
+	app.advertiseTerminalCapabilities(context.Background(), session)
+
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalLost || got.WatchEnabled {
+		t.Fatalf("session after capability identity loss = %#v ok=%v", got, ok)
+	}
+	app.capabilityRetryMu.Lock()
+	_, pending := app.capabilityRetries[id]
+	app.capabilityRetryMu.Unlock()
+	if pending {
+		t.Fatal("identity loss retained a capability retry for a dead binding")
+	}
+}
+
+func TestStaleCapabilityIdentityLossDoesNotOverrideCommittedUnwatch(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginAttached)
+	session, _ := app.Store.FindSession(id)
+	runner.capabilityErr = &tmux.IdentityError{Reason: "pane disappeared"}
+	atFinish := make(chan struct{})
+	release := make(chan struct{})
+	app.capabilityFinishHook = func(_ int, _ error) {
+		close(atFinish)
+		<-release
+	}
+	done := make(chan struct{})
+	go func() {
+		app.advertiseTerminalCapabilities(context.Background(), session)
+		close(done)
+	}()
+	<-atFinish
+	if _, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
+		current.WatchEnabled = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	<-done
+
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalRunning || got.WatchEnabled {
+		t.Fatalf("session after unwatch won identity race = %#v ok=%v", got, ok)
+	}
+}
+
 func TestFailedCreatedWindowCloseDoesNotClaimClosed(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	runner.failKill = true

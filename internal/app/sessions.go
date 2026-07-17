@@ -483,6 +483,14 @@ func closeConfirmationText(ts state.TerminalSession) string {
 }
 
 func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
+	a.markSessionLostConditionally(ctx, ts, cause, false)
+}
+
+func (a *App) markWatchedSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
+	a.markSessionLostConditionally(ctx, ts, cause, true)
+}
+
+func (a *App) markSessionLostConditionally(ctx context.Context, ts state.TerminalSession, cause error, requireWatching bool) {
 	if ts.State == state.TerminalClosed {
 		return
 	}
@@ -492,9 +500,14 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 	}
 	anchorLock := a.anchorMutex(ts.ID)
 	anchorLock.Lock()
-	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
+	applied := false
+	_, found, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+		if !sameTerminalBinding(*s, ts) || s.State != ts.State || requireWatching && !s.WatchEnabled {
+			return
+		}
 		s.State = state.TerminalLost
 		s.WatchEnabled = false
+		applied = true
 	})
 	committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
 	if err != nil {
