@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"path/filepath"
 	"reflect"
@@ -242,6 +243,63 @@ func TestAnchorRetirementDoesNotMistakeTooOldForDeleted(t *testing.T) {
 	}
 	if isTelegramMessageGone(&telegram.Error{ErrorCode: 400, Description: "Bad Request: message is too old"}) {
 		t.Fatal("too-old deletion was classified as proof of absence")
+	}
+}
+
+func TestAnchorRetirementBoundsOversizedTitleBeforeMediaTombstone(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", strings.Repeat("very-long-title ", 200))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 88
+		s.AnchorFormat = anchorFormatGuideEvidence
+		s.RetiringAnchorMessageID = 77
+		s.RetiringAnchorFormat = anchorFormatGuideEvidence
+		s.AnchorPinKnown = true
+		s.AnchorPinned = true
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		switch req.URL.Path {
+		case "/botTOKEN/deleteMessage":
+			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be deleted"}), nil
+		case "/botTOKEN/editMessageMedia":
+			if err := req.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			var media map[string]any
+			if err := json.Unmarshal([]byte(req.FormValue("media")), &media); err != nil {
+				t.Fatal(err)
+			}
+			caption, _ := media["caption"].(string)
+			if plain := html.UnescapeString(caption); len(plain) > 1024 {
+				return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: caption is too long"}), nil
+			}
+			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+		case "/botTOKEN/unpinChatMessage":
+			return snapshotJSONResponse(`true`), nil
+		default:
+			return nil, fmt.Errorf("unexpected endpoint %s", req.URL.Path)
+		}
+	})}
+	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client}
+	a.finishAnchorRotationLocked(context.Background(), session.ID)
+	got, _ := store.FindSession(session.ID)
+	if got.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{77}) || !reflect.DeepEqual(paths, []string{"/botTOKEN/deleteMessage", "/botTOKEN/editMessageMedia", "/botTOKEN/unpinChatMessage"}) {
+		t.Fatalf("oversized-title retirement state=%#v paths=%#v", got, paths)
 	}
 }
 

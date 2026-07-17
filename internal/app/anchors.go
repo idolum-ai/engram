@@ -243,7 +243,10 @@ func anchorShouldBePinned(ts state.TerminalSession) bool {
 }
 
 func (a *App) retiredAnchorText(ts state.TerminalSession) string {
-	return fmt.Sprintf("[%d] %s\ncontinued in the newer live anchor", ts.ID, a.redactText(firstNonEmpty(ts.Title, "session")))
+	text := fmt.Sprintf("[%d] %s\ncontinued in the newer live anchor", ts.ID, a.redactText(firstNonEmpty(ts.Title, "session")))
+	// The same tombstone is used for text and media predecessors. Keep it below
+	// Telegram's parsed caption limit so retirement cannot be blocked by a title.
+	return truncateAtWord(text, 900)
 }
 
 func isTelegramMessageGone(err error) bool {
