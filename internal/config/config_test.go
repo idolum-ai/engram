@@ -9,7 +9,7 @@ import (
 )
 
 func TestArtifactDirPrefersPrivateXDGRunTimeDir(t *testing.T) {
-	runtimeDir := filepath.Join(t.TempDir(), "runtime")
+	runtimeDir := filepath.Join(canonicalTestTempDir(t), "runtime")
 	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestArtifactDirFallsBackForUnsafeXDGRunTimeDir(t *testing.T) {
 	t.Setenv("TMPDIR", tempDir)
 
 	cfg := Config{}
-	want := filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+	want := filepath.Join(canonicalDir(tempDir), "engram-"+strconv.Itoa(os.Getuid()))
 	if got := cfg.ArtifactDir(); got != want {
 		t.Fatalf("ArtifactDir = %q, want fallback %q", got, want)
 	}
@@ -71,7 +71,7 @@ func TestArtifactDirFallsBackForSymlinkedXDGRunTimeDir(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", runtimeLink)
 	t.Setenv("TMPDIR", tempDir)
 
-	want := filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+	want := filepath.Join(canonicalDir(tempDir), "engram-"+strconv.Itoa(os.Getuid()))
 	if got := (Config{}).ArtifactDir(); got != want {
 		t.Fatalf("ArtifactDir = %q, want fallback %q", got, want)
 	}
@@ -97,10 +97,19 @@ func TestArtifactDirFallsBackForSymlinkedXDGAncestor(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(linkedParent, "runtime"))
 	t.Setenv("TMPDIR", tempDir)
 
-	want := filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+	want := filepath.Join(canonicalDir(tempDir), "engram-"+strconv.Itoa(os.Getuid()))
 	if got := (Config{}).ArtifactDir(); got != want {
 		t.Fatalf("ArtifactDir = %q, want fallback %q", got, want)
 	}
+}
+
+func canonicalTestTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func TestEnsureDirsRejectsUnsafePreexistingArtifactRoot(t *testing.T) {

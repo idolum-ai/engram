@@ -19,12 +19,17 @@ import (
 )
 
 const (
-	LogicalWidth  = 430
-	LogicalHeight = 932
-	PixelRatio    = 3
-	TargetRows    = 64
-	maxInputBytes = 1 << 20
-	probeTimeout  = 15 * time.Second
+	LogicalWidth       = 430
+	LogicalHeight      = 932
+	PixelRatio         = 3
+	TargetRows         = 64
+	maxInputBytes      = 1 << 20
+	probeTimeout       = 15 * time.Second
+	terminalWidth      = 406.0
+	terminalCharRatio  = 0.602
+	maxTerminalFont    = 9.4
+	minTerminalFont    = 7.0
+	terminalLineHeight = 1.4
 )
 
 type Input struct {
@@ -225,19 +230,27 @@ func RenderHTML(input Input, themeName string) string {
 	if bufferRows <= 0 {
 		bufferRows = input.VisibleRows
 	}
-	renderColumns := input.Columns
+	layoutColumns := input.Columns
 	if input.Compact {
-		renderColumns = min(renderColumns, 71)
+		layoutColumns = min(layoutColumns, 71)
 	}
-	fontSize := 9.4
-	if fit := 406.0 / (float64(renderColumns) * 0.602); fit < fontSize {
-		fontSize = fit
+	renderColumns, fontSize, lineHeight := readableTerminalLayout(layoutColumns)
+	if input.Compact {
+		lineHeight = 13.2
+	}
+	lineHeightCSS := fmt.Sprintf("%.2f", lineHeight)
+	if input.Compact {
+		lineHeightCSS = "13.2"
+	}
+	columnLabel := fmt.Sprintf("%dx%d visible", input.Columns, input.VisibleRows)
+	if renderColumns < input.Columns {
+		columnLabel = fmt.Sprintf("columns 1–%d of %d · %d visible rows", renderColumns, input.Columns, input.VisibleRows)
 	}
 	theme := snapshotThemeFor(themeName)
 	if input.Compact {
 		theme.accessible = true
 	}
-	footer := fmt.Sprintf("last %d buffer rows", bufferRows)
+	footer := fmt.Sprintf("%d-row bounded frame · %s", bufferRows, columnLabel)
 	if input.Compact {
 		footer = firstNonEmpty(input.Footer, "quoted terminal text")
 	}
@@ -245,12 +258,33 @@ func RenderHTML(input Input, themeName string) string {
 	horizontalOffset := float64(input.ColumnOffset) * fontSize * 0.602
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
-:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;height:13.2px;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%dpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/13.2px "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:pre;transform:translateX(-%.2fpx)}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
+:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;height:%spx;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:pre;transform:translateX(-%.2fpx)}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
 </style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span>%s</span><span>%dx%d visible</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
-		theme.highlightBorder, theme.highlight, input.Columns, bufferRows*14, theme.text, fontSize, horizontalOffset, theme.subtleBorder, theme.muted, theme.foot,
+		lineHeightCSS, theme.highlightBorder, theme.highlight, renderColumns, float64(bufferRows)*lineHeight, theme.text, fontSize, lineHeightCSS, horizontalOffset, theme.subtleBorder, theme.muted, theme.foot,
 		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
 		html.EscapeString(footer), input.Columns, input.VisibleRows)
+}
+
+// RenderedColumns reports how many leading columns fit legibly in the fixed
+// snapshot viewport. The full-width text remains available in the paired raw
+// frame when a wide pane must be clipped for the image.
+func RenderedColumns(columns int) int {
+	renderColumns, _, _ := readableTerminalLayout(columns)
+	return renderColumns
+}
+
+func readableTerminalLayout(columns int) (renderColumns int, fontSize, lineHeight float64) {
+	renderColumns = columns
+	fontSize = maxTerminalFont
+	if fit := terminalWidth / (float64(columns) * terminalCharRatio); fit < fontSize {
+		fontSize = fit
+	}
+	if fontSize < minTerminalFont {
+		fontSize = minTerminalFont
+		renderColumns = int(math.Floor(terminalWidth / (fontSize * terminalCharRatio)))
+	}
+	return renderColumns, fontSize, fontSize * terminalLineHeight
 }
 
 func renderHeight(input Input) int {

@@ -109,7 +109,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": current.ID})
 		return
 	}
-	caption := fmt.Sprintf("[%d] %s\n%d buffer rows · %dx%d visible", latest.ID, a.redactText(firstNonEmpty(latest.Title, "terminal")), capture.BufferRows, capture.Columns, capture.VisibleRows)
+	caption := fmt.Sprintf("[%d] %s\n%s", latest.ID, a.redactText(firstNonEmpty(latest.Title, "terminal")), snapshotFrameDescription(capture, false))
 	message, err := a.Telegram.SendPhoto(ctx, latest.AnchorChatID, pngPath, caption, latest.AnchorMessageID)
 	if err != nil {
 		_ = a.audit("telegram.snapshot", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})
@@ -128,15 +128,31 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 			return
 		}
 		_ = a.audit("state.snapshot", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})
-		a.deleteSnapshotReply(ctx, latest.AnchorChatID, message.MessageID, "state_failed")
+		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
+		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
+		cancel()
 		return
 	}
 	if !updated {
-		a.deleteSnapshotReply(ctx, latest.AnchorChatID, message.MessageID, "superseded")
+		deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)
+		_ = a.Telegram.DeleteMessage(deleteCtx, latest.AnchorChatID, message.MessageID)
+		cancel()
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": latest.ID})
 		return
 	}
 	_ = a.audit("terminal.snapshot", "sent", map[string]any{"session_id": latest.ID, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
+}
+
+func snapshotFrameDescription(capture tmux.StyledCapture, rawCompanion bool) string {
+	description := fmt.Sprintf("%d buffer rows · %dx%d visible", capture.BufferRows, capture.Columns, capture.VisibleRows)
+	if rendered := terminalshot.RenderedColumns(capture.Columns); rendered < capture.Columns {
+		widthDisclosure := "full width not shown"
+		if rawCompanion {
+			widthDisclosure = "Raw contains full width"
+		}
+		description += fmt.Sprintf("\nimage columns 1–%d of %d · %s", rendered, capture.Columns, widthDisclosure)
+	}
+	return description
 }
 
 func (a *App) deleteSnapshotReply(ctx context.Context, chatID int64, messageID int, reason string) {

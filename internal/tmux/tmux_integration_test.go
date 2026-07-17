@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +131,114 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	}
 	if err := manager.KillWindowIfBindingMatches(ctx, window.PaneID, window.ID, serverID); err != nil {
 		t.Fatalf("atomic close of matching window: %v", err)
+	}
+}
+
+func TestTmuxIntegrationTallWrappedCaptureKeepsPresentationsAligned(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxTmpDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-frame-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+
+	inputPath := filepath.Join(t.TempDir(), "frame.txt")
+	var input strings.Builder
+	for i := 0; i < 50; i++ {
+		fmt.Fprintf(&input, "logical-line-%02d-xxxx\n", i)
+	}
+	if err := os.WriteFile(inputPath, []byte(input.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(ctx, "new-session", "-d", "-x", "12", "-y", "100", "-s", "frame", "cat"); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	if _, err := manager.EnsureServerID(ctx); err != nil {
+		t.Fatal(err)
+	}
+	window, err := manager.ResolveTarget(ctx, "frame:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(ctx, "load-buffer", "-b", "frame-input", inputPath, ";", "paste-buffer", "-b", "frame-input", "-t", window.PaneID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	capture, err := manager.CaptureStyled(ctx, window.PaneID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"physical": capture.Text, "joined": capture.JoinedText} {
+		compact := strings.ReplaceAll(text, "\n", "")
+		if strings.Contains(compact, "logical-line-00") || !strings.Contains(compact, "logical-line-49") {
+			t.Fatalf("%s frame is not aligned to the selected physical window: %q", name, text)
+		}
+	}
+	if capture.BufferRows != 64 {
+		t.Fatalf("buffer rows = %d, want 64", capture.BufferRows)
+	}
+}
+
+func TestTmuxIntegrationExecRunnerForcesUTF8WithoutChangingLocale(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxTmpDir(t)
+	t.Setenv("LC_ALL", "C")
+	t.Setenv("LANG", "C")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := ExecRunner{}
+	socket := fmt.Sprintf("engram-utf8-test-%d", os.Getpid())
+	_, _ = runner.Run(context.Background(), "-L", socket, "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "-L", socket, "kill-server") })
+
+	localePath := filepath.Join(t.TempDir(), "locale.txt")
+	scriptPath := filepath.Join(t.TempDir(), "utf8.sh")
+	script := "#!/bin/sh\nprintf '%s|%s\\n' \"$LC_ALL\" \"$LANG\" > " + ShellQuote(localePath) + "\nexec cat\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(ctx, "-L", socket, "new-session", "-d", "-x", "40", "-y", "10", "-s", "utf8", scriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(ctx, "-L", socket, "send-keys", "-l", "-t", "utf8:", "unicode-雪"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(ctx, "-L", socket, "send-keys", "-t", "utf8:", "Enter"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	capture, err := runner.Run(ctx, "-L", socket, "capture-pane", "-p", "-t", "utf8:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(capture, "unicode-雪") {
+		t.Fatalf("UTF-8 tmux capture = %q", capture)
+	}
+	var locale []byte
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		locale, err = os.ReadFile(localePath)
+		if err == nil {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(locale)); got != "C|C" {
+		t.Fatalf("Engram-created pane locale = %q, want inherited C|C", got)
 	}
 }
 
@@ -261,7 +370,7 @@ func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) 
 
 func setIntegrationTmuxTmpDir(t *testing.T) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "et-")
+	dir, err := os.MkdirTemp("/tmp", "et-")
 	if err != nil {
 		t.Fatal(err)
 	}

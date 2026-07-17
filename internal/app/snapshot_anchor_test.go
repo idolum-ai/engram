@@ -208,6 +208,29 @@ func TestSnapshotAnchorCaptionUsesExplicitPresentationTextWithoutURLRewrite(t *t
 	}
 }
 
+func TestSnapshotAnchorCaptionDisclosesWideImageClipping(t *testing.T) {
+	t.Parallel()
+	capture := tmux.StyledCapture{
+		Title:       "wide review",
+		CurrentPath: "/tmp",
+		Columns:     289,
+		VisibleRows: 162,
+		BufferRows:  64,
+	}
+	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: "wide review"}
+
+	caption, _ := (&App{}).snapshotAnchorCaption(session, capture, visibleReferences{})
+	if !strings.Contains(caption, "image columns 1–96 of 289 · Raw contains full width") {
+		t.Fatalf("snapshot caption omitted accessible clipping disclosure: %q", caption)
+	}
+
+	capture.Columns = 96
+	caption, _ = (&App{}).snapshotAnchorCaption(session, capture, visibleReferences{})
+	if strings.Contains(caption, "image columns") {
+		t.Fatalf("unclipped snapshot caption claimed clipping: %q", caption)
+	}
+}
+
 func TestSnapshotAnchorCaptionKeepsRedactionURLSafe(t *testing.T) {
 	t.Parallel()
 	configuredSecret := "configured-secret-value"
@@ -242,17 +265,17 @@ func TestSnapshotAnchorCaptionBoundsVisibleTextBeforeHTMLEscaping(t *testing.T) 
 	capture := tmux.StyledCapture{
 		Title:       strings.Repeat("<&", 800),
 		CurrentPath: "/" + strings.Repeat("long&path/", 200),
-		Columns:     80,
+		Columns:     289,
 		VisibleRows: 24,
 		BufferRows:  64,
 	}
 	session := state.TerminalSession{ID: 3, State: state.TerminalRunning, Title: capture.Title}
 	caption, files := (&App{}).snapshotAnchorCaption(session, capture, visibleReferences{})
-	if len(caption) > 960 || !utf8.ValidString(caption) || len(files) != 0 {
+	if len(caption) > 960 || !utf8.ValidString(caption) || len(files) != 0 || !strings.Contains(caption, "image columns 1–96 of 289 · Raw contains full width") {
 		t.Fatalf("caption bytes=%d valid=%v files=%#v", len(caption), utf8.ValidString(caption), files)
 	}
-	if html := telegram.MarkdownToHTML(caption); strings.ContainsAny(html, "<>") || !strings.HasSuffix(html, ";") {
-		t.Fatalf("escaped caption is not complete HTML text: %q", html[len(html)-20:])
+	if html := telegram.MarkdownToHTML(caption); strings.ContainsAny(html, "<>") {
+		t.Fatalf("escaped caption contains unsafe HTML text: %q", html)
 	}
 }
 

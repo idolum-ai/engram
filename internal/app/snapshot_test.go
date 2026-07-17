@@ -20,6 +20,19 @@ import (
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
+func TestSnapshotFrameDescriptionOnlyPromisesAvailableRawCompanion(t *testing.T) {
+	t.Parallel()
+	capture := tmux.StyledCapture{Columns: 289, VisibleRows: 162, BufferRows: 64}
+	oneOff := snapshotFrameDescription(capture, false)
+	if !strings.Contains(oneOff, "image columns 1–96 of 289 · full width not shown") || strings.Contains(oneOff, "Raw") {
+		t.Fatalf("one-off snapshot description = %q", oneOff)
+	}
+	canonical := snapshotFrameDescription(capture, true)
+	if !strings.Contains(canonical, "image columns 1–96 of 289 · Raw contains full width") {
+		t.Fatalf("canonical snapshot description = %q", canonical)
+	}
+}
+
 func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))

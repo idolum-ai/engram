@@ -28,7 +28,7 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 		"error &lt;script&gt;alert(1)&lt;/script&gt;",
 		"build &lt;unsafe&gt;",
 		"/tmp/&lt;cwd&gt;",
-		"last 64 buffer rows",
+		"64-row bounded frame",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("rendered HTML missing %q", want)
@@ -36,6 +36,46 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 	}
 	if strings.Contains(page, "<script>") {
 		t.Fatal("terminal content became executable HTML")
+	}
+}
+
+func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
+	t.Parallel()
+	page := RenderHTML(Input{
+		ANSI:        "wide terminal content\n",
+		Title:       "codex",
+		Target:      "[5]",
+		CWD:         "/tmp",
+		Columns:     289,
+		VisibleRows: 162,
+		BufferRows:  64,
+	}, "contrast-dark")
+	for _, want := range []string{
+		"width:96ch",
+		"font:7.00px/9.80px",
+		"64-row bounded frame",
+		"columns 1–96 of 289 · 162 visible rows",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("wide-pane HTML missing %q: %s", want, page)
+		}
+	}
+}
+
+func TestRenderedColumnsClipsOnlyBeyondReadableBoundary(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		columns int
+		want    int
+	}{
+		{columns: 80, want: 80},
+		{columns: 96, want: 96},
+		{columns: 97, want: 96},
+		{columns: 289, want: 96},
+	} {
+		if got := RenderedColumns(test.columns); got != test.want {
+			t.Errorf("RenderedColumns(%d) = %d, want %d", test.columns, got, test.want)
+		}
 	}
 }
 
