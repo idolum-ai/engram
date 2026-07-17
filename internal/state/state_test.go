@@ -258,6 +258,26 @@ func TestPersistenceReachedReplacementDistinguishesAtomicWriteOutcomes(t *testin
 	}
 }
 
+func TestAddAttachmentRollsBackBeforeReplacementAndKeepsCommittedState(t *testing.T) {
+	store := &Store{state: newState()}
+	attachment := Attachment{StoredPath: "/tmp/voice.ogg"}
+	preReplace := &atomicWriteError{Err: errors.New("write failed")}
+	if err := store.addAttachmentLocked(attachment, func() error { return preReplace }); !errors.Is(err, preReplace) {
+		t.Fatalf("pre-replacement error = %v", err)
+	}
+	if len(store.state.Attachments) != 0 {
+		t.Fatalf("pre-replacement failure retained attachment: %#v", store.state.Attachments)
+	}
+
+	postReplace := &atomicWriteError{Err: errors.New("directory sync failed"), Replaced: true}
+	if err := store.addAttachmentLocked(attachment, func() error { return postReplace }); !errors.Is(err, postReplace) {
+		t.Fatalf("post-replacement error = %v", err)
+	}
+	if len(store.state.Attachments) != 1 || store.state.Attachments[0].StoredPath != attachment.StoredPath {
+		t.Fatalf("post-replacement failure lost committed attachment: %#v", store.state.Attachments)
+	}
+}
+
 func TestStateV6MigratesUpstreamDefaultsAndPersistsV7(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
@@ -411,6 +431,46 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 	got, ok := reopened.FindSession(7)
 	if !ok || got.LastRawCapture != "" || got.LastRawCaptureHash != "capture-hash" {
 		t.Fatalf("reopened legacy session = %#v ok=%v", got, ok)
+	}
+}
+
+func TestAnchorFileBindingsRemainProcessLocalAndDeepCloned(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(current *TerminalSession) {
+		current.AnchorFiles = []string{"/tmp/report.txt"}
+		current.AnchorFileToken = "0123456789abcdef"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	snapshot.TerminalSessions[0].AnchorFiles[0] = "/tmp/mutated.txt"
+	current, _ := store.FindSession(session.ID)
+	if current.AnchorFiles[0] != "/tmp/report.txt" {
+		t.Fatalf("snapshot aliased anchor files: %#v", current.AnchorFiles)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(persisted), "report.txt") || strings.Contains(string(persisted), "0123456789abcdef") {
+		t.Fatalf("anchor file binding persisted: %s", persisted)
+	}
+	reopened, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ := reopened.FindSession(session.ID)
+	if len(loaded.AnchorFiles) != 0 || loaded.AnchorFileToken != "" {
+		t.Fatalf("process-local binding survived restart: %#v", loaded)
 	}
 }
 

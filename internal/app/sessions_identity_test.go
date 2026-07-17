@@ -66,6 +66,7 @@ func TestReattachWaitsForAnchorDeliveryAndNeutralizesOldView(t *testing.T) {
 		current.SeenUpstreamSignalIDs = []string{"old-signal"}
 		current.LastUpstreamSignalAt = time.Now().UTC()
 		current.UpstreamRetryAt = time.Now().UTC().Add(time.Minute)
+		setAnchorFiles(current, []string{"/tmp/old-binding.txt"})
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +101,7 @@ func TestReattachWaitsForAnchorDeliveryAndNeutralizesOldView(t *testing.T) {
 		t.Fatalf("result=%#v paths=%#v", result, paths)
 	}
 	got, _ := store.FindSession(session.ID)
-	if got.TmuxServerID != appTestServerID || got.LastSummary != "" || got.LastRawCapture != "" || !got.LastSnapshotAttemptAt.IsZero() || len(got.SeenUpstreamSignalIDs) != 0 || !got.LastUpstreamSignalAt.IsZero() || !got.UpstreamRetryAt.IsZero() || got.SummaryMessageID != 0 || got.SnapshotMessageID != 0 || got.UpstreamMessageID != 0 || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{74, 75, 76}) {
+	if got.TmuxServerID != appTestServerID || got.LastSummary != "" || got.LastRawCapture != "" || !got.LastSnapshotAttemptAt.IsZero() || len(got.SeenUpstreamSignalIDs) != 0 || !got.LastUpstreamSignalAt.IsZero() || !got.UpstreamRetryAt.IsZero() || got.SummaryMessageID != 0 || got.SnapshotMessageID != 0 || got.UpstreamMessageID != 0 || len(got.AnchorFiles) != 0 || got.AnchorFileToken != "" || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{74, 75, 76}) {
 		t.Fatalf("reattached session = %#v", got)
 	}
 	if _, ok := app.signalRetries.Load(session.ID); ok {

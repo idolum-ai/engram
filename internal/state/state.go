@@ -82,6 +82,8 @@ type TerminalSession struct {
 	WatchEnabled             bool           `json:"watch_enabled"`
 	LastAnchorEditAt         time.Time      `json:"last_anchor_edit_at,omitempty"`
 	LastRawCapture           string         `json:"last_raw_capture,omitempty"`
+	AnchorFiles              []string       `json:"-"`
+	AnchorFileToken          string         `json:"-"`
 }
 
 func (s TerminalSession) HasSeenUpstreamSignal(recordID string) bool {
@@ -707,9 +709,20 @@ func (s *Store) MarkMessage(key string) error {
 func (s *Store) AddAttachment(a Attachment) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.addAttachmentLocked(a, s.saveLocked)
+}
+
+func (s *Store) addAttachmentLocked(a Attachment, save func() error) error {
+	previous := append([]Attachment(nil), s.state.Attachments...)
 	a.ID = maxAttachmentID(s.state.Attachments) + 1
 	s.state.Attachments = append(s.state.Attachments, a)
-	return s.saveLocked()
+	if err := save(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.Attachments = previous
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Store) AddAttachmentBypass(bypass AttachmentBypass) error {
@@ -968,6 +981,7 @@ func cloneState(in State) State {
 
 func cloneTerminalSession(in TerminalSession) TerminalSession {
 	out := in
+	out.AnchorFiles = append([]string(nil), in.AnchorFiles...)
 	out.StaleAlternateMessageIDs = append([]int(nil), in.StaleAlternateMessageIDs...)
 	out.SeenUpstreamSignalIDs = append([]string(nil), in.SeenUpstreamSignalIDs...)
 	return out

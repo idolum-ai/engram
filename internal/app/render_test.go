@@ -76,10 +76,9 @@ func TestRenderLocalIncludesDeterministicVisibleReferences(t *testing.T) {
 	got := renderLocal(session, "status:\nready")
 	for _, want := range []string{
 		"\n\nstatus:\nready",
-		"\n\npaths:\n```",
+		"\n\nfiles:\n```\n1. ",
 		pdf + "\n",
 		pdf2 + "\n",
-		"~/code/github.com/idolum-ai/engram\n",
 		"\n\nlinks:\nhttps://example.test/path",
 	} {
 		if !strings.Contains(got, want) {
@@ -91,6 +90,9 @@ func TestRenderLocalIncludesDeterministicVisibleReferences(t *testing.T) {
 	}
 	if strings.Contains(got, "missing.txt") {
 		t.Fatalf("renderLocal included missing path:\n%s", got)
+	}
+	if strings.Contains(got, "~/code/github.com/idolum-ai/engram") {
+		t.Fatalf("renderLocal included a directory:\n%s", got)
 	}
 	for _, bogus := range []string{"/2", "/p", "/Venue/BoundaryCountertermKernel.lean", "/bidi", "/review"} {
 		if strings.Contains(got, bogus+"\n") {

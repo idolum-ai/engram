@@ -66,6 +66,153 @@ func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 	}
 }
 
+func TestGuideRefreshBindsFilesFromFullFrameBeforeStoredTail(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	file := filepath.Join(t.TempDir(), "early-report.txt")
+	if err := os.WriteFile(file, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = "text"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.capturePhysical = file + "\n" + strings.Repeat("ordinary output\n", 1400)
+	runner.captureJoined = runner.capturePhysical
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"A report was produced."}]}`))}, nil
+	})}
+	a.Guide = model
+	var markup string
+	tg := telegram.New("TOKEN")
+	tg.BaseURL = "https://api.telegram.org/botTOKEN"
+	tg.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(body["reply_markup"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		markup = string(encoded)
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	a.Telegram = tg
+
+	a.refreshSession(context.Background(), id, true)
+	got, _ := a.Store.FindSession(id)
+	if len(got.LastRawCapture) > maxStoredVisibleCaptureBytes || strings.Contains(got.LastRawCapture, file) {
+		t.Fatalf("stored tail unexpectedly retained early file: bytes=%d", len(got.LastRawCapture))
+	}
+	if !reflect.DeepEqual(got.AnchorFiles, []string{file}) || !strings.Contains(markup, "file:1:") {
+		t.Fatalf("full-frame file binding=%#v markup=%q", got.AnchorFiles, markup)
+	}
+}
+
+func TestGuideRefreshUpdatesFileBindingsWithoutAnotherModelRequest(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	file := filepath.Join(t.TempDir(), "appears-later.txt")
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = "text"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner.capturePhysical = file + "\nordinary output\n"
+	runner.captureJoined = runner.capturePhysical
+	modelCalls := 0
+	model := anthropic.New("secret", "claude-haiku-4-5-20251001")
+	model.BaseURL = "https://anthropic.test/messages"
+	model.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		modelCalls++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"stop_reason":"end_turn","content":[{"type":"text","text":"Ordinary output is visible."}]}`))}, nil
+	})}
+	a.Guide = model
+	tg := telegram.New("TOKEN")
+	tg.BaseURL = "https://api.telegram.org/botTOKEN"
+	tg.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	a.Telegram = tg
+
+	a.refreshSession(context.Background(), id, true)
+	if got, _ := a.Store.FindSession(id); len(got.AnchorFiles) != 0 {
+		t.Fatalf("missing path became a file binding: %#v", got.AnchorFiles)
+	}
+	if err := os.WriteFile(file, []byte("report"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.LastAnchorEditAt = time.Now().Add(-11 * time.Second)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.refreshSession(context.Background(), id, false)
+	got, _ := a.Store.FindSession(id)
+	if !reflect.DeepEqual(got.AnchorFiles, []string{file}) || modelCalls != 1 {
+		t.Fatalf("file bindings=%#v model calls=%d", got.AnchorFiles, modelCalls)
+	}
+}
+
+func TestAccessibleSnapshotCompanionUsesBoundedPlainFrame(t *testing.T) {
+	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runner.capturePhysical = "\x1b[31mhistory and visible\x1b[0m\n"
+	runner.captureJoined = "history and visible\n"
+	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = "snapshot"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ts, ok := a.Store.FindSession(id)
+	if !ok {
+		t.Fatal("session missing")
+	}
+	var uploaded string
+	tg := telegram.New("TOKEN")
+	tg.BaseURL = "https://api.telegram.org/botTOKEN"
+	tg.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendDocument" {
+			t.Fatalf("unexpected endpoint %s", req.URL.Path)
+		}
+		if err := req.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		file, _, err := req.FormFile("document")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(file)
+		file.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		uploaded = string(body)
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	a.Telegram = tg
+	a.rememberSnapshotTextFrame(ts, tmux.StyledCapture{JoinedText: strings.TrimSpace(runner.captureJoined)})
+	frame, ok := a.snapshotTextFrame(ts)
+	if !ok {
+		t.Fatal("remembered snapshot frame unavailable")
+	}
+	before := len(runner.calls)
+	a.uploadAccessibleSnapshotFrame(context.Background(), telegram.Message{Chat: telegram.Chat{ID: 100}}, ts, frame)
+	if uploaded != strings.TrimSpace(runner.captureJoined) || strings.Contains(uploaded, "\x1b[") {
+		t.Fatalf("accessible frame = %q, want joined plain text", uploaded)
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("accessible companion recaptured terminal: before=%d after=%d", before, len(runner.calls))
+	}
+}
+
 func TestGuideDeliveryFailureDoesNotAdvanceCaptureOrConversation(t *testing.T) {
 	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {

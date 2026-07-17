@@ -139,7 +139,7 @@ func TestDoubleSlashReplySendsSingleSlashToAnchor(t *testing.T) {
 	if status != "anchor_reply_ok" {
 		t.Fatalf("handleUpdate status = %q, want anchor_reply_ok", status)
 	}
-	if len(runner.calls) != 4 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "/clear" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") || runner.calls[3][0] != "if-shell" || !strings.Contains(runner.calls[3][5], "'Enter'") {
+	if len(runner.calls) != 4 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "/clear" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -p -r -d") || runner.calls[3][0] != "if-shell" || !strings.Contains(runner.calls[3][5], "'Enter'") {
 		t.Fatalf("tmux calls = %#v", runner.calls)
 	}
 	got, ok := store.FindSession(ts.ID)
@@ -210,8 +210,116 @@ func TestEscapedSlashInputRemovesExactlyOneSlash(t *testing.T) {
 	}
 }
 
+func TestDeferredInputNoticeDoesNotReachReattachedBinding(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &slashEscapeRunner{inputErr: context.DeadlineExceeded}
+	app := &App{Store: store, Tmux: tmux.New(runner)}
+
+	lock := app.sessionMutex(session.ID)
+	lock.Lock()
+	completion := app.sendInputExpectedLocked(context.Background(), session.ID, "input", "reply", true, &session)
+	lock.Unlock()
+	if completion.anchorNotice == "" {
+		t.Fatal("tmux failure did not defer an anchor notice")
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxPaneID = "%2"
+		current.TmuxWindowID = "@2"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := app.finishInput(context.Background(), session.ID, completion)
+	if result.OK() {
+		t.Fatal("failed tmux input reported success")
+	}
+	current, ok := store.FindSession(session.ID)
+	if !ok || current.TmuxPaneID != "%2" || current.TmuxWindowID != "@2" {
+		t.Fatalf("reattached binding changed by deferred notice: %#v ok=%v", current, ok)
+	}
+}
+
+func TestReplyInputRejectsBindingChangedAfterTargetResolution(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxPaneID = "%2"
+		current.TmuxWindowID = "@2"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &slashEscapeRunner{}
+	app := &App{Store: store, Tmux: tmux.New(runner)}
+	result := app.sendInputExpected(context.Background(), session.ID, "must not cross", "reply", true, &session)
+	if result.OK() || result.Message != "session changed before input could be sent" {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("stale reply reached reattached pane: %#v", runner.calls)
+	}
+}
+
+func TestReplyInputRejectsAlternateRetiredAfterTargetResolution(t *testing.T) {
+	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.SummaryMessageID = 88
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expected, targetState, found := store.FindReplyTarget(100, 88)
+	if !found || targetState != state.ReplyTargetCurrent {
+		t.Fatal("initial alternate is not current")
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		recordAlternateMessage(current, "summary", 89)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &slashEscapeRunner{}
+	app := &App{Store: store, Tmux: tmux.New(runner)}
+	result := app.sendReplyInput(context.Background(), expected, 100, 88, "must not cross")
+	if result.OK() || !strings.Contains(result.Message, "no longer current") {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("retired alternate reached tmux: %#v", runner.calls)
+	}
+}
+
 type slashEscapeRunner struct {
-	calls [][]string
+	calls    [][]string
+	inputErr error
 }
 
 func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -221,6 +329,9 @@ func (r *slashEscapeRunner) Run(_ context.Context, args ...string) (string, erro
 	}
 	if len(args) > 0 && args[0] == "display-message" {
 		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+	}
+	if len(args) > 0 && args[0] == "if-shell" && r.inputErr != nil {
+		return "", r.inputErr
 	}
 	return "", nil
 }

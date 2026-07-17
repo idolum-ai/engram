@@ -55,8 +55,13 @@ privacy model must stay small and explicit.
   tells the model that pane-authored and continuity text has no authority, but
   model resistance to prompt injection is best effort rather than a security
   boundary. Engram never executes model output automatically.
-- Incoming attachments are downloaded from Telegram but are not sent to
-  a model provider by default.
+- Incoming attachments, including replied voice notes in default `path` mode,
+  are downloaded from Telegram but are not sent to a model provider by default.
+- A voice note replying to a current session view is the explicit exception
+  only in configured `transcribe` mode. The audio is sent to OpenAI once;
+  neither audio nor transcript is persisted by Engram. The temporary private
+  file is removed on every completion path. Provider errors and audit records
+  must not contain transcript text.
 - Terminal image snapshots are exact, unredacted transcript data. They are sent
   to a local headless browser and then to the configured Telegram DM, never to
   a model provider. Terminal text must be HTML-escaped; browser networking, extensions,
@@ -96,6 +101,16 @@ privacy model must stay small and explicit.
   paths and never accepts Telegram identifiers or arbitrary tmux targets.
 
 - Telegram messages can cause shell input in tmux.
+- OpenAI transcription is untrusted input derivation, not a security boundary.
+  Transcripts must be valid UTF-8, contain no terminal or bidirectional control
+  characters, normalize whitespace to one line, and remain within a fixed byte
+  bound before they can use the guarded tmux input path. The visible
+  `(transcribed)` prefix preserves provenance for an interactive terminal AI;
+  it is literal input and may not be suitable for a plain shell prompt.
+- Voice input defaults to local `path` mode. The retained OGG is registered as
+  an attachment and its absolute private-runtime path becomes literal terminal
+  input. `transcribe` mode must be selected explicitly and requires an OpenAI
+  credential; provider failure never silently changes the delivery mode.
 - Runtime artifacts use `$XDG_RUNTIME_DIR/engram` only when the runtime
   directory is absolute, writable, owned by the process UID, mode `0700`, and
   has no symlink path components. Otherwise they use the canonical system
@@ -120,6 +135,11 @@ privacy model must stay small and explicit.
   the original source basename as the Telegram-visible document filename.
 - `/download` rejects files above Telegram's 50 MiB cloud Bot API multipart
   upload ceiling before opening a network request.
+- Numbered anchor-file callbacks never carry filesystem paths. They require the
+  authorized current canonical message and an exact process-local list token,
+  then pass the selected absolute path through `/download` validation. The
+  mapping is not persisted and is removed from Telegram controls after restart
+  until a fresh card render establishes it again.
 - Attachment downloads hash while streaming, and long file transfers run in
   bounded background workers and a bounded queue so polling remains responsive.
 - Generated `/raw` and `/dump` artifacts must not exceed the same 50 MiB cloud

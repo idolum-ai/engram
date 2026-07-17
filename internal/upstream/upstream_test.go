@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -35,7 +36,7 @@ func TestWriteRecordEstablishesBoundaryAndObservationKeepsLatestIdentity(t *test
 	if err := WriteRecord(&output, Record{ID: testRecordID, Payload: "tests\nfinished"}); err != nil {
 		t.Fatal(err)
 	}
-	want := "\a\r\n[engram:upstream] " + testRecordID + " tests finished\r\n"
+	want := "\a\r\n[engram:upstream:v1] " + testRecordID + " 14:tests finished\r\n"
 	if got := output.String(); got != want {
 		t.Fatalf("signal output = %q, want %q", got, want)
 	}
@@ -47,10 +48,54 @@ func TestWriteRecordEstablishesBoundaryAndObservationKeepsLatestIdentity(t *test
 	}
 }
 
-func TestObserveStripsMalformedFramingWithoutTreatingItAsSignal(t *testing.T) {
+func TestObserveKeepsMalformedFramingAsTerminalEvidence(t *testing.T) {
 	got := Observe("safe\n" + Prefix + "not-an-id injected path /tmp/nope\nafter")
-	if got.Found || got.PresentationText != "safe\nafter" {
+	if got.Found || got.PresentationText != "safe\n"+Prefix+"not-an-id injected path /tmp/nope\nafter" {
 		t.Fatalf("Observe malformed = %#v", got)
+	}
+}
+
+func TestObserveAcceptsBoundedPresentationIndent(t *testing.T) {
+	line := VersionedPrefix + testRecordID + " 41:Codex tool output"
+	got := Observe("before\n    " + line + "\n    finished through Engram\n\nafter")
+	if !got.Found || got.Latest.Payload != "Codex tool output finished through Engram" || got.PresentationText != "before\n\nafter" {
+		t.Fatalf("Observe indented = %#v", got)
+	}
+
+	tooDeep := Observe(strings.Repeat(" ", MaxPresentationIndent+1) + line)
+	if tooDeep.Found || tooDeep.PresentationText == "" {
+		t.Fatalf("Observe over-indented = %#v", tooDeep)
+	}
+}
+
+func TestObserveKeepsAdjacentIndentedOutputOutsideLengthFramedSignal(t *testing.T) {
+	payload := "build complete"
+	line := "    " + VersionedPrefix + testRecordID + " " + strconv.Itoa(len(payload)) + ":" + payload
+	got := Observe(line + "\n    /tmp/report.txt\n    ERROR: deployment failed")
+	if !got.Found || got.Latest.Payload != payload || got.PresentationText != "    /tmp/report.txt\n    ERROR: deployment failed" {
+		t.Fatalf("Observe adjacent output = %#v", got)
+	}
+}
+
+func TestObserveDoesNotJoinContinuationToColumnZeroRecord(t *testing.T) {
+	line := Prefix + testRecordID + " direct signal"
+	got := Observe(line + "\nordinary output")
+	if !got.Found || got.Latest.Payload != "direct signal" || got.PresentationText != "ordinary output" {
+		t.Fatalf("Observe direct = %#v", got)
+	}
+}
+
+func TestObserveKeepsIncompleteLengthFramedSignalUnrecognized(t *testing.T) {
+	got := Observe("    " + VersionedPrefix + testRecordID + " 40:short\n    ordinary output\n    second line")
+	if got.Found || got.PresentationText != "    "+VersionedPrefix+testRecordID+" 40:short\n    ordinary output\n    second line" {
+		t.Fatalf("Observe incomplete = %#v", got)
+	}
+}
+
+func TestObserveDoesNotReinterpretLegacyPayloadAsVersionedFraming(t *testing.T) {
+	got := Observe(Prefix + testRecordID + " v1:2:ok")
+	if !got.Found || got.Latest.Payload != "v1:2:ok" {
+		t.Fatalf("Observe legacy collision = %#v", got)
 	}
 }
 

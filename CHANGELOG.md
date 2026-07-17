@@ -4,6 +4,33 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Conversational guide
+
+- Prefer durable outcomes and current work over terminal narration, routine
+  mechanism, idle prompts, and unexecuted interface text, guided by human
+  preference fixtures and a reproducible prompt tournament.
+
+### Input
+
+- Add a distinct `← ↑ ↓ →` row to current snapshot anchors for direct tmux
+  directional input under the existing authenticated callback boundary.
+- Send long and multiline Telegram replies as one bracketed tmux paste followed
+  by one Enter, allowing terminal applications to receive the complete input as
+  one submission.
+- Add voice replies with explicit startup modes: local durable attachment-path
+  delivery by default, or opt-in `gpt-4o-transcribe`. Transcription audio is
+  temporary, transcript provenance is explicit, and latest-view plus
+  immutable-pane checks are repeated before either input reaches tmux.
+- Recognize versioned, length-framed upstream-signal records through bounded
+  presentation indent and same-indent wrapping so Codex-rendered command output
+  can request attention without consuming adjacent guide evidence.
+
+### File handoff
+
+- Show only existing regular files in anchor reference sections, enumerate and
+  code-format them in both modes, and add matching `⬇️ n` buttons that reuse
+  `/download` behind current-card and exact-list callback guards.
+
 ## [v0.4.0] - 2026-07-14
 
 ### Conversational guide

@@ -1,12 +1,14 @@
 package app
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/idolum-ai/engram/internal/redact"
+	"github.com/idolum-ai/engram/internal/state"
 )
 
 const (
@@ -27,51 +29,80 @@ type textRange struct {
 	end   int
 }
 
+func bindAnchorFiles(ts state.TerminalSession, files []string) state.TerminalSession {
+	ts.AnchorFiles = append([]string(nil), files...)
+	ts.AnchorFileToken = anchorFileToken(files)
+	return ts
+}
+
+func setAnchorFiles(ts *state.TerminalSession, files []string) {
+	ts.AnchorFiles = append([]string(nil), files...)
+	ts.AnchorFileToken = anchorFileToken(files)
+}
+
+func anchorFileToken(files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	return sha(strings.Join(files, "\x00"))[:16]
+}
+
 func renderVisibleReferences(capture string, secrets ...string) string {
-	refs := redactVisibleReferencePaths(extractVisibleReferences(capture, maxVisiblePaths, maxVisibleURLs, secrets...), secrets...)
+	refs := visibleReferencesForCapture(capture, secrets...)
 	return renderReferences(refs, true, maxGuideReferenceBytes)
 }
 
-func renderSnapshotReferences(capture string, maxBytes int, secrets ...string) string {
+func renderSnapshotReferenceSetWithFiles(refs visibleReferences, maxBytes int) (string, []string) {
 	if maxBytes <= 0 {
-		return ""
+		return "", nil
 	}
 	if maxBytes > maxSnapshotReferenceBytes {
 		maxBytes = maxSnapshotReferenceBytes
 	}
-	refs := redactVisibleReferencePaths(extractVisibleReferences(capture, maxVisiblePaths, maxVisibleURLs, secrets...), secrets...)
 	if len(refs.Paths) == 0 || len(refs.URLs) == 0 {
-		return renderReferences(refs, false, maxBytes)
+		return renderReferencesWithFiles(refs, true, maxBytes)
 	}
 	pathBudget := maxBytes * 55 / 100
-	paths := renderReferences(visibleReferences{Paths: refs.Paths}, false, pathBudget)
+	paths, files := renderReferencesWithFiles(visibleReferences{Paths: refs.Paths}, true, pathBudget)
 	linkBudget := maxBytes - len(paths)
 	if paths != "" {
 		linkBudget -= 2
 	}
 	links := renderReferences(visibleReferences{URLs: refs.URLs}, false, linkBudget)
 	if paths == "" {
-		return links
+		return links, nil
 	}
 	if links == "" {
-		return paths
+		return paths, files
 	}
-	return paths + "\n\n" + links
+	return paths + "\n\n" + links, files
 }
 
-func redactVisibleReferencePaths(refs visibleReferences, secrets ...string) visibleReferences {
-	for index, path := range refs.Paths {
-		refs.Paths[index] = redact.Secrets(path, secrets...)
+func visibleReferencesForCapture(capture string, secrets ...string) visibleReferences {
+	refs := extractVisibleReferences(capture, maxVisiblePaths, maxVisibleURLs, secrets...)
+	paths := refs.Paths[:0]
+	for _, path := range refs.Paths {
+		// A redacted path cannot safely back an exact-file download button.
+		if redact.Secrets(path, secrets...) == path {
+			paths = append(paths, path)
+		}
 	}
+	refs.Paths = paths
 	return refs
 }
 
 func renderReferences(refs visibleReferences, fencePaths bool, maxBytes int) string {
+	rendered, _ := renderReferencesWithFiles(refs, fencePaths, maxBytes)
+	return rendered
+}
+
+func renderReferencesWithFiles(refs visibleReferences, fencePaths bool, maxBytes int) (string, []string) {
 	if maxBytes <= 0 || len(refs.Paths) == 0 && len(refs.URLs) == 0 {
-		return ""
+		return "", nil
 	}
 	var b strings.Builder
-	appendItems := func(label string, items []string, fenced bool) {
+	var includedFiles []string
+	appendItems := func(label string, items []string, fenced, numbered bool) {
 		if len(items) == 0 {
 			return
 		}
@@ -87,16 +118,23 @@ func renderReferences(refs visibleReferences, fencePaths bool, maxBytes int) str
 		}
 		added := 0
 		for _, item := range items {
+			renderedItem := item
+			if numbered {
+				renderedItem = fmt.Sprintf("%d. %s", added+1, item)
+			}
 			suffixBytes := 0
 			if fenced {
 				suffixBytes = len("\n```")
 			}
-			if b.Len()+len(separator)+section.Len()+1+len(item)+suffixBytes > maxBytes {
+			if b.Len()+len(separator)+section.Len()+1+len(renderedItem)+suffixBytes > maxBytes {
 				continue
 			}
 			section.WriteByte('\n')
-			section.WriteString(item)
+			section.WriteString(renderedItem)
 			added++
+			if numbered {
+				includedFiles = append(includedFiles, item)
+			}
 		}
 		if added == 0 {
 			return
@@ -107,9 +145,9 @@ func renderReferences(refs visibleReferences, fencePaths bool, maxBytes int) str
 		b.WriteString(separator)
 		b.WriteString(section.String())
 	}
-	appendItems("paths", refs.Paths, fencePaths)
-	appendItems("links", refs.URLs, false)
-	return b.String()
+	appendItems("files", refs.Paths, fencePaths, true)
+	appendItems("links", refs.URLs, false, false)
+	return b.String(), includedFiles
 }
 
 func extractVisibleReferences(capture string, pathLimit, urlLimit int, secrets ...string) visibleReferences {
@@ -146,9 +184,13 @@ func extractVisiblePathsOutsideRanges(capture string, limit int, excluded []text
 			end++
 		}
 		path := strings.TrimRight(capture[i:end], ".,;:)]}>\"'")
-		if len(path) <= maxVisibleReferenceBytes && validVisiblePath(path) && visiblePathExists(path) && !seen[path] {
-			seen[path] = true
-			paths = append(paths, path)
+		if len(path) > maxVisibleReferenceBytes || !validVisiblePath(path) {
+			i = end
+			continue
+		}
+		if filePath, ok := visibleRegularFile(path); ok && !seen[filePath] {
+			seen[filePath] = true
+			paths = append(paths, filePath)
 		}
 		i = end
 	}
@@ -514,20 +556,24 @@ func validVisiblePath(path string) bool {
 	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~/")
 }
 
-func visiblePathExists(path string) bool {
+func visibleRegularFile(path string) (string, bool) {
 	expanded := path
 	if strings.HasPrefix(path, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil || home == "" {
-			return false
+			return "", false
 		}
 		expanded = filepath.Join(home, strings.TrimPrefix(path, "~/"))
 	}
-	info, err := os.Stat(expanded)
-	if err != nil {
-		return false
+	expanded = filepath.Clean(expanded)
+	if !filepath.IsAbs(expanded) {
+		return "", false
 	}
-	return info.Mode().IsRegular() || info.IsDir()
+	info, err := os.Lstat(expanded)
+	if err != nil {
+		return "", false
+	}
+	return expanded, info.Mode().IsRegular()
 }
 
 func pathChar(ch byte) bool {

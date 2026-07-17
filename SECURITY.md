@@ -37,8 +37,11 @@ failure are in scope.
 - Authorized Telegram input can execute shell commands and key presses in tmux.
 - `/download` can upload a chosen local regular file to Telegram. `/raw` and
   `/dump` upload terminal content.
-- Visible pane captures, previous summaries, and input previews are sent to
-  Anthropic Haiku. One bounded full-scrollback retry may also be sent.
+- Bounded visible pane captures may be sent to the selected conversational
+  provider, Anthropic Haiku or OpenAI Luna. Replied Telegram voice notes default
+  to retained local attachments whose paths are delivered as literal tmux
+  input. Only explicit `VOICE_INPUT_MODE=transcribe` sends them to OpenAI
+  `gpt-4o-transcribe` and delivers a bounded transcript instead.
 - State, logs, generated captures, and attachments remain on the local host and
   may contain sensitive transcript data.
 
@@ -46,7 +49,8 @@ failure are in scope.
 
 - Keep `~/.engram/.env` mode `0600` and its parent directory private.
 - Use a dedicated Telegram bot in a direct message. Do not add it to groups.
-- Revoke and replace the bot token or Anthropic key immediately if exposed.
+- Revoke and replace the bot token, Anthropic key, or OpenAI key immediately if
+  exposed.
 - Do not track `.env` files, state, logs, PEM files, generated captures, or
   downloaded attachments.
 - Treat Engram's private runtime root as sensitive. Engram prefers a valid
@@ -59,4 +63,4 @@ failure are in scope.
 Audit and `/logs` redaction is pattern-based. It can miss unknown credential
 formats and sensitive prose, and it does not redact terminal captures,
 `state.json`, `/raw`, `/dump`, `/download`, attachments, Telegram history, or
-Anthropic requests.
+model-provider requests.

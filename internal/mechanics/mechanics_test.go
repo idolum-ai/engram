@@ -109,7 +109,7 @@ func TestSendTextValidatesImmutableIdentityBeforeEffect(t *testing.T) {
 	if pane.ID != "%3" || pane.WindowID != "@2" || pane.CurrentPath != "/tmp/project" {
 		t.Fatalf("pane = %#v", pane)
 	}
-	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "echo ok" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") {
+	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "echo ok" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -p -r -d") {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
@@ -137,7 +137,7 @@ func TestCommandKeepsLiteralAndEnterDistinct(t *testing.T) {
 	if len(runner.calls) != 4 {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
-	if runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "printf 'a b'" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -r -d") {
+	if runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "printf 'a b'" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -p -r -d") {
 		t.Fatalf("literal calls = %#v", runner.calls)
 	}
 	if got := runner.calls[3]; got[0] != "if-shell" || !strings.Contains(got[5], "send-keys -t %3 'Enter'") {

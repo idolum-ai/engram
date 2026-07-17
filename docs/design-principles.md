@@ -56,7 +56,10 @@ inert; two actionable representations of one pane are a product error.
 
 A guide anchor uses compact conversational prose. A snapshot anchor uses a
 bounded, ANSI-preserving terminal image. Both retain deterministic references
-and a small allowlisted row of terminal controls.
+and small allowlisted controls, including exact numbered handoffs for files
+already visible in the pane.
+Snapshot anchors keep the exact delivered frame's literal text one tap away
+through a `📄 Raw` attachment; the image is primary, not exclusive.
 
 ### Fast input path
 
@@ -112,8 +115,8 @@ rendering work.
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying
 session. A snapshot
-anchor may offer `🗣️` for a one-off conversational reply; a guide anchor may
-offer `🖼️` for a one-off image. Alternate views are shown only when Engram can
+anchor may offer `🗣️ Explain` for a one-off conversational reply; a guide anchor may
+offer `🖼️ Snapshot` for a one-off image. Alternate views are shown only when Engram can
 actually deliver them, and they never become a second canonical anchor. The
 latest alternate of each kind may act as a reply handle for its session; an
 older alternate is explicitly stale and cannot route input.
@@ -121,7 +124,7 @@ older alternate is explicitly stale and cannot route input.
 ### Deterministic facts beat guesses
 
 Engram should compute session IDs, tmux targets, pane IDs, working directories,
-attachment paths, visible paths and URLs, capture hashes, timestamps, and
+attachment paths, visible files and URLs, capture hashes, timestamps, and
 service status locally. Extracted references are untrusted pane content;
 Engram does not fetch or endorse them.
 

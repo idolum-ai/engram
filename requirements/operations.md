@@ -24,6 +24,9 @@ runtime state.
 - `LLM_PROVIDER` selects exactly one supported guide implementation at startup:
   `anthropic` with Haiku 4.5 or `openai` with Luna. Only the selected provider's
   credential is used, and changing providers requires a restart.
+- `VOICE_INPUT_MODE` independently selects `path` or `transcribe` at startup.
+  It defaults to local durable path delivery. Transcription requires an OpenAI
+  credential and does not become active merely because that credential exists.
 - Optional dependencies are checked at startup. A configured guide client or
   probed renderer enables its corresponding alternate view and `/mode` target.
 - `/mode [guide|snapshot]` persists the selection and begins anchor migration
@@ -63,14 +66,16 @@ runtime state.
 - `/status` shows version, uptime, session count, anchor mode, snapshot renderer
   capability, state path, audit path, attachment path, free artifact-filesystem
   space, poll time, and whether the conversational guide is enabled, including
-  its selected provider and model.
+  its selected provider and model. It separately reports effective voice input
+  mode and, for OpenAI transcription, its admitted model.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.
 - `engram signal <message>` writes only to its controlling terminal and does
   not load service configuration or call Telegram, tmux, or a model provider.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the local
-  service surface without calling Telegram, a model provider, or starting polling.
+  service surface without calling Telegram, a model provider, or starting
+  polling. They report voice input mode separately from the selected guide.
 - `dry-start` may create and open local state; `preflight` must not.
 - `engram inspect status`, `engram inspect sessions`, and
   `engram inspect frame <watch-id>` require no Telegram or presentation

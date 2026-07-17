@@ -133,6 +133,57 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	}
 }
 
+func TestTmuxIntegrationBracketedPasteSubmitsOneMultilineInput(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxTmpDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-paste-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+
+	payload := "first line\nsecond line"
+	expected := "\x1b[200~" + payload + "\x1b[201~\n"
+	outputPath := t.TempDir() + "/input.bin"
+	helperPath := t.TempDir() + "/capture-input.sh"
+	script := fmt.Sprintf("#!/bin/sh\nprintf '\\033[?2004h'\ndd bs=1 count=%d of=%q 2>/dev/null\nsleep 5\n", len(expected), outputPath)
+	if err := os.WriteFile(helperPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(ctx, "new-session", "-d", "-s", "paste", helperPath); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	serverID, err := manager.EnsureServerID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, err := manager.ResolveTarget(ctx, "paste:0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := manager.SendCommandIfBindingMatches(ctx, window.PaneID, window.ID, serverID, payload); err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		got, err = os.ReadFile(outputPath)
+		if err == nil && len(got) == len(expected) {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if string(got) != expected {
+		t.Fatalf("PTY input = %q, want %q (read error %v)", got, expected, err)
+	}
+}
+
 func TestTmuxIntegrationMetadataFramingPreservesComplexValues(t *testing.T) {
 	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
 		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")

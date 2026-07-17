@@ -48,10 +48,24 @@ Telegram is Engram's only user interface.
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
-- Guide anchors expose refresh, allowed keys, and `🖼️` only when Chromium is
-  ready. Snapshot anchors expose refresh, allowed keys, and `🗣️` only when
-  a guide is configured.
-- `🖼️` queues a one-off image reply to a guide anchor. `🗣️` queues one model
+- Guide anchors expose refresh, the compact non-directional key controls, and
+  `🖼️ Snapshot` only when Chromium is ready. Snapshot anchors additionally expose a
+  distinct `← ↑ ↓ →` row, `📄 Raw` for a bounded plain-text attachment, and `🗣️ Explain` only when a
+  guide is configured.
+- Directional callbacks are accepted only from the current snapshot anchor, so
+  a delayed callback cannot move a terminal after its card returns to guide mode.
+- `📄 Raw` uploads the process-local plain-text companion captured with the
+  exact canonical snapshot image. It never performs a later tmux capture; when
+  restart has cleared that companion, the control asks the user to wait for the
+  startup refresh.
+- Key callbacks answer immediately before tmux work begins. A later tmux failure
+  is delivered as a normal reply rather than leaving Telegram's progress state
+  spinning until the terminal timeout.
+- When a canonical anchor displays files, one `⬇️ n` button is shown for each
+  numbered entry. The callback contains no path: it resolves through the
+  current anchor's exact process-local file-list token and then uses the same
+  validation, bounded snapshot, queue, and upload path as `/download`.
+- `🖼️ Snapshot` queues a one-off image reply to a guide anchor. `🗣️ Explain` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces
   the canonical anchor.
@@ -61,6 +75,25 @@ Telegram is Engram's only user interface.
   makes the predecessor stale. Replies to known stale alternates must
   not reach tmux and receive a concise normal bot reply; Telegram offers no
   callback-style ephemeral banner for an ordinary message reply.
+- A Telegram voice note replying to any current routable message follows the
+  same latest-only rule. `VOICE_INPUT_MODE=path`, the default, downloads it
+  through the bounded transfer queue, retains it in the private attachment
+  store, and sends one `(voice message: <absolute-path>)` guarded paste plus
+  Enter. `VOICE_INPUT_MODE=transcribe` instead requires `OPENAI_API_KEY`, sends
+  a temporary copy once to the admitted non-streaming model, normalizes the
+  result to one bounded line, prefixes `(transcribed)`, and sends one guarded
+  paste plus Enter. The current reply identity and immutable tmux binding are
+  checked again under session-then-anchor delivery locks after the download or
+  transcription. Closed targets are rejected before download or provider use;
+  asynchronous closure or rotation is rechecked before terminal input. Anchor
+  error presentation occurs only after delivery locks are released.
+  Successful transcription delivery is followed by a bounded reply containing
+  the normalized `(transcribed)` input so recognition errors remain visible.
+  A stale, unknown, oversized, unsafe, failed, or identity-changed voice reply
+  sends no terminal input. A transcription failure does not fall back to a path.
+- Voice notes that are not replies retain ordinary attachment behavior. Voice
+  mode is independent of `LLM_PROVIDER`, is selected only at startup, and never
+  becomes transcription merely because an OpenAI credential exists.
 - Alternate delivery is committed only while the complete tmux binding, mode,
   and canonical anchor still match. A prospective alternate that loses this
   race or cannot persist its reply alias is deleted; an uncertain post-replace

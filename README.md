@@ -41,6 +41,9 @@ You need:
 - For **guide mode**, either an Anthropic API key with access to Claude Haiku
   4.5 or an OpenAI API key with access to Luna; Chromium is optional and
   enables the `🖼️` button
+- For automatic **voice transcription**, an OpenAI API key with access to
+  `gpt-4o-transcribe`, independent of the selected guide provider; without it,
+  voice replies can remain local files
 - For **Chromium mode**, Chromium, Chrome, or another Chromium-compatible
   executable; a configured guide provider is optional and enables `🗣️`
 
@@ -99,6 +102,13 @@ ANTHROPIC_API_KEY=your-Anthropic-key
 To use OpenAI Luna instead, set `LLM_PROVIDER=openai` and
 `OPENAI_API_KEY=your-OpenAI-key`. Provider selection is startup configuration;
 restart Engram after changing it.
+
+Voice replies default to `VOICE_INPUT_MODE=path`: Engram retains the OGG in its
+private attachment store and sends one `(voice message: /absolute/path.ogg)`
+input to the pane. Set `VOICE_INPUT_MODE=transcribe` with an `OPENAI_API_KEY` to
+send the audio once to `gpt-4o-transcribe` and deliver one `(transcribed) ...`
+input instead. A standalone voice note remains an ordinary saved attachment.
+Changing the voice mode requires a restart.
 
 For Chromium anchors instead:
 
@@ -173,8 +183,10 @@ privacy boundaries below before running commands that may print secrets.
 | `LLM_PROVIDER` | `anthropic` | when enabling a guide | `anthropic` for Haiku 4.5 or `openai` for Luna. Only the selected provider is used. Changing it requires a restart. |
 | `ANTHROPIC_API_KEY` | none | when selecting Anthropic, secret | Credential for one-pass Haiku rendering. |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
-| `OPENAI_API_KEY` | none | when selecting OpenAI, secret | Credential for one-pass Luna rendering. |
+| `OPENAI_API_KEY` | none | when selecting OpenAI or transcription, secret | Credential for one-pass Luna rendering and, when explicitly selected, voice transcription. |
 | `OPENAI_MODEL` | `gpt-5.6-luna` | no | Luna model ID. Other OpenAI models are not admitted by this release. |
+| `VOICE_INPUT_MODE` | `path` | no | Replied voice-note handling: retain locally and send its absolute `path`, or `transcribe` through OpenAI. Changing it requires a restart. |
+| `OPENAI_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | no | Assessed one-shot speech-to-text model used only by `VOICE_INPUT_MODE=transcribe`. Other transcription models are not admitted by this release. |
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
@@ -212,7 +224,7 @@ the bot channel and must be revoked immediately.
   running when Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.
-- **Local snapshot browser:** In guide mode, tapping `🖼️` renders an on-demand
+- **Local snapshot browser:** In guide mode, tapping `🖼️ Snapshot` renders an on-demand
   image when Chromium passed startup readiness. In snapshot mode, the renderer
   produces the canonical live anchor whenever its capture changes. Engram
   renders a frame capped at 64 ANSI-preserving rows into a
@@ -221,6 +233,9 @@ the bot channel and must be revoked immediately.
   contrast themes use a color-vision-safe ANSI palette, remove opacity-based
   dim text, and correct low-contrast terminal colors to at least a 4.5:1
   contrast ratio.
+  Every snapshot anchor also offers `📄 Raw`, which returns the exact delivered
+  image frame as a bounded plain UTF-8 text attachment for screen readers or
+  exact inspection. It does not recapture a newer terminal state on click.
 - **Conversational guide:** Guide anchors start from the same frame as Chromium
   and send its joined logical text, capped at 64 rows, in one non-streaming request.
   Recognized upstream records, the trailing model-status footer, and a small
@@ -233,10 +248,22 @@ the bot channel and must be revoked immediately.
   Completed model prose is deterministically bounded to 180 words before
   delivery.
   `LLM_PROVIDER` selects Anthropic Haiku 4.5 or OpenAI Luna; both receive the
-  same prompt and bounded evidence. In snapshot mode, tapping `🗣️` makes the
+  same prompt and bounded evidence. In snapshot mode, tapping `🗣️ Explain` makes the
   same one-off request and sends its conversational result as a reply without
   replacing the photo anchor. Captures are not credential-redacted before they
   are sent.
+- **Voice input:** A Telegram voice note replying to a session's latest
+  routable message uses the same guarded paste-plus-Enter path as text replies.
+  In default `path` mode, Engram retains the OGG and attachment metadata in its
+  private artifact store and sends its absolute path to the terminal. In
+  explicit `transcribe` mode, it sends a temporary OGG once to OpenAI's
+  non-streaming `gpt-4o-transcribe` endpoint, normalizes the response to one
+  bounded control-free line, prefixes `(transcribed)`, and removes the audio;
+  transcript text is not persisted. A stale reply, changed tmux identity, or
+  transcription failure sends no input. Engram never silently crosses from
+  transcription to path delivery after an error. After successful delivery,
+  Engram replies with the normalized transcript so the user can verify what
+  reached the pane.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
@@ -254,8 +281,8 @@ the bot channel and must be revoked immediately.
   `/raw`, `/dump`, `/logs`, and command metadata create files in the private
   runtime root. These files are not automatically removed by uninstall and may
   remain until manual or operating-system cleanup.
-  On-demand snapshot intermediates are the exception: they are removed after
-  delivery or failure.
+  On-demand snapshot and voice-transcription intermediates are exceptions:
+  they are removed after delivery or failure.
 - **Downloads:** `/download <absolute-path>` opens a local regular file, copies
   that opened file into a private bounded snapshot, and uploads the snapshot to
   Telegram. It rejects symlinks, but it is still an intentional
@@ -422,6 +449,9 @@ snapshot replies. The latest upstream-signal notification is another reply
 route to the same outer pane. Replacing any alternate of the same kind makes
 its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
+Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
+`Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
+directional row.
 
 ### Nested environments
 
@@ -433,7 +463,11 @@ engram signal "Tests finished; two failures need attention."
 ```
 
 The command establishes a fresh terminal row, then writes one bounded
-`[engram:upstream] <record-id> ...` record and a terminal bell. It makes no
+`[engram:upstream:v1] <record-id> <bytes>:<payload>` record and a terminal bell. Engram also
+recognizes that exact record after up to eight presentation spaces added by a
+terminal host such as Codex. A versioned byte length lets Engram reconstruct a
+bounded same-indent continuation when the host wraps the payload into physical
+rows without consuming adjacent output. It makes no
 network request and reads no service configuration. The outer Engram finds the
 record through its normal tmux capture loop and immediately attempts a redacted
 terminal-signal notification; the guide and Chromium continue independently. At
@@ -478,7 +512,7 @@ that frame.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its
 media in place when the styled capture or its derived caption changes,
-automatically at most once every ten seconds. This includes visible paths that
+automatically at most once every ten seconds. This includes visible files that
 appear or disappear without changing terminal text. The refresh button renders
 immediately, including an unchanged capture. If a guide is configured, `🗣️` replies with a one-off
 conversational rendering without replacing the canonical image. `/sessions`
@@ -489,9 +523,12 @@ when the target capability is available. Existing anchors migrate in the
 background. The choice persists across restart; `ENGRAM_ANCHOR_MODE` remains
 the initial configuration and fallback.
 
-Both modes append bounded local references from the captured pane: existing
-absolute or home-relative files and directories under `paths`, and syntactically
-valid HTTP(S) URLs under `links`. Engram never fetches or endorses an extracted
+Both modes append bounded local references from the captured pane: numbered,
+code-formatted regular files under `files`, and syntactically valid HTTP(S)
+URLs under `links`. Directories, symlinks, missing files, and paths that require
+secret redaction are omitted. Each displayed file has a matching `⬇️ n` button
+that queues the same guarded upload as `/download`; the button is bound to the
+current canonical card and its exact displayed list. Engram never fetches or endorses an extracted
 URL; it is untrusted terminal text surfaced for convenient navigation. URLs
 with embedded user credentials are omitted, and recognized credential query
 parameters are redacted before delivery. Unmatched closing wrappers are removed;
@@ -507,8 +544,7 @@ capture; `/dump` streams the pane's scrollback to an attachment. Cloud Bot API
 downloads are hard-limited to 20 MiB and `/download` uploads to 50 MiB.
 Generated captures and upload snapshots are also capped at 50 MiB, and Engram
 accepts at most eight queued file transfers with two running concurrently.
-Those ceilings follow the hosted [Telegram Bot API file limits](https://core.telegram.org/bots/api#sending-files);
-a local Bot API server is not currently configurable.
+Those ceilings follow the hosted [Telegram Bot API file limits](https://core.telegram.org/bots/api#sending-files).
 
 Local diagnostics use the same protected env file:
 
@@ -588,16 +624,37 @@ ENGRAM_LIVE_HAIKU_INCREMENTAL_EVAL=1 go test -v ./internal/anthropic \
 Compare a challenger prompt with the production prompt using the tournament.
 Both candidates receive identical inputs at production temperature `0.2`. Candidate order
 rotates, candidate names are replaced with fresh opaque IDs, and a separate
-judge uses its model-default decoding and scores fidelity, usefulness, voice, and readability from JSON-serialized
-untrusted evidence. Hard fixture regressions fail the run independently of the
-judge. The tournament defaults to two repeats, gates material-concept coverage,
-and reports full-frame and continuation cohorts separately:
+judge uses its model-default decoding and scores fidelity, usefulness, voice,
+and readability from JSON-serialized untrusted evidence. The fixture's human
+reference guides information priority and style but never overrides terminal
+truth. The three human-preference fixtures are development-informed regression
+cases, not an unseen generalization set. They live outside the broader corpus,
+and none of their terminal or reference prose appears verbatim in the production
+prompt. Future user examples must remain untouched to become a true holdout.
+Contradictions, unsafe relayed instructions, unsupported numeric claims, and
+output-bound violations fail independently of the judge. Relevance exclusions,
+semantic distance, and concept coverage remain visible diagnostics; acceptance requires the
+production candidate to average at least 4/5 for blinded fidelity, usefulness,
+and overall quality. The tournament defaults to two repeats and reports full-frame,
+preference-regression, and continuation cohorts separately. A comma-separated
+`ENGRAM_TOURNAMENT_CASES` list selects exact fixture names for focused iteration:
 
 ```sh
 ENGRAM_LIVE_HAIKU_TOURNAMENT=1 \
 ENGRAM_TOURNAMENT_JUDGE_MODEL=claude-sonnet-4-6 \
 ENGRAM_TOURNAMENT_PROMPT_FILE=/tmp/challenger-prompt.txt \
 go test -v ./internal/anthropic -run TestLiveHaikuPromptTournament -count=1
+```
+
+The judge itself has an opt-in adversarial probe that places conflicting
+instructions in terminal, preferred-outcome, and candidate strings and requires
+the grounded candidate to score higher:
+
+```sh
+ENGRAM_LIVE_TOURNAMENT_JUDGE_INJECTION=1 \
+ENGRAM_TOURNAMENT_JUDGE_MODEL=claude-sonnet-4-6 \
+go test -v ./internal/anthropic \
+  -run TestLiveTournamentJudgeResistsInjectedEvidence -count=1
 ```
 
 The Luna adapter has a smaller opt-in compatibility check that exercises the

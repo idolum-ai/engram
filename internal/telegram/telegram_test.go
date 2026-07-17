@@ -89,17 +89,17 @@ func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	}
 }
 
-func TestAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
+func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
 	t.Parallel()
 
-	got := AnchorMarkup(7, true, false)
-	if got == nil || len(got.InlineKeyboard) != 2 || len(got.InlineKeyboard[0]) != 2 {
-		t.Fatalf("RefreshMarkup rows = %#v, want refresh row plus key row", got)
+	got := AnchorMarkup(7, AnchorMarkupOptions{Image: true, Arrows: true})
+	if got == nil || len(got.InlineKeyboard) != 3 || len(got.InlineKeyboard[0]) != 2 {
+		t.Fatalf("AnchorMarkup rows = %#v, want action, key, and arrow rows", got)
 	}
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
 	}
-	if got.InlineKeyboard[0][1].Text != "🖼️" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+	if got.InlineKeyboard[0][1].Text != "🖼️ Snapshot" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
 	want := []InlineKeyboardButton{
@@ -116,6 +116,61 @@ func TestAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.T) {
 		if got.InlineKeyboard[1][i] != want[i] {
 			t.Fatalf("key button %d = %#v, want %#v", i, got.InlineKeyboard[1][i], want[i])
 		}
+	}
+	wantArrows := []InlineKeyboardButton{
+		{Text: "←", CallbackData: "key:7:left"},
+		{Text: "↑", CallbackData: "key:7:up"},
+		{Text: "↓", CallbackData: "key:7:down"},
+		{Text: "→", CallbackData: "key:7:right"},
+	}
+	if len(got.InlineKeyboard[2]) != len(wantArrows) {
+		t.Fatalf("arrow button count = %d, want %d", len(got.InlineKeyboard[2]), len(wantArrows))
+	}
+	for i := range wantArrows {
+		if got.InlineKeyboard[2][i] != wantArrows[i] {
+			t.Fatalf("arrow button %d = %#v, want %#v", i, got.InlineKeyboard[2][i], wantArrows[i])
+		}
+	}
+}
+
+func TestGuideAnchorMarkupOmitsArrowButtons(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{Image: true})
+	if got == nil || len(got.InlineKeyboard) != 2 {
+		t.Fatalf("AnchorMarkup rows = %#v, want action and key rows", got)
+	}
+}
+
+func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{Voice: true, Raw: true, Arrows: true})
+	if got == nil || len(got.InlineKeyboard[0]) != 3 {
+		t.Fatalf("AnchorMarkup actions = %#v", got)
+	}
+	if want := (InlineKeyboardButton{Text: "🗣️ Explain", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
+		t.Fatalf("explain action = %#v, want %#v", got.InlineKeyboard[0][1], want)
+	}
+	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
+	if got.InlineKeyboard[0][2] != want {
+		t.Fatalf("raw action = %#v, want %#v", got.InlineKeyboard[0][2], want)
+	}
+}
+
+func TestAnchorMarkupAddsNumberedFileButtons(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{FileToken: "0123456789abcdef", FileCount: 2})
+	if got == nil || len(got.InlineKeyboard) != 3 {
+		t.Fatalf("AnchorMarkup rows = %#v, want actions, files, and keys", got)
+	}
+	want := []InlineKeyboardButton{
+		{Text: "⬇️ 1", CallbackData: "file:7:0123456789abcdef:1"},
+		{Text: "⬇️ 2", CallbackData: "file:7:0123456789abcdef:2"},
+	}
+	if !reflect.DeepEqual(got.InlineKeyboard[1], want) {
+		t.Fatalf("file buttons = %#v, want %#v", got.InlineKeyboard[1], want)
 	}
 }
 
@@ -231,7 +286,7 @@ func TestSendHTMLMessagePayload(t *testing.T) {
 		}), nil
 	})}
 
-	if _, err := client.SendHTMLMessage(context.Background(), 5, "<b>ok</b>", 7, AnchorMarkup(1, true, false)); err != nil {
+	if _, err := client.SendHTMLMessage(context.Background(), 5, "<b>ok</b>", 7, AnchorMarkup(1, AnchorMarkupOptions{Image: true})); err != nil {
 		t.Fatal(err)
 	}
 	if got["parse_mode"] != "HTML" {
@@ -586,7 +641,7 @@ func TestSendPhotoRepliesToCanonicalAnchor(t *testing.T) {
 	}
 }
 
-func TestSendPhotoIncludesMarkupWithoutReplyTarget(t *testing.T) {
+func TestSendHTMLPhotoIncludesMarkupAndParseModeWithoutReplyTarget(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "snapshot.png")
 	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
@@ -601,6 +656,9 @@ func TestSendPhotoIncludesMarkupWithoutReplyTarget(t *testing.T) {
 		if got := req.FormValue("reply_to_message_id"); got != "" {
 			t.Fatalf("photo reply = %q, want empty", got)
 		}
+		if got := req.FormValue("parse_mode"); got != "HTML" {
+			t.Fatalf("photo parse mode = %q, want HTML", got)
+		}
 		if got := req.FormValue("reply_markup"); !strings.Contains(got, "refresh:7") || strings.Contains(got, "snapshot:7") {
 			t.Fatalf("snapshot markup = %q", got)
 		}
@@ -609,12 +667,12 @@ func TestSendPhotoIncludesMarkupWithoutReplyTarget(t *testing.T) {
 			"result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}},
 		}), nil
 	})}
-	if _, err := client.SendPhotoWithMarkup(context.Background(), 5, path, "terminal snapshot", 0, AnchorMarkup(7, false, true)); err != nil {
+	if _, err := client.SendHTMLPhotoWithMarkup(context.Background(), 5, path, "terminal snapshot", 0, AnchorMarkup(7, AnchorMarkupOptions{Voice: true, Arrows: true})); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func TestEditPhotoUsesAttachedMediaAndMarkup(t *testing.T) {
+func TestEditHTMLPhotoUsesAttachedMediaMarkupAndParseMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.png")
 	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
 		t.Fatal(err)
@@ -635,7 +693,7 @@ func TestEditPhotoUsesAttachedMediaAndMarkup(t *testing.T) {
 		if err := json.Unmarshal([]byte(req.FormValue("media")), &media); err != nil {
 			t.Fatal(err)
 		}
-		if media["type"] != "photo" || media["media"] != "attach://photo" || media["caption"] != "live terminal" {
+		if media["type"] != "photo" || media["media"] != "attach://photo" || media["caption"] != "live terminal" || media["parse_mode"] != "HTML" {
 			t.Fatalf("media = %#v", media)
 		}
 		if !strings.Contains(req.FormValue("reply_markup"), "refresh:7") || strings.Contains(req.FormValue("reply_markup"), "snapshot:7") {
@@ -650,10 +708,39 @@ func TestEditPhotoUsesAttachedMediaAndMarkup(t *testing.T) {
 			"result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 5}},
 		}), nil
 	})}
-	msg, err := client.EditPhoto(context.Background(), 5, 77, path, "live terminal", AnchorMarkup(7, false, true))
+	msg, err := client.EditHTMLPhoto(context.Background(), 5, 77, path, "live terminal", AnchorMarkup(7, AnchorMarkupOptions{Voice: true, Arrows: true}))
 	if err != nil || msg.MessageID != 77 {
 		t.Fatalf("EditPhoto message = %#v err=%v", msg, err)
 	}
+}
+
+func TestHTMLPhotoCaptionIsNotByteTruncatedAfterEscaping(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.png")
+	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	caption := strings.Repeat("&amp;", 240)
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		if got := req.FormValue("caption"); got != caption {
+			t.Fatalf("HTML caption bytes=%d suffix=%q, want intact bytes=%d", len(got), tailForTest(got, 20), len(caption))
+		}
+		return jsonResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}}}), nil
+	})}
+	if _, err := client.SendHTMLPhotoWithMarkup(context.Background(), 5, path, caption, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tailForTest(text string, count int) string {
+	if len(text) <= count {
+		return text
+	}
+	return text[len(text)-count:]
 }
 
 func TestSafeDocumentFilenameRemovesControlCharacters(t *testing.T) {

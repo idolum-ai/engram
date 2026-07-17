@@ -174,6 +174,62 @@ ENGRAM_SNAPSHOT_THEME=contrast-dark
 	if cfg.SnapshotTheme != "contrast-dark" {
 		t.Fatalf("SnapshotTheme = %q, want contrast-dark", cfg.SnapshotTheme)
 	}
+	if cfg.OpenAITranscriptionModel != DefaultOpenAITranscriptionModel {
+		t.Fatalf("OpenAITranscriptionModel = %q, want %q", cfg.OpenAITranscriptionModel, DefaultOpenAITranscriptionModel)
+	}
+	if cfg.EffectiveVoiceInputMode() != VoiceInputModePath || cfg.VoiceTranscriptionConfigured() {
+		t.Fatalf("voice defaults = mode:%q transcription:%v", cfg.EffectiveVoiceInputMode(), cfg.VoiceTranscriptionConfigured())
+	}
+}
+
+func TestLoadRejectsUnsupportedTranscriptionModelWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+ENGRAM_ANCHOR_MODE=snapshot
+OPENAI_API_KEY=openai-key
+VOICE_INPUT_MODE=transcribe
+OPENAI_TRANSCRIPTION_MODEL=whisper-1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "OPENAI_TRANSCRIPTION_MODEL") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
+func TestLoadRequiresKeyForVoiceTranscription(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+ENGRAM_ANCHOR_MODE=snapshot
+VOICE_INPUT_MODE=transcribe
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("Load error = %v", err)
+	}
+}
+
+func TestLoadRejectsUnknownVoiceInputMode(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte(`
+TELEGRAM_BOT_TOKEN=tg-token
+TELEGRAM_ALLOWED_USER_ID=123
+ENGRAM_ANCHOR_MODE=snapshot
+VOICE_INPUT_MODE=automatic
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "VOICE_INPUT_MODE") {
+		t.Fatalf("Load error = %v", err)
+	}
 }
 
 func TestLoadAcceptsCustomTelegramAPIBase(t *testing.T) {

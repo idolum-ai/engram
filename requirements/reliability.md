@@ -41,6 +41,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   Session updates roll in-memory state back after a failure before replacement;
   after replacement they retain the visible new state and report uncertain
   durability so memory and the current state file do not diverge.
+- Attachment insertion has the same replacement boundary: a pre-replacement
+  failure rolls back the in-memory record so its file may be removed, while an
+  uncertain post-replacement result keeps both record and file and is audited.
 - On Linux, failure to sync either the file or parent directory fails the save.
   Subject to the filesystem and storage device honoring `fsync`, a successful
   save survives process failure and sudden power loss. On Darwin, Go's standard
@@ -54,6 +57,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   recorded again with the final handler status. This gives tmux input
   at-most-once delivery after a crash, avoiding surprise replayed shell
   commands at the cost of possibly dropping the in-flight Telegram update.
+- Voice replies inherit the same at-most-once update acceptance. Their bounded
+  download and transcription run outside polling in the existing transfer
+  queue; the current reply alias and immutable tmux binding are revalidated at
+  delivery so delayed speech cannot cross a view rotation or reattachment.
 - The update journal retains the newest 200 accepted and handled/skipped update
   states so recent polling behavior remains inspectable after restart.
 - Audit records are capped at 64 KiB. `audit.jsonl` rotates before exceeding
@@ -81,6 +88,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
   pin state. Restart resets pin knowledge and reconciles presentation without
   discarding canonical ownership.
+- Startup queues one immediate render for each active watched anchor. This
+  restores process-local conversational continuity and exact numbered file
+  bindings even when the tmux frame itself has not changed across restart.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
@@ -170,6 +180,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   seconds. A retained tmux bell may accelerate capture, but signal discovery
   remains polling-based and does not bypass bounded rendering work or amplify
   Telegram retries.
+- Operations that need both terminal identity and anchor freshness acquire the
+  session lock before the anchor lock. Tmux identity loss and anchor error
+  presentation run only after both locks are released; transfer workers must
+  not strand service shutdown through lock inversion or reentrant anchor work.
 - A Telegram `retry_after` that outlives the client's bounded retry is retained
   in memory before persistence is attempted, then persisted per terminal. A
   pre-replacement state-write failure must not cause the running process to

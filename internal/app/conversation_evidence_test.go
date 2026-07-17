@@ -22,6 +22,13 @@ func TestConversationEvidenceDropsTrailingIdlePromptChrome(t *testing.T) {
 	}
 }
 
+func TestConversationEvidenceKeepsChromeWhenItIsTheOnlyIdleEvidence(t *testing.T) {
+	input := "\u203a Write tests for @filename\n\n  gpt-5.6-sol high \u00b7 ~/engram \u00b7 Main [default]"
+	if got := conversationEvidence(input); got != input {
+		t.Fatalf("conversationEvidence() = %q, want complete idle evidence", got)
+	}
+}
+
 func TestConversationEvidenceKeepsActiveProgress(t *testing.T) {
 	input := "\u203a Fix the tests\n\n  Working (1s; esc to interrupt)\n\n  gpt-5.6-sol high \u00b7 ~ \u00b7 Main [default]"
 	want := "\u203a Fix the tests\n\n  Working (1s; esc to interrupt)"

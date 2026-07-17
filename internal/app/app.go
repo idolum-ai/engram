@@ -31,6 +31,7 @@ type App struct {
 	Store                *state.Store
 	Telegram             *telegram.Client
 	Guide                guide.Renderer
+	Transcriber          voiceTranscriber
 	Tmux                 tmux.Manager
 	Snapshots            snapshotRenderer
 	modeMu               sync.RWMutex
@@ -68,6 +69,7 @@ type App struct {
 	anchorLocks          keyedMutexSet
 	disclosureLocks      keyedMutexSet
 	signalRetries        sync.Map
+	snapshotTextFrames   sync.Map
 	sleepHook            func(time.Duration)
 	refreshHook          func(context.Context, int, bool)
 }
@@ -105,6 +107,10 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	guideRenderer := guideRendererFor(cfg)
+	var transcriber voiceTranscriber
+	if cfg.VoiceTranscriptionConfigured() {
+		transcriber = openai.NewTranscriber(cfg.OpenAIAPIKey, cfg.OpenAITranscriptionModel)
+	}
 	mode, err := cfg.ResolveAnchorMode(store.Snapshot().AnchorMode, config.ModeCapabilities{
 		GuideConfigured: guideRenderer != nil,
 		SnapshotReady:   snapshotReady,
@@ -124,6 +130,7 @@ func New(cfg config.Config) (*App, error) {
 		Store:              store,
 		Telegram:           telegramClient,
 		Guide:              guideRenderer,
+		Transcriber:        transcriber,
 		Tmux:               tmux.New(tmux.ExecRunner{}),
 		Snapshots:          snapshotRenderer,
 		mode:               mode,
@@ -279,6 +286,9 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		_ = a.audit("state.message", "failed", map[string]any{"message_id": msg.MessageID, "error": err.Error()})
 		return "failed_state_mark_message"
 	}
+	if msg.Voice != nil && msg.ReplyToMessage != nil {
+		return a.handleVoiceReply(ctx, msg).status("voice_reply")
+	}
 	if doc, ok := msg.FileAttachment(); ok {
 		return a.handleAttachment(ctx, msg, doc).status("attachment")
 	}
@@ -289,7 +299,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if input, ok := escapedSlashInput(text); ok {
 		if msg.ReplyToMessage != nil {
 			if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-				result := a.sendInput(ctx, ts.ID, input, "command", true)
+				result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, input)
 				if !result.OK() {
 					a.reply(ctx, msg, result.Message)
 				}
@@ -307,7 +317,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	if msg.ReplyToMessage != nil {
 		if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-			result := a.sendInput(ctx, ts.ID, text, "command", true)
+			result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, text)
 			if !result.OK() {
 				a.reply(ctx, msg, result.Message)
 			}
@@ -588,8 +598,12 @@ func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
 
 func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 	a.redactSessionPresentation(&ts)
-	references := renderVisibleReferences(ts.LastRawCapture, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+	references := renderReferences(a.visibleReferences(ts.LastRawCapture), true, maxGuideReferenceBytes)
 	return renderLocalWithReferences(ts, a.redactText(summary), references)
+}
+
+func (a *App) visibleReferences(capture string) visibleReferences {
+	return visibleReferencesForCapture(capture, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
 }
 
 func (a *App) statusText() string {
@@ -599,12 +613,17 @@ func (a *App) statusText() string {
 	if a.guideAvailable {
 		guideStatus = "configured, not probed (" + a.Config.EffectiveLLMProvider() + "/" + a.Config.GuideModel() + ")"
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	voiceStatus := "path (local attachment)"
+	if a.Config.EffectiveVoiceInputMode() == config.VoiceInputModeTranscribe {
+		voiceStatus = "transcribe, configured but not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
+	}
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
 		a.anchorMode(),
 		guideStatus,
+		voiceStatus,
 		a.snapshotStatus(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),

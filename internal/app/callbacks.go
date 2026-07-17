@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -101,6 +102,42 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_telegram_failed"
 		}
 		return result.status("callback")
+	case "raw":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		anchorLock := a.anchorMutex(id)
+		anchorLock.Lock()
+		current, currentOK := a.Store.FindSession(id)
+		if !currentOK || current.AnchorChatID != cb.Message.Chat.ID || current.AnchorMessageID != cb.Message.MessageID || !sameTerminalBinding(current, ts) {
+			anchorLock.Unlock()
+			a.answerCallback(ctx, cb.ID, "anchor moved; use the newer live message")
+			return "callback_user_error"
+		}
+		ts = current
+		if ts.State != state.TerminalRunning || ts.AnchorFormat != "snapshot" || ts.RetiringAnchorMessageID != 0 {
+			anchorLock.Unlock()
+			a.answerCallback(ctx, cb.ID, "raw view is unavailable")
+			return "callback_user_error"
+		}
+		frame, ok := a.snapshotTextFrame(ts)
+		anchorLock.Unlock()
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "raw view is refreshing")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "preparing raw view") {
+			return "callback_telegram_failed"
+		}
+		msg := *cb.Message
+		msg.From = &cb.From
+		return a.queueAccessibleSnapshotFrame(ctx, msg, ts, frame).status("callback")
 	case "recover":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -125,19 +162,50 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.answerCallback(ctx, cb.ID, "bad key")
 			return "failed_bad_callback_key"
 		}
-		if _, status := a.validateAnchorCallback(ctx, cb, id); status != "" {
+		validated, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
 			return status
+		}
+		if directionalKeyPreset(preset) && validated.AnchorFormat != "snapshot" {
+			a.answerCallback(ctx, cb.ID, "arrows are available in snapshot mode")
+			return "callback_user_error"
 		}
 		action, ok := anchorKeyAction(preset)
 		if !ok {
 			a.answerCallback(ctx, cb.ID, "unknown key")
 			return "failed_unknown_callback_key"
 		}
-		result := a.sendKeyGroups(ctx, id, action.Groups, action.Label, action.Delay)
-		if !a.answerCallback(ctx, cb.ID, result.Message) {
+		if !a.answerCallback(ctx, cb.ID, "sending "+action.Label) {
 			return "callback_telegram_failed"
 		}
+		result := a.sendKeyGroupsExpected(ctx, id, action.Groups, action.Label, action.Delay, &validated)
+		if !result.OK() {
+			msg := *cb.Message
+			msg.From = &cb.From
+			a.reply(ctx, msg, result.Message)
+		}
 		return result.status("callback")
+	case "file":
+		id, token, index, ok := parseFileCallback(parts[1])
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "bad file reference")
+			return "failed_bad_callback_file"
+		}
+		validated, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		path, ok := resolveAnchorFile(validated, token, index)
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "file list changed; refresh the card")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, fmt.Sprintf("preparing file %d", index)) {
+			return "callback_telegram_failed"
+		}
+		msg := *cb.Message
+		msg.From = &cb.From
+		return a.download(ctx, msg, path).status("callback")
 	case "watch":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -199,6 +267,38 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
+}
+
+func directionalKeyPreset(preset string) bool {
+	switch preset {
+	case "left", "up", "down", "right":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseFileCallback(value string) (int, string, int, bool) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 3 || len(parts[1]) != 16 {
+		return 0, "", 0, false
+	}
+	id, idErr := strconv.Atoi(parts[0])
+	index, indexErr := strconv.Atoi(parts[2])
+	if idErr != nil || indexErr != nil || id <= 0 || index <= 0 {
+		return 0, "", 0, false
+	}
+	if _, err := hex.DecodeString(parts[1]); err != nil {
+		return 0, "", 0, false
+	}
+	return id, parts[1], index, true
+}
+
+func resolveAnchorFile(ts state.TerminalSession, token string, index int) (string, bool) {
+	if ts.State != state.TerminalRunning || token == "" || token != ts.AnchorFileToken || index <= 0 || index > len(ts.AnchorFiles) {
+		return "", false
+	}
+	return ts.AnchorFiles[index-1], true
 }
 
 func (a *App) callbackAuthorized(cb telegram.CallbackQuery) bool {
@@ -324,6 +424,14 @@ func anchorKeyAction(preset string) (anchorKeyPreset, bool) {
 		return anchorKeyPreset{Label: "^D", Groups: [][]string{{"C-d"}}}, true
 	case "enter":
 		return anchorKeyPreset{Label: "Enter", Groups: [][]string{{"Enter"}}}, true
+	case "left":
+		return anchorKeyPreset{Label: "Left", Groups: [][]string{{"Left"}}}, true
+	case "up":
+		return anchorKeyPreset{Label: "Up", Groups: [][]string{{"Up"}}}, true
+	case "down":
+		return anchorKeyPreset{Label: "Down", Groups: [][]string{{"Down"}}}, true
+	case "right":
+		return anchorKeyPreset{Label: "Right", Groups: [][]string{{"Right"}}}, true
 	default:
 		return anchorKeyPreset{}, false
 	}
