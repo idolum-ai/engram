@@ -78,13 +78,16 @@ func TestSessionListMarkupWithSessions(t *testing.T) {
 	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 2 {
 		t.Fatalf("SessionListMarkup([1]) = %#v", got)
 	}
+	if got.InlineKeyboard[0][0].Text != "▶ 1" || got.InlineKeyboard[0][1].Text != "✕ 1" {
+		t.Fatalf("session actions = %#v", got.InlineKeyboard[0])
+	}
 }
 
 func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	t.Parallel()
 
 	got := SessionListMarkup(nil, []AttachTarget{{Label: "0:1", Target: "0:1"}})
-	if got == nil || len(got.InlineKeyboard) != 1 || got.InlineKeyboard[0][0].CallbackData != "attach:0:1" {
+	if got == nil || len(got.InlineKeyboard) != 1 || got.InlineKeyboard[0][0].Text != "↪ 0:1" || got.InlineKeyboard[0][0].CallbackData != "attach:0:1" {
 		t.Fatalf("SessionListMarkup attach = %#v", got)
 	}
 }
@@ -99,7 +102,7 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
 	}
-	if got.InlineKeyboard[0][1].Text != "🖼️ Snapshot" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+	if got.InlineKeyboard[0][1].Text != "🖼️ View" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
 	want := []InlineKeyboardButton{
@@ -149,7 +152,7 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	if got == nil || len(got.InlineKeyboard[0]) != 3 {
 		t.Fatalf("AnchorMarkup actions = %#v", got)
 	}
-	if want := (InlineKeyboardButton{Text: "🗣️ Explain", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
+	if want := (InlineKeyboardButton{Text: "🗣️ Talk", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
 		t.Fatalf("explain action = %#v, want %#v", got.InlineKeyboard[0][1], want)
 	}
 	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
@@ -178,9 +181,39 @@ func TestRecoverMarkupOffersExactReattach(t *testing.T) {
 	t.Parallel()
 
 	got := RecoverMarkup(7)
-	want := InlineKeyboardButton{Text: "🧭 Reattach", CallbackData: "recover:7"}
+	want := InlineKeyboardButton{Text: "🧭 Link", CallbackData: "recover:7"}
 	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 1 || got.InlineKeyboard[0][0] != want {
 		t.Fatalf("RecoverMarkup(7) = %#v, want %#v", got, want)
+	}
+}
+
+// Do not skip, weaken, replace, or supersede this test for any Telegram button.
+// Every button builder belongs here: Telegram truncation makes longer labels an
+// application-level usability failure, even when the callback remains valid.
+func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
+	t.Parallel()
+
+	maxRunes := utf8.RuneCountInString("🖼️ View")
+	markups := map[string]*InlineKeyboardMarkup{
+		"anchor": AnchorMarkup(123456789, AnchorMarkupOptions{
+			Image: true, Voice: true, Raw: true, Arrows: true,
+			FileToken: "0123456789abcdef", FileCount: 4,
+		}),
+		"recover": RecoverMarkup(123456789),
+		"sessions": SessionListMarkup(
+			[]int{1, 123456789},
+			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},
+		),
+		"close confirmation": CloseConfirmationMarkup("0123456789abcdef"),
+	}
+	for name, markup := range markups {
+		for rowIndex, row := range markup.InlineKeyboard {
+			for buttonIndex, button := range row {
+				if runes := utf8.RuneCountInString(button.Text); runes > maxRunes {
+					t.Errorf("%s row %d button %d label %q has %d runes, max %d", name, rowIndex, buttonIndex, button.Text, runes, maxRunes)
+				}
+			}
+		}
 	}
 }
 
@@ -641,7 +674,7 @@ func TestSendPhotoRepliesToCanonicalAnchor(t *testing.T) {
 	}
 }
 
-func TestSendHTMLPhotoIncludesMarkupAndParseModeWithoutReplyTarget(t *testing.T) {
+func TestSendHTMLPhotoIncludesMarkupParseModeAndStablePlacementWithoutReplyTarget(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "snapshot.png")
 	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
@@ -659,6 +692,9 @@ func TestSendHTMLPhotoIncludesMarkupAndParseModeWithoutReplyTarget(t *testing.T)
 		if got := req.FormValue("parse_mode"); got != "HTML" {
 			t.Fatalf("photo parse mode = %q, want HTML", got)
 		}
+		if got := req.FormValue("show_caption_above_media"); got != "false" {
+			t.Fatalf("caption placement = %q, want false", got)
+		}
 		if got := req.FormValue("reply_markup"); !strings.Contains(got, "refresh:7") || strings.Contains(got, "snapshot:7") {
 			t.Fatalf("snapshot markup = %q", got)
 		}
@@ -672,7 +708,7 @@ func TestSendHTMLPhotoIncludesMarkupAndParseModeWithoutReplyTarget(t *testing.T)
 	}
 }
 
-func TestEditHTMLPhotoUsesAttachedMediaMarkupAndParseMode(t *testing.T) {
+func TestEditHTMLPhotoUsesAttachedMediaMarkupParseModeAndStablePlacement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "snapshot.png")
 	if err := os.WriteFile(path, []byte("png-content"), 0o600); err != nil {
 		t.Fatal(err)
@@ -693,7 +729,7 @@ func TestEditHTMLPhotoUsesAttachedMediaMarkupAndParseMode(t *testing.T) {
 		if err := json.Unmarshal([]byte(req.FormValue("media")), &media); err != nil {
 			t.Fatal(err)
 		}
-		if media["type"] != "photo" || media["media"] != "attach://photo" || media["caption"] != "live terminal" || media["parse_mode"] != "HTML" {
+		if media["type"] != "photo" || media["media"] != "attach://photo" || media["caption"] != "live terminal" || media["parse_mode"] != "HTML" || media["show_caption_above_media"] != false {
 			t.Fatalf("media = %#v", media)
 		}
 		if !strings.Contains(req.FormValue("reply_markup"), "refresh:7") || strings.Contains(req.FormValue("reply_markup"), "snapshot:7") {
@@ -732,6 +768,28 @@ func TestHTMLPhotoCaptionIsNotByteTruncatedAfterEscaping(t *testing.T) {
 		return jsonResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}}}), nil
 	})}
 	if _, err := client.SendHTMLPhotoWithMarkup(context.Background(), 5, path, caption, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHTMLCaptionEditIsNotByteTruncatedAfterEscaping(t *testing.T) {
+	caption := strings.Repeat("&amp;", 240)
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := body["caption"].(string); got != caption {
+			t.Fatalf("HTML caption bytes=%d suffix=%q, want intact bytes=%d", len(got), tailForTest(got, 20), len(caption))
+		}
+		if body["parse_mode"] != "HTML" {
+			t.Fatalf("parse mode = %#v", body["parse_mode"])
+		}
+		return jsonResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 14, "chat": map[string]any{"id": 5}}}), nil
+	})}
+	if _, err := client.EditHTMLCaption(context.Background(), 5, 14, caption, nil); err != nil {
 		t.Fatal(err)
 	}
 }

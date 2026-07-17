@@ -131,6 +131,11 @@ func (c *TranscriptionClient) Transcribe(ctx context.Context, path string) (stri
 }
 
 func (c *Client) Converse(ctx context.Context, in guide.Input) (string, error) {
+	result, err := c.ConverseWithEvidence(ctx, in)
+	return result.Text, err
+}
+
+func (c *Client) ConverseWithEvidence(ctx context.Context, in guide.Input) (guide.Result, error) {
 	payload := map[string]any{
 		"model": c.Model,
 		"messages": []map[string]string{
@@ -143,17 +148,17 @@ func (c *Client) Converse(ctx context.Context, in guide.Input) (string, error) {
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", err
+		return guide.Result{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return guide.Result{}, err
 	}
 	request.Header.Set("Authorization", "Bearer "+c.APIKey)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.HTTPClient.Do(request)
 	if err != nil {
-		return "", err
+		return guide.Result{}, err
 	}
 	defer response.Body.Close()
 
@@ -170,27 +175,28 @@ func (c *Client) Converse(ctx context.Context, in guide.Input) (string, error) {
 		} `json:"error,omitempty"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return "", err
+		return guide.Result{}, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if result.Error != nil {
-			return "", fmt.Errorf("openai %s: %s", result.Error.Type, result.Error.Message)
+			return guide.Result{}, fmt.Errorf("openai %s: %s", result.Error.Type, result.Error.Message)
 		}
-		return "", fmt.Errorf("openai status %s", response.Status)
+		return guide.Result{}, fmt.Errorf("openai status %s", response.Status)
 	}
 	if len(result.Choices) != 1 {
-		return "", fmt.Errorf("openai returned %d choices", len(result.Choices))
+		return guide.Result{}, fmt.Errorf("openai returned %d choices", len(result.Choices))
 	}
 	switch result.Choices[0].FinishReason {
 	case "stop":
 	case "length":
-		return "", fmt.Errorf("openai response exceeded its output limit")
+		return guide.Result{}, fmt.Errorf("openai response exceeded its output limit")
 	default:
-		return "", fmt.Errorf("openai response ended with unexpected finish_reason %q", result.Choices[0].FinishReason)
+		return guide.Result{}, fmt.Errorf("openai response ended with unexpected finish_reason %q", result.Choices[0].FinishReason)
 	}
-	text := strings.TrimSpace(result.Choices[0].Message.Content)
-	if text == "" {
-		return "", fmt.Errorf("openai returned no text")
+	parsed := guide.ParseResult(result.Choices[0].Message.Content)
+	parsed.Text = guide.LimitWords(parsed.Text, guide.MaxWords)
+	if parsed.Text == "" {
+		return guide.Result{}, fmt.Errorf("openai returned no text")
 	}
-	return guide.LimitWords(text, guide.MaxWords), nil
+	return parsed, nil
 }

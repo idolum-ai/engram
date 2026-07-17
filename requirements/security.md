@@ -66,6 +66,17 @@ privacy model must stay small and explicit.
   to a local headless browser and then to the configured Telegram DM, never to
   a model provider. Terminal text must be HTML-escaped; browser networking, extensions,
   and persistent profiles must be disabled.
+- Guide crops refuse styled rows containing configured credentials and redact
+  title and working-directory chrome. This is a narrow configured-secret check,
+  not general transcript sanitization. Their exact plain-text companions remain
+  process-local and are uploaded only after a current-anchor `📄 Raw` callback.
+- When a canonical media anchor is replaced, Engram attempts to delete the old
+  photo before retiring its identity. A failed deletion triggers replacement
+  with a locally generated neutral image. Telegram may refuse both operations
+  for older messages; in that case Engram clears controls where possible,
+  applies a redacted inactive caption, unpins the message, and audits that pixels
+  remain. Telegram history is a disclosure boundary outside Engram's local
+  retention controls.
 - In `snapshot` mode, exact terminal images are sent automatically whenever a
   changed live anchor is rendered. The selected provider is called only when the user taps
   `🗣️`, if that capability was configured and enabled at startup.
@@ -151,6 +162,13 @@ privacy model must stay small and explicit.
   use a deterministic suffix in the private artifact root.
 - Snapshot HTML, isolated browser profiles, and PNGs must use private temporary
   paths and be removed after upload or failure.
+- Automatic guided evidence uses literal terminal pixels inside the canonical
+  guide card and is not a general
+  redacted screenshot. Engram refuses the crop when its configured secret
+  redactor would change any selected or context row, but unrecognized sensitive
+  terminal content can still appear. The same single-user Telegram boundary
+  therefore applies; full snapshots remain explicitly user-requested in guide
+  mode.
 
 ## Process Ownership
 

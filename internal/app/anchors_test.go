@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"html"
 	"net/http"
 	"path/filepath"
 	"reflect"
@@ -62,6 +64,7 @@ func TestAnchorMarkupUsesActualAnchorFormat(t *testing.T) {
 		reject     string
 	}{
 		{name: "text offers image", format: "text", wantAction: "snapshot:1", reject: "voice:1"},
+		{name: "guided media offers image and raw text", format: anchorFormatGuideEvidence, wantAction: "raw:1", reject: "voice:1"},
 		{name: "snapshot offers voice", format: "snapshot", wantAction: "voice:1", reject: "snapshot:1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -70,6 +73,16 @@ func TestAnchorMarkupUsesActualAnchorFormat(t *testing.T) {
 				t.Fatalf("markup for %s anchor = %s", test.format, markup)
 			}
 		})
+	}
+}
+
+func TestRetiredAnchorTextRedactsConfiguredCredentials(t *testing.T) {
+	a := &App{Config: config.Config{TelegramBotToken: "telegram-secret", AnthropicAPIKey: "anthropic-secret", OpenAIAPIKey: "openai-secret"}}
+	text := a.retiredAnchorText(state.TerminalSession{ID: 3, Title: "telegram-secret anthropic-secret openai-secret"})
+	for _, secret := range []string{"telegram-secret", "anthropic-secret", "openai-secret"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("retirement text leaked %q: %s", secret, text)
+		}
 	}
 }
 
@@ -117,7 +130,7 @@ func TestAnchorPinReconciliationTracksWatchLifecycle(t *testing.T) {
 	}
 }
 
-func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testing.T) {
+func TestAnchorRetirementReplacesUndeletableMediaAndRetriesUnpin(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -139,18 +152,19 @@ func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	captionEdits := 0
+	mediaEdits := 0
+	deleteCalls := 0
 	unpins := 0
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.Path {
-		case "/botTOKEN/editMessageCaption":
-			captionEdits++
-			if captionEdits == 1 {
-				return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
-			}
-			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message is not modified"}), nil
+		case "/botTOKEN/deleteMessage":
+			deleteCalls++
+			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be deleted"}), nil
+		case "/botTOKEN/editMessageMedia":
+			mediaEdits++
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": map[string]any{"message_id": 77, "chat": map[string]any{"id": 100}}}), nil
 		case "/botTOKEN/unpinChatMessage":
 			unpins++
 			if unpins == 1 {
@@ -162,7 +176,7 @@ func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testin
 			return nil, nil
 		}
 	})}
-	app := &App{Store: store, Telegram: client}
+	app := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client}
 
 	app.finishAnchorRotationLocked(context.Background(), session.ID)
 	pending, _ := store.FindSession(session.ID)
@@ -170,8 +184,8 @@ func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testin
 		t.Fatalf("retirement was not retained after unpin failure: %#v", pending)
 	}
 	app.finishAnchorRotationLocked(context.Background(), session.ID)
-	if captionEdits != 1 || unpins != 1 {
-		t.Fatalf("retirement ignored retry backoff: edits=%d unpins=%d", captionEdits, unpins)
+	if deleteCalls != 1 || mediaEdits != 1 || unpins != 1 {
+		t.Fatalf("retirement ignored retry backoff: deletes=%d edits=%d unpins=%d", deleteCalls, mediaEdits, unpins)
 	}
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.RetiringAnchorRetryAt = time.Now().Add(-time.Second)
@@ -180,8 +194,114 @@ func TestAnchorRetirementRetriesAfterUnpinFailureAndAcceptsNotModified(t *testin
 	}
 	app.finishAnchorRotationLocked(context.Background(), session.ID)
 	retired, _ := store.FindSession(session.ID)
-	if retired.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(retired.StaleAlternateMessageIDs, []int{77}) || captionEdits != 2 || unpins != 2 {
-		t.Fatalf("retry retirement = %#v edits=%d unpins=%d", retired, captionEdits, unpins)
+	if retired.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(retired.StaleAlternateMessageIDs, []int{77}) || deleteCalls != 2 || mediaEdits != 2 || unpins != 2 {
+		t.Fatalf("retry retirement = %#v deletes=%d edits=%d unpins=%d", retired, deleteCalls, mediaEdits, unpins)
+	}
+}
+
+func TestAnchorRetirementDoesNotMistakeTooOldForDeleted(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "secret-title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 88
+		s.AnchorFormat = anchorFormatGuideEvidence
+		s.RetiringAnchorMessageID = 77
+		s.RetiringAnchorFormat = anchorFormatGuideEvidence
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		switch req.URL.Path {
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
+			return snapshotJSONResponse(`true`), nil
+		case "/botTOKEN/deleteMessage", "/botTOKEN/editMessageMedia":
+			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message is too old"}), nil
+		case "/botTOKEN/editMessageCaption":
+			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected endpoint %s", req.URL.Path)
+		}
+	})}
+	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client}
+	a.finishAnchorRotationLocked(context.Background(), session.ID)
+	got, _ := store.FindSession(session.ID)
+	if got.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(paths, []string{"/botTOKEN/pinChatMessage", "/botTOKEN/deleteMessage", "/botTOKEN/editMessageMedia", "/botTOKEN/editMessageCaption", "/botTOKEN/unpinChatMessage"}) {
+		t.Fatalf("too-old retirement state=%#v paths=%#v", got, paths)
+	}
+	if isTelegramMessageGone(&telegram.Error{ErrorCode: 400, Description: "Bad Request: message is too old"}) {
+		t.Fatal("too-old deletion was classified as proof of absence")
+	}
+}
+
+func TestAnchorRetirementBoundsOversizedTitleBeforeMediaTombstone(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", strings.Repeat("very-long-title ", 200))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 88
+		s.AnchorFormat = anchorFormatGuideEvidence
+		s.RetiringAnchorMessageID = 77
+		s.RetiringAnchorFormat = anchorFormatGuideEvidence
+		s.AnchorPinKnown = true
+		s.AnchorPinned = true
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	var tombstone string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		switch req.URL.Path {
+		case "/botTOKEN/deleteMessage":
+			return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: message can't be deleted"}), nil
+		case "/botTOKEN/editMessageMedia":
+			if err := req.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			var media map[string]any
+			if err := json.Unmarshal([]byte(req.FormValue("media")), &media); err != nil {
+				t.Fatal(err)
+			}
+			caption, _ := media["caption"].(string)
+			tombstone = html.UnescapeString(caption)
+			if len(tombstone) > 1024 {
+				return telegramTestResponse(t, http.StatusBadRequest, map[string]any{"ok": false, "error_code": 400, "description": "Bad Request: caption is too long"}), nil
+			}
+			return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+		case "/botTOKEN/unpinChatMessage":
+			return snapshotJSONResponse(`true`), nil
+		default:
+			return nil, fmt.Errorf("unexpected endpoint %s", req.URL.Path)
+		}
+	})}
+	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client}
+	a.finishAnchorRotationLocked(context.Background(), session.ID)
+	got, _ := store.FindSession(session.ID)
+	if got.RetiringAnchorMessageID != 0 || !reflect.DeepEqual(got.StaleAlternateMessageIDs, []int{77}) || !reflect.DeepEqual(paths, []string{"/botTOKEN/deleteMessage", "/botTOKEN/editMessageMedia", "/botTOKEN/unpinChatMessage"}) || len(tombstone) > 900 || !strings.HasSuffix(tombstone, "\ncontinued in the newer live anchor") {
+		t.Fatalf("oversized-title retirement state=%#v paths=%#v tombstone=%q", got, paths, tombstone)
 	}
 }
 

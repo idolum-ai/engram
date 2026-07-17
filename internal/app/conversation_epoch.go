@@ -21,15 +21,16 @@ type conversationGate struct {
 }
 
 type conversationFrame struct {
-	serverID    string
-	windowID    string
-	paneID      string
-	command     string
-	alternateOn string
-	paneInMode  string
-	columns     int
-	visibleRows int
-	text        string
+	serverID     string
+	windowID     string
+	paneID       string
+	command      string
+	alternateOn  string
+	paneInMode   string
+	columns      int
+	visibleRows  int
+	text         string
+	physicalText string
 }
 
 type conversationEpoch struct {
@@ -41,6 +42,7 @@ type conversationEpoch struct {
 type conversationTurn struct {
 	input         guide.Input
 	frame         conversationFrame
+	previousFrame conversationFrame
 	resetRevision uint64
 }
 
@@ -84,15 +86,16 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 		a.pruneConversationEpochs(a.Store.Snapshot().TerminalSessions)
 	}
 	frame := conversationFrame{
-		serverID:    capture.ServerID,
-		windowID:    capture.WindowID,
-		paneID:      capture.PaneID,
-		command:     strings.TrimSpace(capture.CurrentCmd),
-		alternateOn: capture.AlternateOn,
-		paneInMode:  capture.PaneInMode,
-		columns:     capture.Columns,
-		visibleRows: capture.VisibleRows,
-		text:        text,
+		serverID:     capture.ServerID,
+		windowID:     capture.WindowID,
+		paneID:       capture.PaneID,
+		command:      strings.TrimSpace(capture.CurrentCmd),
+		alternateOn:  capture.AlternateOn,
+		paneInMode:   capture.PaneInMode,
+		columns:      capture.Columns,
+		visibleRows:  capture.VisibleRows,
+		text:         text,
+		physicalText: capture.Text,
 	}
 	a.conversationMu.Lock()
 	defer a.conversationMu.Unlock()
@@ -111,6 +114,9 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 		},
 	}
 	changed, removed, stable, ok := alignedConversationDelta(epoch.frame, frame)
+	if ok {
+		turn.previousFrame = epoch.frame
+	}
 	if ok && epoch.summary != "" && len(changed)+len(removed)+len(stable) <= maxConversationDeltaBytes {
 		turn.input.PreviousRendering = tailUTF8(epoch.summary, maxConversationSummaryBytes)
 		turn.input.ChangedText = changed
@@ -129,7 +135,7 @@ func (a *App) conversationTurnCurrent(session state.TerminalSession, turn conver
 		return false
 	}
 	latest, ok := a.Store.FindSession(session.ID)
-	if !ok || latest.State != state.TerminalRunning || latest.TmuxServerID != session.TmuxServerID ||
+	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.TmuxServerID != session.TmuxServerID ||
 		latest.TmuxWindowID != session.TmuxWindowID || latest.TmuxPaneID != session.TmuxPaneID {
 		return false
 	}

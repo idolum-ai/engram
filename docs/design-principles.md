@@ -100,8 +100,11 @@ and focused on what the terminal content means, within 180 words. Its voice
 stands beside the reader, using direct orientation grounded only in visibly
 named tools, collaborative "we" for shared work, and short one-idea paragraphs
 for phone readability; "you" is reserved for actions only the reader can take.
-It has no model conversation history or structured response and makes no
-second request. Its small process-local continuity is isolated per window and
+It has no model conversation history and makes no second request. When local
+Chromium is ready, its single response also carries a private list of short
+verbatim evidence excerpts. Engram strips that metadata from the prose and
+accepts it only when each excerpt maps uniquely back to the shared physical
+capture. Its small process-local continuity is isolated per window and
 never becomes terminal truth. A different capture boundary, weakly aligned
 frame, manual refresh, mode switch, reattachment, or service restart discards
 the hints. Continuity advances only after the canonical Telegram rendering is
@@ -112,11 +115,27 @@ Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
 literal and deterministic, at the cost of greater visual density and local
 rendering work.
 
+Guide mode can use that same renderer to make its canonical anchor one compact
+photo card. Highlighted terminal rows provide inspectable evidence first; the
+prose remains readable and copyable below the media without a
+second message. The model cannot choose pixels or expand the observation
+boundary. Engram adds bounded surrounding rows. When matching fails, it falls
+back deterministically to the last changed on-screen physical-row region since the
+last accepted frame, then to a bounded physical paragraph with lexical affinity
+to the summary, favoring visible links, and finally to the current terminal tail.
+The footer says which basis was used; quoted, locally changed, or summary-related
+rows are highlighted. Exact
+occurrence is not presented as semantic verification. If
+styled rows cannot be delivered safely, the bounded tail is redacted and
+rendered without styling. A truly empty terminal receives a quiet guide-only
+frame rather than a warning that competes with the summary. The canonical
+message identity, pin, controls, and reply route remain stable.
+
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying
 session. A snapshot
-anchor may offer `🗣️ Explain` for a one-off conversational reply; a guide anchor may
-offer `🖼️ Snapshot` for a one-off image. Alternate views are shown only when Engram can
+anchor may offer `🗣️ Talk` for a one-off conversational reply; a guide anchor may
+offer `🖼️ View` for a one-off image. Alternate views are shown only when Engram can
 actually deliver them, and they never become a second canonical anchor. The
 latest alternate of each kind may act as a reply handle for its session; an
 older alternate is explicitly stale and cannot route input.

@@ -495,7 +495,7 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /"+cmd+" <id>")
 			return
 		}
-		_, ok, err := a.Store.UpdateSession(id, func(ts *state.TerminalSession) { ts.WatchEnabled = false })
+		ok, err := a.stopWatching(id)
 		if err != nil {
 			status = "command_state_failed"
 			a.reply(ctx, msg, "state error: "+err.Error())
@@ -537,6 +537,22 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		a.reply(ctx, msg, "unknown command; try /help")
 	}
 	return status
+}
+
+func (a *App) stopWatching(id int) (bool, error) {
+	lock := a.anchorMutex(id)
+	lock.Lock()
+	defer lock.Unlock()
+	updated, ok, err := a.Store.UpdateSession(id, func(ts *state.TerminalSession) { ts.WatchEnabled = false })
+	committed := ok && !updated.WatchEnabled && (err == nil || state.PersistenceReachedReplacement(err))
+	if committed {
+		a.resetConversationEpochLocked(id)
+	}
+	if err != nil && committed {
+		_ = a.audit("state.unwatch", "durability_uncertain", map[string]any{"session_id": id, "error": err.Error()})
+		return true, nil
+	}
+	return ok, err
 }
 
 func (a *App) registerCommands(ctx context.Context) {

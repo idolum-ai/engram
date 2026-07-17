@@ -44,20 +44,25 @@ Telegram is Engram's only user interface.
 
 - Every callback is answered and authorized against configured user, chat, and
   current canonical message. Retired controls are inert.
+- Every inline button label is limited to the seven-rune budget established by
+  `🖼️ View`. Dynamic display labels are shortened locally when necessary while
+  their callback data remains exact; dense Telegram rows must not rely on the
+  client truncating labels.
 - Close controls are accepted only from the current canonical message. Close
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.
-- Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
-- Guide anchors expose refresh, the compact non-directional key controls, and
-  `🖼️ Snapshot` only when Chromium is ready. Snapshot anchors additionally expose a
-  distinct `← ↑ ↓ →` row, `📄 Raw` for a bounded plain-text attachment, and `🗣️ Explain` only when a
-  guide is configured.
+- Lost anchors expose only `🧭 Link` for exact-identity recovery.
+- Guide anchors expose refresh, the compact non-directional key controls,
+  `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
+  is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
+  `🗣️ Talk` only when a guide is configured.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
 - `📄 Raw` uploads the process-local plain-text companion captured with the
-  exact canonical snapshot image. It never performs a later tmux capture; when
-  restart has cleared that companion, the control asks the user to wait for the
-  startup refresh.
+  exact canonical media image: the complete bounded snapshot frame in snapshot
+  mode or the displayed crop in guide mode. It never performs a later tmux
+  capture; when restart has cleared that companion, the control asks the user
+  to wait for the startup refresh.
 - Key callbacks answer immediately before tmux work begins. A later tmux failure
   is delivered as a normal reply rather than leaving Telegram's progress state
   spinning until the terminal timeout.
@@ -65,14 +70,34 @@ Telegram is Engram's only user interface.
   numbered entry. The callback contains no path: it resolves through the
   current anchor's exact process-local file-list token and then uses the same
   validation, bounded snapshot, queue, and upload path as `/download`.
-- `🖼️ Snapshot` queues a one-off image reply to a guide anchor. `🗣️ Explain` queues one model
+- `🖼️ View` queues a one-off image reply to a guide anchor. `🗣️ Talk` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces
   the canonical anchor.
+- When guide mode and Chromium are both available, the canonical anchor is a
+  single photo card with a compact terminal crop above bounded
+  conversational prose. Telegram media edits preserve the canonical message ID, pin,
+  controls, and reply route. Missing or unverifiable model evidence falls back
+  to a locally computed changed terminal region, then to a bounded physical
+  paragraph selected by lexical affinity to the summary with a visible-link
+  preference, and finally to the current terminal tail. Model-selected excerpts
+  must occur uniquely in both the semantic text
+  sent to the provider and the physical capture. Every crop labels its
+  provenance without claiming semantic verification. If styled candidates cannot be
+  delivered safely, Engram renders the bounded tail as redacted plain text; a
+  truly empty terminal receives a quiet guide-only frame. Engram never preserves
+  stale pixels, delegates pixel selection to the model, or creates a second message.
+- Obsolete media predecessors are deleted when Telegram permits it. If deletion
+  fails, Engram replaces their media with a locally generated neutral image,
+  clears controls, applies a redacted inactive label, and unpins them. If
+  Telegram also refuses media replacement because the message is too old,
+  Engram falls back to caption neutralization and audits that historical pixels
+  remain outside its control.
 - The latest conversational reply and latest screenshot reply for each session
   route Telegram replies to that session. The latest upstream-signal reply has
-  the same routing behavior. Publishing a newer alternate of the same kind
-  makes the predecessor stale. Replies to known stale alternates must
+  the same routing behavior. The canonical guide-evidence card routes through
+  the ordinary anchor identity, not an alternate alias. Publishing a newer
+  alternate of the same kind makes the predecessor stale. Replies to known stale alternates must
   not reach tmux and receive a concise normal bot reply; Telegram offers no
   callback-style ephemeral banner for an ordinary message reply.
 - A Telegram voice note replying to any current routable message follows the

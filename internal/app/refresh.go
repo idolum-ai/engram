@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -78,18 +79,27 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	presentationText := a.processCapturedFrame(ctx, ts, capture)
 	refs := a.visibleReferences(presentationText)
-	hash := sha(presentationText)
+	hash := guideCaptureHash(presentationText, ts.Title, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
-			guard := func() bool {
-				current, ok := a.Store.FindSession(id)
-				return !a.snapshotAnchors() && ok && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
+			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotReady {
+				if _, hasCompanion := a.snapshotTextFrame(ts); hasCompanion {
+					a.updateGuidedAnchorReferences(ctx, ts, refs)
+					return
+				}
+				// Process-local companions vanish on restart. Fall through until a
+				// successful canonical render restores Raw for this unchanged frame.
+			} else {
+				guard := func() bool {
+					current, ok := a.Store.FindSession(id)
+					return !a.snapshotAnchors() && ok && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
+				}
+				a.updateAnchorLocalGuardedWithReferences(ctx, id, ts.LastSummary, false, guard, nil, &refs)
+				return
 			}
-			a.updateAnchorLocalGuardedWithReferences(ctx, id, ts.LastSummary, false, guard, nil, &refs)
-			return
 		}
 	}
-	summary, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
+	summary, evidence, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
 	if errors.Is(guideErr, errConversationTurnSuperseded) {
 		return
 	}
@@ -152,7 +162,30 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
 	}
-	a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
+	updated := false
+	if a.snapshotReady {
+		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, force, guard, accepted)
+	} else {
+		updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
+	}
+	if updated && guideErr == nil {
+		_ = a.audit("terminal.guide", "updated", map[string]any{"session_id": id})
+	}
+}
+
+func guideCaptureHash(text, sessionTitle string, capture tmux.StyledCapture) string {
+	return sha(strings.Join([]string{
+		text,
+		sessionTitle,
+		capture.ANSI,
+		capture.Title,
+		capture.CurrentPath,
+		strings.TrimSpace(capture.CurrentCmd),
+		capture.AlternateOn,
+		capture.PaneInMode,
+		strconv.Itoa(capture.Columns),
+		strconv.Itoa(capture.VisibleRows),
+	}, "\x00"))
 }
 
 func tailUTF8(text string, maxBytes int) string {
@@ -183,10 +216,11 @@ func headUTF8(text string, maxBytes int) string {
 	return text[:end]
 }
 
-func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, conversationTurn, error) {
+func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, []string, conversationTurn, error) {
 	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText))
+	turn.input.EvidenceRequested = a.snapshotReady
 	if !acquireSlot(ctx, a.guideSlots) {
-		return "", turn, ctx.Err()
+		return "", nil, turn, ctx.Err()
 	}
 	defer releaseSlot(a.guideSlots)
 	identityLock := a.sessionMutex(session.ID)
@@ -196,14 +230,20 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	defer a.presentationMu.RUnlock()
 	latest, ok := a.Store.FindSession(session.ID)
 	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
-		return "", turn, errConversationTurnSuperseded
+		return "", nil, turn, errConversationTurnSuperseded
 	}
-	summary, err := a.Guide.Converse(ctx, turn.input)
+	var result guide.Result
+	var err error
+	if renderer, ok := a.Guide.(guide.EvidenceRenderer); ok && a.snapshotReady {
+		result, err = renderer.ConverseWithEvidence(ctx, turn.input)
+	} else {
+		result.Text, err = a.Guide.Converse(ctx, turn.input)
+	}
 	if err != nil {
-		return "", turn, err
+		return "", nil, turn, err
 	}
-	summary = a.redactText(summary)
-	return summary, turn, nil
+	result.Text = a.redactText(result.Text)
+	return result.Text, result.Evidence, turn, nil
 }
 
 func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string) (string, error) {
@@ -261,10 +301,6 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 		}
 		final = true
 	}
-	if a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
-		a.updateSnapshotAnchorCaptionLocked(ctx, ts, summary, final)
-		return false
-	}
 	refs := a.visibleReferences(ts.LastRawCapture)
 	if referenceOverride != nil {
 		refs = *referenceOverride
@@ -272,10 +308,14 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 	references, files := renderReferencesWithFiles(refs, true, maxGuideReferenceBytes)
 	rendered := renderLocalWithReferences(ts, a.redactText(summary), references)
 	renderHash := sha(rendered)
-	if !a.snapshotAnchors() && ts.AnchorFormat == "snapshot" {
-		a.rotateSnapshotAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
+	if !a.snapshotAnchors() && (ts.AnchorFormat == anchorFormatSnapshot || ts.AnchorFormat == anchorFormatGuideEvidence && !a.snapshotReady) {
+		a.rotateMediaAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
 		updated, found := a.Store.FindSession(id)
 		return found && updated.AnchorFormat == "text" && updated.LastRenderHash == renderHash && finish()
+	}
+	if mediaAnchorFormat(ts.AnchorFormat) {
+		a.updateMediaAnchorCaptionLocked(ctx, ts, summary, final)
+		return false
 	}
 	if renderHash == ts.LastRenderHash && !final {
 		return finish()
@@ -615,10 +655,10 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalRunning {
 		return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{
-			Image:     ts.AnchorFormat != "snapshot" && a.snapshotReady,
-			Voice:     ts.AnchorFormat == "snapshot" && a.guideAvailable,
-			Raw:       ts.AnchorFormat == "snapshot",
-			Arrows:    ts.AnchorFormat == "snapshot",
+			Image:     ts.AnchorFormat != anchorFormatSnapshot && a.snapshotReady,
+			Voice:     ts.AnchorFormat == anchorFormatSnapshot && a.guideAvailable,
+			Raw:       mediaAnchorFormat(ts.AnchorFormat),
+			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),
 		})

@@ -63,6 +63,17 @@ func TestConverseUsesOneBoundedNonStreamingRequest(t *testing.T) {
 	}
 }
 
+func TestConverseWithEvidenceKeepsMetadataPrivate(t *testing.T) {
+	client := New("openai-key", testModel)
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return completionResponse("The tests passed.\n<engram-evidence>{\"excerpts\":[\"ok example/internal/app\"]}</engram-evidence>", "stop"), nil
+	})}
+	got, err := client.ConverseWithEvidence(context.Background(), guide.Input{EvidenceRequested: true})
+	if err != nil || got.Text != "The tests passed." || len(got.Evidence) != 1 || got.Evidence[0] != "ok example/internal/app" {
+		t.Fatalf("ConverseWithEvidence() = %#v err=%v", got, err)
+	}
+}
+
 func TestConverseRejectsAPIErrorWithoutLeakingKey(t *testing.T) {
 	client := New("private-key", testModel)
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
