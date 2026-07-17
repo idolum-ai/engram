@@ -237,8 +237,14 @@ func RenderHTML(input Input, themeName string) string {
 		layoutColumns = min(layoutColumns, 71)
 	}
 	renderColumns, fontSize, lineHeight := readableTerminalLayout(layoutColumns)
+	contentColumns := renderColumns
 	if input.Compact {
 		lineHeight = 13.2
+		// Compact evidence is a viewport onto the original physical rows. Keep
+		// the pre wide enough to contain the horizontally selected slice; if it
+		// is constrained to the viewport width, its own overflow clips content
+		// at larger ColumnOffset values before the transform can reveal it.
+		contentColumns = max(contentColumns, input.Columns)
 	}
 	lineHeightCSS := fmt.Sprintf("%.2f", lineHeight)
 	if input.Compact {
@@ -270,7 +276,7 @@ func RenderHTML(input Input, themeName string) string {
 :root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;width:100%%;height:100%%;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:100vw;height:100vh;overflow:hidden;background:%s}.bar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100vw;height:calc(100vh - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:%.2fpx;right:8px;z-index:0;height:%spx;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:%s;overflow-wrap:%s;transform:translateX(-%.2fpx)}.foot{height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}
 </style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span>%s</span><span>%dx%d visible</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
-		highlightLeft, lineHeightCSS, theme.highlightBorder, theme.highlight, renderColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, horizontalOffset, theme.subtleBorder, theme.muted, theme.foot,
+		highlightLeft, lineHeightCSS, theme.highlightBorder, theme.highlight, contentColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, horizontalOffset, theme.subtleBorder, theme.muted, theme.foot,
 		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
 		html.EscapeString(footer), input.Columns, input.VisibleRows)
 }

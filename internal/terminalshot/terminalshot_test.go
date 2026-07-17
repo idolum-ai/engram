@@ -164,7 +164,7 @@ func TestCompactEvidenceKeepsWidePanesReadableAndEscapesFooter(t *testing.T) {
 		ANSI: "important", Title: "build", Target: "[3]", CWD: "/tmp",
 		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, ColumnOffset: 100, Footer: `<unsafe & footer>`,
 	}, "terminal")
-	for _, want := range []string{"font:9.40px/13.2px", "left:0.00px", "transform:translateX(-", "&lt;unsafe &amp; footer&gt;"} {
+	for _, want := range []string{"width:200ch", "font:9.40px/13.2px", "left:0.00px", "transform:translateX(-", "&lt;unsafe &amp; footer&gt;"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide compact HTML missing %q: %s", want, page)
 		}
@@ -348,6 +348,42 @@ func TestLiveChromiumRender(t *testing.T) {
 	}
 	if config.Width != LogicalWidth*PixelRatio || config.Height != LogicalHeight*PixelRatio {
 		t.Fatalf("snapshot size = %dx%d", config.Width, config.Height)
+	}
+}
+
+func TestLiveChromiumCompactOffsetRender(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
+	path, err := renderer.Render(context.Background(), Input{
+		ANSI: strings.Repeat(" ", 100) + "VISIBLE OFFSET CONTENT", Title: "compact offset", Target: "[5]", CWD: "/tmp",
+		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, ColumnOffset: 100,
+	}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visiblePixels := 0
+	for y := 52 * PixelRatio; y < 68*PixelRatio; y++ {
+		for x := 8 * PixelRatio; x < 180*PixelRatio; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if r > 0x4000 || g > 0x4000 || b > 0x4000 {
+				visiblePixels++
+			}
+		}
+	}
+	if visiblePixels == 0 {
+		t.Fatal("horizontally offset compact evidence rendered an empty terminal body")
 	}
 }
 
