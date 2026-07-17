@@ -426,8 +426,11 @@ make install PREFIX="$HOME/.local"
 ```
 
 The tagged-release installer shown in the Linux lifecycle also supports Darwin
-on `amd64` and `arm64`. It replaces only the binary and never creates or starts
-a LaunchAgent.
+on `amd64` and `arm64`. Published Darwin binaries are Developer ID signed and
+notarized with the stable code identifier `ai.idolum.engram`, so updates retain
+one macOS code identity. The installer replaces only the binary and never
+creates or starts a LaunchAgent. Source-checkout builds remain development
+artifacts and do not carry the release signature.
 
 Stop the foreground process with `Ctrl+C`; tmux sessions remain. Engram does not
 ship launchd integration, and `make install-service` and

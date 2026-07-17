@@ -19,6 +19,8 @@ required_files=(
   .github/ISSUE_TEMPLATE/feature_request.md
   scripts/install-release.sh
   scripts/package-release.sh
+  scripts/sign-darwin-release.sh
+  scripts/check-darwin-signing.sh
   scripts/check-release.sh
   scripts/generate-release-notes.sh
   scripts/prepare-release-notes.sh
@@ -53,9 +55,11 @@ fi
 
 for script in \
   scripts/check-release.sh \
+  scripts/check-darwin-signing.sh \
   scripts/generate-release-notes.sh \
   scripts/install-release.sh \
   scripts/package-release.sh \
+  scripts/sign-darwin-release.sh \
   scripts/prepare-release-notes.sh \
   scripts/validate-release-notes.sh \
   scripts/validate-release-version.sh; do
