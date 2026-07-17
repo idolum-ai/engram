@@ -84,7 +84,7 @@ jobs:
           test "${E2E_SUITE}" = "hermetic"
           mkdir -p e2e-artifacts
           : > e2e-artifacts/process.log
-          trap 'status=$?; if [[ ! -f e2e-artifacts/process.log ]]; then : > e2e-artifacts/process.log; fi; if [[ ! -f e2e-artifacts/manifest.json ]]; then printf "%s\n" "{\"suite\":\"hermetic\",\"status\":\"failed\",\"assertions\":[],\"failure\":\"workflow failed before test evidence\"}" > e2e-artifacts/manifest.json; fi; exit "${status}"' EXIT
+          trap 'status=$?; if [[ -f e2e-artifacts/.supervisor-started && ! -f e2e-artifacts/.supervisor-done ]]; then for _ in {1..250}; do [[ -f e2e-artifacts/.supervisor-done ]] && break; sleep 0.1; done; fi; if [[ -f e2e-artifacts/.supervisor-started && ! -f e2e-artifacts/.supervisor-done ]]; then status=1; fi; rm -f e2e-artifacts/.supervisor-started e2e-artifacts/.supervisor-done; if [[ ! -f e2e-artifacts/process.log ]]; then : > e2e-artifacts/process.log; fi; if [[ ! -f e2e-artifacts/manifest.json ]]; then printf "%s\n" "{\"suite\":\"hermetic\",\"status\":\"failed\",\"assertions\":[],\"failure\":\"workflow failed before test evidence\"}" > e2e-artifacts/manifest.json; fi; exit "${status}"' EXIT
           browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
           test -n "${browser}"
           set +e

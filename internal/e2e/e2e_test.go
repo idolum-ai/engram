@@ -122,7 +122,7 @@ printf 'The golden path is complete.\n'
 	tmuxPID := 0
 	defer func() {
 		if !supervisorStopped {
-			if err := stopSupervisedProcess(supervisor, 10*time.Second); err != nil {
+			if err := stopSupervisedProcess(supervisor, 20*time.Second); err != nil {
 				t.Errorf("cleanup external E2E supervisor: %v", err)
 			}
 		}
@@ -222,11 +222,13 @@ printf 'The golden path is complete.\n'
 	assertions = append(assertions, "numbered file callback delivered exact bytes and filename once to the authorized chat")
 
 	t.Log("stopping Engram and its private tmux server")
-	stopErr := stopSupervisedProcess(supervisor, 10*time.Second)
+	stopErr := stopSupervisedProcess(supervisor, 20*time.Second)
 	supervisorStopped = true
 	if stopErr != nil {
 		t.Fatalf("Engram supervisor exited unsuccessfully: %v\n%s", stopErr, readProcessLog(processLogPath))
 	}
+	_ = os.Remove(supervisor.donePath)
+	_ = os.Remove(filepath.Join(artifactDir, ".supervisor-started"))
 	if !waitForProcessExit(tmuxPID, 3*time.Second) {
 		t.Fatalf("external supervisor left tmux server PID %d alive", tmuxPID)
 	}

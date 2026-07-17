@@ -78,6 +78,15 @@ func TestProcessLogSurvivesHardExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, 5*time.Second, func() bool { return !processAlive(supervisorPID) }, "orphaned supervisor exit")
+	tmuxData, err := os.ReadFile(filepath.Join(dir, "tmux.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmuxPID, err := strconv.Atoi(strings.TrimSpace(string(tmuxData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 5*time.Second, func() bool { return !processAlive(tmuxPID) }, "private tmux cleanup after owner hard exit")
 }
 
 func TestSupervisorOwnerHardExitHelper(t *testing.T) {
@@ -87,11 +96,15 @@ func TestSupervisorOwnerHardExitHelper(t *testing.T) {
 	}
 	logPath := filepath.Join(dir, "process.log")
 	childReady := filepath.Join(dir, "child.ready")
-	env := append(withoutEnvironment(os.Environ(), "ENGRAM_E2E_SUPERVISED_CHILD", "ENGRAM_E2E_SUPERVISED_CHILD_READY"),
+	tmuxBinary := requiredExecutable(t, "ENGRAM_E2E_TMUX", "tmux")
+	binDir := privateDir(t, dir, "hard-exit-bin")
+	writeTmuxWrapper(t, binDir, tmuxBinary)
+	env := append(isolatedEnvironment(binDir, privateDir(t, dir, "hard-exit-home"), privateDir(t, dir, "hard-exit-config"), privateDir(t, dir, "hard-exit-cache"), privateDir(t, dir, "hard-exit-runtime"), privateDir(t, dir, "hard-exit-tmux")),
 		"ENGRAM_E2E_SUPERVISED_CHILD=1",
 		"ENGRAM_E2E_SUPERVISED_CHILD_READY="+childReady,
+		"ENGRAM_E2E_SUPERVISED_TMUX_PID="+filepath.Join(dir, "tmux.pid"),
 	)
-	process := startSupervisedProcess(t, env, []string{os.Args[0], "-test.run=^TestSupervisedChildHelper$", "-test.v"}, logPath, false)
+	process := startSupervisedProcess(t, env, []string{os.Args[0], "-test.run=^TestSupervisedChildHelper$", "-test.v"}, logPath, true)
 	eventually(t, 5*time.Second, func() bool {
 		_, err := os.Stat(childReady)
 		return err == nil
@@ -112,11 +125,85 @@ func TestSupervisedChildHelper(t *testing.T) {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM)
 	defer signal.Stop(signals)
+	if err := exec.Command("tmux", "new-session", "-d", "-s", "hard-exit", "sleep 30").Run(); err != nil {
+		t.Fatal(err)
+	}
+	pidOutput, err := exec.Command("tmux", "display-message", "-p", "#{pid}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(os.Getenv("ENGRAM_E2E_SUPERVISED_TMUX_PID"), pidOutput, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(os.Getenv("ENGRAM_E2E_SUPERVISED_CHILD_READY"), []byte("ready\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	<-signals
 	println("output after owner hard exit")
+}
+
+func TestPlannedSupervisorShutdownRejectsNonzeroExit(t *testing.T) {
+	ready := filepath.Join(t.TempDir(), "ready")
+	child := exec.Command("/bin/sh", "-c", "trap 'exit 7' TERM; : > \"$READY\"; while :; do sleep 1; done")
+	child.Env = append(os.Environ(), "READY="+ready)
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 3*time.Second, func() bool { _, err := os.Stat(ready); return err == nil }, "nonzero child readiness")
+	if err := cleanupSupervisedChild(child, true); err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("planned nonzero cleanup error = %v", err)
+	}
+}
+
+func TestPlannedSupervisorShutdownRejectsForcedKill(t *testing.T) {
+	oldTerm, oldKill, oldGroup := supervisorTermGrace, supervisorKillGrace, supervisorGroupGrace
+	supervisorTermGrace, supervisorKillGrace, supervisorGroupGrace = 100*time.Millisecond, time.Second, 100*time.Millisecond
+	defer func() { supervisorTermGrace, supervisorKillGrace, supervisorGroupGrace = oldTerm, oldKill, oldGroup }()
+	child := exec.Command("/bin/sh", "-c", "trap '' TERM; while :; do sleep 1; done")
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := cleanupSupervisedChild(child, true); err == nil || !strings.Contains(err.Error(), "required SIGKILL") {
+		t.Fatalf("forced cleanup error = %v", err)
+	}
+}
+
+func TestSupervisorRemovesDescendantAfterLeaderExit(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "descendant.pid")
+	child := exec.Command("/bin/sh", "-c", "sh -c 'trap \"\" TERM; sleep 30' & echo $! > \"$PID_PATH\"")
+	child.Env = append(os.Environ(), "PID_PATH="+pidPath)
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var descendantPID int
+	eventually(t, 3*time.Second, func() bool {
+		data, err := os.ReadFile(pidPath)
+		descendantPID, err = strconv.Atoi(strings.TrimSpace(string(data)))
+		return err == nil && descendantPID > 1
+	}, "TERM-ignoring descendant readiness")
+	err := cleanupSupervisedChild(child, true)
+	if err == nil || !strings.Contains(err.Error(), "required SIGKILL") {
+		t.Fatalf("descendant cleanup error = %v", err)
+	}
+	eventually(t, 3*time.Second, func() bool { return !processAlive(descendantPID) }, "TERM-ignoring descendant exit")
+}
+
+func TestSupervisorFailureIsRetained(t *testing.T) {
+	dir := t.TempDir()
+	process := startSupervisedProcess(t, os.Environ(), []string{"/bin/sh", "-c", "trap 'exit 7' TERM; while :; do sleep 1; done"}, filepath.Join(dir, "process.log"), false)
+	time.Sleep(100 * time.Millisecond)
+	if err := stopSupervisedProcess(process, 10*time.Second); err == nil {
+		t.Fatal("failing supervisor unexpectedly passed")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "supervisor.log"))
+	if err != nil || !strings.Contains(string(data), "exit status 7") {
+		t.Fatalf("supervisor.log = %q, err=%v", data, err)
+	}
 }
 
 func withoutEnvironment(environment []string, keys ...string) []string {

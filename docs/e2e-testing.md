@@ -74,6 +74,7 @@ below. A local test writes the same evidence bundle to
   resolved Go, runner, tmux, and browser versions, and hashes binding the image
   and text evidence;
 - `process.log`, streamed directly so output survives hard test termination;
+- `supervisor.log`, retained cleanup-owner diagnostics;
 - `test.log` for workflow runs, including failed runs; and
 - `telegram.log` when a failed test needs simulator diagnostics.
 

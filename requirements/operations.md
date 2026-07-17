@@ -118,6 +118,9 @@ runtime state.
   that survives test-process termination and reacts to control-pipe EOF within
   a bounded interval. Child output must be connected directly to retained
   `process.log`, without a parent-owned copy pipe.
+- Hard-exit cleanup must publish an atomic completion marker after child, log,
+  and tmux cleanup. The workflow must wait for that marker within a deadline
+  longer than the supervisor's complete cleanup budget before uploading.
 
 ## Scope
 
