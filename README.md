@@ -224,7 +224,7 @@ the bot channel and must be revoked immediately.
   running when Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.
-- **Local snapshot browser:** In guide mode, tapping `🖼️ Snapshot` renders an on-demand
+- **Local snapshot browser:** In guide mode, tapping `🖼️` renders an on-demand
   image when Chromium passed startup readiness. In snapshot mode, the renderer
   produces the canonical live anchor whenever its capture changes. Engram
   renders a frame capped at 64 ANSI-preserving rows into a

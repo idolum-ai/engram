@@ -133,7 +133,7 @@ When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying
 session. A snapshot
 anchor may offer `🗣️ Explain` for a one-off conversational reply; a guide anchor may
-offer `🖼️ Snapshot` for a one-off image. Alternate views are shown only when Engram can
+offer `🖼️` for a one-off image. Alternate views are shown only when Engram can
 actually deliver them, and they never become a second canonical anchor. The
 latest alternate of each kind may act as a reply handle for its session; an
 older alternate is explicitly stale and cannot route input.

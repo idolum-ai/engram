@@ -49,7 +49,7 @@ Telegram is Engram's only user interface.
   token records the immutable tmux binding and becomes stale after reattachment.
 - Lost anchors expose only `🧭 Reattach` for exact-identity recovery.
 - Guide anchors expose refresh, the compact non-directional key controls,
-  `📄 Raw` for their exact displayed crop, and `🖼️ Snapshot` only when Chromium
+  `📄 Raw` for their exact displayed crop, and `🖼️` only when Chromium
   is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
   `🗣️ Explain` only when a guide is configured.
 - Directional callbacks are accepted only from the current snapshot anchor, so
@@ -66,7 +66,7 @@ Telegram is Engram's only user interface.
   numbered entry. The callback contains no path: it resolves through the
   current anchor's exact process-local file-list token and then uses the same
   validation, bounded snapshot, queue, and upload path as `/download`.
-- `🖼️ Snapshot` queues a one-off image reply to a guide anchor. `🗣️ Explain` queues one model
+- `🖼️` queues a one-off image reply to a guide anchor. `🗣️ Explain` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces
   the canonical anchor.

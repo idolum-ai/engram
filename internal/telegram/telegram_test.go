@@ -99,7 +99,7 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
 	}
-	if got.InlineKeyboard[0][1].Text != "🖼️ Snapshot" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+	if got.InlineKeyboard[0][1].Text != "🖼️" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
 	want := []InlineKeyboardButton{

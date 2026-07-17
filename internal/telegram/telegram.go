@@ -516,7 +516,7 @@ type AnchorMarkupOptions struct {
 func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
 	actions := []InlineKeyboardButton{{Text: "🔄", CallbackData: fmt.Sprintf("refresh:%d", sessionID)}}
 	if options.Image {
-		actions = append(actions, InlineKeyboardButton{Text: "🖼️ Snapshot", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
+		actions = append(actions, InlineKeyboardButton{Text: "🖼️", CallbackData: fmt.Sprintf("snapshot:%d", sessionID)})
 	}
 	if options.Voice {
 		actions = append(actions, InlineKeyboardButton{Text: "🗣️ Explain", CallbackData: fmt.Sprintf("voice:%d", sessionID)})
