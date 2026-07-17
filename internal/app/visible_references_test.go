@@ -214,9 +214,14 @@ func TestReferenceRenderingFencesPathsOnlyWhenRequestedAndKeepsLinksPlain(t *tes
 
 func TestSnapshotReferencesReserveRoomForLinks(t *testing.T) {
 	root := t.TempDir()
+	const pathBytes = maxVisibleReferenceBytes - 20
+	nameBytes := pathBytes - len(root) - 1
+	if nameBytes < 1 {
+		t.Fatalf("temporary root is too long for a visible-path budget test: %q", root)
+	}
 	paths := []string{
-		filepath.Join(root, strings.Repeat("p", 140)),
-		filepath.Join(root, strings.Repeat("q", 140)),
+		filepath.Join(root, strings.Repeat("p", nameBytes)),
+		filepath.Join(root, strings.Repeat("q", nameBytes)),
 	}
 	for _, path := range paths {
 		if err := os.WriteFile(path, []byte("artifact"), 0o600); err != nil {
