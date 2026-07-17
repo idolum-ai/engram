@@ -19,6 +19,27 @@ func tmuxRecord(values ...string) string {
 	return out.String() + "\n"
 }
 
+func TestTmuxCommandArgumentsForceUTF8WithoutChangingInput(t *testing.T) {
+	t.Parallel()
+	original := []string{"display-message", "-p", "hello"}
+	want := []string{"-u", "display-message", "-p", "hello"}
+	if got := tmuxCommandArguments(original); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmux arguments = %#v, want %#v", got, want)
+	}
+	if !reflect.DeepEqual(original, []string{"display-message", "-p", "hello"}) {
+		t.Fatalf("tmux arguments changed caller input: %#v", original)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 type fakeRunner struct {
 	calls [][]string
 	out   string
@@ -51,6 +72,8 @@ type styledCaptureRunner struct {
 	calls     [][]string
 	ansi      string
 	joined    string
+	metadata  string
+	framing   string
 	afterMeta string
 }
 
@@ -107,11 +130,20 @@ func (r *sequenceRunner) Run(_ context.Context, args ...string) (string, error) 
 func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
+		if r.metadata != "" {
+			return r.metadata, nil
+		}
 		return styledCaptureMetadata("bash", "1", "0"), nil
 	}
 	if len(args) > 0 && args[0] == "capture-pane" {
+		if !containsString(args, "-b") && r.framing != "" {
+			return r.framing, nil
+		}
 		if r.afterMeta != "" {
 			return r.afterMeta, nil
+		}
+		if r.metadata != "" {
+			return r.metadata, nil
 		}
 		return styledCaptureMetadata("bash", "1", "0"), nil
 	}
@@ -498,6 +530,45 @@ func TestCaptureLiteralUsesBoundedRowsWithoutPasteBuffers(t *testing.T) {
 	}
 	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S -40 -E 23 -t %7" {
 		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestCaptureLiteralKeepsCurrentTailForTallPane(t *testing.T) {
+	fullVisiblePane := strings.Repeat("old output\n", 36) + "codex\nprompt\n"
+	runner := &sequenceRunner{outputs: []string{tmuxRecord("80", "40"), fullVisiblePane}}
+	got, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "codex\nprompt") {
+		t.Fatalf("CaptureLiteral = %q", got)
+	}
+	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S -24 -E 39 -t %7" {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestCaptureStyledUsesOnePhysicalWindowForANSIAndJoinedText(t *testing.T) {
+	ansi := strings.Repeat("\x1b[32mselected physical row\x1b[0m\n", 64)
+	joined := strings.Repeat("selected logical line\n", 32)
+	metadata := styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "80", "100", "bash", "1", "0")
+	runner := &styledCaptureRunner{ansi: ansi, joined: joined, metadata: metadata}
+
+	got, err := New(runner).CaptureStyled(context.Background(), "%7", 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ANSI != ansi || got.JoinedText != strings.TrimSpace(joined) {
+		t.Fatalf("misaligned styled capture: ANSI=%q joined=%q", got.ANSI, got.JoinedText)
+	}
+	if len(runner.calls) != 5 {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	finalCapture := runner.calls[1]
+	physicalBounds := []string{"-S", "36", "-E", "99"}
+	joinedBounds := []string{"-S", "36", "-E", "99"}
+	if !containsArgs(finalCapture[:11], physicalBounds) || !containsArgs(finalCapture[11:22], joinedBounds) {
+		t.Fatalf("physical and joined captures used different bounds: %#v", finalCapture)
 	}
 }
 

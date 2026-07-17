@@ -285,6 +285,10 @@ func newVoiceInputTestApp(t *testing.T) (*App, *slashEscapeRunner, *fakeVoiceTra
 	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	runtimeDir, err := filepath.EvalSymlinks(runtimeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {

@@ -47,7 +47,7 @@ func (ExecRunner) Run(ctx context.Context, args ...string) (string, error) {
 }
 
 func (ExecRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string) error {
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd := exec.CommandContext(ctx, "tmux", tmuxCommandArguments(args)...)
 	var errOut bytes.Buffer
 	cmd.Stdout = dst
 	cmd.Stderr = &errOut
@@ -56,6 +56,10 @@ func (ExecRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string
 		return &commandError{args: append([]string(nil), args...), err: err, stderr: errOut.String()}
 	}
 	return nil
+}
+
+func tmuxCommandArguments(args []string) []string {
+	return append([]string{"-u"}, args...)
 }
 
 type Manager struct {
@@ -534,8 +538,7 @@ func (m Manager) CaptureLiteral(ctx context.Context, paneID, windowID, serverID 
 	if err != nil || visibleRows <= 0 || visibleRows > 400 {
 		return "", fmt.Errorf("invalid tmux pane height %q", parts[1])
 	}
-	start := visibleRows - targetRows
-	end := visibleRows - 1
+	start, end := captureBounds(visibleRows, targetRows)
 	command := strings.Join([]string{"capture-pane", "-p", "-N", "-S", strconv.Itoa(start), "-E", strconv.Itoa(end), "-t", paneID}, " ")
 	out, err := m.captureIfBindingMatches(ctx, paneID, windowID, serverID, command)
 	if err != nil {
@@ -580,8 +583,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		return StyledCapture{}, err
 	}
 	columns, visibleRows := before.Columns, before.VisibleRows
-	start := visibleRows - targetRows
-	end := visibleRows - 1
+	start, end := captureBounds(visibleRows, targetRows)
 	nonce, err := captureNonce()
 	if err != nil {
 		return StyledCapture{}, err
@@ -690,6 +692,10 @@ func sameCaptureIdentity(before, after captureMetadata) bool {
 }
 
 func validTmuxFlag(value string) bool { return value == "0" || value == "1" }
+
+func captureBounds(visibleRows, targetRows int) (start, end int) {
+	return visibleRows - targetRows, visibleRows - 1
+}
 
 func captureNonce() (string, error) {
 	var nonce [16]byte
