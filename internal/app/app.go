@@ -34,6 +34,7 @@ type App struct {
 	Transcriber          voiceTranscriber
 	Tmux                 tmux.Manager
 	Snapshots            snapshotRenderer
+	footerStatusRunner   snapshotFooterStatusRunner
 	modeMu               sync.RWMutex
 	mode                 string
 	presentationMu       sync.RWMutex

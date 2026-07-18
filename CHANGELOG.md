@@ -4,6 +4,14 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Configuration
+
+- Add an optional trusted local snapshot-status command whose sanitized,
+  bounded one-line output appears in image footers. Engram owns the layout
+  budget, runs the command only during an existing render with a short timeout
+  and secret-free environment, and never lets status-only changes trigger
+  automatic Telegram edits.
+
 ### Conversational guide
 
 - Prefer durable outcomes and current work over terminal narration, routine

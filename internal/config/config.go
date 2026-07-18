@@ -45,6 +45,7 @@ type Config struct {
 	AnchorMode                 string
 	SnapshotBrowser            string
 	SnapshotTheme              string
+	SnapshotStatusCommand      string
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
 }
@@ -95,6 +96,7 @@ func Load(path string) (Config, error) {
 		AnchorMode:                 firstNonEmpty(values["ENGRAM_ANCHOR_MODE"], AnchorModeGuide),
 		SnapshotBrowser:            ExpandPath(values["ENGRAM_SNAPSHOT_BROWSER"]),
 		SnapshotTheme:              firstNonEmpty(values["ENGRAM_SNAPSHOT_THEME"], "terminal"),
+		SnapshotStatusCommand:      strings.TrimSpace(values["ENGRAM_SNAPSHOT_STATUS_COMMAND"]),
 		AttachmentSoftMaxBytes:     softMax,
 		TelegramPollTimeoutSeconds: int(pollTimeout),
 	}

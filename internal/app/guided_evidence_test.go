@@ -360,13 +360,17 @@ func TestGuidedEvidenceReplacesUnavailableAnchorAndDeletesMediaPredecessor(t *te
 			return nil, fmt.Errorf("unexpected Telegram endpoint %s", request.URL.Path)
 		}
 	})}
+	renderer := &fakeSnapshotRenderer{}
 	a := &App{
-		Config: config.Config{Home: dir, TelegramChatID: 100, SnapshotTheme: "contrast-dark"}, Store: store, Telegram: client,
-		Snapshots: &fakeSnapshotRenderer{}, mode: "guide", snapshotReady: true,
+		Config: config.Config{Home: dir, TelegramChatID: 100, SnapshotTheme: "contrast-dark", SnapshotStatusCommand: "local-status"}, Store: store, Telegram: client,
+		Snapshots: renderer, mode: "guide", snapshotReady: true, footerStatusRunner: &recordingSnapshotFooterStatusRunner{output: "disk 47G free"},
 	}
 	capture := tmux.StyledCapture{Text: "tests passed successfully", ANSI: "\x1b[32mtests passed successfully", Columns: 71, VisibleRows: 37, BufferRows: 1, CurrentPath: "/tmp"}
 	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
 		t.Fatal("replacement guided anchor was not accepted")
+	}
+	if renderer.input.Status != "disk 47G free" {
+		t.Fatalf("guided evidence status = %q", renderer.input.Status)
 	}
 	got, _ := store.FindSession(session.ID)
 	frame, frameOK := a.snapshotTextFrame(got)
