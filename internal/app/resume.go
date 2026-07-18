@@ -71,6 +71,9 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 		if current.State == state.TerminalRunning {
 			return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("[%d] is already running", id)}
 		}
+		if current.State != state.TerminalLost {
+			return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("[%d] is %s; only lost sessions can be resumed", id, current.State)}
+		}
 		if program == "" && sessionID == "" {
 			program = current.ResumeProgram
 			sessionID = current.ResumeSessionID
