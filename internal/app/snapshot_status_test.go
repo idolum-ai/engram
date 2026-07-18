@@ -203,9 +203,16 @@ func TestSnapshotFooterStatusBufferBoundsMemory(t *testing.T) {
 func TestSanitizeSnapshotFooterStatusDropsInvalidUTF8AndControls(t *testing.T) {
 	t.Parallel()
 	input := string([]byte{'o', 'k', 0xff, 0x00, ' ', 0x9b}) + "31mnow " + string([]byte{0x9d}) + "private raw title" + string([]byte{0x9c}) + "safe " +
-		"\u009b32mnext \x1bPprivate payload\x1b\\after \x1b]private title\u009cend"
-	if got := sanitizeSnapshotFooterStatus(input); got != "ok now safe next after end" {
+		string([]byte{0x90}) + "private\aRAW-LEAK" + string([]byte{0x9c}) + "raw-dcs-safe " +
+		"\u009b32mnext \u0090private\aUTF8-LEAK\u009cutf8-dcs-safe \x1bPprivate\aESC-LEAK\x1b\\esc-dcs-safe \x1b]private title\u009cend"
+	got := sanitizeSnapshotFooterStatus(input)
+	if got != "ok now safe raw-dcs-safe next utf8-dcs-safe esc-dcs-safe end" {
 		t.Fatalf("sanitized status = %q", got)
+	}
+	for _, leaked := range []string{"RAW-LEAK", "UTF8-LEAK", "ESC-LEAK"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("sanitized status retained DCS payload %q", leaked)
+		}
 	}
 }
 

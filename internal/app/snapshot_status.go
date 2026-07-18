@@ -178,8 +178,11 @@ func stripSnapshotFooterControlSequences(input string) string {
 			case 0x9b:
 				index = skipSnapshotFooterCSI(input, index+1)
 				continue
-			case 0x90, 0x98, 0x9d, 0x9e, 0x9f:
-				index = skipSnapshotFooterControlString(input, index+1)
+			case 0x9d:
+				index = skipSnapshotFooterControlString(input, index+1, true)
+				continue
+			case 0x90, 0x98, 0x9e, 0x9f:
+				index = skipSnapshotFooterControlString(input, index+1, false)
 				continue
 			case 0x9c:
 				index++
@@ -194,8 +197,11 @@ func stripSnapshotFooterControlSequences(input string) string {
 			case '\u009b':
 				index = skipSnapshotFooterCSI(input, index+size)
 				continue
-			case '\u0090', '\u0098', '\u009d', '\u009e', '\u009f':
-				index = skipSnapshotFooterControlString(input, index+size)
+			case '\u009d':
+				index = skipSnapshotFooterControlString(input, index+size, true)
+				continue
+			case '\u0090', '\u0098', '\u009e', '\u009f':
+				index = skipSnapshotFooterControlString(input, index+size, false)
 				continue
 			}
 			output.WriteRune(r)
@@ -209,8 +215,10 @@ func stripSnapshotFooterControlSequences(input string) string {
 		switch input[index] {
 		case '[':
 			index = skipSnapshotFooterCSI(input, index+1)
-		case 'P', 'X', ']', '^', '_':
-			index = skipSnapshotFooterControlString(input, index+1)
+		case ']':
+			index = skipSnapshotFooterControlString(input, index+1, true)
+		case 'P', 'X', '^', '_':
+			index = skipSnapshotFooterControlString(input, index+1, false)
 		default:
 			index++
 		}
@@ -228,9 +236,9 @@ func skipSnapshotFooterCSI(input string, index int) int {
 	return index
 }
 
-func skipSnapshotFooterControlString(input string, index int) int {
+func skipSnapshotFooterControlString(input string, index int, bellTerminates bool) int {
 	for index < len(input) {
-		if input[index] == 0x07 {
+		if bellTerminates && input[index] == 0x07 {
 			return index + 1
 		}
 		if input[index] == 0x1b && index+1 < len(input) && input[index+1] == '\\' {
