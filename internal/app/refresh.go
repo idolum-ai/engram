@@ -78,7 +78,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, ts, capture)
-	refs := a.visibleReferences(presentationText)
+	refs := a.visibleReferencesForStyledCapture(presentationText, capture.Hyperlinks)
 	hash := guideCaptureHash(presentationText, ts.Title, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
@@ -668,6 +668,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 
 func (a *App) scheduler(ctx context.Context) {
 	for _, ts := range a.Store.Snapshot().TerminalSessions {
+		a.queueTerminalCapabilityReconcile(ts.ID)
 		if ts.AnchorMessageID != 0 {
 			a.reconcileAnchorControls(ctx, ts.ID)
 			if ts.State == state.TerminalRunning && ts.WatchEnabled {
@@ -677,6 +678,7 @@ func (a *App) scheduler(ctx context.Context) {
 			}
 		}
 	}
+	a.reconcileDueTerminalCapabilities(ctx, time.Now())
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	nextCapture := map[int]time.Time{}
@@ -687,6 +689,7 @@ func (a *App) scheduler(ctx context.Context) {
 		case <-ticker.C:
 			st := a.Store.Snapshot()
 			now := time.Now()
+			a.reconcileDueTerminalCapabilities(ctx, now)
 			for _, ts := range st.TerminalSessions {
 				if ts.AnchorMessageID != 0 {
 					a.reconcileAnchorPresentation(ctx, ts.ID)

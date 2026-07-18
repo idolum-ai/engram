@@ -229,16 +229,22 @@ the bot channel and must be revoked immediately.
   mode, every changed anchor frame is an exact, unredacted terminal image sent
   automatically to Telegram at most once every ten seconds.
 - **tmux and local processes:** Authorized messages can create windows and send
-  literal shell input or key presses. tmux owns terminal history and continues
-  running when Engram stops unless a window is explicitly closed. A process in
+  literal shell input or key presses. Engram-created windows use tmux's global
+  `default-size`, matching detached tmux operation even when the selected session
+  has a much larger attached client; explicitly attached panes retain their
+  existing geometry. tmux owns terminal history and continues running when
+  Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.
 - **Local snapshot browser:** In guide mode, tapping `🖼️ View` renders an on-demand
   image when Chromium passed startup readiness. In snapshot mode, the renderer
   produces the canonical live anchor whenever its capture changes. Engram
-  renders a frame capped at 64 ANSI-preserving rows into a
-  full-bleed `1290×2796` PNG and removes the private HTML, browser profile, and
-  PNG after delivery. No snapshot content is sent to a model provider. The two
+  renders a frame capped at 64 ANSI-preserving rows into a full-bleed PNG at 3x
+  density and removes the private HTML, browser profile, and PNG after delivery.
+  Narrow frames use a `1290×2796` portrait canvas. Wide terminal rows soft-wrap
+  at a readable 100-column viewport and the canvas grows vertically so no
+  captured columns are discarded; Telegram can zoom the resulting photo. No
+  snapshot content is sent to a model provider. The two
   contrast themes use a color-vision-safe ANSI palette, remove opacity-based
   dim text, and correct low-contrast terminal colors to at least a 4.5:1
   contrast ratio.
@@ -256,12 +262,13 @@ the bot channel and must be revoked immediately.
   its provenance. If styled rows contain a configured secret or cannot be
   aligned safely, Engram renders the bounded tail as redacted plain text. A
   truly empty terminal uses a quiet guide-only frame so the prose remains the
-  focus. Compact crops keep a readable 71-cell viewport around the exact quote
-  or meaningful paragraph or tail, account for wide and combining characters, preserve
-  inherited terminal styling, and enforce the accessible contrast floor. The message ID,
+  focus. Compact crops preserve every selected physical row and soft-wrap it at
+  71 terminal cells, account for tabs, wide and combining characters, preserve
+  inherited terminal styling, and enforce the accessible contrast floor. Highlights
+  cover every wrapped visual fragment of a selected row. The message ID,
   pin, controls, and reply route do not change.
   Every media anchor also offers `📄 Raw`, which returns the exact delivered
-  snapshot frame or guide crop as a bounded plain UTF-8 text attachment for
+  snapshot frame or the complete unwrapped selected guide rows as a bounded plain UTF-8 text attachment for
   screen readers or exact inspection. It does not recapture a newer terminal
   state on click.
 - **Conversational guide:** Guide anchors start from the same frame as Chromium
@@ -485,12 +492,59 @@ directional row.
 
 ### Nested environments
 
+Every watched pane advertises its terminal-native capabilities as tmux pane
+user options. From a program already running in that pane, or from an
+interactive shell inspecting it:
+
+```sh
+tmux show-options -pv @engram
+tmux show-options -pv @engram_watch_id
+tmux show-options -pv @engram_notify
+tmux show-options -pv @engram_artifact
+```
+
+The versioned `@engram` value is the commit marker and reports the Telegram
+surface and watch ID. Ignore the auxiliary options unless that marker is present
+and its watch ID agrees with `@engram_watch_id`. The other two
+options state the exact terminal-native notification command and the artifact
+sequence: print a visible `file://` URI, optionally as OSC 8, then signal. Because these are
+ordinary tmux metadata and terminal standards, an onlooking agent can discover
+and use them without an Engram API, socket, plugin, or `AGENTS.md`. Engram
+removes the options when an attached pane is untracked and restores them for
+active watches after service restart.
+
 A process running inside a container or another Engram can request the outer
 user's attention when every layer preserves a controlling PTY:
 
 ```sh
 engram signal "Tests finished; two failures need attention."
 ```
+
+The default form writes to the controlling terminal. Agent runners and other
+terminal hosts that capture a command's stdout before presenting it in the
+watched pane use the explicit relay form instead:
+
+```sh
+engram signal --stdout "Tests finished; two failures need attention."
+```
+
+A process can intentionally associate an existing local regular file with the
+same captured frame by printing a standard OSC 8 `file://` hyperlink, or a
+visible literal `file://` URI when its terminal host strips OSC controls, before
+it signals. For example:
+
+```sh
+printf '\033]8;;file:///tmp/test-report.txt\033\\test report\033]8;;\033\\\n'
+engram signal "Tests finished; open the report for details."
+```
+
+When Engram observes both within its bounded frame, the signal notification
+lists the validated path and the normal anchor exposes its user-controlled file
+button. Engram does not open, read, upload, or execute the file automatically.
+Only absolute local or `localhost` file URIs that resolve to existing regular
+non-symlink files are eligible; query strings, fragments, remote hosts, and
+credential-shaped paths are rejected. Percent-encode spaces and other reserved
+URI characters in a real producer.
 
 The command establishes a fresh terminal row, then writes one bounded
 `[engram:upstream:v1] <record-id> <bytes>:<payload>` record and a terminal bell. Engram also
@@ -505,10 +559,13 @@ most one signal per pane notifies every ten seconds. Replying to the newest
 signal notification routes to the outer pane; foreground terminal behavior
 carries that input inward when possible.
 
-The command requires a controlling PTY. Use `docker exec -t`, `podman exec -t`,
+The default command requires a controlling PTY. Use `docker exec -t`, `podman exec -t`,
 or `ssh -t` where applicable. Detached services, cron/CI jobs, `setsid`, and
-containers without a console cannot use `engram signal`; they may emit the
-documented record only if they already have a terminal path. The child also
+containers without a console cannot use the default form. `--stdout` is valid
+only when a terminal host visibly relays that stdout into the watched pane; it
+does not create a transport for detached jobs. A process may also emit the
+documented record directly when it already has that terminal path. The child
+also
 needs an Engram binary for its own operating system and architecture, or can
 emit the wire record directly.
 

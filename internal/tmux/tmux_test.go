@@ -73,7 +73,6 @@ type styledCaptureRunner struct {
 	ansi      string
 	joined    string
 	metadata  string
-	framing   string
 	afterMeta string
 }
 
@@ -90,6 +89,24 @@ type ensureRaceRunner struct {
 }
 
 type missingServerRunner struct{ calls [][]string }
+
+type windowResizeFailureRunner struct{ calls [][]string }
+
+func (r *windowResizeFailureRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	switch args[0] {
+	case "show-options":
+		return "80x24\n", nil
+	case "new-window":
+		return tmuxRecord("@9", "%9"), nil
+	case "resize-window":
+		return "", errors.New("resize failed")
+	case "kill-window":
+		return "", nil
+	default:
+		return "", fmt.Errorf("unexpected tmux call: %v", args)
+	}
+}
 
 func (r *missingServerRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
@@ -136,9 +153,6 @@ func (r *styledCaptureRunner) Run(_ context.Context, args ...string) (string, er
 		return styledCaptureMetadata("bash", "1", "0"), nil
 	}
 	if len(args) > 0 && args[0] == "capture-pane" {
-		if !containsString(args, "-b") && r.framing != "" {
-			return r.framing, nil
-		}
 		if r.afterMeta != "" {
 			return r.afterMeta, nil
 		}
@@ -217,6 +231,80 @@ func TestSendTextIfBindingMatchesUsesOneBracketedPaste(t *testing.T) {
 	}
 }
 
+func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
+	t.Parallel()
+	runner := &fakeRunner{}
+	manager := New(runner)
+	if err := manager.AdvertiseEngramIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID, 42); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v, want one guarded pane option transaction", runner.calls)
+	}
+	wantCommands := []string{
+		"set-option -p -q -u -t %7 @engram",
+		"set-option -p -q -t %7 @engram_watch_id '42'",
+		"set-option -p -q -t %7 @engram_notify 'run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)'",
+		"set-option -p -q -t %7 @engram_artifact 'print a visible file:// URI (OSC 8 optional), then run @engram_notify'",
+		"set-option -p -q -t %7 @engram 'v1 watch=42 remote=telegram'",
+	}
+	call := runner.calls[0]
+	if len(call) != 7 || call[0] != "if-shell" || call[3] != "%7" {
+		t.Fatalf("guarded option call = %#v", call)
+	}
+	for _, command := range wantCommands {
+		if !strings.Contains(call[5], command) {
+			t.Fatalf("guarded option transaction = %q, missing %q", call[5], command)
+		}
+	}
+	last := -1
+	for _, command := range wantCommands {
+		index := strings.Index(call[5], command)
+		if index <= last {
+			t.Fatalf("guarded option transaction order = %q, %q was not after its predecessor", call[5], command)
+		}
+		last = index
+	}
+
+	runner.calls = nil
+	if err := manager.ClearEngramAdvertisementIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID); err != nil {
+		t.Fatal(err)
+	}
+	wantCommands = []string{
+		"set-option -p -q -u -t %7 @engram",
+		"set-option -p -q -u -t %7 @engram_watch_id",
+		"set-option -p -q -u -t %7 @engram_notify",
+		"set-option -p -q -u -t %7 @engram_artifact",
+	}
+	if len(runner.calls) != 1 || len(runner.calls[0]) != 7 {
+		t.Fatalf("guarded option clear calls = %#v, want one transaction", runner.calls)
+	}
+	for _, command := range wantCommands {
+		if !strings.Contains(runner.calls[0][5], command) {
+			t.Fatalf("guarded option clear transaction = %q, missing %q", runner.calls[0][5], command)
+		}
+	}
+}
+
+func TestExtractOSC8HyperlinksAcceptsTerminalTerminatorsAndDeduplicates(t *testing.T) {
+	t.Parallel()
+	input := strings.Join([]string{
+		"\x1b]8;;file:///tmp/report%20one.txt\x1b\\report\x1b]8;;\x1b\\",
+		"\x1b]8;id=2;https://example.test/build\aweb\x1b]8;;\a",
+		"\x1b]8;;file:///tmp/М-report.txt\x1b\\unicode\x1b]8;;\x1b\\",
+		"\x1b]8;;file:///tmp/report%20one.txt\x1b\\duplicate\x1b]8;;\x1b\\",
+		"\x1b]8;;file:///tmp/bad\npath\x1b\\bad",
+		"\x1b]8;;unterminated",
+	}, " ")
+	want := []string{"file:///tmp/report%20one.txt", "https://example.test/build", "file:///tmp/М-report.txt"}
+	if got := extractOSC8Hyperlinks(input, 8); !reflect.DeepEqual(got, want) {
+		t.Fatalf("hyperlinks = %#v, want %#v", got, want)
+	}
+	if got := extractOSC8Hyperlinks(input, 1); !reflect.DeepEqual(got, want[:1]) {
+		t.Fatalf("bounded hyperlinks = %#v, want %#v", got, want[:1])
+	}
+}
+
 func TestListSessionsParsesTmuxOutput(t *testing.T) {
 	f := &fakeRunner{
 		out: tmuxRecord("main", "$1", "3", "1") + tmuxRecord("other", "$2", "1", "0"),
@@ -252,17 +340,41 @@ func TestSessionNamesResolveToImmutableSessionIDs(t *testing.T) {
 	})
 
 	t.Run("new window", func(t *testing.T) {
-		f := &fakeRunner{out: tmuxRecord("@9", "%9")}
-		windowID, paneID, err := New(f).NewWindow(context.Background(), "$4", "/tmp", "probe")
+		runner := &sequenceRunner{outputs: []string{"80x24\n", tmuxRecord("@9", "%9"), ""}}
+		windowID, paneID, err := New(runner).NewWindow(context.Background(), "$4", "/tmp", "probe")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if windowID != "@9" || paneID != "%9" {
 			t.Fatalf("window=%q pane=%q", windowID, paneID)
 		}
-		want := []string{"new-window", "-P", "-F", "#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "$4:"}
-		if len(f.calls) != 1 || !reflect.DeepEqual(f.calls[0], want) {
-			t.Fatalf("calls = %#v, want %#v", f.calls, want)
+		want := [][]string{
+			{"show-options", "-gv", "default-size"},
+			{"new-window", "-P", "-F", "#{n:window_id}:#{window_id}#{n:pane_id}:#{pane_id}", "-n", "probe", "-c", "/tmp", "-t", "$4:"},
+			{"resize-window", "-x", "80", "-y", "24", "-t", "@9"},
+		}
+		if !reflect.DeepEqual(runner.calls, want) {
+			t.Fatalf("calls = %#v, want %#v", runner.calls, want)
+		}
+	})
+
+	t.Run("invalid default size fails before creation", func(t *testing.T) {
+		runner := &sequenceRunner{outputs: []string{"80 by 24\n"}}
+		if _, _, err := New(runner).NewWindow(context.Background(), "$4", "/tmp", "probe"); err == nil || !strings.Contains(err.Error(), "invalid tmux default-size") {
+			t.Fatalf("NewWindow error = %v", err)
+		}
+		if len(runner.calls) != 1 || runner.calls[0][0] != "show-options" {
+			t.Fatalf("invalid size caused a tmux mutation: %#v", runner.calls)
+		}
+	})
+
+	t.Run("resize failure removes created window", func(t *testing.T) {
+		runner := &windowResizeFailureRunner{}
+		if _, _, err := New(runner).NewWindow(context.Background(), "$4", "/tmp", "probe"); err == nil || !strings.Contains(err.Error(), "size new tmux window") {
+			t.Fatalf("NewWindow error = %v", err)
+		}
+		if len(runner.calls) != 4 || !reflect.DeepEqual(runner.calls[3], []string{"kill-window", "-t", "@9"}) {
+			t.Fatalf("resize failure cleanup calls = %#v", runner.calls)
 		}
 	})
 
@@ -545,6 +657,24 @@ func TestCaptureLiteralKeepsCurrentTailForTallPane(t *testing.T) {
 	}
 	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S -24 -E 39 -t %7" {
 		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestCaptureLiteralTallPaneUsesCurrentTailWithoutContentProbe(t *testing.T) {
+	t.Parallel()
+	runner := &sequenceRunner{outputs: []string{
+		tmuxRecord("289", "162"),
+		"current prompt\nfailure footer\n",
+	}}
+	got, err := New(runner).CaptureLiteral(context.Background(), "%7", "@2", styledCaptureServerID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "current prompt\nfailure footer" {
+		t.Fatalf("CaptureLiteral = %q", got)
+	}
+	if len(runner.calls) != 2 || runner.calls[1][0] != "if-shell" || runner.calls[1][5] != "capture-pane -p -N -S 98 -E 161 -t %7" {
+		t.Fatalf("current-tail literal capture calls = %#v", runner.calls)
 	}
 }
 

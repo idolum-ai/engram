@@ -77,6 +77,9 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	if anchorReady {
+		if current, ok := a.Store.FindSession(ts.ID); ok {
+			a.advertiseTerminalCapabilities(ctx, current)
+		}
 		a.reconcileAnchorPresentation(ctx, ts.ID)
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
@@ -187,6 +190,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		anchorLock.Unlock()
 		lock.Unlock()
 		a.reply(ctx, msg, fmt.Sprintf("reattached %s as [%d]", window.PaneID, updated.ID))
+		a.advertiseTerminalCapabilities(ctx, updated)
 		a.reconcileAnchorPresentation(ctx, updated.ID)
 		a.queueRefresh(updated.ID, true, 0)
 		return actionResult{Outcome: actionOK, Message: fmt.Sprintf("reattached [%d]", updated.ID)}
@@ -225,6 +229,9 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not send session anchor"}
 	}
 	if anchorReady {
+		if current, ok := a.Store.FindSession(ts.ID); ok {
+			a.advertiseTerminalCapabilities(ctx, current)
+		}
 		a.reconcileAnchorPresentation(ctx, ts.ID)
 		a.queueRefresh(ts.ID, true, summaryQuietPeriod)
 	}
@@ -359,6 +366,9 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 				_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 				return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
 			}
+			if current, ok := a.Store.FindSession(id); ok {
+				a.advertiseTerminalCapabilities(ctx, current)
+			}
 			a.reconcileAnchorPresentation(ctx, id)
 			return actionResult{Outcome: actionOK, Message: "watching"}
 		}
@@ -367,6 +377,9 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 	if _, _, err := a.Store.UpdateSession(id, func(s *state.TerminalSession) { s.WatchEnabled = true }); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "state update failed"}
+	}
+	if current, ok := a.Store.FindSession(id); ok {
+		a.advertiseTerminalCapabilities(ctx, current)
 	}
 	a.reconcileAnchorPresentation(ctx, id)
 	a.queueRefresh(id, true, 0)
@@ -416,6 +429,7 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 		a.resetConversationEpochLocked(id)
 		anchorLock.Unlock()
 		lock.Unlock()
+		a.clearTerminalCapabilities(ctx, ts)
 		a.updateAnchorLocal(ctx, id, "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed.", true)
 		a.reconcileAnchorPresentation(ctx, id)
 		_ = a.audit("tmux.untrack", "ok", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "origin": ts.Origin})
@@ -469,6 +483,14 @@ func closeConfirmationText(ts state.TerminalSession) string {
 }
 
 func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
+	a.markSessionLostConditionally(ctx, ts, cause, false)
+}
+
+func (a *App) markWatchedSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
+	a.markSessionLostConditionally(ctx, ts, cause, true)
+}
+
+func (a *App) markSessionLostConditionally(ctx context.Context, ts state.TerminalSession, cause error, requireWatching bool) {
 	if ts.State == state.TerminalClosed {
 		return
 	}
@@ -478,9 +500,14 @@ func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cau
 	}
 	anchorLock := a.anchorMutex(ts.ID)
 	anchorLock.Lock()
-	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
+	applied := false
+	_, found, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
+		if !sameTerminalBinding(*s, ts) || s.State != ts.State || requireWatching && !s.WatchEnabled {
+			return
+		}
 		s.State = state.TerminalLost
 		s.WatchEnabled = false
+		applied = true
 	})
 	committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
 	if err != nil {

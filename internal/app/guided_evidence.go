@@ -20,7 +20,6 @@ const guidedEvidenceMaxRows = 18
 const guidedEvidenceMinExcerptBytes = 12
 const guidedCaptionBytes = 960
 const guidedTailRows = 10
-const guidedViewportColumns = 71
 
 const (
 	guidedEvidenceExcerpt = "model_excerpt"
@@ -422,7 +421,6 @@ func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledC
 		return guidedEvidenceCrop{}, false
 	}
 	selected := make(map[int]bool)
-	focusStart, focusEnd := capture.Columns, -1
 	for _, excerpt := range excerpts {
 		match, ok := matchEvidenceSpan(plainRows, excerpt)
 		if !ok {
@@ -431,8 +429,6 @@ func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledC
 		for row := match.rows[0]; row <= match.rows[1]; row++ {
 			selected[row] = true
 		}
-		focusStart = min(focusStart, match.columns[0])
-		focusEnd = max(focusEnd, match.columns[1])
 	}
 	if len(selected) == 0 {
 		return guidedEvidenceCrop{}, false
@@ -459,11 +455,7 @@ func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledC
 	for _, row := range indices {
 		highlights = append(highlights, row-start)
 	}
-	if focusEnd < focusStart || focusEnd-focusStart+1 > guidedViewportColumns {
-		return guidedEvidenceCrop{}, false
-	}
-	focus := [2]int{focusStart, focusEnd}
-	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, highlights, &focus, "quoted terminal text", guidedEvidenceExcerpt, theme), true
+	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, highlights, "quoted terminal text", guidedEvidenceExcerpt, theme), true
 }
 
 func buildGuidedRecentActivityCrop(session state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, theme string) (guidedEvidenceCrop, bool) {
@@ -516,7 +508,7 @@ func buildGuidedRecentActivityCrop(session state.TerminalSession, capture tmux.S
 	if len(highlights) == 0 {
 		return guidedEvidenceCrop{}, false
 	}
-	return buildGuidedRangeCrop(session, capture, newRows, ansiRows, start, end, highlights, nil, "changed terminal region", guidedEvidenceChanged, theme), true
+	return buildGuidedRangeCrop(session, capture, newRows, ansiRows, start, end, highlights, "changed terminal region", guidedEvidenceChanged, theme), true
 }
 
 func buildGuidedTailCrop(session state.TerminalSession, capture tmux.StyledCapture, theme string) (guidedEvidenceCrop, bool) {
@@ -536,7 +528,7 @@ func buildGuidedTailCrop(session state.TerminalSession, capture tmux.StyledCaptu
 	for start > 0 && end-start+1 < guidedTailRows && strings.TrimSpace(plainRows[start-1]) != "" {
 		start--
 	}
-	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, nil, nil, "current terminal tail", guidedEvidenceTail, theme), true
+	return buildGuidedRangeCrop(session, capture, plainRows, ansiRows, start, end, nil, "current terminal tail", guidedEvidenceTail, theme), true
 }
 
 func buildGuidedPlainTailCrop(session state.TerminalSession, capture tmux.StyledCapture, text, theme string) (guidedEvidenceCrop, bool) {
@@ -552,33 +544,25 @@ func buildGuidedPlainTailCrop(session state.TerminalSession, capture tmux.Styled
 	for start > 0 && end-start+1 < guidedTailRows && strings.TrimSpace(rows[start-1]) != "" {
 		start--
 	}
-	return buildGuidedRangeCrop(session, capture, rows, rows, start, end, nil, nil, "current terminal tail", guidedEvidencePlain, theme), true
+	return buildGuidedRangeCrop(session, capture, rows, rows, start, end, nil, "current terminal tail", guidedEvidencePlain, theme), true
 }
 
-func buildGuidedRangeCrop(session state.TerminalSession, capture tmux.StyledCapture, plainRows, ansiRows []string, start, end int, highlights []int, focus *[2]int, footer, source, theme string) guidedEvidenceCrop {
+func buildGuidedRangeCrop(session state.TerminalSession, capture tmux.StyledCapture, plainRows, ansiRows []string, start, end int, highlights []int, footer, source, theme string) guidedEvidenceCrop {
 	cropANSI := append([]string(nil), ansiRows[start:end+1]...)
 	if prefix := inheritedSGRPrefix(ansiRows[:start]); prefix != "" && len(cropANSI) > 0 {
 		cropANSI[0] = prefix + cropANSI[0]
 	}
 	cropPlain := append([]string(nil), plainRows[start:end+1]...)
-	offset := guidedContentOffset(cropPlain, highlights, capture.Columns)
-	if focus != nil {
-		offset = guidedSpanOffset(*focus, capture.Columns)
-	}
 	input := terminalshot.Input{
 		ANSI: strings.Join(cropANSI, "\n"), Title: firstNonEmpty(session.Title, capture.Title), Target: fmt.Sprintf("[%d]", session.ID),
 		CWD: capture.CurrentPath, Columns: capture.Columns, VisibleRows: capture.VisibleRows, BufferRows: end - start + 1,
-		Compact: true, HighlightRows: highlights, ColumnOffset: offset, Footer: footer,
+		Compact: true, HighlightRows: highlights, Footer: footer,
 	}
-	visiblePlain := make([]string, len(cropPlain))
-	for index, row := range cropPlain {
-		visiblePlain[index] = terminalCellSlice(row, offset, min(guidedViewportColumns, capture.Columns))
-	}
-	return guidedEvidenceCrop{input: input, plain: strings.Join(visiblePlain, "\n"), source: source, hash: guidedCropHash(input, theme, source)}
+	return guidedEvidenceCrop{input: input, plain: strings.Join(cropPlain, "\n"), source: source, hash: guidedCropHash(input, theme, source)}
 }
 
 func guidedCropHash(input terminalshot.Input, theme, source string) string {
-	return sha(strings.Join([]string{input.ANSI, fmt.Sprint(input.HighlightRows), fmt.Sprint(input.ColumnOffset), fmt.Sprint(input.Columns), fmt.Sprint(input.VisibleRows), fmt.Sprint(input.BufferRows), input.Title, input.CWD, input.Footer, theme, source}, "\x00"))
+	return sha(strings.Join([]string{input.ANSI, fmt.Sprint(input.HighlightRows), fmt.Sprint(input.Columns), fmt.Sprint(input.VisibleRows), fmt.Sprint(input.BufferRows), input.Title, input.CWD, input.Footer, theme, source}, "\x00"))
 }
 
 func trimPassiveCapture(capture tmux.StyledCapture) tmux.StyledCapture {
@@ -621,65 +605,6 @@ func inheritedSGRPrefix(rows []string) string {
 		}
 	}
 	return out.String()
-}
-
-func guidedSpanOffset(span [2]int, columns int) int {
-	if columns <= guidedViewportColumns {
-		return 0
-	}
-	width := span[1] - span[0] + 1
-	offset := max(0, span[0]-(guidedViewportColumns-width)/2)
-	return min(offset, columns-guidedViewportColumns)
-}
-
-func guidedContentOffset(rows []string, highlights []int, columns int) int {
-	if columns <= guidedViewportColumns {
-		return 0
-	}
-	if len(highlights) == 0 {
-		lastContent := 0
-		for _, row := range rows {
-			column := 0
-			for _, r := range row {
-				column += terminalRuneWidth(r, column)
-				if !unicode.IsSpace(r) {
-					lastContent = max(lastContent, column)
-				}
-			}
-		}
-		return min(max(0, lastContent-guidedViewportColumns), columns-guidedViewportColumns)
-	}
-	selected := make(map[int]bool, len(highlights))
-	for _, row := range highlights {
-		selected[row] = true
-	}
-	scores := make([]int, columns)
-	for rowIndex, row := range rows {
-		if len(selected) > 0 && !selected[rowIndex] {
-			continue
-		}
-		column := 0
-		for _, r := range row {
-			width := terminalRuneWidth(r, column)
-			if !unicode.IsSpace(r) {
-				for cell := column; cell < min(column+width, columns); cell++ {
-					scores[cell]++
-				}
-			}
-			column += width
-		}
-	}
-	bestOffset, bestScore := 0, -1
-	for offset := 0; offset <= columns-guidedViewportColumns; offset++ {
-		score := 0
-		for _, value := range scores[offset : offset+guidedViewportColumns] {
-			score += value
-		}
-		if score >= bestScore {
-			bestOffset, bestScore = offset, score
-		}
-	}
-	return bestOffset
 }
 
 type terminalPosition struct {
@@ -764,42 +689,6 @@ func runeSliceIndex(haystack, needle []rune, start int) int {
 		}
 	}
 	return -1
-}
-
-func terminalCellSlice(row string, start, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	end := start + width
-	column := 0
-	var out strings.Builder
-	included := false
-	for _, r := range row {
-		cellWidth := terminalRuneWidth(r, column)
-		if cellWidth == 0 {
-			if included {
-				out.WriteRune(r)
-			}
-			continue
-		}
-		if column >= end {
-			break
-		}
-		if r == '\t' {
-			for cell := max(column, start); cell < min(column+cellWidth, end); cell++ {
-				out.WriteByte(' ')
-				included = true
-			}
-		} else if column >= start && column+cellWidth <= end {
-			out.WriteRune(r)
-			included = true
-		} else if column < end && column+cellWidth > start {
-			out.WriteByte(' ')
-			included = true
-		}
-		column += cellWidth
-	}
-	return strings.TrimRight(out.String(), " ")
 }
 
 func terminalRuneWidth(r rune, column int) int {

@@ -47,9 +47,14 @@ second transport or model a deployment hierarchy.
   Deeper indentation, tabs, altered prefixes, invalid lengths, and malformed
   record IDs are not signals. This tolerance is presentation framing, not
   authentication; any pane writer can already forge a valid record.
-- The command makes no network request and reads no Engram service state. If no
-  controlling terminal is available, it exits nonzero without attempting a
-  fallback transport.
+- The command makes no network request and reads no Engram service state. The
+  default form exits nonzero when no controlling terminal is available, without
+  attempting a fallback transport.
+- `engram signal --stdout <message>` emits the identical record to stdout
+  without opening `/dev/tty`. This explicit form is for agent runners and other
+  terminal hosts whose captured command output is visibly relayed into the
+  watched pane. It is not a fallback transport and provides no delivery when
+  stdout is redirected, detached, or otherwise absent from that terminal path.
 - Every intervening runtime must preserve a controlling PTY. Detached services,
   cron/CI jobs, `setsid`, ordinary `docker exec`, and SSH without `-t` do not
   satisfy this requirement even when their stdout is otherwise redirected to a
@@ -60,7 +65,7 @@ second transport or model a deployment hierarchy.
 ## Observation And Delivery
 
 - `CaptureStyled` obtains physical ANSI rows and a joined logical-text view over
-  the same bottom-bounded coordinates in one tmux command batch. The parent
+  the same bounded coordinates in one tmux command batch. The parent
   scans that joined view for the newest recognized record. It opens no listener,
   socket, pipe, port, or shared state directory.
 - Where tmux exposes a window bell flag, Engram may use it to accelerate a
@@ -70,6 +75,12 @@ second transport or model a deployment hierarchy.
   notification containing its normalized semantic payload after normal output
   redaction. Anchor rendering continues independently; the guide or Chromium
   latency and failure must not suppress the attention attempt.
+- When the same bounded styled capture contains validated OSC 8 local-file
+  targets or visible literal `file://` URIs, the notification may enumerate
+  those paths after the signal payload.
+  This composes two visible terminal facts; it does not authenticate the emitter
+  or authorize automatic file access. Only explicit hyperlink targets are
+  eligible for this signal association, not bare paths heuristically found in text.
 - Engram normally replies the notification to the canonical anchor. If Telegram
   reports that reply target missing, Engram sends a standalone notification,
   records it as the current reply alias, and schedules canonical-anchor
@@ -140,7 +151,9 @@ second transport or model a deployment hierarchy.
 - Mapping inner tmux sessions to outer Telegram anchors.
 - Guaranteed delivery, acknowledgements, retries between Engram instances, or
   background signaling without a controlling terminal.
-- Forwarding attachments, files, commands, or arbitrary structured messages.
+- Automatically opening, reading, uploading, or forwarding referenced files,
+  commands, attachments, or arbitrary structured messages. A validated OSC 8
+  path is only a user-visible reference to the existing download flow.
 - Treating arbitrary terminal bells as trusted or user-visible messages.
 
 If future work requires guaranteed delivery, attachments, acknowledgements, or

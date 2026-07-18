@@ -104,6 +104,7 @@ type StyledCapture struct {
 	ANSI        string
 	Text        string
 	JoinedText  string
+	Hyperlinks  []string
 	ServerID    string
 	WindowID    string
 	PaneID      string
@@ -121,6 +122,13 @@ const paneRecordFormat = "#{n:session_id}:#{session_id}#{n:window_id}:#{window_i
 
 const serverIDOption = "@engram_server_id"
 const identityMismatchMarker = "ENGRAM_IDENTITY_MISMATCH"
+
+const (
+	EngramPaneOption     = "@engram"
+	EngramWatchIDOption  = "@engram_watch_id"
+	EngramNotifyOption   = "@engram_notify"
+	EngramArtifactOption = "@engram_artifact"
+)
 
 type IdentityError struct {
 	Reason string
@@ -191,6 +199,10 @@ func (m Manager) NewWindow(ctx context.Context, sessionID, workdir, title string
 	if !validSessionID(sessionID) {
 		return "", "", fmt.Errorf("invalid tmux session ID %q", sessionID)
 	}
+	columns, rows, err := m.defaultWindowSize(ctx)
+	if err != nil {
+		return "", "", err
+	}
 	format := recordFormat("window_id", "pane_id")
 	out, err := m.Runner.Run(ctx, "new-window", "-P", "-F", format, "-n", title, "-c", workdir, "-t", sessionID+":")
 	if err != nil {
@@ -204,7 +216,31 @@ func (m Manager) NewWindow(ctx context.Context, sessionID, workdir, title string
 	if !validImmutableID(parts[0], '@') || !validImmutableID(parts[1], '%') {
 		return "", "", fmt.Errorf("unexpected tmux new-window identity %q", out)
 	}
-	return parts[0], parts[1], nil
+	windowID, paneID = parts[0], parts[1]
+	if _, err := m.Runner.Run(ctx, "resize-window", "-x", strconv.Itoa(columns), "-y", strconv.Itoa(rows), "-t", windowID); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		_, _ = m.Runner.Run(cleanupCtx, "kill-window", "-t", windowID)
+		cancel()
+		return "", "", fmt.Errorf("size new tmux window to %dx%d: %w", columns, rows, err)
+	}
+	return windowID, paneID, nil
+}
+
+func (m Manager) defaultWindowSize(ctx context.Context) (columns, rows int, err error) {
+	out, err := m.Runner.Run(ctx, "show-options", "-gv", "default-size")
+	if err != nil {
+		return 0, 0, fmt.Errorf("read tmux default-size: %w", err)
+	}
+	width, height, found := strings.Cut(strings.TrimSpace(out), "x")
+	if !found || strings.Contains(height, "x") {
+		return 0, 0, fmt.Errorf("invalid tmux default-size %q", strings.TrimSpace(out))
+	}
+	columns, widthErr := strconv.Atoi(width)
+	rows, heightErr := strconv.Atoi(height)
+	if widthErr != nil || heightErr != nil || columns <= 0 || columns > 400 || rows <= 0 || rows > 400 {
+		return 0, 0, fmt.Errorf("invalid tmux default-size %q", strings.TrimSpace(out))
+	}
+	return columns, rows, nil
 }
 
 func (m Manager) ListSessions(ctx context.Context) ([]Session, error) {
@@ -481,6 +517,44 @@ func (m Manager) SendKeysIfBindingMatches(ctx context.Context, paneID, windowID,
 	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(parts, " "))
 }
 
+// AdvertiseEngramIfBindingMatches publishes a small, terminal-native capability
+// description on the watched pane. tmux user options are deliberately used as
+// durable, inspectable environment metadata rather than injecting text or shell
+// configuration into the pane.
+func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, windowID, serverID string, watchID int) error {
+	if watchID <= 0 {
+		return fmt.Errorf("invalid Engram watch ID %d", watchID)
+	}
+	marker := fmt.Sprintf("v1 watch=%d remote=telegram", watchID)
+	commands := []string{"set-option -p -q -u -t " + paneID + " " + EngramPaneOption}
+	for _, option := range []struct {
+		name  string
+		value string
+	}{
+		{EngramWatchIDOption, strconv.Itoa(watchID)},
+		{EngramNotifyOption, "run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)"},
+		{EngramArtifactOption, "print a visible file:// URI (OSC 8 optional), then run @engram_notify"},
+	} {
+		commands = append(commands, "set-option -p -q -t "+paneID+" "+option.name+" "+ShellQuote(option.value))
+	}
+	// @engram is the commit marker: consumers ignore auxiliary fields while it
+	// is absent. Publish it only after every auxiliary value is in place.
+	commands = append(commands, "set-option -p -q -t "+paneID+" "+EngramPaneOption+" "+ShellQuote(marker))
+	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(commands, " ; "))
+}
+
+// ClearEngramAdvertisementIfBindingMatches removes capability metadata without
+// affecting the pane's program, environment, title, or other user options.
+func (m Manager) ClearEngramAdvertisementIfBindingMatches(ctx context.Context, paneID, windowID, serverID string) error {
+	// Clear the commit marker first so stale auxiliary values are never treated
+	// as a live capability advertisement if a later clear is interrupted.
+	commands := make([]string, 0, 4)
+	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption} {
+		commands = append(commands, "set-option -p -q -u -t "+paneID+" "+option)
+	}
+	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(commands, " ; "))
+}
+
 func (m Manager) runIfBindingMatches(ctx context.Context, paneID, windowID, serverID, command string) error {
 	condition := bindingCondition(windowID, serverID)
 	falseCommand := "display-message -p " + identityMismatchMarker
@@ -629,6 +703,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		ANSI:        ansi,
 		Text:        physicalSemanticCapture(ansi),
 		JoinedText:  semanticCapture(joined),
+		Hyperlinks:  extractOSC8Hyperlinks(ansi, 16),
 		ServerID:    after.ServerID,
 		WindowID:    after.WindowID,
 		PaneID:      after.PaneID,
@@ -641,6 +716,64 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		Title:       after.Title,
 		CurrentPath: after.CurrentPath,
 	}, nil
+}
+
+func extractOSC8Hyperlinks(input string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	const prefix = "\x1b]8;"
+	const maxURIBytes = 2048
+	seen := make(map[string]bool)
+	links := make([]string, 0, min(limit, 4))
+	for offset := 0; offset < len(input) && len(links) < limit; {
+		start := strings.Index(input[offset:], prefix)
+		if start < 0 {
+			break
+		}
+		start += offset + len(prefix)
+		parameterEnd := strings.IndexByte(input[start:], ';')
+		if parameterEnd < 0 {
+			break
+		}
+		uriStart := start + parameterEnd + 1
+		uriEnd, next, ok := terminalStringEnd(input, uriStart)
+		if !ok {
+			offset = uriStart
+			continue
+		}
+		uri := input[uriStart:uriEnd]
+		if uri != "" && len(uri) <= maxURIBytes && utf8.ValidString(uri) && !strings.ContainsAny(uri, "\x00\r\n") && !seen[uri] {
+			seen[uri] = true
+			links = append(links, uri)
+		}
+		offset = next
+	}
+	return links
+}
+
+func terminalStringEnd(input string, start int) (end, next int, ok bool) {
+	for i := start; i < len(input); {
+		switch {
+		case input[i] == '\a':
+			return i, i + 1, true
+		case input[i] == 0x1b && i+1 < len(input) && input[i+1] == '\\':
+			return i, i + 2, true
+		}
+		r, size := utf8.DecodeRuneInString(input[i:])
+		if r == '\u009c' {
+			return i, i + size, true
+		}
+		if r == utf8.RuneError && size == 1 {
+			if input[i] == 0x9c {
+				return i, i + 1, true
+			}
+			i++
+			continue
+		}
+		i += size
+	}
+	return 0, start, false
 }
 
 type captureMetadata struct {

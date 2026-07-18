@@ -46,6 +46,9 @@ ways to inspect exact state.
 tmux is a deliberate dependency because its mature, narrow interface has
 effectively crystallized. Low expected API drift lets Engram stay small and
 precise instead of continually adapting to a moving workspace substrate.
+Engram-created windows use tmux's configured default size, so their applications
+render against real tmux geometry consistently across attached and detached
+hosts. Engram does not resize windows that the user explicitly attaches.
 
 ### Phone-first anchors
 
@@ -160,11 +163,23 @@ Engram should work with tmux sessions that already exist. Target selection is
 predictable: the configured session first, otherwise an existing session,
 otherwise a managed fallback.
 
+### The terminal advertises its affordances
+
+An agent or person already looking at tmux should be able to discover that a
+pane is remotely observed without first knowing an Engram command or reading a
+repository-specific instruction file. A watched pane therefore publishes a
+small versioned set of tmux user options describing its ordinary terminal
+affordances: a signal command and OSC 8 file references. Discovery stays in tmux, and
+use stays in terminal output; Engram does not inject shell variables, mutate
+the foreground program, or invent a private agent protocol.
+
 ### Recursion collapses to the terminal
 
 An Engram may run inside a container or terminal observed by another Engram.
 That does not require a hierarchy or an Engram-to-Engram network. A nested
-process can emit one visible, bounded attention record with a terminal bell;
+process can expose an intentional local artifact with a standard OSC 8
+`file://` hyperlink, then emit one visible, bounded attention record with a
+terminal bell;
 the outer Engram observes the record through its normal tmux capture and keeps
 the outer pane as the truthful reply boundary. Composition should emerge from
 the terminal path that already exists, without distributing credentials or

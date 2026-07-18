@@ -2,11 +2,14 @@ package terminalshot
 
 import (
 	"context"
+	"fmt"
+	"html"
 	"image"
 	"image/png"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -39,7 +42,7 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 	}
 }
 
-func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
+func TestRenderHTMLWrapsWidePanesWithoutClipping(t *testing.T) {
 	t.Parallel()
 	page := RenderHTML(Input{
 		ANSI:        "wide terminal content\n",
@@ -51,10 +54,12 @@ func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
 		BufferRows:  64,
 	}, "contrast-dark")
 	for _, want := range []string{
-		"width:96ch",
+		"width:100ch",
 		"font:7.00px/9.80px",
+		"white-space:pre-wrap",
+		"overflow-wrap:anywhere",
 		"64-row bounded frame",
-		"columns 1–96 of 289 · 162 visible rows",
+		"full 289 columns · wrapped at 100 · 162 visible rows",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide-pane HTML missing %q: %s", want, page)
@@ -62,7 +67,7 @@ func TestRenderHTMLKeepsWidePanesReadable(t *testing.T) {
 	}
 }
 
-func TestRenderedColumnsClipsOnlyBeyondReadableBoundary(t *testing.T) {
+func TestRenderedColumnsReportsSoftWrapBoundary(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
 		columns int
@@ -70,12 +75,37 @@ func TestRenderedColumnsClipsOnlyBeyondReadableBoundary(t *testing.T) {
 	}{
 		{columns: 80, want: 80},
 		{columns: 96, want: 96},
-		{columns: 97, want: 96},
-		{columns: 289, want: 96},
+		{columns: 97, want: 97},
+		{columns: 100, want: 100},
+		{columns: 101, want: 100},
+		{columns: 289, want: 100},
 	} {
 		if got := RenderedColumns(test.columns); got != test.want {
 			t.Errorf("RenderedColumns(%d) = %d, want %d", test.columns, got, test.want)
 		}
+	}
+}
+
+func TestWideSnapshotDimensionsPreserveAllColumnsWithinTelegramPhotoBounds(t *testing.T) {
+	t.Parallel()
+	for _, columns := range []int{101, 289, 400} {
+		ansi := strings.Repeat(strings.Repeat("x", columns)+"\n", 64)
+		input := Input{ANSI: ansi, Columns: columns, VisibleRows: 162, BufferRows: 64}
+		width, height := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio
+		if width+height > 10000 || width > height*20 || height > width*20 {
+			t.Fatalf("%d-column snapshot dimensions %dx%d exceed Telegram photo bounds", columns, width, height)
+		}
+	}
+	input := Input{ANSI: strings.Repeat(strings.Repeat("x", 289)+"\n", 64), Columns: 289, VisibleRows: 162, BufferRows: 64}
+	if got, want := renderWidth(input), 446; got != want {
+		t.Fatalf("wide render width = %d, want %d", got, want)
+	}
+	if got, want := renderHeight(input), 1958; got != want {
+		t.Fatalf("wide render height = %d, want %d", got, want)
+	}
+	sparse := Input{ANSI: "short line\n", Columns: 289, VisibleRows: 162, BufferRows: 64}
+	if got := renderHeight(sparse); got != LogicalHeight {
+		t.Fatalf("sparse wide render height = %d, want minimum %d", got, LogicalHeight)
 	}
 }
 
@@ -124,7 +154,7 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 		Columns: 71, VisibleRows: 37, BufferRows: 3, Compact: true, HighlightRows: []int{1},
 	}
 	page := RenderHTML(input, "contrast-dark")
-	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px`) || !strings.Contains(page, "quoted terminal text") {
+	if strings.Count(page, `class="evidence-mark"`) != 1 || !strings.Contains(page, `top:23.2px;height:13.2px`) || !strings.Contains(page, ".evidence-mark{position:absolute;left:8px") || !strings.Contains(page, "quoted terminal text") {
 		t.Fatalf("compact evidence HTML = %s", page)
 	}
 	if got := renderHeight(input); got != 180 {
@@ -132,18 +162,51 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 	}
 }
 
-func TestCompactEvidenceKeepsWidePanesReadableAndEscapesFooter(t *testing.T) {
+func TestCompactEvidenceWrapsWidePanesAndEscapesFooter(t *testing.T) {
 	page := RenderHTML(Input{
-		ANSI: "important", Title: "build", Target: "[3]", CWD: "/tmp",
-		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, ColumnOffset: 100, Footer: `<unsafe & footer>`,
+		ANSI: "left " + strings.Repeat("x", 150) + " right", Title: "build", Target: "[3]", CWD: "/tmp",
+		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, Footer: `<unsafe & footer>`,
 	}, "terminal")
-	for _, want := range []string{"font:9.40px/13.2px", "transform:translateX(-", "&lt;unsafe &amp; footer&gt;"} {
+	for _, want := range []string{"width:71ch", "font:9.40px/13.2px", "white-space:pre-wrap", "overflow-wrap:anywhere", "word-break:break-all", "left ", " right", "&lt;unsafe &amp; footer&gt;"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide compact HTML missing %q: %s", want, page)
 		}
 	}
+	if strings.Contains(page, "translateX") {
+		t.Fatal("compact evidence retained horizontal panning")
+	}
 	if strings.Contains(page, `<unsafe & footer>`) {
 		t.Fatal("footer became executable HTML")
+	}
+}
+
+func TestCompactEvidenceWrappedRowsExpandImageAndHighlights(t *testing.T) {
+	rows := make([]string, 18)
+	for index := range rows {
+		rows[index] = strings.Repeat(string(rune('a'+index%26)), 400)
+	}
+	input := Input{
+		ANSI: strings.Join(rows, "\n"), Title: "wide evidence", Target: "[8]", CWD: "/tmp",
+		Columns: 400, VisibleRows: 120, BufferRows: len(rows), Compact: true, HighlightRows: []int{0, 1}, Footer: "wrapped evidence",
+	}
+	page := RenderHTML(input, "contrast-dark")
+	for _, want := range []string{
+		`top:10.0px;height:79.2px`,
+		`top:89.2px;height:79.2px`,
+		"width:71ch",
+		"white-space:pre-wrap",
+		"word-break:break-all",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("wrapped compact evidence missing %q: %s", want, page)
+		}
+	}
+	width, height := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio
+	if height <= LogicalHeight*PixelRatio {
+		t.Fatalf("wrapped compact height = %d, want greater than fixed portrait height %d", height, LogicalHeight*PixelRatio)
+	}
+	if width+height > 10000 || width > height*20 || height > width*20 {
+		t.Fatalf("wrapped compact dimensions %dx%d exceed Telegram photo bounds", width, height)
 	}
 }
 
@@ -164,6 +227,93 @@ func TestCompactEvidenceHTMLCanRenderQuietGuidedFrame(t *testing.T) {
 	page := RenderHTML(input, "contrast-dark")
 	if !strings.Contains(page, "guided view") || strings.Contains(page, "No verified") {
 		t.Fatalf("quiet guided HTML = %s", page)
+	}
+}
+
+func TestOSCTerminatorsPreserveFollowingRenderedTextAndRowCounts(t *testing.T) {
+	t.Parallel()
+	for name, terminator := range map[string]string{
+		"bel":        "\a",
+		"escape st":  "\x1b\\",
+		"raw c1 st":  string([]byte{0x9c}),
+		"utf8 c1 st": "\u009c",
+	} {
+		t.Run(name, func(t *testing.T) {
+			ansi := "before \x1b]8;;file:///tmp/report.txt" + terminator + "AFTER-SENTINEL"
+			page := RenderHTML(Input{ANSI: ansi, Columns: 71, VisibleRows: 1, BufferRows: 1}, "contrast-dark")
+			if !strings.Contains(page, "before ") || !strings.Contains(page, "AFTER-SENTINEL") || strings.Contains(page, "file:///tmp/report.txt") {
+				t.Fatalf("rendered OSC sequence incorrectly: %s", page)
+			}
+			if got := snapshotRowVisualCounts(ansi, 1, 71); !reflect.DeepEqual(got, []int{1}) {
+				t.Fatalf("visual row counts = %#v, want [1]", got)
+			}
+		})
+	}
+	unicodeTarget := "file:///tmp/М-report.txt"
+	ansi := "\x1b]8;;" + unicodeTarget + "\x1b\\UNICODE-LABEL"
+	page := RenderHTML(Input{ANSI: ansi, Columns: 71, VisibleRows: 1, BufferRows: 1}, "contrast-dark")
+	if !strings.Contains(page, "UNICODE-LABEL") || strings.Contains(page, unicodeTarget) || strings.Contains(page, "-report.txt") {
+		t.Fatalf("multibyte OSC target leaked or hid its label: %s", page)
+	}
+	if got := snapshotRowVisualCounts(ansi, 1, 71); !reflect.DeepEqual(got, []int{1}) {
+		t.Fatalf("multibyte OSC visual row counts = %#v, want [1]", got)
+	}
+}
+
+func TestSupportedScreenshotSurfacesContainTheirVisibleAreas(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		input      Input
+		width      int
+		height     int
+		bodyLayout string
+		font       string
+		footer     string
+	}{
+		{
+			name: "narrow full snapshot",
+			input: Input{ANSI: "NARROW BODY", Title: "narrow", Target: "[1]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
+				Columns: 80, VisibleRows: 37, BufferRows: 1, Footer: "NARROW FOOTER"},
+			width: LogicalWidth, height: LogicalHeight, bodyLayout: "white-space:pre", font: "font:8.43px/11.80px", footer: "1-row bounded frame · 80x37 visible",
+		},
+		{
+			name: "wide full snapshot",
+			input: Input{ANSI: "WIDE BODY", Title: "wide", Target: "[2]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
+				Columns: 289, VisibleRows: 162, BufferRows: 1, Footer: "WIDE FOOTER"},
+			width: 446, height: LogicalHeight, bodyLayout: "white-space:pre-wrap", font: "font:7.00px/9.80px", footer: "1-row bounded frame · full 289 columns · wrapped at 100 · 162 visible rows",
+		},
+		{
+			name: "compact evidence",
+			input: Input{ANSI: "COMPACT BODY", Title: "evidence", Target: "[3]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
+				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "COMPACT FOOTER"},
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "COMPACT FOOTER",
+		},
+		{
+			name: "quiet guided frame",
+			input: Input{ANSI: " ", Title: "quiet", Target: "[4]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
+				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "QUIET FOOTER"},
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "QUIET FOOTER",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			page := RenderHTML(test.input, "contrast-dark")
+			for _, want := range []string{
+				fmt.Sprintf(".window{width:%dpx;height:%dpx", test.width, test.height),
+				".bar{width:100%;height:44px", "overflow:hidden;border-bottom:1px", ".screen{position:relative;width:100%;height:calc(100% - 66px)",
+				".foot{width:100%;height:22px", ".foot span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+				test.bodyLayout, test.font, html.EscapeString(test.input.Title), html.EscapeString(test.input.Target), html.EscapeString(test.input.CWD),
+				html.EscapeString(test.footer), html.EscapeString(strings.TrimSpace(test.input.ANSI)),
+			} {
+				if !strings.Contains(page, want) {
+					t.Fatalf("rendered surface missing %q: %s", want, page)
+				}
+			}
+			if strings.Contains(page, "100vw") || strings.Contains(page, "100vh") {
+				t.Fatalf("rendered surface depends on browser-clamped viewport units: %s", page)
+			}
+		})
 	}
 }
 
@@ -322,6 +472,196 @@ func TestLiveChromiumRender(t *testing.T) {
 	if config.Width != LogicalWidth*PixelRatio || config.Height != LogicalHeight*PixelRatio {
 		t.Fatalf("snapshot size = %dx%d", config.Width, config.Height)
 	}
+}
+
+func TestLiveChromiumSupportedSurfaceAreas(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	tests := []struct {
+		name      string
+		input     Input
+		bodyText  bool
+		highlight bool
+	}{
+		{
+			name: "narrow full snapshot", bodyText: true,
+			input: Input{ANSI: "NARROW BODY", Title: "narrow surface", Target: "[1]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
+				Columns: 80, VisibleRows: 37, BufferRows: 1},
+		},
+		{
+			name: "wide full snapshot", bodyText: true,
+			input: Input{ANSI: "WIDE BODY", Title: "wide surface", Target: "[2]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
+				Columns: 289, VisibleRows: 162, BufferRows: 1},
+		},
+		{
+			name: "compact evidence", bodyText: true, highlight: true,
+			input: Input{ANSI: strings.Repeat(" ", 100) + "COMPACT BODY", Title: "compact surface", Target: "[3]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
+				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "compact evidence footer"},
+		},
+		{
+			name: "quiet guided frame",
+			input: Input{ANSI: " ", Title: "quiet surface", Target: "[4]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
+				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "quiet guided footer"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
+			path, err := renderer.Render(context.Background(), test.input, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.Remove(path)
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			img, err := png.Decode(f)
+			_ = f.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			width, height := renderWidth(test.input), renderHeight(test.input)
+			if img.Bounds().Dx() != width*PixelRatio || img.Bounds().Dy() != height*PixelRatio {
+				t.Fatalf("surface dimensions = %dx%d, want %dx%d", img.Bounds().Dx(), img.Bounds().Dy(), width*PixelRatio, height*PixelRatio)
+			}
+			assertVisibleInk(t, img, image.Rect(8, 8, width/2, 38), [3]uint8{0x10, 0x10, 0x10}, "header title")
+			assertVisibleInk(t, img, image.Rect(width/2, 8, width-8, 38), [3]uint8{0x10, 0x10, 0x10}, "header location")
+			assertVisibleInk(t, img, image.Rect(8, height-18, width/2, height-3), [3]uint8{0x08, 0x08, 0x08}, "footer provenance")
+			assertVisibleInk(t, img, image.Rect(width/2, height-18, width-8, height-3), [3]uint8{0x08, 0x08, 0x08}, "footer dimensions")
+			if test.bodyText {
+				assertVisibleInk(t, img, image.Rect(8, 50, width-8, min(height-24, 110)), [3]uint8{0x00, 0x00, 0x00}, "terminal body")
+			}
+			if test.highlight && !regionContainsYellow(img, image.Rect(0, 44, 24, min(height-22, 110))) {
+				t.Fatal("compact evidence highlight is not visible")
+			}
+		})
+	}
+}
+
+func assertVisibleInk(t *testing.T, img image.Image, logical image.Rectangle, background [3]uint8, area string) {
+	t.Helper()
+	ink := 0
+	for y := logical.Min.Y * PixelRatio; y < logical.Max.Y*PixelRatio; y++ {
+		for x := logical.Min.X * PixelRatio; x < logical.Max.X*PixelRatio; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if channelDifference(uint8(r>>8), background[0]) > 24 || channelDifference(uint8(g>>8), background[1]) > 24 || channelDifference(uint8(b>>8), background[2]) > 24 {
+				ink++
+			}
+		}
+	}
+	if ink < 24 {
+		t.Fatalf("%s has %d visible foreground pixels", area, ink)
+	}
+}
+
+func regionContainsYellow(img image.Image, logical image.Rectangle) bool {
+	for y := logical.Min.Y * PixelRatio; y < logical.Max.Y*PixelRatio; y++ {
+		for x := logical.Min.X * PixelRatio; x < logical.Max.X*PixelRatio; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if r > 0xd000 && g > 0xb000 && b < 0x9000 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func channelDifference(a, b uint8) int {
+	if a > b {
+		return int(a - b)
+	}
+	return int(b - a)
+}
+
+func TestLiveChromiumCompactWrappedRender(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
+	path, err := renderer.Render(context.Background(), Input{
+		ANSI: strings.Repeat(" ", 100) + "VISIBLE WRAPPED CONTENT", Title: "compact wrap", Target: "[5]", CWD: "/tmp",
+		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true,
+	}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visiblePixels := 0
+	for y := 52 * PixelRatio; y < 96*PixelRatio; y++ {
+		for x := 8 * PixelRatio; x < 180*PixelRatio; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if r > 0x4000 || g > 0x4000 || b > 0x4000 {
+				visiblePixels++
+			}
+		}
+	}
+	if visiblePixels == 0 {
+		t.Fatal("wrapped compact evidence rendered an empty terminal body")
+	}
+}
+
+func TestLiveChromiumWideRender(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	const columns = 289
+	rows := make([]string, 64)
+	for index := range rows {
+		rows[index] = strings.Repeat("x", columns)
+	}
+	// Only the final soft-wrapped fragment is cyan. A check that accidentally
+	// reaches the preceding line can no longer hide bottom-edge clipping.
+	rows[len(rows)-1] = strings.Repeat("x", 200) + "\x1b[36m" + strings.Repeat("Z", 89) + "\x1b[0m"
+	ansi := strings.Join(rows, "\n")
+	input := Input{
+		ANSI: ansi, Title: "wide live render", Target: "[7]", CWD: "/tmp",
+		Columns: columns, VisibleRows: 162, BufferRows: 64,
+	}
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
+	path, err := renderer.Render(context.Background(), input, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantWidth, wantHeight := renderWidth(input)*PixelRatio, renderHeight(input)*PixelRatio; img.Bounds().Dx() != wantWidth || img.Bounds().Dy() != wantHeight {
+		t.Fatalf("wide snapshot size = %dx%d, want %dx%d", img.Bounds().Dx(), img.Bounds().Dy(), wantWidth, wantHeight)
+	}
+	logicalHeight := renderHeight(input)
+	if !regionContainsCyan(img, image.Rect(8, logicalHeight-32, renderWidth(input)-8, logicalHeight-22)) {
+		t.Fatal("final wrapped terminal row is not visible immediately above the footer")
+	}
+}
+
+func regionContainsCyan(img image.Image, logical image.Rectangle) bool {
+	for y := logical.Min.Y * PixelRatio; y < logical.Max.Y*PixelRatio; y++ {
+		for x := logical.Min.X * PixelRatio; x < logical.Max.X*PixelRatio; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if b > 0xc000 && g > 0x9000 && r < 0xa000 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type fakeBrowserRunner struct {

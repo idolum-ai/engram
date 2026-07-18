@@ -91,6 +91,111 @@ func visibleReferencesForCapture(capture string, secrets ...string) visibleRefer
 	return refs
 }
 
+func visibleReferencesForStyledCapture(capture string, hyperlinks []string, secrets ...string) visibleReferences {
+	targets := append([]string(nil), hyperlinks...)
+	targets = append(targets, extractVisibleFileURIs(capture, maxVisiblePaths)...)
+	explicit := visibleReferencesForHyperlinks(targets, maxVisiblePaths, maxVisibleURLs, secrets...)
+	detected := visibleReferencesForCapture(capture, secrets...)
+	return visibleReferences{
+		Paths: mergeReferences(explicit.Paths, detected.Paths, maxVisiblePaths),
+		URLs:  mergeReferences(explicit.URLs, detected.URLs, maxVisibleURLs),
+	}
+}
+
+func extractVisibleFileURIs(capture string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	lower := strings.ToLower(capture)
+	seen := make(map[string]bool)
+	var targets []string
+	for offset := 0; offset < len(capture) && len(targets) < limit; {
+		at := strings.Index(lower[offset:], "file://")
+		if at < 0 {
+			break
+		}
+		start := offset + at
+		if start > 0 && isURLPrefixChar(capture[start-1]) {
+			offset = start + 1
+			continue
+		}
+		end := start
+		for end < len(capture) && !isURLTerminator(capture[end]) {
+			end++
+		}
+		candidate := trimUnmatchedURLClosers(capture[start:end])
+		parsed, err := url.Parse(candidate)
+		if err == nil && strings.EqualFold(parsed.Scheme, "file") && len(candidate) <= maxVisibleReferenceBytes && !seen[candidate] {
+			seen[candidate] = true
+			targets = append(targets, candidate)
+		}
+		offset = max(end, start+1)
+	}
+	return targets
+}
+
+func visibleReferencesForHyperlinks(hyperlinks []string, pathLimit, urlLimit int, secrets ...string) visibleReferences {
+	refs := visibleReferences{}
+	seenPaths := make(map[string]bool)
+	seenURLs := make(map[string]bool)
+	for _, target := range hyperlinks {
+		parsed, err := url.Parse(target)
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.EqualFold(parsed.Scheme, "file") && len(refs.Paths) < pathLimit:
+			path, ok := visibleFileURIPath(parsed)
+			if !ok || len(path) > maxVisibleReferenceBytes || redact.Secrets(path, secrets...) != path || seenPaths[path] {
+				continue
+			}
+			seenPaths[path] = true
+			refs.Paths = append(refs.Paths, path)
+		case (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) && len(refs.URLs) < urlLimit:
+			safe, ok := sanitizeVisibleURL(target, secrets...)
+			if !ok || len(safe) > maxVisibleReferenceBytes || seenURLs[safe] {
+				continue
+			}
+			seenURLs[safe] = true
+			refs.URLs = append(refs.URLs, safe)
+		}
+	}
+	return refs
+}
+
+func visibleFileURIPath(parsed *url.URL) (string, bool) {
+	if parsed == nil || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return "", false
+	}
+	if parsed.Host != "" && !strings.EqualFold(parsed.Host, "localhost") {
+		return "", false
+	}
+	if parsed.Path == "" || !filepath.IsAbs(parsed.Path) || strings.ContainsAny(parsed.Path, "\x00\r\n") {
+		return "", false
+	}
+	return visibleRegularFile(parsed.Path)
+}
+
+func mergeReferences(preferred, fallback []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	merged := make([]string, 0, min(limit, len(preferred)+len(fallback)))
+	for _, group := range [][]string{preferred, fallback} {
+		for _, item := range group {
+			if len(merged) >= limit {
+				return merged
+			}
+			if !seen[item] {
+				seen[item] = true
+				merged = append(merged, item)
+			}
+		}
+	}
+	return merged
+}
+
 func renderReferences(refs visibleReferences, fencePaths bool, maxBytes int) string {
 	rendered, _ := renderReferencesWithFiles(refs, fencePaths, maxBytes)
 	return rendered

@@ -65,7 +65,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 
 - Both anchor modes use the same ANSI-preserving `CaptureStyled` result. It
   targets and caps at 64 rows ending at the pane bottom, using available recent
-  scrollback when needed. Engram samples identity, dimensions, foreground
+  scrollback when the pane is shorter. Taller panes always use the current
+  bottom 64 physical rows; historical density never outranks the current tail.
+  The bounds are derived from pane geometry without a separate content probe,
+  and the physical ANSI and joined captures use that exact interval in one tmux command batch. Engram
+  samples identity, dimensions, foreground
   command, alternate-screen state, and copy-mode state immediately before and
   after the capture and rejects a frame when any sampled boundary changes.
   These are endpoint observations, not process-generation identity: tmux cannot
@@ -76,6 +80,22 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   semantics over the same coordinates. The physical and joined captures execute
   in one tmux command batch so signal parsing, guide text, references, and
   snapshot pixels do not come from separately timed observations.
+- `CaptureStyled` extracts at most 16 distinct OSC 8 hyperlink targets from the
+  physical ANSI capture in appearance order. It accepts BEL, ESC-ST, and C1-ST
+  string terminators, rejects invalid UTF-8 and embedded newlines or NULs, and
+  caps each target at 2 KiB. Hyperlink controls remain absent from semantic text
+  and rendered terminal pixels.
+- A running watched pane publishes `@engram`, `@engram_watch_id`,
+  `@engram_notify`, and `@engram_artifact` tmux pane user options behind the
+  same immutable server/window binding guard used for input. `@engram` is the
+  commit marker: Engram clears it before changing auxiliary values, publishes
+  it last, and clears it first on removal. Consumers ignore auxiliary options
+  unless the marker is present and its watch ID agrees with `@engram_watch_id`.
+  The versioned summary advertises the remote surface; the other options give a human-readable
+  notification command and the standard OSC 8 artifact sequence. Startup
+  repairs metadata for persisted running watches; normal unwatch or
+  attached-pane untracking removes it without changing the pane program,
+  environment, title, or other options.
 - Deterministic reference extraction uses the joined logical-text view after
   terminal-authored upstream records have been removed. Unmatched closing
   wrappers are removed; other terminal punctuation is retained. URL candidates
@@ -87,6 +107,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - Both anchor modes enumerate regular local files in a code block. Links stay
   outside code blocks so Telegram can make them directly navigable.
   Presentation tests must preserve that distinction.
+- Validated OSC 8 targets and visible literal `file://` URIs are considered
+  before references heuristically found in visible text. `file://` targets must be absolute, local or `localhost`,
+  query- and fragment-free, existing regular files that are not symlinks.
+  Explicit HTTP(S) targets use the same structural validation and credential
+  redaction as visible URLs. All existing count and byte limits still apply.
 - Guide mode sends every frame's complete joined logical text, with upstream
   records, the trailing model-status footer, and a small allowlist of paired
   Codex placeholder prompts removed, to the selected guide provider in one
@@ -116,8 +141,12 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   that belong to the reader alone.
 - The guide names a tool, project, account, or person only when the terminal text
   visibly establishes that identity. Model identifiers are never user identities.
-- Snapshot mode renders the same frame through Chromium into a full-bleed
-  430x932 logical-pixel image at 3x density.
+- Snapshot mode renders the same frame through Chromium into a full-bleed image
+  at 3x density. Narrow frames use a 430x932 logical-pixel canvas. Rows wider
+  than the readable viewport soft-wrap at up to 100 columns; the logical width
+  expands only enough to retain the 7px font and the height grows to contain all
+  wrapped rows. No captured column may be silently clipped. The worst supported
+  400-column, 64-row frame remains within Telegram's photo dimension limits.
 - Guide mode may render its canonical anchor as a compact evidence photo card
   from the same captured frame, with bounded prose below the media.
   Every model excerpt must first match one unique range in the cleaned semantic
@@ -129,16 +158,18 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   the last meaningful non-empty terminal block capped at 10 rows. The crop
   footer identifies `quoted terminal text`, `changed terminal region`, or
   `current terminal tail`; tail rows are not highlighted. A crop carries the
-  active SGR state from preceding rows. Compact crops preserve a readable
-  71-cell viewport around the exact matched span; deterministic tails frame
-  their rightmost meaningful content. Tabs, combining marks, and wide Unicode
-  characters use terminal-cell widths. Crops enforce the accessible
+  active SGR state from preceding rows. Compact crops preserve every complete
+  selected physical row and soft-wrap it at 71 terminal cells; no horizontal
+  viewport or column offset may discard text. The highlight border begins at
+  the content edge and covers every wrapped visual fragment belonging to a
+  highlighted physical row. Tabs, combining marks, and wide Unicode characters
+  use terminal-cell widths. Crops enforce the accessible
   contrast floor regardless of the full-snapshot theme. If the styled tail
   cannot be delivered safely, Engram renders the same bounded range as redacted
   plain text. Empty terminals use a quiet `guided view` frame. Engram never
   preserves stale pixels or falls back to a larger automatic screenshot.
-- The exact plain text corresponding to the displayed vertical and horizontal
-  guide viewport is retained
+- The exact plain text corresponding to the selected guide rows, before visual
+  soft-wrapping, is retained
   only in process memory and is available through `📄 Raw` while that canonical
   message remains current.
 - Terminal content is untrusted data for the model, not intended instructions or

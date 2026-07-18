@@ -349,6 +349,9 @@ func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) 
 		}
 	}
 	manager := New(runner)
+	if _, err := runner.Run(ctx, "set-option", "-g", "default-size", "91x33"); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"0", "=foo", "$0"} {
 		sessionID, err := manager.EnsureSession(ctx, name, t.TempDir())
 		if err != nil {
@@ -364,6 +367,69 @@ func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) 
 		}
 		if pane.SessionName != name {
 			t.Fatalf("new pane session = %q, want exact session %q", pane.SessionName, name)
+		}
+		geometry, err := runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_width}x#{pane_height}")
+		if err != nil {
+			t.Fatal(err)
+		}
+		windowSize, err := runner.Run(ctx, "show-options", "-wv", "-t", paneID, "window-size")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.TrimSpace(geometry) != "91x33" || strings.TrimSpace(windowSize) != "manual" {
+			t.Fatalf("new pane geometry = %q window-size = %q, want 91x33 and manual", strings.TrimSpace(geometry), strings.TrimSpace(windowSize))
+		}
+	}
+}
+
+func TestTmuxIntegrationCapabilityOptionsConvergeAsOneGuardedTransaction(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxTmpDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-capability-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+	if _, err := runner.Run(ctx, "new-session", "-d", "-s", "capability", "cat"); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	serverID, err := manager.EnsureServerID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, err := manager.ResolveTarget(ctx, "capability:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AdvertiseEngramIfBindingMatches(ctx, window.PaneID, window.ID, serverID, 42); err != nil {
+		t.Fatal(err)
+	}
+	format := "#{@engram}\x1f#{@engram_watch_id}\x1f#{@engram_notify}\x1f#{@engram_artifact}"
+	advertised, err := runner.Run(ctx, "display-message", "-p", "-t", window.PaneID, format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"v1 watch=42 remote=telegram", "42", "engram signal --stdout MESSAGE", "visible file:// URI"} {
+		if !strings.Contains(advertised, want) {
+			t.Fatalf("advertised options = %q, missing %q", advertised, want)
+		}
+	}
+	if err := manager.ClearEngramAdvertisementIfBindingMatches(ctx, window.PaneID, window.ID, serverID); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := runner.Run(ctx, "display-message", "-p", "-t", window.PaneID, format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []string{"watch=42", "engram signal", "file://"} {
+		if strings.Contains(cleared, stale) {
+			t.Fatalf("cleared options = %q, retained %q", cleared, stale)
 		}
 	}
 }
