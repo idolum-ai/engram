@@ -88,7 +88,8 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 		return false
 	}
 	renderCtx, cancel := context.WithTimeout(ctx, snapshotRenderTimeout)
-	pngPath, renderErr := a.Snapshots.Render(renderCtx, crop.input, a.Config.ArtifactDir())
+	input := a.withSnapshotFooterStatus(renderCtx, crop.input, capture.CurrentPath)
+	pngPath, renderErr := a.Snapshots.Render(renderCtx, input, a.Config.ArtifactDir())
 	cancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {

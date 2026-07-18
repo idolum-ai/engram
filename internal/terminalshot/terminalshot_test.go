@@ -42,6 +42,62 @@ func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
 	}
 }
 
+func TestRenderHTMLBoundsAndEscapesSnapshotStatus(t *testing.T) {
+	t.Parallel()
+	input := Input{
+		ANSI: "ready", Title: "build", Target: "[1]", CWD: "/tmp",
+		Columns: 80, VisibleRows: 37, BufferRows: 1,
+		Status: strings.Repeat("x", 30) + " <unsafe>",
+	}
+	page := RenderHTML(input, "contrast-dark")
+	want := strings.Repeat("x", footerStatusMaxCells-1) + "…"
+	for _, text := range []string{`class="provenance"`, `class="status"`, `class="dimensions"`, want} {
+		if !strings.Contains(page, text) {
+			t.Fatalf("status footer missing %q: %s", text, page)
+		}
+	}
+	if strings.Contains(page, "<unsafe>") || strings.Contains(page, "&lt;unsafe&gt;") {
+		t.Fatalf("truncated status retained unsafe tail: %s", page)
+	}
+	if got := snapshotFooterStatusCellBudget(input); got != footerStatusMaxCells {
+		t.Fatalf("status budget = %d, want %d", got, footerStatusMaxCells)
+	}
+}
+
+func TestSnapshotStatusBudgetBelongsToSupportedLayout(t *testing.T) {
+	t.Parallel()
+	for _, input := range []Input{
+		{Columns: 80, VisibleRows: 37, BufferRows: 1},
+		{Columns: 289, VisibleRows: 162, BufferRows: 1},
+		{Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true},
+	} {
+		if got := snapshotFooterStatusCellBudget(input); got != footerStatusMaxCells {
+			t.Errorf("status budget for %#v = %d, want %d", input, got, footerStatusMaxCells)
+		}
+	}
+}
+
+func TestTruncateTerminalCellsCountsWideAndCombiningRunes(t *testing.T) {
+	t.Parallel()
+	if got := truncateTerminalCells("disk 47G free", 24); got != "disk 47G free" {
+		t.Fatalf("short status = %q", got)
+	}
+	if got := truncateTerminalCells("磁盘空间还剩很多", 8); got != "磁盘空…" {
+		t.Fatalf("wide status = %q", got)
+	}
+	if got := truncateTerminalCells("e\u0301e\u0301e\u0301", 2); got != "e\u0301…" {
+		t.Fatalf("combining status = %q", got)
+	}
+}
+
+func TestRenderHTMLOmitsEmptySnapshotStatusSlot(t *testing.T) {
+	t.Parallel()
+	page := RenderHTML(Input{ANSI: "ready", Columns: 80, VisibleRows: 37, BufferRows: 1}, "contrast-dark")
+	if strings.Contains(page, `<span class="status">`) {
+		t.Fatalf("empty status reserved a footer element: %s", page)
+	}
+}
+
 func TestRenderHTMLWrapsWidePanesWithoutClipping(t *testing.T) {
 	t.Parallel()
 	page := RenderHTML(Input{
@@ -487,22 +543,22 @@ func TestLiveChromiumSupportedSurfaceAreas(t *testing.T) {
 		{
 			name: "narrow full snapshot", bodyText: true,
 			input: Input{ANSI: "NARROW BODY", Title: "narrow surface", Target: "[1]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
-				Columns: 80, VisibleRows: 37, BufferRows: 1},
+				Columns: 80, VisibleRows: 37, BufferRows: 1, Status: "disk 47G free"},
 		},
 		{
 			name: "wide full snapshot", bodyText: true,
 			input: Input{ANSI: "WIDE BODY", Title: "wide surface", Target: "[2]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
-				Columns: 289, VisibleRows: 162, BufferRows: 1},
+				Columns: 289, VisibleRows: 162, BufferRows: 1, Status: "disk 47G free"},
 		},
 		{
 			name: "compact evidence", bodyText: true, highlight: true,
 			input: Input{ANSI: strings.Repeat(" ", 100) + "COMPACT BODY", Title: "compact surface", Target: "[3]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
-				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "compact evidence footer"},
+				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "compact evidence footer", Status: "disk 47G free"},
 		},
 		{
 			name: "quiet guided frame",
 			input: Input{ANSI: " ", Title: "quiet surface", Target: "[4]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
-				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "quiet guided footer"},
+				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "quiet guided footer", Status: "disk 47G free"},
 		},
 	}
 	for _, test := range tests {
@@ -529,6 +585,7 @@ func TestLiveChromiumSupportedSurfaceAreas(t *testing.T) {
 			assertVisibleInk(t, img, image.Rect(8, 8, width/2, 38), [3]uint8{0x10, 0x10, 0x10}, "header title")
 			assertVisibleInk(t, img, image.Rect(width/2, 8, width-8, 38), [3]uint8{0x10, 0x10, 0x10}, "header location")
 			assertVisibleInk(t, img, image.Rect(8, height-18, width/2, height-3), [3]uint8{0x08, 0x08, 0x08}, "footer provenance")
+			assertVisibleInk(t, img, image.Rect(width/2+30, height-18, width-80, height-3), [3]uint8{0x08, 0x08, 0x08}, "footer status")
 			assertVisibleInk(t, img, image.Rect(width/2, height-18, width-8, height-3), [3]uint8{0x08, 0x08, 0x08}, "footer dimensions")
 			if test.bodyText {
 				assertVisibleInk(t, img, image.Rect(8, 50, width-8, min(height-24, 110)), [3]uint8{0x00, 0x00, 0x00}, "terminal body")

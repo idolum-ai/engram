@@ -21,18 +21,26 @@ import (
 )
 
 const (
-	LogicalWidth       = 430
-	LogicalHeight      = 932
-	PixelRatio         = 3
-	TargetRows         = 64
-	maxInputBytes      = 1 << 20
-	probeTimeout       = 15 * time.Second
-	terminalWidth      = 406.0
-	terminalCharRatio  = 0.602
-	maxTerminalFont    = 9.4
-	minTerminalFont    = 7.0
-	terminalLineHeight = 1.4
-	wrappedColumns     = 100
+	LogicalWidth                  = 430
+	LogicalHeight                 = 932
+	PixelRatio                    = 3
+	TargetRows                    = 64
+	maxInputBytes                 = 1 << 20
+	probeTimeout                  = 15 * time.Second
+	terminalWidth                 = 406.0
+	terminalCharRatio             = 0.602
+	maxTerminalFont               = 9.4
+	minTerminalFont               = 7.0
+	terminalLineHeight            = 1.4
+	wrappedColumns                = 100
+	footerStatusMaxCells          = 24
+	footerStatusMinCells          = 8
+	footerStatusCellPixels        = 9 * terminalCharRatio
+	footerHorizontalPadding       = 24
+	footerMinimumProvenancePixels = 150
+	footerDimensionsPixels        = 78
+	footerGapPixels               = 12
+	maxStatusBytes                = 4 << 10
 )
 
 type Input struct {
@@ -46,6 +54,7 @@ type Input struct {
 	Compact       bool
 	HighlightRows []int
 	Footer        string
+	Status        string
 }
 
 type CommandRunner interface {
@@ -270,14 +279,59 @@ func RenderHTML(input Input, themeName string) string {
 	// Engram's canvas so its right and bottom chrome stay inside that bitmap.
 	logicalWidth := renderWidth(input)
 	logicalHeight := renderHeight(input)
+	statusBudget := snapshotFooterStatusCellBudget(input)
+	status := truncateTerminalCells(strings.TrimSpace(input.Status), statusBudget)
+	statusHTML := ""
+	if status != "" {
+		statusHTML = fmt.Sprintf(`<span class="status">%s</span>`, html.EscapeString(status))
+	}
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
-:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:%dpx;height:%dpx;overflow:hidden;background:%s}.bar{width:100%%;height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;overflow:hidden;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100%%;height:calc(100%% - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:%s;overflow-wrap:%s;word-break:%s}.foot{width:100%%;height:22px;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 12px;overflow:hidden;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}.foot span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.foot span:first-child{flex:1 1 auto}.foot span:last-child{flex:0 1 auto;text-align:right}
-</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span>%s</span><span>%dx%d visible</span></footer></main></body></html>`,
+:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:%dpx;height:%dpx;overflow:hidden;background:%s}.bar{width:100%%;height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;overflow:hidden;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100%%;height:calc(100%% - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:%s;overflow-wrap:%s;word-break:%s}.foot{width:100%%;height:22px;display:flex;align-items:center;justify-content:space-between;gap:%dpx;padding:0 12px;overflow:hidden;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}.foot span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.provenance{flex:1 1 auto}.status{flex:0 1 %dch;max-width:%dch;text-align:right;font-family:"SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace}.dimensions{flex:0 0 auto;text-align:right}
+</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span class="provenance">%s</span>%s<span class="dimensions">%dx%d visible</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, logicalWidth, logicalHeight, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
-		theme.highlightBorder, theme.highlight, renderColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, wordBreak, theme.subtleBorder, theme.muted, theme.foot,
+		theme.highlightBorder, theme.highlight, renderColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, wordBreak, footerGapPixels, theme.subtleBorder, theme.muted, theme.foot, statusBudget, statusBudget,
 		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
-		html.EscapeString(footer), input.Columns, input.VisibleRows)
+		html.EscapeString(footer), statusHTML, input.Columns, input.VisibleRows)
+}
+
+func snapshotFooterStatusCellBudget(input Input) int {
+	availablePixels := renderWidth(input) - footerHorizontalPadding - footerMinimumProvenancePixels - footerDimensionsPixels - 2*footerGapPixels
+	if availablePixels <= 0 {
+		return 0
+	}
+	cells := int(math.Floor(float64(availablePixels) / footerStatusCellPixels))
+	if cells < footerStatusMinCells {
+		return 0
+	}
+	return min(cells, footerStatusMaxCells)
+}
+
+func truncateTerminalCells(value string, maxCells int) string {
+	if maxCells <= 0 || value == "" {
+		return ""
+	}
+	cells := 0
+	for _, r := range value {
+		cells += terminalRuneWidth(r, cells)
+	}
+	if cells <= maxCells {
+		return value
+	}
+	if maxCells == 1 {
+		return "…"
+	}
+	var out strings.Builder
+	cells = 0
+	for _, r := range value {
+		width := terminalRuneWidth(r, cells)
+		if cells+width > maxCells-1 {
+			break
+		}
+		out.WriteRune(r)
+		cells += width
+	}
+	return strings.TrimSpace(out.String()) + "…"
 }
 
 // RenderedColumns reports the readable wrap width. Full snapshots soft-wrap
@@ -481,6 +535,9 @@ func validateInput(input Input) error {
 	}
 	if len(input.ANSI) > maxInputBytes {
 		return fmt.Errorf("snapshot capture exceeds %d bytes", maxInputBytes)
+	}
+	if len(input.Status) > maxStatusBytes {
+		return fmt.Errorf("snapshot status exceeds %d bytes", maxStatusBytes)
 	}
 	for _, row := range input.HighlightRows {
 		if row < 0 || row >= input.BufferRows {

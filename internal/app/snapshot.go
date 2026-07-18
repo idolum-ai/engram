@@ -80,7 +80,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		return
 	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
-	pngPath, renderErr := a.Snapshots.Render(renderCtx, terminalshot.Input{
+	input := a.withSnapshotFooterStatus(renderCtx, terminalshot.Input{
 		ANSI:        capture.ANSI,
 		Title:       firstNonEmpty(current.Title, capture.Title),
 		Target:      fmt.Sprintf("[%d]", current.ID),
@@ -88,7 +88,8 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		Columns:     capture.Columns,
 		VisibleRows: capture.VisibleRows,
 		BufferRows:  capture.BufferRows,
-	}, a.Config.ArtifactDir())
+	}, capture.CurrentPath)
+	pngPath, renderErr := a.Snapshots.Render(renderCtx, input, a.Config.ArtifactDir())
 	renderCancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {

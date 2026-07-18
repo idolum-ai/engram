@@ -91,15 +91,16 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	})}
 	renderer := &fakeSnapshotRenderer{}
 	app := &App{
-		Config:        config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100, Home: dir},
-		Store:         store,
-		Telegram:      client,
-		Tmux:          tmux.New(snapshotTmuxRunner{}),
-		Snapshots:     renderer,
-		captureSlots:  make(chan struct{}, 1),
-		renderSlots:   make(chan struct{}, 1),
-		transferSlots: make(chan struct{}, 1),
-		transferQueue: make(chan struct{}, 1),
+		Config:             config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100, Home: dir, SnapshotStatusCommand: "local-status"},
+		Store:              store,
+		Telegram:           client,
+		Tmux:               tmux.New(snapshotTmuxRunner{}),
+		Snapshots:          renderer,
+		captureSlots:       make(chan struct{}, 1),
+		renderSlots:        make(chan struct{}, 1),
+		transferSlots:      make(chan struct{}, 1),
+		transferQueue:      make(chan struct{}, 1),
+		footerStatusRunner: &recordingSnapshotFooterStatusRunner{output: "disk 47G free"},
 	}
 	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
 		ID:      "snapshot-callback",
@@ -114,7 +115,7 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	if callbackText != "printing window" {
 		t.Fatalf("callback text = %q", callbackText)
 	}
-	if renderer.input.Columns != 71 || renderer.input.VisibleRows != 37 || renderer.input.BufferRows != 64 || !strings.Contains(renderer.input.ANSI, "green") {
+	if renderer.input.Columns != 71 || renderer.input.VisibleRows != 37 || renderer.input.BufferRows != 64 || !strings.Contains(renderer.input.ANSI, "green") || renderer.input.Status != "disk 47G free" {
 		t.Fatalf("snapshot input = %#v", renderer.input)
 	}
 	if replyTo != "77" || !strings.Contains(caption, "[1] build") || !strings.Contains(caption, "64 buffer rows") {

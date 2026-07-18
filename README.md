@@ -201,6 +201,7 @@ privacy boundaries below before running commands that may print secrets.
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
 | `ENGRAM_SNAPSHOT_BROWSER` | auto-detected headless shell, with Linux browser fallbacks | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. macOS auto-detection accepts dedicated headless executables only; an explicit value may opt into a desktop browser. |
 | `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Live and on-demand snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
+| `ENGRAM_SNAPSHOT_STATUS_COMMAND` | none | no | Trusted local shell command whose sanitized one-line stdout occupies a bounded snapshot-footer slot. It runs only while an image is already being rendered, from the pane directory when available. |
 | `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `16777216` | no | Incoming attachment soft limit. An exact SHA-256 bypass may authorize up to the 20 MiB cloud Bot API hard limit and available disk. |
 
 `make run` uses `~/.engram/.env` by default. For a protected local config at a
@@ -213,6 +214,34 @@ make run ENGRAM_ENV="$PWD/.env"
 
 The repository ignores only the root `.env`; prefer `~/.engram/.env`, and never
 place alternate secret files in the checkout.
+
+### Local snapshot status
+
+Snapshot footers can carry one small fact computed by the host without teaching
+Engram about operating-system-specific status providers. For example, this
+portable command displays the free space on the filesystem containing the
+pane's current directory:
+
+```env
+ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", $4 / 1048576}'
+```
+
+![Synthetic snapshot footer showing disk space](docs/assets/snapshot-status-example.png)
+
+The example image uses synthetic terminal text, paths, and capacity rather than
+host data.
+
+The value is a trusted local `/bin/sh` command from the protected Engram env
+file; terminal text, Telegram messages, and model output can never set it.
+Engram runs it only after a snapshot render has already been selected, with a
+500 ms deadline, bounded stdout, discarded stderr, and a minimal environment
+that excludes configured API keys and the Telegram token. Nonzero exits,
+timeouts, empty output, and output requiring secret redaction are omitted
+without failing the image. Whitespace and terminal control sequences are
+removed, and the renderer—not configuration—deterministically limits the
+footer slot so provenance and dimensions retain priority. Status changes alone
+do not trigger automatic Telegram edits; the next terminal-driven or manual
+render picks up the current value.
 
 ## Data Flow / Privacy
 

@@ -158,6 +158,7 @@ ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ENGRAM_TMUX_SESSION=main
 ENGRAM_SNAPSHOT_BROWSER=/opt/chromium
 ENGRAM_SNAPSHOT_THEME=contrast-dark
+ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", $4 / 1048576}'
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +183,9 @@ ENGRAM_SNAPSHOT_THEME=contrast-dark
 	}
 	if cfg.SnapshotTheme != "contrast-dark" {
 		t.Fatalf("SnapshotTheme = %q, want contrast-dark", cfg.SnapshotTheme)
+	}
+	if cfg.SnapshotStatusCommand != `df -kP . | awk 'END {printf "disk %.1fG free\n", $4 / 1048576}'` {
+		t.Fatalf("SnapshotStatusCommand = %q", cfg.SnapshotStatusCommand)
 	}
 	if cfg.OpenAITranscriptionModel != DefaultOpenAITranscriptionModel {
 		t.Fatalf("OpenAITranscriptionModel = %q, want %q", cfg.OpenAITranscriptionModel, DefaultOpenAITranscriptionModel)

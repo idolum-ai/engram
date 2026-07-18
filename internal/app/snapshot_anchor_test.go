@@ -105,14 +105,15 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 	renderer := &countingSnapshotRenderer{}
 	tmuxRunner := &snapshotReferenceTmuxRunner{physical: physicalCapture, joined: joinedCapture}
 	app := &App{
-		Config:        config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "contrast-dark", TelegramChatID: 100, Home: dir},
-		Store:         store,
-		Telegram:      client,
-		Tmux:          tmux.New(tmuxRunner),
-		Snapshots:     renderer,
-		captureSlots:  make(chan struct{}, 1),
-		renderSlots:   make(chan struct{}, 1),
-		manualRefresh: map[int]bool{},
+		Config:             config.Config{AnchorMode: config.AnchorModeSnapshot, SnapshotTheme: "contrast-dark", SnapshotStatusCommand: "local-status", TelegramChatID: 100, Home: dir},
+		Store:              store,
+		Telegram:           client,
+		Tmux:               tmux.New(tmuxRunner),
+		Snapshots:          renderer,
+		captureSlots:       make(chan struct{}, 1),
+		renderSlots:        make(chan struct{}, 1),
+		manualRefresh:      map[int]bool{},
+		footerStatusRunner: &recordingSnapshotFooterStatusRunner{output: "disk 47G free"},
 	}
 
 	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
@@ -122,6 +123,9 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 	}
 	if requests != 1 || signalRequests != 1 || renderer.renders != 1 {
 		t.Fatalf("first refresh requests=%d signals=%d renders=%d", requests, signalRequests, renderer.renders)
+	}
+	if renderer.input.Status != "disk 47G free" {
+		t.Fatalf("snapshot anchor status = %q", renderer.input.Status)
 	}
 
 	ageSnapshotAttempt(t, store, session.ID)
@@ -672,6 +676,7 @@ func mustJSON(value any) []byte {
 type countingSnapshotRenderer struct {
 	renders  int
 	onRender func()
+	input    terminalshot.Input
 }
 
 type failingSnapshotRenderer struct{ renders int }
@@ -702,8 +707,9 @@ func (r snapshotReferenceTmuxRunner) Run(ctx context.Context, args ...string) (s
 
 func (r *countingSnapshotRenderer) Available() (string, error) { return "/usr/bin/chromium", nil }
 
-func (r *countingSnapshotRenderer) Render(_ context.Context, _ terminalshot.Input, dir string) (string, error) {
+func (r *countingSnapshotRenderer) Render(_ context.Context, input terminalshot.Input, dir string) (string, error) {
 	r.renders++
+	r.input = input
 	if onRender := r.onRender; onRender != nil {
 		r.onRender = nil
 		onRender()

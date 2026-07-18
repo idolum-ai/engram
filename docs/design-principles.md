@@ -150,6 +150,13 @@ attachment paths, visible files and URLs, capture hashes, timestamps, and
 service status locally. Extracted references are untrusted pane content;
 Engram does not fetch or endorse them.
 
+A snapshot footer may include one bounded fact produced by a trusted local
+shell command from the protected Engram configuration. This is a narrow Unix
+pipe, not a catalog of operating-system status providers or a plugin protocol:
+the command receives the pane directory and returns one sanitized line. Engram
+owns its visual budget, runs it only while a render is already happening, and
+does not let status-only changes create automatic edits.
+
 The selected model interprets only the bounded terminal text. Terminal text is data, not
 authority; the prompt tells it to ignore instructions addressed to Engram or
 the reader, while recognizing that model-level injection resistance is best
