@@ -31,21 +31,19 @@ func (shellSnapshotFooterStatusRunner) Run(ctx context.Context, command, dir str
 	cmd.Dir = dir
 	cmd.Env = snapshotFooterStatusEnvironment()
 	cmd.Stderr = nil
-	output := &snapshotFooterStatusBuffer{}
+	output := &snapshotFooterStatusBuffer{onOverflow: func() { killSnapshotFooterStatusProcessGroup(cmd) }}
 	cmd.Stdout = output
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return os.ErrProcessDone
-		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		return err
-	}
+	cmd.Cancel = func() error { return killSnapshotFooterStatusProcessGroup(cmd) }
 	cmd.WaitDelay = 100 * time.Millisecond
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	defer killSnapshotFooterStatusProcessGroup(cmd)
+	if err := cmd.Wait(); err != nil {
+		if output.overflow {
+			return "", errSnapshotFooterStatusTooLarge
+		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
@@ -57,27 +55,48 @@ func (shellSnapshotFooterStatusRunner) Run(ctx context.Context, command, dir str
 	return output.String(), nil
 }
 
+func killSnapshotFooterStatusProcessGroup(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return os.ErrProcessDone
+	}
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
+}
+
 type snapshotFooterStatusBuffer struct {
-	value    strings.Builder
-	overflow bool
+	value      strings.Builder
+	overflow   bool
+	onOverflow func()
 }
 
 func (b *snapshotFooterStatusBuffer) Write(p []byte) (int, error) {
-	written := len(p)
 	remaining := snapshotFooterStatusMaxOutputBytes - b.value.Len()
 	if remaining <= 0 {
-		b.overflow = b.overflow || len(p) > 0
-		return written, nil
+		b.markOverflow()
+		return 0, errSnapshotFooterStatusTooLarge
 	}
 	if len(p) > remaining {
-		b.overflow = true
-		p = p[:remaining]
+		_, _ = b.value.Write(p[:remaining])
+		b.markOverflow()
+		return remaining, errSnapshotFooterStatusTooLarge
 	}
-	_, _ = b.value.Write(p)
-	return written, nil
+	return b.value.Write(p)
 }
 
 func (b *snapshotFooterStatusBuffer) String() string { return b.value.String() }
+
+func (b *snapshotFooterStatusBuffer) markOverflow() {
+	if b.overflow {
+		return
+	}
+	b.overflow = true
+	if b.onOverflow != nil {
+		b.onOverflow()
+	}
+}
 
 func snapshotFooterStatusEnvironment() []string {
 	keys := []string{"HOME", "LANG", "LC_ALL", "LC_CTYPE", "LOGNAME", "PATH", "SHELL", "TMPDIR", "USER"}
@@ -120,7 +139,10 @@ func (a *App) withSnapshotFooterStatus(ctx context.Context, input terminalshot.I
 
 func snapshotFooterStatusDir(candidates ...string) string {
 	for _, candidate := range candidates {
-		candidate = filepath.Clean(strings.TrimSpace(candidate))
+		if candidate == "" {
+			continue
+		}
+		candidate = filepath.Clean(candidate)
 		if !filepath.IsAbs(candidate) {
 			continue
 		}
@@ -132,8 +154,8 @@ func snapshotFooterStatusDir(candidates ...string) string {
 }
 
 func sanitizeSnapshotFooterStatus(output string) string {
-	output = strings.ToValidUTF8(output, "")
 	output = stripSnapshotFooterControlSequences(output)
+	output = strings.ToValidUTF8(output, "")
 	var clean strings.Builder
 	for _, r := range output {
 		switch {
@@ -152,6 +174,17 @@ func stripSnapshotFooterControlSequences(input string) string {
 	var output strings.Builder
 	for index := 0; index < len(input); {
 		if input[index] != 0x1b {
+			switch input[index] {
+			case 0x9b:
+				index = skipSnapshotFooterCSI(input, index+1)
+				continue
+			case 0x90, 0x98, 0x9d, 0x9e, 0x9f:
+				index = skipSnapshotFooterControlString(input, index+1)
+				continue
+			case 0x9c:
+				index++
+				continue
+			}
 			r, size := utf8.DecodeRuneInString(input[index:])
 			if r == utf8.RuneError && size == 1 {
 				index++
@@ -202,6 +235,9 @@ func skipSnapshotFooterControlString(input string, index int) int {
 		}
 		if input[index] == 0x1b && index+1 < len(input) && input[index+1] == '\\' {
 			return index + 2
+		}
+		if input[index] == 0x9c {
+			return index + 1
 		}
 		r, size := utf8.DecodeRuneInString(input[index:])
 		if r == '\u009c' {

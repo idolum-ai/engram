@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -67,6 +70,13 @@ func TestSnapshotFooterStatusFallsBackToConfiguredWorkdirThenRoot(t *testing.T) 
 	if got := snapshotFooterStatusDir("relative", filepath.Join(workdir, "missing")); got != "/" {
 		t.Fatalf("root fallback = %q", got)
 	}
+	spaceDir := filepath.Join(workdir, "project ")
+	if err := os.Mkdir(spaceDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := snapshotFooterStatusDir(spaceDir); got != spaceDir {
+		t.Fatalf("space-suffixed directory = %q, want %q", got, spaceDir)
+	}
 }
 
 func TestShellSnapshotFooterStatusUsesBoundedSecretFreeEnvironment(t *testing.T) {
@@ -105,9 +115,34 @@ func TestShellSnapshotFooterStatusKillsTimedOutPipeline(t *testing.T) {
 }
 
 func TestShellSnapshotFooterStatusRejectsOversizedStdout(t *testing.T) {
-	_, err := (shellSnapshotFooterStatusRunner{}).Run(context.Background(), `awk 'BEGIN {for (i=0;i<5000;i++) printf "x"}'`, "/")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := (shellSnapshotFooterStatusRunner{}).Run(ctx, `while :; do printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; done`, "/")
 	if !errors.Is(err, errSnapshotFooterStatusTooLarge) {
 		t.Fatalf("oversized output error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("oversized producer returned after %v", elapsed)
+	}
+}
+
+func TestShellSnapshotFooterStatusCleansBackgroundDescendantsAfterSuccess(t *testing.T) {
+	output, err := (shellSnapshotFooterStatusRunner{}).Run(context.Background(), `sleep 30 >/dev/null 2>&1 & printf '%d\n' "$!"`, "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil {
+		t.Fatalf("background pid output = %q: %v", output, err)
+	}
+	defer syscall.Kill(pid, syscall.SIGKILL)
+	deadline := time.Now().Add(2 * time.Second)
+	for processExists(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processExists(pid) {
+		t.Fatalf("background status descendant %d survived successful shell exit", pid)
 	}
 }
 
@@ -151,20 +186,30 @@ func (r *recordingSnapshotFooterStatusRunner) Run(ctx context.Context, command, 
 
 func TestSnapshotFooterStatusBufferBoundsMemory(t *testing.T) {
 	t.Parallel()
-	buffer := &snapshotFooterStatusBuffer{}
+	overflows := 0
+	buffer := &snapshotFooterStatusBuffer{onOverflow: func() { overflows++ }}
 	payload := strings.Repeat("x", snapshotFooterStatusMaxOutputBytes+100)
-	if n, err := buffer.Write([]byte(payload)); err != nil || n != len(payload) {
+	if n, err := buffer.Write([]byte(payload)); !errors.Is(err, errSnapshotFooterStatusTooLarge) || n != snapshotFooterStatusMaxOutputBytes {
 		t.Fatalf("bounded write n=%d err=%v", n, err)
 	}
-	if !buffer.overflow || len(buffer.String()) != snapshotFooterStatusMaxOutputBytes {
-		t.Fatalf("bounded buffer bytes=%d overflow=%v", len(buffer.String()), buffer.overflow)
+	if n, err := buffer.Write([]byte("again")); !errors.Is(err, errSnapshotFooterStatusTooLarge) || n != 0 {
+		t.Fatalf("post-overflow write n=%d err=%v", n, err)
+	}
+	if !buffer.overflow || len(buffer.String()) != snapshotFooterStatusMaxOutputBytes || overflows != 1 {
+		t.Fatalf("bounded buffer bytes=%d overflow=%v callbacks=%d", len(buffer.String()), buffer.overflow, overflows)
 	}
 }
 
 func TestSanitizeSnapshotFooterStatusDropsInvalidUTF8AndControls(t *testing.T) {
 	t.Parallel()
-	input := string([]byte{'o', 'k', 0xff, 0x00}) + " \u009b31mnow \x1bPprivate payload\x1b\\safe \x1b]private title\u009cend"
-	if got := sanitizeSnapshotFooterStatus(input); got != "ok now safe end" {
+	input := string([]byte{'o', 'k', 0xff, 0x00, ' ', 0x9b}) + "31mnow " + string([]byte{0x9d}) + "private raw title" + string([]byte{0x9c}) + "safe " +
+		"\u009b32mnext \x1bPprivate payload\x1b\\after \x1b]private title\u009cend"
+	if got := sanitizeSnapshotFooterStatus(input); got != "ok now safe next after end" {
 		t.Fatalf("sanitized status = %q", got)
 	}
+}
+
+func processExists(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
