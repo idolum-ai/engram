@@ -462,6 +462,41 @@ of the same watch only needs `/resume 5`. New sessions reuse closed,
 non-resumable numeric IDs before allocating larger ones; running and
 recoverable watches keep their IDs.
 
+For automatic Codex mapping, install Engram's narrow `SessionStart` hook in
+`~/.codex/hooks.json` after installing the binary:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.local/bin/engram codex-hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Review and trust the hook with Codex's `/hooks` interface. It publishes only
+the exact Codex session UUID, working directory, lifecycle source, and time to
+a pane-local tmux option. Engram validates the persisted pane/window/server
+binding before accepting it, then stores the mapping in its protected state.
+
+After a host reboot—or whenever Engram starts and discovers that its running
+state no longer matches tmux—the bot sends a deterministic recovery plan with
+one `♻️ Go` button per exact provider session. `/recovery` shows the same plan
+on demand. The message also includes copyable `/resume <id>` lines. Commands
+submitted at a proven shell prompt are retained in a small redacted ledger;
+they may appear as “observed launches,” but Engram never replays them
+automatically.
+
 Remove the service before removing the binary:
 
 ```sh

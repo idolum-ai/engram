@@ -574,10 +574,21 @@ func ClearMarkup() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
 }
 
-func RecoverMarkup(sessionID int) *InlineKeyboardMarkup {
-	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
-		Button("🧭 Link", fmt.Sprintf("recover:%d", sessionID)),
-	}}}
+func RecoverMarkup(sessionID int, resumable bool) *InlineKeyboardMarkup {
+	buttons := []InlineKeyboardButton{Button("🧭 Link", fmt.Sprintf("recover:%d", sessionID))}
+	if resumable {
+		buttons = append([]InlineKeyboardButton{Button("♻️ Go", fmt.Sprintf("resume:%d", sessionID))}, buttons...)
+	}
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{buttons}}
+}
+
+func RecoveryPlanMarkup(sessionIDs []int) *InlineKeyboardMarkup {
+	rows := make([][]InlineKeyboardButton, 0, len(sessionIDs)+1)
+	for _, sessionID := range sessionIDs {
+		rows = append(rows, []InlineKeyboardButton{Button(fmt.Sprintf("♻️ %d", sessionID), fmt.Sprintf("plan-resume:%d", sessionID))})
+	}
+	rows = append(rows, []InlineKeyboardButton{Button("Dismiss", "plan-dismiss:all")})
+	return &InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func CloseConfirmationMarkup(token string) *InlineKeyboardMarkup {

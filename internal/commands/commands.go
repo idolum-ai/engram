@@ -26,6 +26,7 @@ var registry = []Metadata{
 	{Command: "logs", Usage: "/logs", Description: "Send service audit logs as an attachment", Category: "service"},
 	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions", Category: "service"},
 	{Command: "sessions", Usage: "/sessions", Description: "List active terminal sessions with controls", Category: "session"},
+	{Command: "recovery", Usage: "/recovery", Description: "Show a deterministic plan for lost sessions", Category: "session"},
 	{Command: "attach", Usage: "/attach <tmux-target>", Description: "Track an existing tmux window or pane", Category: "session"},
 	{Command: "new", Usage: "/new <text>", Description: "Create a tmux window and send text as a shell command", Category: "session"},
 	{Command: "resume", Usage: "/resume <id> [<codex|claude> <session-uuid>]", Description: "Restore a lost agent session into its existing watch", Category: "session"},

@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/idolum-ai/engram/internal/recovery"
 )
 
 func tmuxRecord(values ...string) string {
@@ -734,6 +736,38 @@ func TestSemanticCaptureCleansTerminalOutput(t *testing.T) {
 	want := "red\nlink: label\ncharset kept\ndcs done\nc1 done"
 	if got != want {
 		t.Fatalf("semanticCapture = %q, want %q", got, want)
+	}
+}
+
+func TestPublishRecoveryMetadataUsesPaneLocalOption(t *testing.T) {
+	runner := &fakeRunner{}
+	metadata := recovery.Metadata{Program: recovery.ProgramCodex, SessionID: "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"}
+	if err := New(runner).PublishRecoveryMetadata(context.Background(), "%7", metadata); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	call := runner.calls[0]
+	if len(call) != 7 || !reflect.DeepEqual(call[:6], []string{"set-option", "-p", "-q", "-t", "%7", EngramRecoveryOption}) || !strings.Contains(call[6], metadata.SessionID) {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestRecoveryMetadataValidatesBindingAroundRead(t *testing.T) {
+	metadata := recovery.Metadata{Program: recovery.ProgramCodex, SessionID: "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"}
+	encoded, err := recovery.Encode(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := tmuxRecord(styledCaptureServerID, "$1", "@2", "%7", "main", "0", "0", "1", "/work", "codex")
+	runner := &sequenceRunner{outputs: []string{binding, encoded + "\n", binding}}
+	got, err := New(runner).RecoveryMetadata(context.Background(), "%7", "@2", styledCaptureServerID)
+	if err != nil || got.SessionID != metadata.SessionID {
+		t.Fatalf("metadata = %#v, err = %v", got, err)
+	}
+	if len(runner.calls) != 3 || runner.calls[1][0] != "show-options" {
+		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/idolum-ai/engram/internal/recovery"
 )
 
 type Runner interface {
@@ -128,6 +130,7 @@ const (
 	EngramWatchIDOption  = "@engram_watch_id"
 	EngramNotifyOption   = "@engram_notify"
 	EngramArtifactOption = "@engram_artifact"
+	EngramRecoveryOption = "@engram_recovery"
 )
 
 type IdentityError struct {
@@ -342,6 +345,44 @@ func (m Manager) EnsureServerID(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return m.CurrentServerID(ctx)
+}
+
+// PublishRecoveryMetadata is the narrow terminal-hook ingress. The hook may
+// identify only its inherited immutable pane ID; the service later validates
+// the full pane/window/server binding before trusting this pane-local option.
+func (m Manager) PublishRecoveryMetadata(ctx context.Context, paneID string, metadata recovery.Metadata) error {
+	if !validImmutableID(strings.TrimSpace(paneID), '%') {
+		return fmt.Errorf("invalid tmux pane id")
+	}
+	encoded, err := recovery.Encode(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = m.Runner.Run(ctx, "set-option", "-p", "-q", "-t", paneID, EngramRecoveryOption, encoded)
+	return err
+}
+
+// RecoveryMetadata reads hook-published metadata only while the stored
+// immutable binding remains valid on both sides of the option read.
+func (m Manager) RecoveryMetadata(ctx context.Context, paneID, windowID, serverID string) (recovery.Metadata, error) {
+	if _, err := m.ValidateBinding(ctx, paneID, windowID, serverID); err != nil {
+		return recovery.Metadata{}, err
+	}
+	value, err := m.Runner.Run(ctx, "show-options", "-p", "-q", "-v", "-t", paneID, EngramRecoveryOption)
+	if err != nil {
+		if missingTmuxTarget(err) {
+			return recovery.Metadata{}, &IdentityError{Reason: "tmux pane identity is gone", Err: err}
+		}
+		return recovery.Metadata{}, err
+	}
+	if _, err := m.ValidateBinding(ctx, paneID, windowID, serverID); err != nil {
+		return recovery.Metadata{}, err
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return recovery.Metadata{}, nil
+	}
+	return recovery.Decode(value)
 }
 
 func validServerID(id string) bool {

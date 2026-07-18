@@ -180,10 +180,22 @@ func TestAnchorMarkupAddsNumberedFileButtons(t *testing.T) {
 func TestRecoverMarkupOffersExactReattach(t *testing.T) {
 	t.Parallel()
 
-	got := RecoverMarkup(7)
+	got := RecoverMarkup(7, false)
 	want := InlineKeyboardButton{Text: "🧭 Link", CallbackData: "recover:7"}
 	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 1 || got.InlineKeyboard[0][0] != want {
-		t.Fatalf("RecoverMarkup(7) = %#v, want %#v", got, want)
+		t.Fatalf("RecoverMarkup(7, false) = %#v, want %#v", got, want)
+	}
+}
+
+func TestRecoveryMarkupsOfferExactResumeAndDismiss(t *testing.T) {
+	t.Parallel()
+	recover := RecoverMarkup(7, true)
+	if got := recover.InlineKeyboard[0][0]; got.CallbackData != "resume:7" {
+		t.Fatalf("resume button = %#v", got)
+	}
+	plan := RecoveryPlanMarkup([]int{7, 9})
+	if len(plan.InlineKeyboard) != 3 || plan.InlineKeyboard[0][0].CallbackData != "plan-resume:7" || plan.InlineKeyboard[2][0].CallbackData != "plan-dismiss:all" {
+		t.Fatalf("recovery plan markup = %#v", plan)
 	}
 }
 
@@ -199,7 +211,8 @@ func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
 			Image: true, Voice: true, Raw: true, Arrows: true,
 			FileToken: "0123456789abcdef", FileCount: 4,
 		}),
-		"recover": RecoverMarkup(123456789),
+		"recover":       RecoverMarkup(123456789, true),
+		"recovery plan": RecoveryPlanMarkup([]int{1, 123456789}),
 		"sessions": SessionListMarkup(
 			[]int{1, 123456789},
 			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestAuditRotationBoundsCurrentAndPreviousFiles(t *testing.T) {
@@ -239,6 +240,49 @@ func TestStoreDoesNotReuseClosedResumableSessionID(t *testing.T) {
 	got, ok := store.FindSession(resumable.ID)
 	if !ok || got.ResumeProgram != "codex" || got.ResumeSessionID == "" {
 		t.Fatalf("resumable session was not preserved: %#v ok=%v", got, ok)
+	}
+}
+
+func TestStorePersistsBootRecoveryUntilAcknowledged(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending, changed, err := store.ObserveHostBoot("boot-a"); err != nil || changed || pending != "" {
+		t.Fatalf("initial boot = pending %q changed %v err %v", pending, changed, err)
+	}
+	if pending, changed, err := store.ObserveHostBoot("boot-b"); err != nil || !changed || pending != "boot-b" {
+		t.Fatalf("changed boot = pending %q changed %v err %v", pending, changed, err)
+	}
+	if pending, changed, err := store.ObserveHostBoot("boot-b"); err != nil || changed || pending != "boot-b" {
+		t.Fatalf("retry boot = pending %q changed %v err %v", pending, changed, err)
+	}
+	if err := store.AcknowledgeRecoveryBoot("boot-b"); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := store.Snapshot(); snapshot.HostBootID != "boot-b" || snapshot.PendingRecoveryBootID != "" {
+		t.Fatalf("acknowledged state = %#v", snapshot)
+	}
+}
+
+func TestRecoveryEventsAreBoundedAndCloned(t *testing.T) {
+	var session TerminalSession
+	session.RecordRecoveryEvent(RecoveryEvent{Kind: "command", Command: strings.Repeat("ø", maxRecoveryCommandBytes), Validation: "sent_to_shell"})
+	if got := session.RecoveryEvents[0].Command; len(got) > maxRecoveryCommandBytes || !utf8.ValidString(got) {
+		t.Fatalf("bounded command bytes=%d valid=%v", len(got), utf8.ValidString(got))
+	}
+	session.RecoveryEvents = nil
+	for index := 0; index < maxRecoveryEvents+5; index++ {
+		session.RecordRecoveryEvent(RecoveryEvent{Kind: "command", Command: fmt.Sprintf("command-%d", index), Validation: "sent_to_shell"})
+	}
+	if len(session.RecoveryEvents) != maxRecoveryEvents || session.RecoveryEvents[0].Command != "command-5" {
+		t.Fatalf("events = %#v", session.RecoveryEvents)
+	}
+	cloned := cloneTerminalSession(session)
+	cloned.RecoveryEvents[0].Command = "changed"
+	if session.RecoveryEvents[0].Command == "changed" {
+		t.Fatal("recovery events shared backing storage")
 	}
 }
 

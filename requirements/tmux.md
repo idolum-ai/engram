@@ -221,3 +221,16 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   metadata before allocating another ID. Active, lost, and explicitly
   resumable closed watches are never recycled, so ordinary create/close use
   stays compact without sacrificing recoverable conversations.
+- Engram records a bounded recovery event only when input was submitted with
+  Enter while tmux reported an allowlisted shell as the pane foreground
+  process. Input submitted while Codex, Claude, or another process is in the
+  foreground is conversation and is not recorded as a launch command.
+- `engram codex-hook` accepts only a Codex `SessionStart` JSON event and an
+  inherited immutable `TMUX_PANE`. It publishes bounded provider metadata to a
+  pane-local tmux option. The service accepts that metadata only between two
+  validations of the persisted pane, window, and server incarnation.
+- A shell command becomes process-observed only when a prompt, bounded later
+  validation sees its expected executable as the pane foreground process.
+  That evidence remains advisory and is never automatically replayed. A
+  provider UUID from a lifecycle hook or explicit `/resume` is required for
+  one-tap recovery.
