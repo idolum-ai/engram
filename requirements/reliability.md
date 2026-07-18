@@ -84,6 +84,13 @@ exports a bounded recent tail, not an unbounded full audit file.
   Legacy write-only fields are ignored and disappear on the next save. Legacy
   terminal states other than `running`, `lost`, and `closed` normalize to
   `lost`, where immutable-identity reattachment can recover them safely.
+- State retains at most 24 recovery events per terminal watch. Command text is
+  redacted and byte-bounded; exact provider identifiers and validation
+  provenance are persisted so recovery does not depend on tmux scrollback.
+- The current Linux boot ID is persisted. A changed boot leaves recovery-plan
+  delivery pending until Telegram accepts it. On every service start Engram
+  also reconciles previously running bindings, so a lost tmux server is
+  detected even when the host boot ID did not change.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
   pin state. Restart resets pin knowledge and reconciles presentation without
@@ -97,8 +104,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v9 persists `anchor_mode`, the canonical anchor presentation
-  format, the latest conversational, snapshot, and upstream-signal reply IDs,
+- State schema v11 persists `anchor_mode`, the canonical anchor presentation
+  format, boot-incarnation and bounded recovery-ledger metadata, the latest
+  conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,
   and a bounded stale-alias set used only to reject confusing replies. It binds each watch to
   a random tmux server incarnation so reused pane/window IDs after a server

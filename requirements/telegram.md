@@ -51,7 +51,13 @@ Telegram is Engram's only user interface.
 - Close controls are accepted only from the current canonical message. Close
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.
-- Lost anchors expose only `🧭 Link` for exact-identity recovery.
+- Lost anchors expose `🧭 Link` for exact-identity recovery and add `♻️ Go`
+  only when an allowlisted provider and valid persisted session UUID make a
+  native resume exact.
+- `/recovery` sends a deterministic, non-model-generated plan for lost
+  sessions. It contains copyable `/resume <id>` commands, compact one-tap
+  controls for exact provider mappings, advisory observed launches explicitly
+  labeled as not replayed, and a dismiss control.
 - Guide anchors expose refresh, the compact non-directional key controls,
   `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
   is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and

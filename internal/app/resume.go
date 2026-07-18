@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -10,13 +9,14 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/mechanics"
+	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
 const (
-	resumeProgramCodex  = "codex"
-	resumeProgramClaude = "claude"
+	resumeProgramCodex  = recovery.ProgramCodex
+	resumeProgramClaude = recovery.ProgramClaude
 )
 
 func parseResumeRequest(args string) (id int, program, sessionID string, ok bool) {
@@ -40,23 +40,15 @@ func parseResumeRequest(args string) (id int, program, sessionID string, ok bool
 }
 
 func validResumeProgram(program string) bool {
-	return program == resumeProgramCodex || program == resumeProgramClaude
+	return recovery.ValidProgram(program)
 }
 
 func validResumeSessionID(id string) bool {
-	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
-		return false
-	}
-	hexID := strings.ReplaceAll(id, "-", "")
-	decoded, err := hex.DecodeString(hexID)
-	return err == nil && len(decoded) == 16
+	return recovery.ValidSessionID(id)
 }
 
 func resumeCommand(program, sessionID string) string {
-	if program == resumeProgramClaude {
-		return "claude --resume " + sessionID
-	}
-	return "codex resume " + sessionID
+	return recovery.ResumeCommand(program, sessionID)
 }
 
 func (a *App) resumeSession(ctx context.Context, id int, program, sessionID string) actionResult {
@@ -141,6 +133,10 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 			session.UpstreamRetryAt = time.Time{}
 			retireAlternateReplyTargets(session)
 			setAnchorFiles(session, nil)
+			session.RecordRecoveryEvent(state.RecoveryEvent{
+				At: now, Kind: "resume", Command: resumeCommand(program, sessionID),
+				CWD: workdir, Validation: "explicit_resume", Program: program, ProviderSessionID: sessionID,
+			})
 		})
 		committed := found && applied && (updateErr == nil || state.PersistenceReachedReplacement(updateErr))
 		if !committed {

@@ -2,19 +2,44 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/tmux"
 )
 
 type signalWriteCloser struct {
 	bytes.Buffer
 	closeErr error
+}
+
+type hookRunner struct{ calls [][]string }
+
+func (r *hookRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	return "", nil
+}
+
+func TestCodexHookPublishesExactSessionToInheritedPane(t *testing.T) {
+	runner := &hookRunner{}
+	input := strings.NewReader(`{"session_id":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0","cwd":"/work","hook_event_name":"SessionStart","source":"resume"}`)
+	err := runCodexHook(input, "%7", tmux.New(runner), time.Date(2026, 7, 18, 21, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 || len(runner.calls[0]) != 7 || runner.calls[0][0] != "set-option" || runner.calls[0][4] != "%7" || !strings.Contains(runner.calls[0][6], "019f7607-c8b0-74b3-87ca-64a7e6e7ede0") {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	if err := runCodexHook(strings.NewReader(`{}`), "", tmux.New(runner), time.Time{}); err == nil {
+		t.Fatal("invalid hook input was accepted")
+	}
 }
 
 func (w *signalWriteCloser) Close() error { return w.closeErr }

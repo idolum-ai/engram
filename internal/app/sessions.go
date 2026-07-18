@@ -58,6 +58,9 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "initial session state update failed"}
 	}
+	if current, ok := a.Store.FindSession(ts.ID); ok {
+		a.recordSentRecoveryCommand(current, pane, input)
+	}
 	resp, err := a.sendAnchor(ctx, msg.Chat.ID, a.renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, a.anchorMarkup(ts))
 	anchorReady := false
 	if err == nil {

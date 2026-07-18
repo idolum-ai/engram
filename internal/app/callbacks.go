@@ -156,6 +156,55 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_telegram_failed"
 		}
 		return result.status("callback")
+	case "resume":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		if ts.State != state.TerminalLost || !validResumeProgram(ts.ResumeProgram) || !validResumeSessionID(ts.ResumeSessionID) {
+			a.answerCallback(ctx, cb.ID, "exact resume is unavailable")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "resuming") {
+			return "callback_telegram_failed"
+		}
+		result := a.resumeSession(ctx, id, "", "")
+		if !result.OK() {
+			msg := *cb.Message
+			msg.From = &cb.From
+			a.reply(ctx, msg, result.Message)
+		}
+		return result.status("callback")
+	case "plan-resume":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, ok := a.Store.FindSession(id)
+		if !ok || ts.State != state.TerminalLost || !validResumeProgram(ts.ResumeProgram) || !validResumeSessionID(ts.ResumeSessionID) {
+			a.answerCallback(ctx, cb.ID, "exact resume is unavailable")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "resuming") {
+			return "callback_telegram_failed"
+		}
+		result := a.resumeSession(ctx, id, "", "")
+		msg := *cb.Message
+		msg.From = &cb.From
+		a.reply(ctx, msg, result.Message)
+		return result.status("callback")
+	case "plan-dismiss":
+		if _, err := a.Telegram.EditReplyMarkup(ctx, cb.Message.Chat.ID, cb.Message.MessageID, telegram.ClearMarkup()); err != nil && !telegram.IsMessageNotModified(err) {
+			a.answerCallback(ctx, cb.ID, "could not dismiss")
+			return "callback_telegram_failed"
+		}
+		return callbackAnswerStatus(a.answerCallback(ctx, cb.ID, "dismissed"), "callback_ok")
 	case "key":
 		id, preset, ok := parseKeyCallback(parts[1])
 		if !ok {
