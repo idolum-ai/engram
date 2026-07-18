@@ -45,8 +45,9 @@ runtime state.
   `$(PREFIX)/bin`.
 - `make install-service` installs and starts a systemd user service and seeds
   `~/.engram/.env` with mode `0600` only when absent.
-- The service must run the installed binary with `~/.engram/.env` and restart
-  after failure without closing tmux sessions.
+- The service must run the installed binary with `~/.engram/.env`, use
+  `KillMode=process`, and restart after failure without systemd signaling the
+  tmux server or terminal processes Engram started.
 - Updating a running installation requires replacing the binary and restarting
   the user service.
 - `make uninstall-service` removes the systemd user unit, and `make uninstall`

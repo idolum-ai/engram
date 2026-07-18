@@ -80,6 +80,8 @@ type TerminalSession struct {
 	AnchorPinned             bool           `json:"anchor_pinned,omitempty"`
 	AnchorPinKnown           bool           `json:"anchor_pin_known,omitempty"`
 	WatchEnabled             bool           `json:"watch_enabled"`
+	ResumeProgram            string         `json:"resume_program,omitempty"`
+	ResumeSessionID          string         `json:"resume_session_id,omitempty"`
 	LastAnchorEditAt         time.Time      `json:"last_anchor_edit_at,omitempty"`
 	LastRawCapture           string         `json:"last_raw_capture,omitempty"`
 	AnchorFiles              []string       `json:"-"`
@@ -155,7 +157,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion    = 9
+	currentStateVersion    = 10
 	maxTerminalSessions    = 200
 	maxAttachments         = 200
 	maxAttachmentBypasses  = 100
@@ -212,9 +214,7 @@ func ReadSnapshot(path string) (State, error) {
 			snapshot.TerminalSessions[index].Origin = TerminalOriginAttached
 		}
 	}
-	if snapshot.NextSessionID == 0 {
-		snapshot.NextSessionID = maxSessionID(snapshot.TerminalSessions) + 1
-	}
+	snapshot.NextSessionID = nextSessionID(snapshot.TerminalSessions)
 	if snapshot.ProcessedMessages == nil {
 		snapshot.ProcessedMessages = map[string]bool{}
 	}
@@ -261,9 +261,7 @@ func Open(path, auditPath string) (*Store, error) {
 		s.state.AnchorMode = ""
 	}
 	normalizeTerminalSessions(s.state.TerminalSessions)
-	if s.state.NextSessionID == 0 {
-		s.state.NextSessionID = maxSessionID(s.state.TerminalSessions) + 1
-	}
+	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
 	if s.state.ProcessedMessages == nil {
 		s.state.ProcessedMessages = map[string]bool{}
 	}
@@ -307,6 +305,7 @@ func (s *Store) SetAnchorMode(mode string) error {
 
 func (s *Store) saveLocked() error {
 	s.pruneStateLocked(time.Now().UTC())
+	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
 	persisted := cloneState(s.state)
 	for i := range persisted.TerminalSessions {
 		persisted.TerminalSessions[i].LastRawCapture = ""
@@ -528,8 +527,10 @@ func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
-	id := s.state.NextSessionID
-	s.state.NextSessionID++
+	id, replaceIndex, err := sessionAllocationSlot(s.state.TerminalSessions)
+	if err != nil {
+		return TerminalSession{}, err
+	}
 	ts := TerminalSession{
 		ID:              id,
 		TmuxSessionName: tmuxSessionName,
@@ -542,7 +543,12 @@ func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string)
 		LastActivityAt:  now,
 		WatchEnabled:    false,
 	}
-	s.state.TerminalSessions = append(s.state.TerminalSessions, ts)
+	if replaceIndex >= 0 {
+		s.state.TerminalSessions[replaceIndex] = ts
+	} else {
+		s.state.TerminalSessions = append(s.state.TerminalSessions, ts)
+	}
+	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
 	return ts, s.saveLocked()
 }
 
@@ -769,14 +775,40 @@ func (s *Store) NoteGuide(errText string) error {
 	return s.saveLocked()
 }
 
-func maxSessionID(sessions []TerminalSession) int {
-	max := 0
-	for _, s := range sessions {
-		if s.ID > max {
-			max = s.ID
+func sessionAllocationSlot(sessions []TerminalSession) (int, int, error) {
+	closedByID := make(map[int]int)
+	used := make(map[int]bool)
+	for index, session := range sessions {
+		if session.ID <= 0 || session.ID > maxTerminalSessions {
+			continue
+		}
+		used[session.ID] = true
+		if session.State == TerminalClosed && session.ResumeProgram == "" && session.ResumeSessionID == "" {
+			closedByID[session.ID] = index
 		}
 	}
-	return max
+	for id := 1; id <= maxTerminalSessions; id++ {
+		if index, ok := closedByID[id]; ok {
+			return id, index, nil
+		}
+	}
+	for id := 1; id <= maxTerminalSessions; id++ {
+		if !used[id] {
+			return id, -1, nil
+		}
+	}
+	maxID := 0
+	for _, session := range sessions {
+		if session.ID > maxID {
+			maxID = session.ID
+		}
+	}
+	return maxID + 1, -1, nil
+}
+
+func nextSessionID(sessions []TerminalSession) int {
+	id, _, _ := sessionAllocationSlot(sessions)
+	return id
 }
 
 func (s *Store) appendUpdateLocked(event UpdateEvent) {

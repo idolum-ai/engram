@@ -174,6 +174,74 @@ func TestStorePersistsSession(t *testing.T) {
 	}
 }
 
+func TestStoreReusesLowestClosedSessionID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.AllocateSession("main", "@1", "%1", "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.AllocateSession("main", "@2", "%2", "active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(first.ID, func(session *TerminalSession) {
+		session.State = TerminalClosed
+		session.AnchorMessageID = 99
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := store.AllocateSession("main", "@3", "%3", "replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused.ID != first.ID || second.ID != 2 {
+		t.Fatalf("allocated IDs: first=%d second=%d reused=%d", first.ID, second.ID, reused.ID)
+	}
+	got := store.Snapshot()
+	if len(got.TerminalSessions) != 2 || got.NextSessionID != 3 {
+		t.Fatalf("state after reuse = %#v", got)
+	}
+	replaced, ok := store.FindSession(first.ID)
+	if !ok || replaced.Title != "replacement" || replaced.AnchorMessageID != 0 || replaced.State != TerminalRunning {
+		t.Fatalf("reused session = %#v ok=%v", replaced, ok)
+	}
+}
+
+func TestStoreDoesNotReuseClosedResumableSessionID(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumable, err := store.AllocateSession("main", "@1", "%1", "resumable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(resumable.ID, func(session *TerminalSession) {
+		session.State = TerminalClosed
+		session.ResumeProgram = "codex"
+		session.ResumeSessionID = "123e4567-e89b-12d3-a456-426614174000"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	allocated, err := store.AllocateSession("main", "@2", "%2", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocated.ID == resumable.ID {
+		t.Fatalf("resumable session ID %d was recycled", resumable.ID)
+	}
+	got, ok := store.FindSession(resumable.ID)
+	if !ok || got.ResumeProgram != "codex" || got.ResumeSessionID == "" {
+		t.Fatalf("resumable session was not preserved: %#v ok=%v", got, ok)
+	}
+}
+
 func TestStorePersistsAnchorMode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")
@@ -404,7 +472,7 @@ func TestStoreLoadsLegacyStateAndOmitsRawCaptureOnSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := store.Snapshot()
-	if st.Version != currentStateVersion || st.NextSessionID != 8 || st.ProcessedMessages == nil {
+	if st.Version != currentStateVersion || st.NextSessionID != 1 || st.ProcessedMessages == nil {
 		t.Fatalf("normalized legacy state = %#v", st)
 	}
 	if got := st.TerminalSessions[0].LastRawCapture; got != "sensitive terminal output" {

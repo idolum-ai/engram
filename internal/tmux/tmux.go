@@ -851,9 +851,10 @@ func (m Manager) cleanupCaptureBuffers(ctx context.Context, names ...string) {
 	_, _ = m.Runner.Run(cleanupCtx, args...)
 }
 
-// DumpScrollback streams a physical, ANSI-preserving capture to dst. It does
-// not join wrapped lines or buffer tmux stdout in Engram. The runner must
-// implement StreamRunner so this memory behavior is explicit.
+// DumpScrollback streams the complete retained pane history as readable plain
+// text. Soft-wrapped terminal rows are joined back into logical lines, and tmux
+// stdout is never buffered in Engram. The runner must implement StreamRunner so
+// this memory behavior is explicit.
 func (m Manager) DumpScrollback(ctx context.Context, paneID, windowID, serverID string, dst io.Writer) error {
 	if dst == nil {
 		return fmt.Errorf("missing scrollback destination")
@@ -871,7 +872,7 @@ func (m Manager) DumpScrollback(ctx context.Context, paneID, windowID, serverID 
 	}
 	marker := identityMismatchMarker + "-" + nonce
 	guard := &identityGuardWriter{dst: dst, marker: marker}
-	command := "capture-pane -p -e -N -S - -E - -t " + paneID
+	command := "capture-pane -p -J -N -S - -E - -t " + paneID
 	err = runner.RunToWriter(ctx, guard, "if-shell", "-F", "-t", paneID, bindingCondition(windowID, serverID), command, "display-message -p "+marker)
 	if err != nil {
 		if missingTmuxTarget(err) {
