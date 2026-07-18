@@ -13,6 +13,7 @@ import (
 	"github.com/idolum-ai/engram/internal/redact"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
+	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
@@ -101,18 +102,14 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 			return
 		}
 	} else {
-		pane, text, err := a.terminalMechanics().CaptureVisibleRaw(tctx, terminalBinding(ts))
+		capture, err := a.captureStyled(tctx, ts, terminalshot.TargetRows)
 		if err != nil {
-			a.recordIdentityLoss(ctx, ts, err)
 			a.reply(ctx, msg, "capture error: "+err.Error())
 			return
 		}
-		if err := a.recordValidatedPane(ts, pane); err != nil {
-			a.reply(ctx, msg, "state error: "+err.Error())
-			return
-		}
+		text := accessibleCaptureText(capture)
 		if int64(len(text)) > telegramCloudUploadMax {
-			a.reply(ctx, msg, fmt.Sprintf("capture rejected: visible pane exceeds Telegram's %d-byte cloud Bot API limit", telegramCloudUploadMax))
+			a.reply(ctx, msg, fmt.Sprintf("capture rejected: View frame exceeds Telegram's %d-byte cloud Bot API limit", telegramCloudUploadMax))
 			return
 		}
 		file, createdPath, err := createPredictableArtifact(a.Config.ArtifactDir(), filename)

@@ -395,6 +395,16 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			return
 		}
 		status = a.newSession(ctx, msg, args).status("command")
+	case "resume":
+		id, program, sessionID, ok := parseResumeRequest(args)
+		if !ok {
+			status = "command_user_error"
+			a.reply(ctx, msg, "usage: /resume <id> [<codex|claude> <session-uuid>]")
+			return
+		}
+		result := a.resumeSession(ctx, id, program, sessionID)
+		status = result.status("command")
+		a.reply(ctx, msg, result.Message)
 	case "send", "run":
 		id, rest, ok := parseIDRest(args)
 		if !ok {

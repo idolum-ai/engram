@@ -28,6 +28,7 @@ var registry = []Metadata{
 	{Command: "sessions", Usage: "/sessions", Description: "List active terminal sessions with controls", Category: "session"},
 	{Command: "attach", Usage: "/attach <tmux-target>", Description: "Track an existing tmux window or pane", Category: "session"},
 	{Command: "new", Usage: "/new <text>", Description: "Create a tmux window and send text as a shell command", Category: "session"},
+	{Command: "resume", Usage: "/resume <id> [<codex|claude> <session-uuid>]", Description: "Restore a lost agent session into its existing watch", Category: "session"},
 	{Command: "send", Usage: "/send <id> <text>", Description: "Send text as a shell command to a session", Category: "session"},
 	{Command: "text", Usage: "/text <id> <text>", Description: "Send literal text without pressing Enter", Category: "session"},
 	{Command: "key", Usage: "/key <id> <keys...>", Description: "Send tmux key names to a session", Category: "session"},

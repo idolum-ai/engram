@@ -108,7 +108,7 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 		Config: config.Config{Home: dir, SnapshotTheme: "contrast-dark"}, Store: store, Telegram: client,
 		Snapshots: renderer, mode: "guide", snapshotReady: true, renderSlots: make(chan struct{}, 1),
 	}
-	first := tmux.StyledCapture{Text: "context\ntests passed successfully\nprompt", ANSI: "context\n\x1b[32mtests passed successfully\x1b[0m\nprompt", Columns: 71, VisibleRows: 37, BufferRows: 3, CurrentPath: "/tmp"}
+	first := tmux.StyledCapture{Text: "context\ntests passed successfully\nprompt", ANSI: "context\n\x1b[32mtests passed successfully\x1b[0m\nprompt", JoinedText: "older full View row\ncontext\ntests passed successfully\nprompt", Columns: 71, VisibleRows: 37, BufferRows: 4, CurrentPath: "/tmp"}
 	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, conversationFrame{}, first.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
 		t.Fatal("guided anchor was not updated")
 	}
@@ -120,13 +120,14 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 		t.Fatalf("evidence reply target = %#v %q ok=%v", routed, targetState, ok)
 	}
 	frame, frameOK := a.snapshotTextFrame(current)
-	if !frameOK || frame.JoinedText != first.Text || !strings.Contains(string(mustJSON(a.anchorMarkup(current))), "raw:1") {
+	if !frameOK || frame.JoinedText != first.JoinedText || frame.PresentationHash == frame.FrameHash || !strings.Contains(string(mustJSON(a.anchorMarkup(current))), "raw:1") {
 		t.Fatalf("evidence text companion=%#v ok=%v markup=%s", frame, frameOK, mustJSON(a.anchorMarkup(current)))
 	}
 
 	second := first
 	second.Text = "context\nnew decisive result\nprompt"
 	second.ANSI = second.Text
+	second.JoinedText = "older full View row\n" + second.Text
 	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, conversationFrame{}, second.Text, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, true, nil, nil) {
 		t.Fatal("fallback anchor was not updated")
 	}
@@ -137,11 +138,12 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 	third := second
 	third.Text = "context\nfinal visible result\nprompt"
 	third.ANSI = third.Text
+	third.JoinedText = "older full View row\n" + third.Text
 	if a.updateGuidedAnchorWithEvidence(context.Background(), fallback, third, conversationFrame{}, third.Text, "Final result.", visibleReferences{}, []string{"final visible result"}, true, nil, func() bool { return false }) {
 		t.Fatal("failed acceptance reported success")
 	}
 	frame, frameOK = a.snapshotTextFrame(fallback)
-	if !frameOK || frame.JoinedText != third.Text {
+	if !frameOK || frame.JoinedText != third.JoinedText {
 		t.Fatalf("failed acceptance retained stale raw frame: %#v ok=%v", frame, frameOK)
 	}
 }

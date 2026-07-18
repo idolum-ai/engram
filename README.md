@@ -449,6 +449,19 @@ attach button once to adopt it explicitly. Engram preserves the watch ID and
 anchor, but treats the adopted window as externally owned so `/close` will only
 untrack it.
 
+If the tmux server itself was lost but a Codex or Claude transcript remains,
+restore it into the existing watch and anchor:
+
+```text
+/resume 5 codex 123e4567-e89b-12d3-a456-426614174000
+/resume 4 claude 123e4567-e89b-12d3-a456-426614174001
+```
+
+Engram persists the allowlisted program and session UUID, so a later recovery
+of the same watch only needs `/resume 5`. New sessions reuse closed,
+non-resumable numeric IDs before allocating larger ones; running and
+recoverable watches keep their IDs.
+
 Remove the service before removing the binary:
 
 ```sh
@@ -655,8 +668,9 @@ links for particular services.
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or
 legacy session and leaves its tmux window running. Inline close buttons always
-ask for confirmation. `/raw` preserves the visible pane as a physical terminal
-capture; `/dump` streams the pane's scrollback to an attachment. Cloud Bot API
+ask for confirmation. `/raw` returns the complete bounded plain-text frame used
+by `🖼️ View`; `/dump` streams the pane's full retained tmux history as readable
+plain text with soft wraps joined. Cloud Bot API
 downloads are hard-limited to 20 MiB and `/download` uploads to 50 MiB.
 Generated captures and upload snapshots are also capped at 50 MiB, and Engram
 accepts at most eight queued file transfers with two running concurrently.

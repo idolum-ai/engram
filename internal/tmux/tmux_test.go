@@ -737,16 +737,16 @@ func TestSemanticCaptureCleansTerminalOutput(t *testing.T) {
 	}
 }
 
-func TestDumpScrollbackStreamsRawPhysicalCapture(t *testing.T) {
-	f := &fakeStreamRunner{chunks: []string{"\x1b[32mchunk one", "\nchunk two   \n"}}
+func TestDumpScrollbackStreamsPlainLogicalHistory(t *testing.T) {
+	f := &fakeStreamRunner{chunks: []string{"chunk one", " continued\nchunk two   \n"}}
 	var dst bytes.Buffer
 	if err := New(f).DumpScrollback(context.Background(), "%10", "@2", styledCaptureServerID, &dst); err != nil {
 		t.Fatal(err)
 	}
-	if want := "\x1b[32mchunk one\nchunk two   \n"; dst.String() != want {
+	if want := "chunk one continued\nchunk two   \n"; dst.String() != want {
 		t.Fatalf("dump = %q, want %q", dst.String(), want)
 	}
-	if len(f.calls) != 1 || f.calls[0][0] != "if-shell" || f.calls[0][3] != "%10" || f.calls[0][5] != "capture-pane -p -e -N -S - -E - -t %10" {
+	if len(f.calls) != 1 || f.calls[0][0] != "if-shell" || f.calls[0][3] != "%10" || f.calls[0][5] != "capture-pane -p -J -N -S - -E - -t %10" {
 		t.Fatalf("calls = %#v", f.calls)
 	}
 }

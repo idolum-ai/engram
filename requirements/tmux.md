@@ -168,10 +168,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   cannot be delivered safely, Engram renders the same bounded range as redacted
   plain text. Empty terminals use a quiet `guided view` frame. Engram never
   preserves stale pixels or falls back to a larger automatic screenshot.
-- The exact plain text corresponding to the selected guide rows, before visual
-  soft-wrapping, is retained
-  only in process memory and is available through `📄 Raw` while that canonical
-  message remains current.
+- The complete bounded logical-text frame underlying `🖼️ View`, before visual
+  soft-wrapping, is retained only in process memory and is available through
+  `📄 Raw` while that canonical message remains current. In guide mode this is
+  intentionally broader than the compact evidence crop displayed on the card.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.
@@ -183,11 +183,12 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   missing files, and credential-shaped paths are omitted. `links` contains at
   most four valid HTTP(S) URLs. Engram never asks the model to generate
   references or fetches an extracted URL.
-- `/raw` preserves the visible pane's physical wrapped lines and attributes.
-  `/dump` streams physical full scrollback to an attachment. Both captures are
-  conditionally executed against the stored server, window, and pane identity
-  in the same tmux command queue; a queued request is canceled if that binding
-  changed before its worker began.
+- `/raw` captures the same complete bounded, plain logical-text frame used by
+  `🖼️ View`. `/dump` streams the pane's complete retained tmux history as plain
+  logical text, joining terminal soft wraps and omitting ANSI styling. Both
+  captures are conditionally executed against the stored server, window, and
+  pane identity in the same tmux command queue; a queued request is canceled if
+  that binding changed before its worker began.
 - `/raw` and `/dump` stop before Telegram's 50 MiB upload ceiling.
 - `engram inspect frame <watch-id>` captures at most 64 recent plain-text rows
   without tmux paste buffers, strips terminal controls, and caps stdout at
@@ -212,3 +213,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - Inline close requires a separate, expiring confirm/cancel callback. A failed
   tmux close does not mark a session closed.
 - Closed and lost sessions do not refresh or retain input controls.
+- `/resume <id> <codex|claude> <session-uuid>` creates a replacement tmux
+  window for a lost or closed watch, starts the allowlisted agent's native
+  resume command, and rebinds the existing watch ID and Telegram anchor. The
+  provider and UUID are persisted so later recoveries may use `/resume <id>`.
+- New sessions reuse the lowest closed watch ID without persisted resume
+  metadata before allocating another ID. Active, lost, and explicitly
+  resumable closed watches are never recycled, so ordinary create/close use
+  stays compact without sacrificing recoverable conversations.
