@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.5.0] - 2026-07-18
+
 ### Configuration
 
 - Add an optional trusted local snapshot-status command whose sanitized,
