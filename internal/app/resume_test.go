@@ -97,6 +97,28 @@ func TestResumeSessionUsesPersistedMappingAndRejectsRunningWatch(t *testing.T) {
 	}
 }
 
+func TestResumeSessionRejectsClosedWatch(t *testing.T) {
+	app, runner, id := newResumeTestApp(t, state.TerminalClosed)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.ResumeProgram = "codex"
+		session.ResumeSessionID = "019f5245-5070-7eb3-996c-e284e7cb222c"
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result := app.resumeSession(context.Background(), id, "", "")
+	if result.Outcome != actionUserError || !strings.Contains(result.Message, "only lost sessions can be resumed") {
+		t.Fatalf("closed resume result = %#v", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("closed resume touched tmux: %#v", runner.calls)
+	}
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalClosed {
+		t.Fatalf("closed session changed: %#v ok=%v", got, ok)
+	}
+}
+
 func newResumeTestApp(t *testing.T, terminalState state.TerminalState) (*App, *resumeRunner, int) {
 	t.Helper()
 	dir := t.TempDir()
