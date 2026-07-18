@@ -32,12 +32,12 @@ func recoveryTestApp(t *testing.T) (*App, state.TerminalSession) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &App{Store: store, Config: config.Config{OpenAIAPIKey: "sk-proj-super-secret-value"}}, session
+	return &App{Store: store, Config: config.Config{OpenAIAPIKey: "fixture-sensitive-value"}}, session
 }
 
 func TestRecoveryLedgerRecordsShellCommandsButNotAgentConversation(t *testing.T) {
 	app, session := recoveryTestApp(t)
-	app.recordSentRecoveryCommand(session, tmux.Pane{CurrentCmd: "bash", CurrentPath: "/work"}, "codex --token=sk-proj-super-secret-value")
+	app.recordSentRecoveryCommand(session, tmux.Pane{CurrentCmd: "bash", CurrentPath: "/work"}, "codex --credential=fixture-sensitive-value")
 	current, _ := app.Store.FindSession(session.ID)
 	if len(current.RecoveryEvents) != 1 || current.RecoveryEvents[0].Program != recovery.ProgramCodex || strings.Contains(current.RecoveryEvents[0].Command, "super-secret") {
 		t.Fatalf("shell recovery event = %#v", current.RecoveryEvents)
