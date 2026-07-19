@@ -14,26 +14,57 @@ import (
 )
 
 type snapshotTextFrame struct {
-	ChatID     int64
-	MessageID  int
-	ServerID   string
-	WindowID   string
-	PaneID     string
-	FrameHash  string
-	JoinedText string
+	ChatID           int64
+	MessageID        int
+	ServerID         string
+	WindowID         string
+	PaneID           string
+	FrameHash        string
+	PresentationHash string
+	JoinedText       string
 }
 
 func (a *App) rememberSnapshotTextFrame(ts state.TerminalSession, capture tmux.StyledCapture) {
-	a.rememberAnchorTextFrame(ts, capture.JoinedText, sha(capture.ANSI+"\x00"+capture.JoinedText))
+	text := accessibleCaptureText(capture)
+	frameHash := sha(capture.ANSI + "\x00" + text)
+	a.rememberAnchorTextFrameWithPresentation(ts, text, frameHash, frameHash)
 }
 
 func (a *App) rememberAnchorTextFrame(ts state.TerminalSession, text, frameHash string) {
+	a.rememberAnchorTextFrameWithPresentation(ts, text, frameHash, frameHash)
+}
+
+func (a *App) rememberAnchorTextFrameWithPresentation(ts state.TerminalSession, text, frameHash, presentationHash string) {
 	a.snapshotTextFrames.Store(ts.ID, snapshotTextFrame{
 		ChatID: ts.AnchorChatID, MessageID: ts.AnchorMessageID,
 		ServerID: ts.TmuxServerID, WindowID: ts.TmuxWindowID, PaneID: ts.TmuxPaneID,
-		FrameHash:  frameHash,
-		JoinedText: text,
+		FrameHash: frameHash, PresentationHash: presentationHash, JoinedText: text,
 	})
+}
+
+func (a *App) rememberGuidedViewTextFrame(ts state.TerminalSession, capture tmux.StyledCapture, presentationHash string) {
+	text := accessibleCaptureText(capture)
+	a.rememberAnchorTextFrameWithPresentation(ts, text, sha(capture.ANSI+"\x00"+text), presentationHash)
+}
+
+func (a *App) rememberOneOffViewTextFrame(ts state.TerminalSession, capture tmux.StyledCapture) {
+	presentationHash := ""
+	if current, ok := a.snapshotTextFrame(ts); ok {
+		presentationHash = current.PresentationHash
+	}
+	text := accessibleCaptureText(capture)
+	frameHash := sha(capture.ANSI + "\x00" + text)
+	if presentationHash == "" {
+		presentationHash = frameHash
+	}
+	a.rememberAnchorTextFrameWithPresentation(ts, text, frameHash, presentationHash)
+}
+
+func accessibleCaptureText(capture tmux.StyledCapture) string {
+	if capture.JoinedText != "" {
+		return capture.JoinedText
+	}
+	return capture.Text
 }
 
 func (a *App) snapshotTextFrame(ts state.TerminalSession) (snapshotTextFrame, bool) {

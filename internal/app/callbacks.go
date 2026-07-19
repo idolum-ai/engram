@@ -156,6 +156,60 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			return "callback_telegram_failed"
 		}
 		return result.status("callback")
+	case "resume":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		if ts.State != state.TerminalLost || !validResumeProgram(ts.ResumeProgram) || !validResumeSessionID(ts.ResumeSessionID) {
+			a.answerCallback(ctx, cb.ID, "exact resume is unavailable")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "resuming") {
+			return "callback_telegram_failed"
+		}
+		result := a.resumeSession(ctx, id, "", "")
+		if !result.OK() {
+			msg := *cb.Message
+			msg.From = &cb.From
+			a.reply(ctx, msg, result.Message)
+		}
+		return result.status("callback")
+	case "plan-resume":
+		callbackParts := strings.Split(parts[1], ":")
+		if len(callbackParts) != 2 {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		id, err := strconv.Atoi(callbackParts[0])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, ok := a.Store.FindSession(id)
+		if !ok || ts.State != state.TerminalLost || callbackParts[1] != sessionActionToken(ts) || !validResumeProgram(ts.ResumeProgram) || !validResumeSessionID(ts.ResumeSessionID) {
+			a.answerCallback(ctx, cb.ID, "recovery plan is stale; run /recovery again")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "resuming") {
+			return "callback_telegram_failed"
+		}
+		result := a.resumeSession(ctx, id, "", "")
+		msg := *cb.Message
+		msg.From = &cb.From
+		a.reply(ctx, msg, result.Message)
+		return result.status("callback")
+	case "plan-dismiss":
+		if _, err := a.Telegram.EditReplyMarkup(ctx, cb.Message.Chat.ID, cb.Message.MessageID, telegram.ClearMarkup()); err != nil && !telegram.IsMessageNotModified(err) {
+			a.answerCallback(ctx, cb.ID, "could not dismiss")
+			return "callback_telegram_failed"
+		}
+		return callbackAnswerStatus(a.answerCallback(ctx, cb.ID, "dismissed"), "callback_ok")
 	case "key":
 		id, preset, ok := parseKeyCallback(parts[1])
 		if !ok {
@@ -206,17 +260,32 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		msg := *cb.Message
 		msg.From = &cb.From
 		return a.download(ctx, msg, path).status("callback")
-	case "watch":
-		id, err := strconv.Atoi(parts[1])
-		if err != nil {
-			a.answerCallback(ctx, cb.ID, "bad session id")
-			return "failed_bad_callback_id"
+	case "session-watch":
+		id, _, status := a.validateSessionListCallback(ctx, cb, parts[1])
+		if status != "" {
+			return status
 		}
 		result := a.watchSession(ctx, id, cb.Message.MessageID)
 		if !a.answerCallback(ctx, cb.ID, result.Message) {
 			return "callback_telegram_failed"
 		}
 		return result.status("callback")
+	case "session-close":
+		_, ts, status := a.validateSessionListCallback(ctx, cb, parts[1])
+		if status != "" {
+			return status
+		}
+		token, err := a.issueCloseConfirmation(ts)
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "could not create confirmation")
+			return "callback_state_failed"
+		}
+		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(token)); err != nil {
+			a.consumeCloseConfirmation(token)
+			a.answerCallback(ctx, cb.ID, "could not open confirmation")
+			return "callback_telegram_failed"
+		}
+		return callbackAnswerStatus(a.answerCallback(ctx, cb.ID, "confirm below"), "callback_ok")
 	case "close":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -267,6 +336,25 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
+}
+
+func (a *App) validateSessionListCallback(ctx context.Context, cb telegram.CallbackQuery, value string) (int, state.TerminalSession, string) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		a.answerCallback(ctx, cb.ID, "bad session action")
+		return 0, state.TerminalSession{}, "failed_bad_callback_id"
+	}
+	id, err := strconv.Atoi(parts[0])
+	if err != nil || id <= 0 {
+		a.answerCallback(ctx, cb.ID, "bad session id")
+		return 0, state.TerminalSession{}, "failed_bad_callback_id"
+	}
+	ts, ok := a.Store.FindSession(id)
+	if !ok || ts.State == state.TerminalClosed || parts[1] != sessionActionToken(ts) {
+		a.answerCallback(ctx, cb.ID, "session list changed; run /sessions again")
+		return 0, state.TerminalSession{}, "callback_user_error"
+	}
+	return id, ts, ""
 }
 
 func directionalKeyPreset(preset string) bool {

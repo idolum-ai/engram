@@ -51,18 +51,26 @@ Telegram is Engram's only user interface.
 - Close controls are accepted only from the current canonical message. Close
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.
-- Lost anchors expose only `🧭 Link` for exact-identity recovery.
+- Lost anchors expose `🧭 Link` for exact-identity recovery and add `♻️ Go`
+  only when an allowlisted provider and valid persisted session UUID make a
+  native resume exact.
+- `/recovery` sends a deterministic, non-model-generated plan for lost
+  sessions. It contains copyable `/resume <id>` commands, compact one-tap
+  controls for exact provider mappings, advisory observed launches explicitly
+  labeled as not replayed, and a dismiss control. Plans are paginated so every
+  control remains on the same message as its visible session. Each control is
+  bound to the exact watch generation that produced it; older plans are inert.
 - Guide anchors expose refresh, the compact non-directional key controls,
   `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
   is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
   `🗣️ Talk` only when a guide is configured.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
-- `📄 Raw` uploads the process-local plain-text companion captured with the
-  exact canonical media image: the complete bounded snapshot frame in snapshot
-  mode or the displayed crop in guide mode. It never performs a later tmux
-  capture; when restart has cleared that companion, the control asks the user
-  to wait for the startup refresh.
+- `📄 Raw` uploads the process-local plain-text companion for the most recent
+  complete bounded `🖼️ View` frame. In guide mode the canonical card may show a
+  compact evidence crop, but Raw still contains the complete View text. It never
+  performs a later tmux capture; when restart has cleared that companion, the
+  control asks the user to wait for the startup refresh.
 - Key callbacks answer immediately before tmux work begins. A later tmux failure
   is delivered as a normal reply rather than leaving Telegram's progress state
   spinning until the terminal timeout.

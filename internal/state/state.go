@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 type TerminalState string
@@ -32,58 +33,94 @@ const (
 )
 
 type State struct {
-	Version            int                `json:"version"`
-	AnchorMode         string             `json:"anchor_mode,omitempty"`
-	NextSessionID      int                `json:"next_session_id"`
-	LastUpdateID       int                `json:"last_update_id"`
-	LastPollAt         time.Time          `json:"last_poll_at,omitempty"`
-	LastHaikuAt        time.Time          `json:"last_haiku_at,omitempty"`
-	LastHaikuError     string             `json:"last_haiku_error,omitempty"`
-	TerminalSessions   []TerminalSession  `json:"terminal_sessions"`
-	Attachments        []Attachment       `json:"attachments"`
-	AttachmentBypasses []AttachmentBypass `json:"attachment_bypasses,omitempty"`
-	UpdateJournal      []UpdateEvent      `json:"update_journal,omitempty"`
-	ProcessedMessages  map[string]bool    `json:"processed_messages,omitempty"`
+	Version                     int                `json:"version"`
+	AnchorMode                  string             `json:"anchor_mode,omitempty"`
+	NextSessionID               int                `json:"next_session_id"`
+	LastUpdateID                int                `json:"last_update_id"`
+	LastPollAt                  time.Time          `json:"last_poll_at,omitempty"`
+	LastHaikuAt                 time.Time          `json:"last_haiku_at,omitempty"`
+	LastHaikuError              string             `json:"last_haiku_error,omitempty"`
+	TerminalSessions            []TerminalSession  `json:"terminal_sessions"`
+	Attachments                 []Attachment       `json:"attachments"`
+	AttachmentBypasses          []AttachmentBypass `json:"attachment_bypasses,omitempty"`
+	UpdateJournal               []UpdateEvent      `json:"update_journal,omitempty"`
+	ProcessedMessages           map[string]bool    `json:"processed_messages,omitempty"`
+	HostBootID                  string             `json:"host_boot_id,omitempty"`
+	PendingRecoveryBootID       string             `json:"pending_recovery_boot_id,omitempty"`
+	LastRecoveryPlanHash        string             `json:"last_recovery_plan_hash,omitempty"`
+	RecoveryPlanMessageIDs      []int              `json:"recovery_plan_message_ids,omitempty"`
+	PendingRecoveryPlanHash     string             `json:"pending_recovery_plan_hash,omitempty"`
+	PendingRecoveryPlanNextPage int                `json:"pending_recovery_plan_next_page,omitempty"`
+}
+
+type RecoveryEvent struct {
+	At                time.Time `json:"at"`
+	Kind              string    `json:"kind"`
+	Command           string    `json:"command,omitempty"`
+	CommandHash       string    `json:"command_hash,omitempty"`
+	CWD               string    `json:"cwd,omitempty"`
+	ForegroundBefore  string    `json:"foreground_before,omitempty"`
+	ForegroundAfter   string    `json:"foreground_after,omitempty"`
+	ExpectedProcess   string    `json:"expected_process,omitempty"`
+	Validation        string    `json:"validation"`
+	Program           string    `json:"program,omitempty"`
+	ProviderSessionID string    `json:"provider_session_id,omitempty"`
+}
+
+type PendingResume struct {
+	StartedAt               time.Time      `json:"started_at"`
+	PreviousTmuxSessionName string         `json:"previous_tmux_session_name"`
+	PreviousTmuxWindowID    string         `json:"previous_tmux_window_id"`
+	PreviousTmuxPaneID      string         `json:"previous_tmux_pane_id"`
+	PreviousTmuxServerID    string         `json:"previous_tmux_server_id"`
+	PreviousOrigin          TerminalOrigin `json:"previous_origin,omitempty"`
+	PreviousCWD             string         `json:"previous_cwd,omitempty"`
+	PreviousResumeProgram   string         `json:"previous_resume_program,omitempty"`
+	PreviousResumeSessionID string         `json:"previous_resume_session_id,omitempty"`
 }
 
 type TerminalSession struct {
-	ID                       int            `json:"id"`
-	TmuxSessionName          string         `json:"tmux_session_name"`
-	TmuxWindowID             string         `json:"tmux_window_id"`
-	TmuxPaneID               string         `json:"tmux_pane_id"`
-	TmuxServerID             string         `json:"tmux_server_id,omitempty"`
-	Origin                   TerminalOrigin `json:"origin,omitempty"`
-	Title                    string         `json:"title"`
-	LastKnownCWD             string         `json:"last_known_cwd,omitempty"`
-	State                    TerminalState  `json:"state"`
-	CreatedAt                time.Time      `json:"created_at"`
-	UpdatedAt                time.Time      `json:"updated_at"`
-	LastActivityAt           time.Time      `json:"last_activity_at"`
-	LastRawCaptureHash       string         `json:"last_raw_capture_hash,omitempty"`
-	LastSnapshotCaptureHash  string         `json:"last_snapshot_capture_hash,omitempty"`
-	LastSnapshotAttemptAt    time.Time      `json:"last_snapshot_attempt_at,omitempty"`
-	LastRenderHash           string         `json:"last_render_hash,omitempty"`
-	LastSummary              string         `json:"last_summary,omitempty"`
-	SummaryMessageID         int            `json:"summary_message_id,omitempty"`
-	SnapshotMessageID        int            `json:"snapshot_message_id,omitempty"`
-	UpstreamMessageID        int            `json:"upstream_message_id,omitempty"`
-	SeenUpstreamSignalIDs    []string       `json:"seen_upstream_signal_ids,omitempty"`
-	LastUpstreamSignalAt     time.Time      `json:"last_upstream_signal_at,omitempty"`
-	UpstreamRetryAt          time.Time      `json:"upstream_retry_at,omitempty"`
-	StaleAlternateMessageIDs []int          `json:"stale_alternate_message_ids,omitempty"`
-	AnchorChatID             int64          `json:"anchor_chat_id,omitempty"`
-	AnchorMessageID          int            `json:"anchor_message_id,omitempty"`
-	AnchorFormat             string         `json:"anchor_format,omitempty"`
-	RetiringAnchorMessageID  int            `json:"retiring_anchor_message_id,omitempty"`
-	RetiringAnchorFormat     string         `json:"retiring_anchor_format,omitempty"`
-	RetiringAnchorRetryAt    time.Time      `json:"retiring_anchor_retry_at,omitempty"`
-	AnchorPinned             bool           `json:"anchor_pinned,omitempty"`
-	AnchorPinKnown           bool           `json:"anchor_pin_known,omitempty"`
-	WatchEnabled             bool           `json:"watch_enabled"`
-	LastAnchorEditAt         time.Time      `json:"last_anchor_edit_at,omitempty"`
-	LastRawCapture           string         `json:"last_raw_capture,omitempty"`
-	AnchorFiles              []string       `json:"-"`
-	AnchorFileToken          string         `json:"-"`
+	ID                       int             `json:"id"`
+	TmuxSessionName          string          `json:"tmux_session_name"`
+	TmuxWindowID             string          `json:"tmux_window_id"`
+	TmuxPaneID               string          `json:"tmux_pane_id"`
+	TmuxServerID             string          `json:"tmux_server_id,omitempty"`
+	Origin                   TerminalOrigin  `json:"origin,omitempty"`
+	Title                    string          `json:"title"`
+	LastKnownCWD             string          `json:"last_known_cwd,omitempty"`
+	State                    TerminalState   `json:"state"`
+	CreatedAt                time.Time       `json:"created_at"`
+	UpdatedAt                time.Time       `json:"updated_at"`
+	LastActivityAt           time.Time       `json:"last_activity_at"`
+	LastRawCaptureHash       string          `json:"last_raw_capture_hash,omitempty"`
+	LastSnapshotCaptureHash  string          `json:"last_snapshot_capture_hash,omitempty"`
+	LastSnapshotAttemptAt    time.Time       `json:"last_snapshot_attempt_at,omitempty"`
+	LastRenderHash           string          `json:"last_render_hash,omitempty"`
+	LastSummary              string          `json:"last_summary,omitempty"`
+	SummaryMessageID         int             `json:"summary_message_id,omitempty"`
+	SnapshotMessageID        int             `json:"snapshot_message_id,omitempty"`
+	UpstreamMessageID        int             `json:"upstream_message_id,omitempty"`
+	SeenUpstreamSignalIDs    []string        `json:"seen_upstream_signal_ids,omitempty"`
+	LastUpstreamSignalAt     time.Time       `json:"last_upstream_signal_at,omitempty"`
+	UpstreamRetryAt          time.Time       `json:"upstream_retry_at,omitempty"`
+	StaleAlternateMessageIDs []int           `json:"stale_alternate_message_ids,omitempty"`
+	AnchorChatID             int64           `json:"anchor_chat_id,omitempty"`
+	AnchorMessageID          int             `json:"anchor_message_id,omitempty"`
+	AnchorFormat             string          `json:"anchor_format,omitempty"`
+	RetiringAnchorMessageID  int             `json:"retiring_anchor_message_id,omitempty"`
+	RetiringAnchorFormat     string          `json:"retiring_anchor_format,omitempty"`
+	RetiringAnchorRetryAt    time.Time       `json:"retiring_anchor_retry_at,omitempty"`
+	AnchorPinned             bool            `json:"anchor_pinned,omitempty"`
+	AnchorPinKnown           bool            `json:"anchor_pin_known,omitempty"`
+	WatchEnabled             bool            `json:"watch_enabled"`
+	ResumeProgram            string          `json:"resume_program,omitempty"`
+	ResumeSessionID          string          `json:"resume_session_id,omitempty"`
+	PendingResume            *PendingResume  `json:"pending_resume,omitempty"`
+	RecoveryEvents           []RecoveryEvent `json:"recovery_events,omitempty"`
+	LastAnchorEditAt         time.Time       `json:"last_anchor_edit_at,omitempty"`
+	LastRawCapture           string          `json:"last_raw_capture,omitempty"`
+	AnchorFiles              []string        `json:"-"`
+	AnchorFileToken          string          `json:"-"`
 }
 
 func (s TerminalSession) HasSeenUpstreamSignal(recordID string) bool {
@@ -102,6 +139,17 @@ func (s *TerminalSession) RecordSeenUpstreamSignal(recordID string) {
 	s.SeenUpstreamSignalIDs = append(s.SeenUpstreamSignalIDs, recordID)
 	if len(s.SeenUpstreamSignalIDs) > maxSeenUpstreamSignals {
 		s.SeenUpstreamSignalIDs = append([]string(nil), s.SeenUpstreamSignalIDs[len(s.SeenUpstreamSignalIDs)-maxSeenUpstreamSignals:]...)
+	}
+}
+
+func (s *TerminalSession) RecordRecoveryEvent(event RecoveryEvent) {
+	if event.At.IsZero() {
+		event.At = time.Now().UTC()
+	}
+	normalizeRecoveryEvent(&event)
+	s.RecoveryEvents = append(s.RecoveryEvents, event)
+	if len(s.RecoveryEvents) > maxRecoveryEvents {
+		s.RecoveryEvents = append([]RecoveryEvent(nil), s.RecoveryEvents[len(s.RecoveryEvents)-maxRecoveryEvents:]...)
 	}
 }
 
@@ -155,17 +203,21 @@ type Store struct {
 }
 
 const (
-	currentStateVersion    = 9
-	maxTerminalSessions    = 200
-	maxAttachments         = 200
-	maxAttachmentBypasses  = 100
-	maxUpdateJournal       = 200
-	maxStaleAlternates     = 16
-	maxSeenUpstreamSignals = 32
-	maxProcessedMessages   = 2_000
-	maxAuditFileBytes      = int64(4 << 20)
-	maxAuditRecordBytes    = 64 << 10
-	maxReadOnlyStateBytes  = 16 << 20
+	currentStateVersion     = 15
+	maxTerminalSessions     = 200
+	maxAttachments          = 200
+	maxAttachmentBypasses   = 100
+	maxUpdateJournal        = 200
+	maxStaleAlternates      = 16
+	maxSeenUpstreamSignals  = 32
+	maxRecoveryEvents       = 24
+	maxRecoveryPlanMessages = 50
+	maxRecoveryCommandBytes = 512
+	maxRecoveryFieldBytes   = 4096
+	maxProcessedMessages    = 2_000
+	maxAuditFileBytes       = int64(4 << 20)
+	maxAuditRecordBytes     = 64 << 10
+	maxReadOnlyStateBytes   = 16 << 20
 )
 
 // ReadSnapshot reads and normalizes persisted state without creating,
@@ -212,9 +264,7 @@ func ReadSnapshot(path string) (State, error) {
 			snapshot.TerminalSessions[index].Origin = TerminalOriginAttached
 		}
 	}
-	if snapshot.NextSessionID == 0 {
-		snapshot.NextSessionID = maxSessionID(snapshot.TerminalSessions) + 1
-	}
+	snapshot.NextSessionID = nextSessionID(snapshot.TerminalSessions)
 	if snapshot.ProcessedMessages == nil {
 		snapshot.ProcessedMessages = map[string]bool{}
 	}
@@ -261,9 +311,7 @@ func Open(path, auditPath string) (*Store, error) {
 		s.state.AnchorMode = ""
 	}
 	normalizeTerminalSessions(s.state.TerminalSessions)
-	if s.state.NextSessionID == 0 {
-		s.state.NextSessionID = maxSessionID(s.state.TerminalSessions) + 1
-	}
+	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
 	if s.state.ProcessedMessages == nil {
 		s.state.ProcessedMessages = map[string]bool{}
 	}
@@ -305,8 +353,151 @@ func (s *Store) SetAnchorMode(mode string) error {
 	return nil
 }
 
+// ObserveHostBoot records the current host boot incarnation. A changed boot is
+// retained as pending until Engram has successfully delivered its deterministic
+// recovery plan, so an interrupted service start retries on the same boot.
+func (s *Store) ObserveHostBoot(bootID string) (pending string, changed bool, err error) {
+	bootID = strings.TrimSpace(bootID)
+	if bootID == "" || len(bootID) > 256 || strings.ContainsRune(bootID, '\x00') {
+		return "", false, fmt.Errorf("invalid host boot id")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previousHostBootID := s.state.HostBootID
+	previousPending := s.state.PendingRecoveryBootID
+	if s.state.HostBootID == "" {
+		s.state.HostBootID = bootID
+	} else if s.state.HostBootID != bootID {
+		s.state.HostBootID = bootID
+		s.state.PendingRecoveryBootID = bootID
+		changed = true
+	}
+	pending = s.state.PendingRecoveryBootID
+	if s.state.HostBootID == previousHostBootID && s.state.PendingRecoveryBootID == previousPending {
+		return pending, changed, nil
+	}
+	if saveErr := s.saveLocked(); saveErr != nil {
+		if !PersistenceReachedReplacement(saveErr) {
+			s.state.HostBootID = previousHostBootID
+			s.state.PendingRecoveryBootID = previousPending
+		}
+		return pending, changed, saveErr
+	}
+	return pending, changed, nil
+}
+
+func (s *Store) AcknowledgeRecoveryBoot(bootID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.state.PendingRecoveryBootID
+	if s.state.PendingRecoveryBootID == strings.TrimSpace(bootID) {
+		s.state.PendingRecoveryBootID = ""
+	} else {
+		return nil
+	}
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.PendingRecoveryBootID = previous
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) SetRecoveryPlanHash(hash string) error {
+	hash = strings.TrimSpace(hash)
+	if len(hash) > 128 || strings.ContainsRune(hash, '\x00') {
+		return fmt.Errorf("invalid recovery plan hash")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.state.LastRecoveryPlanHash
+	if previous == hash {
+		return nil
+	}
+	s.state.LastRecoveryPlanHash = hash
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.LastRecoveryPlanHash = previous
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) SetRecoveryPlanProgress(hash string, nextPage int, messageIDs []int) error {
+	hash, err := validateRecoveryPlanProgress(hash, nextPage, messageIDs)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := append([]int(nil), s.state.RecoveryPlanMessageIDs...)
+	previousHash := s.state.PendingRecoveryPlanHash
+	previousNextPage := s.state.PendingRecoveryPlanNextPage
+	s.state.RecoveryPlanMessageIDs = append([]int(nil), messageIDs...)
+	s.state.PendingRecoveryPlanHash = hash
+	s.state.PendingRecoveryPlanNextPage = nextPage
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.RecoveryPlanMessageIDs = previous
+			s.state.PendingRecoveryPlanHash = previousHash
+			s.state.PendingRecoveryPlanNextPage = previousNextPage
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) CompleteRecoveryPlan(hash string, messageIDs []int) error {
+	hash, err := validateRecoveryPlanProgress(hash, 0, messageIDs)
+	if err != nil || hash == "" {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("invalid recovery plan hash")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previousHash := s.state.LastRecoveryPlanHash
+	previousMessageIDs := append([]int(nil), s.state.RecoveryPlanMessageIDs...)
+	previousPendingHash := s.state.PendingRecoveryPlanHash
+	previousNextPage := s.state.PendingRecoveryPlanNextPage
+	s.state.LastRecoveryPlanHash = hash
+	s.state.RecoveryPlanMessageIDs = append([]int(nil), messageIDs...)
+	s.state.PendingRecoveryPlanHash = ""
+	s.state.PendingRecoveryPlanNextPage = 0
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.LastRecoveryPlanHash = previousHash
+			s.state.RecoveryPlanMessageIDs = previousMessageIDs
+			s.state.PendingRecoveryPlanHash = previousPendingHash
+			s.state.PendingRecoveryPlanNextPage = previousNextPage
+		}
+		return err
+	}
+	return nil
+}
+
+func validateRecoveryPlanProgress(hash string, nextPage int, messageIDs []int) (string, error) {
+	hash = strings.TrimSpace(hash)
+	if len(hash) > 128 || strings.ContainsRune(hash, '\x00') || nextPage < 0 || nextPage > maxRecoveryPlanMessages {
+		return "", fmt.Errorf("invalid recovery plan progress")
+	}
+	if len(messageIDs) > maxRecoveryPlanMessages {
+		return "", fmt.Errorf("too many recovery plan messages")
+	}
+	for _, messageID := range messageIDs {
+		if messageID <= 0 {
+			return "", fmt.Errorf("invalid recovery plan message id")
+		}
+	}
+	return hash, nil
+}
+
 func (s *Store) saveLocked() error {
 	s.pruneStateLocked(time.Now().UTC())
+	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
 	persisted := cloneState(s.state)
 	for i := range persisted.TerminalSessions {
 		persisted.TerminalSessions[i].LastRawCapture = ""
@@ -527,9 +718,12 @@ func boundedAuditTail(path string, maxBytes int64) ([]byte, error) {
 func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string) (TerminalSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := cloneState(s.state)
 	now := time.Now().UTC()
-	id := s.state.NextSessionID
-	s.state.NextSessionID++
+	id, replaceIndex, err := sessionAllocationSlot(s.state.TerminalSessions)
+	if err != nil {
+		return TerminalSession{}, err
+	}
 	ts := TerminalSession{
 		ID:              id,
 		TmuxSessionName: tmuxSessionName,
@@ -542,8 +736,19 @@ func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string)
 		LastActivityAt:  now,
 		WatchEnabled:    false,
 	}
-	s.state.TerminalSessions = append(s.state.TerminalSessions, ts)
-	return ts, s.saveLocked()
+	if replaceIndex >= 0 {
+		s.state.TerminalSessions[replaceIndex] = ts
+	} else {
+		s.state.TerminalSessions = append(s.state.TerminalSessions, ts)
+	}
+	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state = previous
+		}
+		return ts, err
+	}
+	return ts, nil
 }
 
 func (s *Store) UpdateSession(id int, fn func(*TerminalSession)) (TerminalSession, bool, error) {
@@ -769,14 +974,40 @@ func (s *Store) NoteGuide(errText string) error {
 	return s.saveLocked()
 }
 
-func maxSessionID(sessions []TerminalSession) int {
-	max := 0
-	for _, s := range sessions {
-		if s.ID > max {
-			max = s.ID
+func sessionAllocationSlot(sessions []TerminalSession) (int, int, error) {
+	closedByID := make(map[int]int)
+	used := make(map[int]bool)
+	for index, session := range sessions {
+		if session.ID <= 0 || session.ID > maxTerminalSessions {
+			continue
+		}
+		used[session.ID] = true
+		if session.State == TerminalClosed && session.ResumeProgram == "" && session.ResumeSessionID == "" {
+			closedByID[session.ID] = index
 		}
 	}
-	return max
+	for id := 1; id <= maxTerminalSessions; id++ {
+		if index, ok := closedByID[id]; ok {
+			return id, index, nil
+		}
+	}
+	for id := 1; id <= maxTerminalSessions; id++ {
+		if !used[id] {
+			return id, -1, nil
+		}
+	}
+	maxID := 0
+	for _, session := range sessions {
+		if session.ID > maxID {
+			maxID = session.ID
+		}
+	}
+	return maxID + 1, -1, nil
+}
+
+func nextSessionID(sessions []TerminalSession) int {
+	id, _, _ := sessionAllocationSlot(sessions)
+	return id
 }
 
 func (s *Store) appendUpdateLocked(event UpdateEvent) {
@@ -934,13 +1165,58 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.State = TerminalLost
 			session.WatchEnabled = false
 		}
+		if session.State == TerminalClosed {
+			session.ResumeProgram = ""
+			session.ResumeSessionID = ""
+			session.PendingResume = nil
+			session.RecoveryEvents = nil
+		}
 		if len(session.StaleAlternateMessageIDs) > maxStaleAlternates {
 			session.StaleAlternateMessageIDs = append([]int(nil), session.StaleAlternateMessageIDs[len(session.StaleAlternateMessageIDs)-maxStaleAlternates:]...)
 		}
 		if len(session.SeenUpstreamSignalIDs) > maxSeenUpstreamSignals {
 			session.SeenUpstreamSignalIDs = append([]string(nil), session.SeenUpstreamSignalIDs[len(session.SeenUpstreamSignalIDs)-maxSeenUpstreamSignals:]...)
 		}
+		if len(session.RecoveryEvents) > maxRecoveryEvents {
+			session.RecoveryEvents = append([]RecoveryEvent(nil), session.RecoveryEvents[len(session.RecoveryEvents)-maxRecoveryEvents:]...)
+		}
+		for eventIndex := range session.RecoveryEvents {
+			normalizeRecoveryEvent(&session.RecoveryEvents[eventIndex])
+		}
+		if pending := session.PendingResume; pending != nil {
+			pending.PreviousTmuxSessionName = truncateUTF8(pending.PreviousTmuxSessionName, 256)
+			pending.PreviousTmuxWindowID = truncateUTF8(pending.PreviousTmuxWindowID, 64)
+			pending.PreviousTmuxPaneID = truncateUTF8(pending.PreviousTmuxPaneID, 64)
+			pending.PreviousTmuxServerID = truncateUTF8(pending.PreviousTmuxServerID, 128)
+			pending.PreviousCWD = truncateUTF8(pending.PreviousCWD, maxRecoveryFieldBytes)
+			pending.PreviousResumeProgram = truncateUTF8(pending.PreviousResumeProgram, 32)
+			pending.PreviousResumeSessionID = truncateUTF8(pending.PreviousResumeSessionID, 128)
+		}
 	}
+}
+
+func normalizeRecoveryEvent(event *RecoveryEvent) {
+	event.Kind = truncateUTF8(event.Kind, 64)
+	event.Command = truncateUTF8(event.Command, maxRecoveryCommandBytes)
+	event.CommandHash = truncateUTF8(event.CommandHash, 128)
+	event.CWD = truncateUTF8(event.CWD, maxRecoveryFieldBytes)
+	event.ForegroundBefore = truncateUTF8(event.ForegroundBefore, 256)
+	event.ForegroundAfter = truncateUTF8(event.ForegroundAfter, 256)
+	event.ExpectedProcess = truncateUTF8(event.ExpectedProcess, 256)
+	event.Validation = truncateUTF8(event.Validation, 64)
+	event.Program = truncateUTF8(event.Program, 32)
+	event.ProviderSessionID = truncateUTF8(event.ProviderSessionID, 128)
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.ValidString(value[:cut]) {
+		cut--
+	}
+	return value[:cut]
 }
 
 func sessionRecency(session TerminalSession) time.Time {
@@ -965,6 +1241,7 @@ func maxAttachmentID(attachments []Attachment) int {
 
 func cloneState(in State) State {
 	out := in
+	out.RecoveryPlanMessageIDs = append([]int(nil), in.RecoveryPlanMessageIDs...)
 	out.TerminalSessions = append([]TerminalSession(nil), in.TerminalSessions...)
 	for i := range out.TerminalSessions {
 		out.TerminalSessions[i] = cloneTerminalSession(out.TerminalSessions[i])
@@ -981,8 +1258,13 @@ func cloneState(in State) State {
 
 func cloneTerminalSession(in TerminalSession) TerminalSession {
 	out := in
+	if in.PendingResume != nil {
+		pending := *in.PendingResume
+		out.PendingResume = &pending
+	}
 	out.AnchorFiles = append([]string(nil), in.AnchorFiles...)
 	out.StaleAlternateMessageIDs = append([]int(nil), in.StaleAlternateMessageIDs...)
 	out.SeenUpstreamSignalIDs = append([]string(nil), in.SeenUpstreamSignalIDs...)
+	out.RecoveryEvents = append([]RecoveryEvent(nil), in.RecoveryEvents...)
 	return out
 }

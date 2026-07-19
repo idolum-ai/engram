@@ -34,10 +34,13 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux window creation failed"}
 	}
 	ts, err := a.Store.AllocateSession(sessionName, windowID, paneID, title)
-	if err != nil {
+	if err != nil && !state.PersistenceReachedReplacement(err) {
 		_, _ = a.terminalMechanics().CloseWindow(tmuxCtx, mechanics.Binding{PaneID: paneID, WindowID: windowID, ServerID: serverID})
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "session state allocation failed"}
+	}
+	if err != nil {
+		_ = a.audit("state.session", "durability_uncertain", map[string]any{"session_id": ts.ID, "operation": "allocate", "error": err.Error()})
 	}
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.Origin = state.TerminalOriginCreated
@@ -57,6 +60,9 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 	if err := a.recordValidatedPane(ts, pane); err != nil {
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "initial session state update failed"}
+	}
+	if current, ok := a.Store.FindSession(ts.ID); ok {
+		a.recordSentRecoveryCommand(current, pane, input)
 	}
 	resp, err := a.sendAnchor(ctx, msg.Chat.ID, a.renderLocal(ts, "starting; waiting for terminal output"), msg.MessageID, a.anchorMarkup(ts))
 	anchorReady := false
@@ -197,9 +203,12 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 	}
 	title := tmux.AttachedTitle(window)
 	ts, err := a.Store.AllocateSession(window.SessionName, window.ID, window.PaneID, title)
-	if err != nil {
+	if err != nil && !state.PersistenceReachedReplacement(err) {
 		a.reply(ctx, msg, "state error: "+err.Error())
 		return actionResult{Outcome: actionStateFailed, Message: "state error"}
+	}
+	if err != nil {
+		_ = a.audit("state.session", "durability_uncertain", map[string]any{"session_id": ts.ID, "operation": "allocate_attached", "error": err.Error()})
 	}
 	updated, _, err := a.Store.UpdateSession(ts.ID, func(s *state.TerminalSession) {
 		s.Origin = state.TerminalOriginAttached
@@ -343,6 +352,9 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 	if ts.State == state.TerminalClosed {
 		return actionResult{Outcome: actionUserError, Message: "session is " + string(ts.State) + "; use /sessions to attach an active pane"}
 	}
+	if ts.PendingResume != nil {
+		return actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}
+	}
 	if ts.State == state.TerminalLost {
 		tctx, cancel := tmux.TimeoutContext(ctx)
 		defer cancel()
@@ -411,6 +423,7 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 			s.State = state.TerminalClosed
 			s.WatchEnabled = false
+			clearRecoveryMetadata(s)
 			s.LastSummary = "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed."
 		})
 		committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
@@ -452,6 +465,7 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
+		clearRecoveryMetadata(s)
 		s.LastSummary = "status:\nThe Engram-created tmux window was closed."
 	})
 	committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
@@ -475,6 +489,13 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 	return actionResult{Outcome: actionOK, Message: "closed"}
 }
 
+func clearRecoveryMetadata(session *state.TerminalSession) {
+	session.ResumeProgram = ""
+	session.ResumeSessionID = ""
+	session.PendingResume = nil
+	session.RecoveryEvents = nil
+}
+
 func closeConfirmationText(ts state.TerminalSession) string {
 	if ts.Origin == state.TerminalOriginCreated {
 		return fmt.Sprintf("Close [%d]? This will kill its Engram-created tmux window.", ts.ID)
@@ -482,17 +503,17 @@ func closeConfirmationText(ts state.TerminalSession) string {
 	return fmt.Sprintf("Untrack [%d]? Its existing tmux window will remain open.", ts.ID)
 }
 
-func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
-	a.markSessionLostConditionally(ctx, ts, cause, false)
+func (a *App) markSessionLost(ctx context.Context, ts state.TerminalSession, cause error) error {
+	return a.markSessionLostConditionally(ctx, ts, cause, false)
 }
 
-func (a *App) markWatchedSessionLost(ctx context.Context, ts state.TerminalSession, cause error) {
-	a.markSessionLostConditionally(ctx, ts, cause, true)
+func (a *App) markWatchedSessionLost(ctx context.Context, ts state.TerminalSession, cause error) error {
+	return a.markSessionLostConditionally(ctx, ts, cause, true)
 }
 
-func (a *App) markSessionLostConditionally(ctx context.Context, ts state.TerminalSession, cause error, requireWatching bool) {
+func (a *App) markSessionLostConditionally(ctx context.Context, ts state.TerminalSession, cause error, requireWatching bool) error {
 	if ts.State == state.TerminalClosed {
-		return
+		return nil
 	}
 	message := "session identity is no longer valid"
 	if cause != nil {
@@ -519,13 +540,17 @@ func (a *App) markSessionLostConditionally(ctx context.Context, ts state.Termina
 	}
 	if !committed {
 		anchorLock.Unlock()
-		return
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("session changed before it could be marked lost")
 	}
 	a.resetConversationEpochLocked(ts.ID)
 	anchorLock.Unlock()
 	_ = a.audit("tmux.identity", "lost", map[string]any{"session_id": ts.ID, "pane_id": ts.TmuxPaneID, "window_id": ts.TmuxWindowID, "error": message})
 	a.updateAnchorLocal(ctx, ts.ID, "status:\nThe tracked tmux pane no longer matches this session. Engram stopped watching it.\n\nrecommendation:\nUse /sessions and attach the intended pane again.", true)
 	a.reconcileAnchorPresentation(ctx, ts.ID)
+	return nil
 }
 
 func (a *App) sessions(ctx context.Context, msg telegram.Message) {
@@ -535,18 +560,18 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	}
 	var b strings.Builder
 	b.WriteString("sessions\n")
-	ids := writeTrackedSessions(&b, st.TerminalSessions)
-	if len(ids) == 0 {
+	actions := writeTrackedSessions(&b, st.TerminalSessions)
+	if len(actions) == 0 {
 		b.WriteString("\nNo tracked sessions.\n")
 	}
 	b.WriteString("\ntmux\n")
 	attachTargets := a.writeTmuxSessions(ctx, &b)
-	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(ids, attachTargets)); err != nil {
+	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(actions, attachTargets)); err != nil {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
 	}
 }
 
-func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) []int {
+func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) []telegram.SessionAction {
 	active := make([]state.TerminalSession, 0, len(sessions))
 	for _, session := range sessions {
 		if session.State != state.TerminalClosed {
@@ -570,7 +595,7 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 		1: "active",
 	}
 	lastRank := -1
-	ids := make([]int, 0, len(active))
+	actions := make([]telegram.SessionAction, 0, len(active))
 	for _, session := range active {
 		rank := sessionPresentationRank(session)
 		if rank != lastRank {
@@ -579,9 +604,13 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 		}
 		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
 		b.WriteString("\n")
-		ids = append(ids, session.ID)
+		actions = append(actions, telegram.SessionAction{ID: session.ID, Token: sessionActionToken(session)})
 	}
-	return ids
+	return actions
+}
+
+func sessionActionToken(session state.TerminalSession) string {
+	return sha(fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%s", session.ID, session.CreatedAt.UTC().Format(time.RFC3339Nano), session.TmuxServerID, session.TmuxWindowID, session.TmuxPaneID, session.ResumeSessionID))[:12]
 }
 
 func sessionPresentationRank(session state.TerminalSession) int {
