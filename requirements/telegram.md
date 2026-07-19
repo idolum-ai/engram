@@ -57,7 +57,9 @@ Telegram is Engram's only user interface.
 - `/recovery` sends a deterministic, non-model-generated plan for lost
   sessions. It contains copyable `/resume <id>` commands, compact one-tap
   controls for exact provider mappings, advisory observed launches explicitly
-  labeled as not replayed, and a dismiss control.
+  labeled as not replayed, and a dismiss control. Plans are paginated so every
+  control remains on the same message as its visible session. Each control is
+  bound to the exact watch generation that produced it; older plans are inert.
 - Guide anchors expose refresh, the compact non-directional key controls,
   `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
   is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and

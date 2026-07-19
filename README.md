@@ -458,9 +458,9 @@ restore it into the existing watch and anchor:
 ```
 
 Engram persists the allowlisted program and session UUID, so a later recovery
-of the same watch only needs `/resume 5`. New sessions reuse closed,
-non-resumable numeric IDs before allocating larger ones; running and
-recoverable watches keep their IDs.
+of the same lost watch only needs `/resume 5`. Closing a watch is final and
+clears that recovery mapping. New sessions reuse closed numeric IDs before
+allocating larger ones; running and recoverable watches keep their IDs.
 
 For automatic Codex mapping, install Engram's narrow `SessionStart` hook in
 `~/.codex/hooks.json` after installing the binary:

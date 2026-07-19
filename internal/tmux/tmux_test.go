@@ -902,6 +902,18 @@ func TestIsIdentityLoss(t *testing.T) {
 	}
 }
 
+func TestValidateBindingTreatsMissingServerAsIdentityLoss(t *testing.T) {
+	runner := &fakeRunner{err: &commandError{
+		args:   []string{"display-message"},
+		err:    errors.New("exit status 1"),
+		stderr: "no server running on /tmp/tmux/default",
+	}}
+	_, err := New(runner).ValidateBinding(context.Background(), "%3", "@2", "0123456789abcdef0123456789abcdef")
+	if err == nil || !IsIdentityLoss(err) {
+		t.Fatalf("missing-server validation error = %v", err)
+	}
+}
+
 func TestKillWindowChecksCompleteBindingInOneTmuxCall(t *testing.T) {
 	runner := &fakeRunner{}
 	err := New(runner).KillWindowIfBindingMatches(context.Background(), "%3", "@2", "0123456789abcdef0123456789abcdef")

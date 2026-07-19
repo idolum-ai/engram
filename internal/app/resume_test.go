@@ -2,13 +2,16 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/mechanics"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
@@ -119,6 +122,81 @@ func TestResumeSessionRejectsClosedWatch(t *testing.T) {
 	}
 }
 
+func TestClearRecoveryMetadataMakesClosedWatchReusable(t *testing.T) {
+	session := state.TerminalSession{
+		ResumeProgram:   "codex",
+		ResumeSessionID: "019f5245-5070-7eb3-996c-e284e7cb222c",
+		RecoveryEvents:  []state.RecoveryEvent{{Kind: "provider_session"}},
+	}
+	clearRecoveryMetadata(&session)
+	if session.ResumeProgram != "" || session.ResumeSessionID != "" || len(session.RecoveryEvents) != 0 {
+		t.Fatalf("recovery metadata remained after close: %#v", session)
+	}
+}
+
+func TestResumeSessionRollsBackWhenProviderDoesNotStart(t *testing.T) {
+	app, runner, id := newResumeTestApp(t, state.TerminalLost)
+	runner.neverResume = true
+	const sessionID = "019f5245-5070-7eb3-996c-e284e7cb222c"
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	result := app.resumeSession(ctx, id, "codex", sessionID)
+	if result.Outcome != actionTmuxFailed || !strings.Contains(result.Message, "did not start") {
+		t.Fatalf("resume result = %#v", result)
+	}
+	got, ok := app.Store.FindSession(id)
+	if !ok || got.State != state.TerminalLost || got.TmuxWindowID != "@9" || got.TmuxPaneID != "%9" {
+		t.Fatalf("failed resume did not restore original watch: %#v ok=%v", got, ok)
+	}
+	if !runner.calledContaining("kill-window -t @2") {
+		t.Fatalf("failed resume did not clean up replacement window: %#v", runner.calls)
+	}
+}
+
+func TestResumeSessionRefusesToDuplicateLiveOriginalPane(t *testing.T) {
+	app, runner, id := newResumeTestApp(t, state.TerminalLost)
+	runner.existingPane = true
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.TmuxServerID = appTestServerID
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := app.resumeSession(context.Background(), id, "codex", "019f5245-5070-7eb3-996c-e284e7cb222c")
+	if result.Outcome != actionUserError || !strings.Contains(result.Message, "original pane still exists") {
+		t.Fatalf("live-pane resume result = %#v", result)
+	}
+	if runner.called("new-window") {
+		t.Fatalf("live-pane resume created a duplicate window: %#v", runner.calls)
+	}
+}
+
+func TestAbortPreparedResumePreservesLinkedBindingWhenCleanupFails(t *testing.T) {
+	app, runner, id := newResumeTestApp(t, state.TerminalLost)
+	runner.failCleanup = true
+	original, _ := app.Store.FindSession(id)
+	prepared, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.PendingResume = &state.PendingResume{
+			PreviousTmuxSessionName: original.TmuxSessionName,
+			PreviousTmuxWindowID:    original.TmuxWindowID, PreviousTmuxPaneID: original.TmuxPaneID,
+			PreviousTmuxServerID: original.TmuxServerID, PreviousOrigin: original.Origin,
+		}
+		session.TmuxWindowID = "@2"
+		session.TmuxPaneID = "%2"
+		session.TmuxServerID = appTestServerID
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := app.abortPreparedResume(prepared, mechanics.Binding{PaneID: "%2", WindowID: "@2", ServerID: appTestServerID}, "start failed", actionTmuxFailed)
+	if result.Outcome != actionStateFailed || !strings.Contains(result.Message, "cleanup failed") {
+		t.Fatalf("abort result = %#v", result)
+	}
+	got, _ := app.Store.FindSession(id)
+	if got.PendingResume == nil || got.TmuxPaneID != "%2" {
+		t.Fatalf("failed cleanup discarded actionable replacement binding: %#v", got)
+	}
+}
+
 func newResumeTestApp(t *testing.T, terminalState state.TerminalState) (*App, *resumeRunner, int) {
 	t.Helper()
 	dir := t.TempDir()
@@ -146,8 +224,13 @@ func newResumeTestApp(t *testing.T, terminalState state.TerminalState) (*App, *r
 }
 
 type resumeRunner struct {
-	calls [][]string
-	cwd   string
+	calls        [][]string
+	cwd          string
+	program      string
+	resumed      bool
+	neverResume  bool
+	existingPane bool
+	failCleanup  bool
 }
 
 func (r *resumeRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -162,13 +245,51 @@ func (r *resumeRunner) Run(_ context.Context, args ...string) (string, error) {
 		return appTestServerID + "\n", nil
 	case "new-window":
 		return framedTmuxRecord("@2", "%2"), nil
+	case "list-panes":
+		if r.existingPane {
+			return framedTmuxRecord("$1", "@9", "%9", "main", "9", "0", "1", r.cwd, "codex"), nil
+		}
+		return "", nil
 	case "display-message":
-		return framedTmuxBindingRecord("$1", "@2", "%2", "main", "1", "0", "1", r.cwd, "bash"), nil
-	case "resize-window", "set-buffer", "if-shell", "kill-window", "delete-buffer":
+		program := "bash"
+		if r.resumed {
+			program = r.program
+		}
+		return framedTmuxBindingRecord("$1", "@2", "%2", "main", "1", "0", "1", r.cwd, program), nil
+	case "set-buffer":
+		r.program = strings.Fields(args[len(args)-1])[0]
+		return "", nil
+	case "if-shell":
+		if r.failCleanup && strings.Contains(strings.Join(args, " "), "kill-window -t @2") {
+			return "", errors.New("cleanup failed")
+		}
+		r.resumed = !r.neverResume
+		return "", nil
+	case "resize-window", "kill-window", "delete-buffer":
 		return "", nil
 	default:
 		return "", fmt.Errorf("unexpected tmux call: %v", args)
 	}
+}
+
+func (r *resumeRunner) called(command string) bool {
+	for _, call := range r.calls {
+		if len(call) > 0 && call[0] == command {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *resumeRunner) calledContaining(fragment string) bool {
+	for _, call := range r.calls {
+		for _, argument := range call {
+			if strings.Contains(argument, fragment) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *resumeRunner) calledWith(command, literal string) bool {

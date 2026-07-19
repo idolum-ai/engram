@@ -214,13 +214,18 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   tmux close does not mark a session closed.
 - Closed and lost sessions do not refresh or retain input controls.
 - `/resume <id> <codex|claude> <session-uuid>` creates a replacement tmux
-  window for a lost or closed watch, starts the allowlisted agent's native
+  window for a lost watch, starts the allowlisted agent's native
   resume command, and rebinds the existing watch ID and Telegram anchor. The
   provider and UUID are persisted so later recoveries may use `/resume <id>`.
-- New sessions reuse the lowest closed watch ID without persisted resume
-  metadata before allocating another ID. Active, lost, and explicitly
-  resumable closed watches are never recycled, so ordinary create/close use
-  stays compact without sacrificing recoverable conversations.
+  Before Enter, Engram durably binds the replacement window while retaining the
+  lost state. It refuses native resume if the original pane still exists and
+  reports success only after tmux observes the requested provider in the
+  replacement pane. Failed starts close the replacement and restore the prior
+  lost binding.
+- Closing is final: it clears persisted recovery metadata. New sessions reuse
+  the lowest closed watch ID before allocating another ID. Active and lost
+  watches are never recycled, so ordinary create/close use stays compact
+  without sacrificing recoverable conversations.
 - Engram records a bounded recovery event only when input was submitted with
   Enter while tmux reported an allowlisted shell as the pane foreground
   process. Input submitted while Codex, Claude, or another process is in the

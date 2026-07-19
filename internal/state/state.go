@@ -33,20 +33,24 @@ const (
 )
 
 type State struct {
-	Version               int                `json:"version"`
-	AnchorMode            string             `json:"anchor_mode,omitempty"`
-	NextSessionID         int                `json:"next_session_id"`
-	LastUpdateID          int                `json:"last_update_id"`
-	LastPollAt            time.Time          `json:"last_poll_at,omitempty"`
-	LastHaikuAt           time.Time          `json:"last_haiku_at,omitempty"`
-	LastHaikuError        string             `json:"last_haiku_error,omitempty"`
-	TerminalSessions      []TerminalSession  `json:"terminal_sessions"`
-	Attachments           []Attachment       `json:"attachments"`
-	AttachmentBypasses    []AttachmentBypass `json:"attachment_bypasses,omitempty"`
-	UpdateJournal         []UpdateEvent      `json:"update_journal,omitempty"`
-	ProcessedMessages     map[string]bool    `json:"processed_messages,omitempty"`
-	HostBootID            string             `json:"host_boot_id,omitempty"`
-	PendingRecoveryBootID string             `json:"pending_recovery_boot_id,omitempty"`
+	Version                     int                `json:"version"`
+	AnchorMode                  string             `json:"anchor_mode,omitempty"`
+	NextSessionID               int                `json:"next_session_id"`
+	LastUpdateID                int                `json:"last_update_id"`
+	LastPollAt                  time.Time          `json:"last_poll_at,omitempty"`
+	LastHaikuAt                 time.Time          `json:"last_haiku_at,omitempty"`
+	LastHaikuError              string             `json:"last_haiku_error,omitempty"`
+	TerminalSessions            []TerminalSession  `json:"terminal_sessions"`
+	Attachments                 []Attachment       `json:"attachments"`
+	AttachmentBypasses          []AttachmentBypass `json:"attachment_bypasses,omitempty"`
+	UpdateJournal               []UpdateEvent      `json:"update_journal,omitempty"`
+	ProcessedMessages           map[string]bool    `json:"processed_messages,omitempty"`
+	HostBootID                  string             `json:"host_boot_id,omitempty"`
+	PendingRecoveryBootID       string             `json:"pending_recovery_boot_id,omitempty"`
+	LastRecoveryPlanHash        string             `json:"last_recovery_plan_hash,omitempty"`
+	RecoveryPlanMessageIDs      []int              `json:"recovery_plan_message_ids,omitempty"`
+	PendingRecoveryPlanHash     string             `json:"pending_recovery_plan_hash,omitempty"`
+	PendingRecoveryPlanNextPage int                `json:"pending_recovery_plan_next_page,omitempty"`
 }
 
 type RecoveryEvent struct {
@@ -61,6 +65,18 @@ type RecoveryEvent struct {
 	Validation        string    `json:"validation"`
 	Program           string    `json:"program,omitempty"`
 	ProviderSessionID string    `json:"provider_session_id,omitempty"`
+}
+
+type PendingResume struct {
+	StartedAt               time.Time      `json:"started_at"`
+	PreviousTmuxSessionName string         `json:"previous_tmux_session_name"`
+	PreviousTmuxWindowID    string         `json:"previous_tmux_window_id"`
+	PreviousTmuxPaneID      string         `json:"previous_tmux_pane_id"`
+	PreviousTmuxServerID    string         `json:"previous_tmux_server_id"`
+	PreviousOrigin          TerminalOrigin `json:"previous_origin,omitempty"`
+	PreviousCWD             string         `json:"previous_cwd,omitempty"`
+	PreviousResumeProgram   string         `json:"previous_resume_program,omitempty"`
+	PreviousResumeSessionID string         `json:"previous_resume_session_id,omitempty"`
 }
 
 type TerminalSession struct {
@@ -99,6 +115,7 @@ type TerminalSession struct {
 	WatchEnabled             bool            `json:"watch_enabled"`
 	ResumeProgram            string          `json:"resume_program,omitempty"`
 	ResumeSessionID          string          `json:"resume_session_id,omitempty"`
+	PendingResume            *PendingResume  `json:"pending_resume,omitempty"`
 	RecoveryEvents           []RecoveryEvent `json:"recovery_events,omitempty"`
 	LastAnchorEditAt         time.Time       `json:"last_anchor_edit_at,omitempty"`
 	LastRawCapture           string          `json:"last_raw_capture,omitempty"`
@@ -186,7 +203,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion     = 11
+	currentStateVersion     = 15
 	maxTerminalSessions     = 200
 	maxAttachments          = 200
 	maxAttachmentBypasses   = 100
@@ -194,6 +211,7 @@ const (
 	maxStaleAlternates      = 16
 	maxSeenUpstreamSignals  = 32
 	maxRecoveryEvents       = 24
+	maxRecoveryPlanMessages = 50
 	maxRecoveryCommandBytes = 512
 	maxRecoveryFieldBytes   = 4096
 	maxProcessedMessages    = 2_000
@@ -384,6 +402,97 @@ func (s *Store) AcknowledgeRecoveryBoot(bootID string) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) SetRecoveryPlanHash(hash string) error {
+	hash = strings.TrimSpace(hash)
+	if len(hash) > 128 || strings.ContainsRune(hash, '\x00') {
+		return fmt.Errorf("invalid recovery plan hash")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.state.LastRecoveryPlanHash
+	if previous == hash {
+		return nil
+	}
+	s.state.LastRecoveryPlanHash = hash
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.LastRecoveryPlanHash = previous
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) SetRecoveryPlanProgress(hash string, nextPage int, messageIDs []int) error {
+	hash, err := validateRecoveryPlanProgress(hash, nextPage, messageIDs)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := append([]int(nil), s.state.RecoveryPlanMessageIDs...)
+	previousHash := s.state.PendingRecoveryPlanHash
+	previousNextPage := s.state.PendingRecoveryPlanNextPage
+	s.state.RecoveryPlanMessageIDs = append([]int(nil), messageIDs...)
+	s.state.PendingRecoveryPlanHash = hash
+	s.state.PendingRecoveryPlanNextPage = nextPage
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.RecoveryPlanMessageIDs = previous
+			s.state.PendingRecoveryPlanHash = previousHash
+			s.state.PendingRecoveryPlanNextPage = previousNextPage
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) CompleteRecoveryPlan(hash string, messageIDs []int) error {
+	hash, err := validateRecoveryPlanProgress(hash, 0, messageIDs)
+	if err != nil || hash == "" {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("invalid recovery plan hash")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previousHash := s.state.LastRecoveryPlanHash
+	previousMessageIDs := append([]int(nil), s.state.RecoveryPlanMessageIDs...)
+	previousPendingHash := s.state.PendingRecoveryPlanHash
+	previousNextPage := s.state.PendingRecoveryPlanNextPage
+	s.state.LastRecoveryPlanHash = hash
+	s.state.RecoveryPlanMessageIDs = append([]int(nil), messageIDs...)
+	s.state.PendingRecoveryPlanHash = ""
+	s.state.PendingRecoveryPlanNextPage = 0
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.LastRecoveryPlanHash = previousHash
+			s.state.RecoveryPlanMessageIDs = previousMessageIDs
+			s.state.PendingRecoveryPlanHash = previousPendingHash
+			s.state.PendingRecoveryPlanNextPage = previousNextPage
+		}
+		return err
+	}
+	return nil
+}
+
+func validateRecoveryPlanProgress(hash string, nextPage int, messageIDs []int) (string, error) {
+	hash = strings.TrimSpace(hash)
+	if len(hash) > 128 || strings.ContainsRune(hash, '\x00') || nextPage < 0 || nextPage > maxRecoveryPlanMessages {
+		return "", fmt.Errorf("invalid recovery plan progress")
+	}
+	if len(messageIDs) > maxRecoveryPlanMessages {
+		return "", fmt.Errorf("too many recovery plan messages")
+	}
+	for _, messageID := range messageIDs {
+		if messageID <= 0 {
+			return "", fmt.Errorf("invalid recovery plan message id")
+		}
+	}
+	return hash, nil
 }
 
 func (s *Store) saveLocked() error {
@@ -609,6 +718,7 @@ func boundedAuditTail(path string, maxBytes int64) ([]byte, error) {
 func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string) (TerminalSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := cloneState(s.state)
 	now := time.Now().UTC()
 	id, replaceIndex, err := sessionAllocationSlot(s.state.TerminalSessions)
 	if err != nil {
@@ -632,7 +742,13 @@ func (s *Store) AllocateSession(tmuxSessionName, windowID, paneID, title string)
 		s.state.TerminalSessions = append(s.state.TerminalSessions, ts)
 	}
 	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
-	return ts, s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state = previous
+		}
+		return ts, err
+	}
+	return ts, nil
 }
 
 func (s *Store) UpdateSession(id int, fn func(*TerminalSession)) (TerminalSession, bool, error) {
@@ -1049,6 +1165,12 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.State = TerminalLost
 			session.WatchEnabled = false
 		}
+		if session.State == TerminalClosed {
+			session.ResumeProgram = ""
+			session.ResumeSessionID = ""
+			session.PendingResume = nil
+			session.RecoveryEvents = nil
+		}
 		if len(session.StaleAlternateMessageIDs) > maxStaleAlternates {
 			session.StaleAlternateMessageIDs = append([]int(nil), session.StaleAlternateMessageIDs[len(session.StaleAlternateMessageIDs)-maxStaleAlternates:]...)
 		}
@@ -1060,6 +1182,15 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 		}
 		for eventIndex := range session.RecoveryEvents {
 			normalizeRecoveryEvent(&session.RecoveryEvents[eventIndex])
+		}
+		if pending := session.PendingResume; pending != nil {
+			pending.PreviousTmuxSessionName = truncateUTF8(pending.PreviousTmuxSessionName, 256)
+			pending.PreviousTmuxWindowID = truncateUTF8(pending.PreviousTmuxWindowID, 64)
+			pending.PreviousTmuxPaneID = truncateUTF8(pending.PreviousTmuxPaneID, 64)
+			pending.PreviousTmuxServerID = truncateUTF8(pending.PreviousTmuxServerID, 128)
+			pending.PreviousCWD = truncateUTF8(pending.PreviousCWD, maxRecoveryFieldBytes)
+			pending.PreviousResumeProgram = truncateUTF8(pending.PreviousResumeProgram, 32)
+			pending.PreviousResumeSessionID = truncateUTF8(pending.PreviousResumeSessionID, 128)
 		}
 	}
 }
@@ -1110,6 +1241,7 @@ func maxAttachmentID(attachments []Attachment) int {
 
 func cloneState(in State) State {
 	out := in
+	out.RecoveryPlanMessageIDs = append([]int(nil), in.RecoveryPlanMessageIDs...)
 	out.TerminalSessions = append([]TerminalSession(nil), in.TerminalSessions...)
 	for i := range out.TerminalSessions {
 		out.TerminalSessions[i] = cloneTerminalSession(out.TerminalSessions[i])
@@ -1126,6 +1258,10 @@ func cloneState(in State) State {
 
 func cloneTerminalSession(in TerminalSession) TerminalSession {
 	out := in
+	if in.PendingResume != nil {
+		pending := *in.PendingResume
+		out.PendingResume = &pending
+	}
 	out.AnchorFiles = append([]string(nil), in.AnchorFiles...)
 	out.StaleAlternateMessageIDs = append([]int(nil), in.StaleAlternateMessageIDs...)
 	out.SeenUpstreamSignalIDs = append([]string(nil), in.SeenUpstreamSignalIDs...)

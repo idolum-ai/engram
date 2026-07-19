@@ -27,57 +27,62 @@ import (
 )
 
 type App struct {
-	Config                config.Config
-	Store                 *state.Store
-	Telegram              *telegram.Client
-	Guide                 guide.Renderer
-	Transcriber           voiceTranscriber
-	Tmux                  tmux.Manager
-	Snapshots             snapshotRenderer
-	footerStatusRunner    snapshotFooterStatusRunner
-	modeMu                sync.RWMutex
-	mode                  string
-	presentationMu        sync.RWMutex
-	guideAvailable        bool
-	snapshotReady         bool
-	lock                  *lockfile.Lock
-	startedAt             time.Time
-	quitCode              int
-	stopCh                chan struct{}
-	runCtx                context.Context
-	refreshWG             sync.WaitGroup
-	schedulerWG           sync.WaitGroup
-	transferWG            sync.WaitGroup
-	captureSlots          chan struct{}
-	guideSlots            chan struct{}
-	renderSlots           chan struct{}
-	transferSlots         chan struct{}
-	transferQueue         chan struct{}
-	summaryMu             sync.Mutex
-	summaryQueued         map[int]bool
-	summaryRunning        map[int]bool
-	summaryForce          map[int]bool
-	summaryDue            map[int]time.Time
-	manualRefresh         map[int]bool
-	conversationMu        sync.Mutex
-	conversationEpochs    map[int]conversationEpoch
-	conversationRevision  uint64
-	conversationGateMu    sync.Mutex
-	conversationGates     map[int]*conversationGate
-	closeConfirmMu        sync.Mutex
-	closeConfirms         map[string]closeConfirmation
-	sessionLocks          keyedMutexSet
-	anchorLocks           keyedMutexSet
-	disclosureLocks       keyedMutexSet
-	capabilityLocks       keyedMutexSet
-	capabilityRetryMu     sync.Mutex
-	capabilityRetries     map[int]capabilityRetry
-	capabilityFinishHook  func(int, error)
-	signalRetries         sync.Map
-	snapshotTextFrames    sync.Map
-	sleepHook             func(time.Duration)
-	refreshHook           func(context.Context, int, bool)
-	pendingRecoveryBootID string
+	Config                        config.Config
+	Store                         *state.Store
+	Telegram                      *telegram.Client
+	Guide                         guide.Renderer
+	Transcriber                   voiceTranscriber
+	Tmux                          tmux.Manager
+	Snapshots                     snapshotRenderer
+	footerStatusRunner            snapshotFooterStatusRunner
+	modeMu                        sync.RWMutex
+	mode                          string
+	presentationMu                sync.RWMutex
+	guideAvailable                bool
+	snapshotReady                 bool
+	lock                          *lockfile.Lock
+	startedAt                     time.Time
+	quitCode                      int
+	stopCh                        chan struct{}
+	runCtx                        context.Context
+	refreshWG                     sync.WaitGroup
+	schedulerWG                   sync.WaitGroup
+	transferWG                    sync.WaitGroup
+	captureSlots                  chan struct{}
+	guideSlots                    chan struct{}
+	renderSlots                   chan struct{}
+	transferSlots                 chan struct{}
+	transferQueue                 chan struct{}
+	summaryMu                     sync.Mutex
+	summaryQueued                 map[int]bool
+	summaryRunning                map[int]bool
+	summaryForce                  map[int]bool
+	summaryDue                    map[int]time.Time
+	manualRefresh                 map[int]bool
+	conversationMu                sync.Mutex
+	conversationEpochs            map[int]conversationEpoch
+	conversationRevision          uint64
+	conversationGateMu            sync.Mutex
+	conversationGates             map[int]*conversationGate
+	closeConfirmMu                sync.Mutex
+	closeConfirms                 map[string]closeConfirmation
+	sessionLocks                  keyedMutexSet
+	anchorLocks                   keyedMutexSet
+	disclosureLocks               keyedMutexSet
+	capabilityLocks               keyedMutexSet
+	capabilityRetryMu             sync.Mutex
+	capabilityRetries             map[int]capabilityRetry
+	capabilityFinishHook          func(int, error)
+	signalRetries                 sync.Map
+	snapshotTextFrames            sync.Map
+	sleepHook                     func(time.Duration)
+	refreshHook                   func(context.Context, int, bool)
+	pendingRecoveryBootID         string
+	deliveredRecoveryPlanHash     string
+	pendingRecoveryPlanMessageIDs []int
+	pendingRecoveryPlanHash       string
+	pendingRecoveryPlanNextPage   int
+	recoveryPlanMu                sync.Mutex
 }
 
 const summaryQuietPeriod = 2 * time.Second
@@ -139,34 +144,38 @@ func New(cfg config.Config) (*App, error) {
 			return nil, err
 		}
 	}
+	stateSnapshot := store.Snapshot()
 	return &App{
-		Config:                cfg,
-		Store:                 store,
-		Telegram:              telegramClient,
-		Guide:                 guideRenderer,
-		Transcriber:           transcriber,
-		Tmux:                  tmux.New(tmux.ExecRunner{}),
-		Snapshots:             snapshotRenderer,
-		mode:                  mode,
-		guideAvailable:        guideRenderer != nil,
-		snapshotReady:         snapshotReady,
-		lock:                  l,
-		startedAt:             time.Now().UTC(),
-		stopCh:                make(chan struct{}),
-		captureSlots:          make(chan struct{}, maxConcurrentCaptures),
-		guideSlots:            make(chan struct{}, maxConcurrentGuideRequests),
-		renderSlots:           make(chan struct{}, maxConcurrentSnapshotRenders),
-		transferSlots:         make(chan struct{}, maxConcurrentTransfers),
-		transferQueue:         make(chan struct{}, maxQueuedTransfers),
-		summaryQueued:         map[int]bool{},
-		summaryRunning:        map[int]bool{},
-		summaryForce:          map[int]bool{},
-		summaryDue:            map[int]time.Time{},
-		manualRefresh:         map[int]bool{},
-		conversationEpochs:    map[int]conversationEpoch{},
-		conversationGates:     map[int]*conversationGate{},
-		closeConfirms:         map[string]closeConfirmation{},
-		pendingRecoveryBootID: pendingRecoveryBootID,
+		Config:                        cfg,
+		Store:                         store,
+		Telegram:                      telegramClient,
+		Guide:                         guideRenderer,
+		Transcriber:                   transcriber,
+		Tmux:                          tmux.New(tmux.ExecRunner{}),
+		Snapshots:                     snapshotRenderer,
+		mode:                          mode,
+		guideAvailable:                guideRenderer != nil,
+		snapshotReady:                 snapshotReady,
+		lock:                          l,
+		startedAt:                     time.Now().UTC(),
+		stopCh:                        make(chan struct{}),
+		captureSlots:                  make(chan struct{}, maxConcurrentCaptures),
+		guideSlots:                    make(chan struct{}, maxConcurrentGuideRequests),
+		renderSlots:                   make(chan struct{}, maxConcurrentSnapshotRenders),
+		transferSlots:                 make(chan struct{}, maxConcurrentTransfers),
+		transferQueue:                 make(chan struct{}, maxQueuedTransfers),
+		summaryQueued:                 map[int]bool{},
+		summaryRunning:                map[int]bool{},
+		summaryForce:                  map[int]bool{},
+		summaryDue:                    map[int]time.Time{},
+		manualRefresh:                 map[int]bool{},
+		conversationEpochs:            map[int]conversationEpoch{},
+		conversationGates:             map[int]*conversationGate{},
+		closeConfirms:                 map[string]closeConfirmation{},
+		pendingRecoveryBootID:         pendingRecoveryBootID,
+		pendingRecoveryPlanMessageIDs: append([]int(nil), stateSnapshot.RecoveryPlanMessageIDs...),
+		pendingRecoveryPlanHash:       stateSnapshot.PendingRecoveryPlanHash,
+		pendingRecoveryPlanNextPage:   stateSnapshot.PendingRecoveryPlanNextPage,
 	}, nil
 }
 
@@ -230,12 +239,16 @@ func (a *App) Run(ctx context.Context) int {
 		a.transferWG.Wait()
 	}()
 	_ = a.audit("service.start", "ok", map[string]any{"version": version.String()})
-	a.deliverStartupRecoveryPlan(runCtx)
 	a.registerCommands(runCtx)
 	a.schedulerWG.Add(1)
 	go func() {
 		defer a.schedulerWG.Done()
 		a.scheduler(runCtx)
+	}()
+	a.schedulerWG.Add(1)
+	go func() {
+		defer a.schedulerWG.Done()
+		a.deliverStartupRecoveryPlan(runCtx)
 	}()
 	offset := a.Store.Snapshot().LastUpdateID + 1
 	backoff := time.Second
