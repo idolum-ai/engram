@@ -274,6 +274,68 @@ func TestStoreRefusesAllocationBeforePruningProtectedSessions(t *testing.T) {
 	}
 }
 
+func TestStoreRefusesAllocationForFullLegacyIDRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	sessions := make([]TerminalSession, 0, maxTerminalSessions)
+	for id := 2; id <= maxTerminalSessions+1; id++ {
+		sessions = append(sessions, TerminalSession{
+			ID: id, TmuxWindowID: fmt.Sprintf("@%d", id), TmuxPaneID: fmt.Sprintf("%%%d", id),
+			State: TerminalRunning, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+	}
+	writeStateFixture(t, path, State{Version: currentStateVersion, TerminalSessions: sessions, ProcessedMessages: map[string]bool{}})
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := store.Snapshot()
+	if _, err := store.AllocateSession("main", "@202", "%202", "overflow"); err == nil || !strings.Contains(err.Error(), "capacity") {
+		t.Fatalf("AllocateSession() error = %v, want capacity error", err)
+	}
+	after := store.Snapshot()
+	if !reflect.DeepEqual(after.TerminalSessions, before.TerminalSessions) {
+		t.Fatal("failed allocation changed protected legacy terminal sessions")
+	}
+	if _, ok := store.FindSession(2); !ok {
+		t.Fatal("failed allocation pruned legacy session 2")
+	}
+}
+
+func TestStoreReusesClosedSlotInFullLegacyIDRange(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	sessions := make([]TerminalSession, 0, maxTerminalSessions)
+	for id := 2; id <= maxTerminalSessions+1; id++ {
+		terminalState := TerminalRunning
+		if id == maxTerminalSessions+1 {
+			terminalState = TerminalClosed
+		}
+		sessions = append(sessions, TerminalSession{
+			ID: id, TmuxWindowID: fmt.Sprintf("@%d", id), TmuxPaneID: fmt.Sprintf("%%%d", id),
+			State: terminalState, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		})
+	}
+	writeStateFixture(t, path, State{Version: currentStateVersion, TerminalSessions: sessions, ProcessedMessages: map[string]bool{}})
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated, err := store.AllocateSession("main", "@202", "%202", "replacement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocated.ID != 1 {
+		t.Fatalf("AllocateSession() ID = %d, want legacy gap 1", allocated.ID)
+	}
+	if got := store.Snapshot().TerminalSessions; len(got) != maxTerminalSessions {
+		t.Fatalf("terminal sessions = %d, want %d", len(got), maxTerminalSessions)
+	}
+	if _, ok := store.FindSession(2); !ok {
+		t.Fatal("reusing a closed slot pruned protected legacy session 2")
+	}
+}
+
 func TestStorePersistsBootRecoveryUntilAcknowledged(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
