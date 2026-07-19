@@ -172,7 +172,7 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 			session.State = state.TerminalRunning
 			session.WatchEnabled = true
 			session.PendingResume = nil
-			session.LastKnownCWD = firstNonEmpty(pane.CurrentPath, workdir)
+			session.LastKnownCWD = firstNonEmptyExact(pane.CurrentPath, workdir)
 			session.LastActivityAt = now
 			session.LastRawCaptureHash = ""
 			session.LastRawCapture = ""
@@ -287,7 +287,6 @@ func (a *App) abortPreparedResume(prepared state.TerminalSession, binding mechan
 
 func (a *App) resumeWorkdir(session state.TerminalSession) string {
 	for _, candidate := range []string{session.LastKnownCWD, a.Config.Workdir} {
-		candidate = strings.TrimSpace(candidate)
 		if candidate == "" {
 			continue
 		}
@@ -296,4 +295,13 @@ func (a *App) resumeWorkdir(session state.TerminalSession) string {
 		}
 	}
 	return a.Config.Workdir
+}
+
+func firstNonEmptyExact(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

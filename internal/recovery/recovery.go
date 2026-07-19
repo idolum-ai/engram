@@ -68,7 +68,7 @@ func ParseCodexSessionStart(input io.Reader, now time.Time) (Metadata, error) {
 	}
 	return Metadata{
 		Version: 1, Program: ProgramCodex, SessionID: strings.ToLower(event.SessionID),
-		CWD: strings.TrimSpace(event.CWD), Source: source, Observed: now.UTC(),
+		CWD: event.CWD, Source: source, Observed: now.UTC(),
 	}, nil
 }
 
@@ -102,7 +102,6 @@ func Decode(value string) (Metadata, error) {
 func validateMetadata(metadata Metadata) (Metadata, error) {
 	metadata.Program = strings.ToLower(strings.TrimSpace(metadata.Program))
 	metadata.SessionID = strings.ToLower(strings.TrimSpace(metadata.SessionID))
-	metadata.CWD = strings.TrimSpace(metadata.CWD)
 	if metadata.Version != 1 || !ValidProgram(metadata.Program) || !ValidSessionID(metadata.SessionID) {
 		return Metadata{}, fmt.Errorf("invalid recovery metadata")
 	}

@@ -52,7 +52,7 @@ func TestCloseThenStaleValidationDoesNotRecoverSession(t *testing.T) {
 	}
 }
 
-func TestPruneAfterInputEffectDoesNotReportSuccess(t *testing.T) {
+func TestCapacityAllocationCannotPruneInputTarget(t *testing.T) {
 	app, runner, session := newLifecycleRaceApp(t, state.TerminalOriginCreated)
 	fillSessionCapacity(t, app, 199)
 	runner.onSend = func() {
@@ -60,18 +60,18 @@ func TestPruneAfterInputEffectDoesNotReportSuccess(t *testing.T) {
 	}
 
 	result := app.sendInput(context.Background(), session.ID, "pwd", "command", true)
-	if runner.err != nil {
-		t.Fatal(runner.err)
+	if runner.err == nil || !strings.Contains(runner.err.Error(), "capacity") {
+		t.Fatalf("competing allocation error = %v, want capacity error", runner.err)
 	}
-	if result.Outcome != actionStateFailed || !strings.Contains(result.Message, "no longer current") {
+	if !result.OK() {
 		t.Fatalf("send result = %#v", result)
 	}
-	if _, ok := app.Store.FindSession(session.ID); ok {
-		t.Fatal("input target was not pruned")
+	if _, ok := app.Store.FindSession(session.ID); !ok {
+		t.Fatal("input target was pruned")
 	}
 }
 
-func TestPruneAfterCloseEffectDoesNotReportSuccess(t *testing.T) {
+func TestCapacityAllocationCannotPruneCloseTarget(t *testing.T) {
 	app, runner, session := newLifecycleRaceApp(t, state.TerminalOriginCreated)
 	fillSessionCapacity(t, app, 199)
 	runner.onKill = func() {
@@ -79,14 +79,15 @@ func TestPruneAfterCloseEffectDoesNotReportSuccess(t *testing.T) {
 	}
 
 	result := app.closeSession(context.Background(), session.ID)
-	if runner.err != nil {
-		t.Fatal(runner.err)
+	if runner.err == nil || !strings.Contains(runner.err.Error(), "capacity") {
+		t.Fatalf("competing allocation error = %v, want capacity error", runner.err)
 	}
-	if result.Outcome != actionStateFailed || !strings.Contains(result.Message, "no longer tracked") {
+	if !result.OK() {
 		t.Fatalf("close result = %#v", result)
 	}
-	if _, ok := app.Store.FindSession(session.ID); ok {
-		t.Fatal("close target was not pruned")
+	closed, ok := app.Store.FindSession(session.ID)
+	if !ok || closed.State != state.TerminalClosed {
+		t.Fatalf("close target = %#v ok=%v", closed, ok)
 	}
 }
 

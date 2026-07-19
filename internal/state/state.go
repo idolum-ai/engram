@@ -976,37 +976,51 @@ func (s *Store) NoteGuide(errText string) error {
 
 func sessionAllocationSlot(sessions []TerminalSession) (int, int, error) {
 	closedByID := make(map[int]int)
-	used := make(map[int]bool)
+	used := make(map[int]int)
+	reusableIndex := -1
 	for index, session := range sessions {
-		if session.ID <= 0 || session.ID > maxTerminalSessions {
-			continue
+		reusable := session.State == TerminalClosed && session.ResumeProgram == "" && session.ResumeSessionID == ""
+		if reusable && reusableIndex < 0 {
+			reusableIndex = index
 		}
-		used[session.ID] = true
-		if session.State == TerminalClosed && session.ResumeProgram == "" && session.ResumeSessionID == "" {
+		if session.ID > 0 && session.ID <= maxTerminalSessions {
+			used[session.ID]++
+		}
+		if reusable && session.ID > 0 && session.ID <= maxTerminalSessions {
 			closedByID[session.ID] = index
 		}
 	}
 	for id := 1; id <= maxTerminalSessions; id++ {
-		if index, ok := closedByID[id]; ok {
+		if index, ok := closedByID[id]; ok && used[id] == 1 {
 			return id, index, nil
 		}
 	}
+	// A legacy allocator could fill the table with IDs outside the current
+	// 1..maxTerminalSessions namespace. Recycle a closed entry into a free ID
+	// without growing the table, but never mistake an ID gap for spare capacity.
+	if reusableIndex >= 0 {
+		for id := 1; id <= maxTerminalSessions; id++ {
+			if used[id] == 0 {
+				return id, reusableIndex, nil
+			}
+		}
+	}
+	if len(sessions) >= maxTerminalSessions {
+		return 0, -1, fmt.Errorf("terminal session capacity of %d reached; close a watch before creating another", maxTerminalSessions)
+	}
 	for id := 1; id <= maxTerminalSessions; id++ {
-		if !used[id] {
+		if used[id] == 0 {
 			return id, -1, nil
 		}
 	}
-	maxID := 0
-	for _, session := range sessions {
-		if session.ID > maxID {
-			maxID = session.ID
-		}
-	}
-	return maxID + 1, -1, nil
+	return 0, -1, fmt.Errorf("terminal session capacity of %d reached; close a watch before creating another", maxTerminalSessions)
 }
 
 func nextSessionID(sessions []TerminalSession) int {
-	id, _, _ := sessionAllocationSlot(sessions)
+	id, _, err := sessionAllocationSlot(sessions)
+	if err != nil {
+		return maxTerminalSessions + 1
+	}
 	return id
 }
 
@@ -1118,10 +1132,10 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 	}
 	sort.SliceStable(indices, func(i, j int) bool {
 		a, b := sessions[indices[i]], sessions[indices[j]]
-		aActive := a.State == TerminalRunning
-		bActive := b.State == TerminalRunning
-		if aActive != bActive {
-			return aActive
+		aProtected := a.State == TerminalRunning || a.State == TerminalLost
+		bProtected := b.State == TerminalRunning || b.State == TerminalLost
+		if aProtected != bProtected {
+			return aProtected
 		}
 		aTime, bTime := sessionRecency(a), sessionRecency(b)
 		if !aTime.Equal(bTime) {

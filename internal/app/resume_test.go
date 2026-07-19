@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -131,6 +132,65 @@ func TestClearRecoveryMetadataMakesClosedWatchReusable(t *testing.T) {
 	clearRecoveryMetadata(&session)
 	if session.ResumeProgram != "" || session.ResumeSessionID != "" || len(session.RecoveryEvents) != 0 {
 		t.Fatalf("recovery metadata remained after close: %#v", session)
+	}
+}
+
+func TestResumeWorkdirPreservesExactWhitespace(t *testing.T) {
+	root := t.TempDir()
+	exact := filepath.Join(root, "project ")
+	trimmed := strings.TrimSpace(exact)
+	if err := os.Mkdir(exact, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(trimmed, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{Config: config.Config{Workdir: trimmed}}
+	if got := app.resumeWorkdir(state.TerminalSession{LastKnownCWD: exact}); got != exact {
+		t.Fatalf("resumeWorkdir() = %q, want exact %q", got, exact)
+	}
+	if got := firstNonEmptyExact(exact, trimmed); got != exact {
+		t.Fatalf("firstNonEmptyExact() = %q, want exact %q", got, exact)
+	}
+}
+
+func TestPendingResumeRejectsEveryTerminalInputRoute(t *testing.T) {
+	app, runner, id := newResumeTestApp(t, state.TerminalLost)
+	prepared, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.TmuxWindowID = "@2"
+		session.TmuxPaneID = "%2"
+		session.TmuxServerID = appTestServerID
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 88
+		session.PendingResume = &state.PendingResume{
+			PreviousTmuxSessionName: "old", PreviousTmuxWindowID: "@9",
+			PreviousTmuxPaneID: "%9", PreviousTmuxServerID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.calls = nil
+
+	for name, send := range map[string]func() actionResult{
+		"command": func() actionResult { return app.sendInput(context.Background(), id, "echo unsafe", "command", true) },
+		"text":    func() actionResult { return app.sendInput(context.Background(), id, "unsafe", "text", false) },
+		"keys": func() actionResult {
+			return app.sendKeyGroups(context.Background(), id, [][]string{{"Enter"}}, "Enter", 0)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := send()
+			if result.Outcome != actionUserError || !strings.Contains(result.Message, "resume recovery") {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+	if app.voiceReplyStillDeliverableLocked(100, 88, prepared) {
+		t.Fatal("voice reply remained deliverable during pending resume")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("pending resume touched tmux: %#v", runner.calls)
 	}
 }
 

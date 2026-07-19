@@ -87,13 +87,13 @@ exports a bounded recent tail, not an unbounded full audit file.
 - State retains at most 24 recovery events per terminal watch. Command text is
   redacted and byte-bounded; exact provider identifiers and validation
   provenance are persisted so recovery does not depend on tmux scrollback.
-- The current Linux boot ID is persisted. A changed boot leaves recovery-plan
-  delivery pending until Telegram accepts it. On every service start Engram
-  also reconciles previously running bindings, so a lost tmux server is
-  detected even when the host boot ID did not change. Recovery reconciliation
-  runs after polling starts under one bounded startup deadline. The hash of the
-  last accepted deterministic plan prevents same-boot restart spam while a
-  failed delivery remains eligible for retry.
+- The current Linux boot ID or Darwin boot time is persisted. A changed boot
+  leaves recovery-plan delivery pending until Telegram accepts it. On every
+  service start Engram also reconciles previously running bindings, so a lost
+  tmux server is detected even when the host boot ID did not change. Recovery
+  reconciliation runs after polling starts under one bounded startup deadline.
+  The hash of the last accepted deterministic plan prevents same-boot restart
+  spam while a failed delivery remains eligible for retry.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
   pin state. Restart resets pin knowledge and reconciles presentation without
@@ -107,7 +107,7 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v11 persists `anchor_mode`, the canonical anchor presentation
+- State schema v15 persists `anchor_mode`, the canonical anchor presentation
   format, boot-incarnation and bounded recovery-ledger metadata, the latest
   conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,

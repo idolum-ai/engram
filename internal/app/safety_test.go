@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/guide"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/tmux"
@@ -277,8 +278,9 @@ func TestCaptureFailureWithLiveIdentityDoesNotMarkSessionLost(t *testing.T) {
 	}
 }
 
-func TestRefreshStopsWhenSessionIsPrunedAfterIdentityValidation(t *testing.T) {
+func TestCapacityAllocationCannotPruneRefreshTarget(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Guide = safetyGuide{}
 	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		session.LastKnownCWD = "/tmp"
 	}); err != nil {
@@ -289,21 +291,27 @@ func TestRefreshStopsWhenSessionIsPrunedAfterIdentityValidation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var allocationErr error
 	runner.onIdentity = func() {
 		runner.onIdentity = nil
-		if _, err := app.Store.AllocateSession("new", "@3", "%999", "new"); err != nil {
-			t.Fatal(err)
-		}
+		_, allocationErr = app.Store.AllocateSession("new", "@3", "%999", "new")
 	}
 
 	app.refreshSession(context.Background(), id, true)
-	if _, ok := app.Store.FindSession(id); ok {
-		t.Fatal("oldest session was not pruned during validation")
+	if allocationErr == nil || !strings.Contains(allocationErr.Error(), "capacity") {
+		t.Fatalf("competing allocation error = %v, want capacity error", allocationErr)
 	}
+	if _, ok := app.Store.FindSession(id); !ok {
+		t.Fatal("refresh target was pruned during validation")
+	}
+	captured := false
 	for _, call := range runner.calls {
 		if len(call) > 0 && call[0] == "capture-pane" {
-			t.Fatalf("refresh captured after session was pruned: %#v", runner.calls)
+			captured = true
 		}
+	}
+	if !captured {
+		t.Fatalf("refresh stopped after rejected allocation: %#v", runner.calls)
 	}
 }
 
@@ -727,6 +735,12 @@ type safetyRunner struct {
 	failKill        bool
 	capabilityErr   error
 	onIdentity      func()
+}
+
+type safetyGuide struct{}
+
+func (safetyGuide) Converse(context.Context, guide.Input) (string, error) {
+	return "current terminal state", nil
 }
 
 type newSessionRunner struct{}
