@@ -65,11 +65,6 @@ for script in \
   fi
 done
 
-if ! rg -q "KillMode=process" Makefile; then
-  echo "generated service unit must preserve tmux descendants with KillMode=process" >&2
-  exit 1
-fi
-
 artifact_path_pattern='(^|/)(secrets?|private)(/|$)|\.(db|sqlite|sqlite3|log|pem|key)$|(^|/)\.env$'
 if git ls-files | rg -n "$artifact_path_pattern" >/dev/null; then
   echo "tracked file looks like a private runtime artifact:" >&2

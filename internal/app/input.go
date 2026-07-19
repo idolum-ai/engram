@@ -121,17 +121,6 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 	expected.State = state.TerminalRunning
 	_, found, applied, err := a.updateSessionIfCurrent(expected, func(s *state.TerminalSession) {
 		s.LastActivityAt = time.Now().UTC()
-		if enter && shellForeground(pane.CurrentCmd) {
-			preview := strings.TrimSpace(a.redactText(text))
-			if len(preview) > maxRecoveryCommandBytes {
-				preview = headUTF8(preview, maxRecoveryCommandBytes)
-			}
-			s.RecordRecoveryEvent(state.RecoveryEvent{
-				At: time.Now().UTC(), Kind: "command", Command: preview, CommandHash: sha(text),
-				CWD: pane.CurrentPath, ForegroundBefore: pane.CurrentCmd,
-				ExpectedProcess: commandExecutable(text), Validation: "sent_to_shell", Program: commandProgram(text),
-			})
-		}
 	})
 	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": mode, "error": err.Error()})

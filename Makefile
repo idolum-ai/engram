@@ -48,7 +48,6 @@ install-service-unit:
 		'[Service]' \
 		'Type=simple' \
 		'ExecStart=$(BINDIR)/$(BINARY) run --env %h/.engram/.env' \
-		'KillMode=process' \
 		'Restart=on-failure' \
 		'RestartSec=5' \
 		'' \

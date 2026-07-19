@@ -4,15 +4,6 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
-### Recovery
-
-- Persist a bounded, redacted per-window recovery ledger, accept exact Codex
-  session metadata through an opt-in `SessionStart` hook, and detect host/tmux
-  incarnation loss at startup.
-- Add deterministic `/recovery` plans and compact Telegram controls that resume
-  exact provider sessions while keeping observed shell launches advisory and
-  never replaying arbitrary commands automatically.
-
 ## [v0.5.0] - 2026-07-18
 
 ### Configuration

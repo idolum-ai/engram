@@ -125,10 +125,6 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	if updated.SnapshotMessageID != 88 {
 		t.Fatalf("snapshot reply alias = %d, want 88", updated.SnapshotMessageID)
 	}
-	frame, frameOK := app.snapshotTextFrame(updated)
-	if !frameOK || strings.Contains(frame.JoinedText, "\x1b[") || strings.Count(frame.JoinedText, "green") != 64 {
-		t.Fatalf("one-off View raw companion = %#v ok=%v", frame, frameOK)
-	}
 	mu.Lock()
 	gotPaths := append([]string(nil), paths...)
 	mu.Unlock()
@@ -284,9 +280,8 @@ func (snapshotTmuxRunner) Run(_ context.Context, args ...string) (string, error)
 	case "capture-pane":
 		return framedStyledCaptureMetadata("bash"), nil
 	case "show-buffer":
-		physical := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 64)
-		joined := strings.Repeat("green\n", 64)
-		return pairedCaptureResult(args, physical, joined), nil
+		capture := strings.Repeat("\x1b[32mgreen\x1b[0m\n", 64)
+		return pairedCaptureResult(args, capture, capture), nil
 	default:
 		return "", nil
 	}

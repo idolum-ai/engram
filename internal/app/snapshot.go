@@ -141,9 +141,6 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": latest.ID})
 		return
 	}
-	if anchor, found := a.Store.FindSession(latest.ID); found && sameTerminalBinding(anchor, latest) {
-		a.rememberOneOffViewTextFrame(anchor, capture)
-	}
 	_ = a.audit("terminal.snapshot", "sent", map[string]any{"session_id": latest.ID, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
 }
 

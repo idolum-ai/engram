@@ -378,34 +378,6 @@ func TestCloseCallbackRejectsRetiredAnchor(t *testing.T) {
 	}
 }
 
-func TestSessionListCallbackRejectsReusedWatchID(t *testing.T) {
-	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
-	original, _ := app.Store.FindSession(id)
-	staleToken := sessionActionToken(original)
-	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		session.CreatedAt = session.CreatedAt.Add(time.Second)
-		session.TmuxWindowID = "@2"
-		session.TmuxPaneID = "%2"
-	}); err != nil {
-		t.Fatal(err)
-	}
-	client := telegram.New("TOKEN")
-	client.BaseURL = "https://api.telegram.org/botTOKEN"
-	client.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)), Header: make(http.Header)}, nil
-	})}
-	app.Telegram = client
-
-	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
-		ID: "stale-session-list", From: telegram.User{ID: 42},
-		Message: &telegram.Message{MessageID: 90, Chat: telegram.Chat{ID: 100}},
-		Data:    fmt.Sprintf("session-watch:%d:%s", id, staleToken),
-	})
-	if status != "callback_user_error" || len(runner.calls) != 0 {
-		t.Fatalf("stale session-list callback status=%q tmux=%#v", status, runner.calls)
-	}
-}
-
 func TestCloseConfirmationCannotCrossBindingGeneration(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	session, _ := app.Store.FindSession(id)
@@ -567,23 +539,6 @@ func TestLostSessionOffersOnlyReattach(t *testing.T) {
 	button := markup.InlineKeyboard[0][0]
 	if button.Text != "🧭 Link" || button.CallbackData != "recover:"+strconv.Itoa(id) {
 		t.Fatalf("lost anchor button = %#v", button)
-	}
-}
-
-func TestLostSessionWithExactProviderMappingOffersResume(t *testing.T) {
-	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
-	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		session.State = state.TerminalLost
-		session.WatchEnabled = false
-		session.ResumeProgram = "codex"
-		session.ResumeSessionID = "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ts, _ := app.Store.FindSession(id)
-	markup := anchorMarkup(ts)
-	if markup == nil || len(markup.InlineKeyboard[0]) != 2 || markup.InlineKeyboard[0][0].CallbackData != "resume:"+strconv.Itoa(id) {
-		t.Fatalf("resumable lost anchor markup = %#v", markup)
 	}
 }
 

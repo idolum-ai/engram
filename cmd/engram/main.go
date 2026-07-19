@@ -13,13 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/idolum-ai/engram/internal/app"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/inspect"
-	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
@@ -109,12 +107,6 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
-	case "codex-hook":
-		if err := runCodexHook(os.Stdin, os.Getenv("TMUX_PANE"), tmux.New(tmux.ExecRunner{}), time.Now().UTC()); err != nil {
-			fmt.Fprintln(os.Stderr, "codex-hook:", err)
-			return 1
-		}
-		return 0
 	case "help", "--help", "-h":
 		printHelp()
 		return 0
@@ -136,23 +128,9 @@ func printHelp() {
   engram inspect frame <watch-id>
   engram commands
   engram signal [--stdout] <message>
-  engram codex-hook
   engram version
   engram help
 `)
-}
-
-func runCodexHook(input io.Reader, paneID string, manager tmux.Manager, now time.Time) error {
-	metadata, err := recovery.ParseCodexSessionStart(input, now)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(paneID) == "" {
-		return errors.New("TMUX_PANE is not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return manager.PublishRecoveryMetadata(ctx, paneID, metadata)
 }
 
 func openControllingTerminal() (io.WriteCloser, error) {

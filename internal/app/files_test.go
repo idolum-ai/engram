@@ -26,85 +26,16 @@ func (r *fileCaptureRunner) Run(_ context.Context, _ ...string) (string, error) 
 	return "", errors.New("unexpected tmux capture")
 }
 
-type successfulFileCaptureRunner struct {
-	physical string
-	joined   string
-}
+type successfulFileCaptureRunner struct{}
 
-func (r successfulFileCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
+func (successfulFileCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
 	switch args[0] {
 	case "display-message":
-		if strings.Contains(args[len(args)-1], "pane_width") {
-			return framedStyledCaptureMetadata("bash"), nil
-		}
 		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
-	case "capture-pane":
-		return framedStyledCaptureMetadata("bash"), nil
-	case "show-buffer":
-		physical := firstNonEmpty(r.physical, "visible terminal\n")
-		joined := firstNonEmpty(r.joined, "visible terminal\n")
-		return pairedCaptureResult(args, physical, joined), nil
-	case "delete-buffer":
-		return "", nil
+	case "if-shell":
+		return "visible terminal\n", nil
 	default:
 		return "", errors.New("unexpected tmux call")
-	}
-}
-
-func TestRawCaptureUploadsCompletePlainViewFrame(t *testing.T) {
-	dir := t.TempDir()
-	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, err := store.AllocateSession("main", "@1", "%1", "shell")
-	if err != nil {
-		t.Fatal(err)
-	}
-	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
-		current.TmuxServerID = appTestServerID
-		current.WatchEnabled = true
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const fullView = "history line that View includes\ncurrent prompt"
-	var uploaded string
-	client := telegram.New("TOKEN")
-	client.BaseURL = "https://api.telegram.org/botTOKEN"
-	client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Path != "/botTOKEN/sendDocument" {
-			return nil, errors.New("unexpected Telegram endpoint")
-		}
-		if err := req.ParseMultipartForm(1 << 20); err != nil {
-			return nil, err
-		}
-		files := req.MultipartForm.File["document"]
-		if len(files) != 1 {
-			return nil, errors.New("missing raw document")
-		}
-		file, err := files[0].Open()
-		if err != nil {
-			return nil, err
-		}
-		defer file.Close()
-		data, err := io.ReadAll(file)
-		if err != nil {
-			return nil, err
-		}
-		uploaded = string(data)
-		return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
-	})}
-	app := &App{
-		Config: config.Config{Home: dir, TelegramChatID: 100}, Store: store, Telegram: client,
-		Tmux: tmux.New(successfulFileCaptureRunner{physical: "\x1b[31mstyled crop\x1b[0m\n", joined: fullView}),
-	}
-	if err := os.MkdirAll(app.Config.ArtifactDir(), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	app.captureSessionFile(context.Background(), telegram.Message{Chat: telegram.Chat{ID: 100}}, session, false)
-	if uploaded != fullView || strings.Contains(uploaded, "\x1b[") {
-		t.Fatalf("uploaded raw frame = %q, want plain full View frame %q", uploaded, fullView)
 	}
 }
 

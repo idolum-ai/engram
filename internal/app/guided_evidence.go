@@ -55,8 +55,7 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 		return false
 	}
 	caption, files := a.guidedEvidenceCaption(current, current.LastSummary, refs)
-	presentationHash := firstNonEmpty(frame.PresentationHash, frame.FrameHash)
-	renderHash := sha(caption + "\x00" + presentationHash)
+	renderHash := sha(caption + "\x00" + frame.FrameHash)
 	if renderHash == current.LastRenderHash {
 		return true
 	}
@@ -126,9 +125,8 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	}
 	if renderHash == latest.LastRenderHash && !force {
 		// The image already displayed by Telegram is this exact crop. Rebuild its
-		// complete process-local View companion after restart before taking the
-		// quiet path.
-		a.rememberGuidedViewTextFrame(latest, capture, crop.hash)
+		// process-local text companion after restart before taking the quiet path.
+		a.rememberAnchorTextFrame(latest, crop.plain, crop.hash)
 		return finish()
 	}
 	if !force && time.Since(latest.LastAnchorEditAt) < 10*time.Second {
@@ -187,15 +185,15 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 		a.finishAnchorRotationLocked(ctx, latest.ID)
 		_ = a.audit("terminal.guided_evidence", "replaced", map[string]any{"session_id": latest.ID, "source": crop.source, "rows": crop.input.BufferRows})
 		if current, found := a.Store.FindSession(latest.ID); found {
-			// Telegram already exposes Raw on the replacement card. Keep its complete
-			// View companion available even if later continuity acceptance loses a race.
-			a.rememberGuidedViewTextFrame(current, capture, crop.hash)
+			// Telegram already exposes Raw on the replacement card. Keep its exact
+			// companion available even if later continuity acceptance loses a race.
+			a.rememberAnchorTextFrame(current, crop.plain, crop.hash)
 		}
 		return finish()
 	}
 	// Telegram now displays this crop under the existing message identity. Keep
-	// its complete View companion coherent even if later state acceptance fails.
-	a.rememberGuidedViewTextFrame(latest, capture, crop.hash)
+	// its exact text companion coherent even if later state acceptance fails.
+	a.rememberAnchorTextFrame(latest, crop.plain, crop.hash)
 	if guard != nil && !guard() {
 		return false
 	}

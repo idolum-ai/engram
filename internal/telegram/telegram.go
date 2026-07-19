@@ -574,26 +574,10 @@ func ClearMarkup() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
 }
 
-func RecoverMarkup(sessionID int, resumable bool) *InlineKeyboardMarkup {
-	buttons := []InlineKeyboardButton{Button("🧭 Link", fmt.Sprintf("recover:%d", sessionID))}
-	if resumable {
-		buttons = append([]InlineKeyboardButton{Button("♻️ Go", fmt.Sprintf("resume:%d", sessionID))}, buttons...)
-	}
-	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{buttons}}
-}
-
-func RecoveryPlanMarkup(actions []SessionAction) *InlineKeyboardMarkup {
-	rows := make([][]InlineKeyboardButton, 0, len(actions)+1)
-	for _, action := range actions {
-		rows = append(rows, []InlineKeyboardButton{Button(fmt.Sprintf("♻️ %d", action.ID), fmt.Sprintf("plan-resume:%d:%s", action.ID, action.Token))})
-	}
-	rows = append(rows, []InlineKeyboardButton{Button("Dismiss", "plan-dismiss:all")})
-	return &InlineKeyboardMarkup{InlineKeyboard: rows}
-}
-
-type SessionAction struct {
-	ID    int
-	Token string
+func RecoverMarkup(sessionID int) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("🧭 Link", fmt.Sprintf("recover:%d", sessionID)),
+	}}}
 }
 
 func CloseConfirmationMarkup(token string) *InlineKeyboardMarkup {
@@ -603,15 +587,15 @@ func CloseConfirmationMarkup(token string) *InlineKeyboardMarkup {
 	}}}
 }
 
-func SessionListMarkup(actions []SessionAction, attachTargets []AttachTarget) *InlineKeyboardMarkup {
-	if len(actions) == 0 && len(attachTargets) == 0 {
+func SessionListMarkup(ids []int, attachTargets []AttachTarget) *InlineKeyboardMarkup {
+	if len(ids) == 0 && len(attachTargets) == 0 {
 		return nil
 	}
-	rows := make([][]InlineKeyboardButton, 0, len(actions)+len(attachTargets))
-	for _, action := range actions {
+	rows := make([][]InlineKeyboardButton, 0, len(ids)+len(attachTargets))
+	for _, id := range ids {
 		rows = append(rows, []InlineKeyboardButton{
-			Button(fmt.Sprintf("▶ %d", action.ID), fmt.Sprintf("session-watch:%d:%s", action.ID, action.Token)),
-			Button(fmt.Sprintf("✕ %d", action.ID), fmt.Sprintf("session-close:%d:%s", action.ID, action.Token)),
+			Button(fmt.Sprintf("▶ %d", id), fmt.Sprintf("watch:%d", id)),
+			Button(fmt.Sprintf("✕ %d", id), fmt.Sprintf("close:%d", id)),
 		})
 	}
 	for _, target := range attachTargets {
