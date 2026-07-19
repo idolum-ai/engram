@@ -33,6 +33,7 @@ const (
 	minTerminalFont               = 7.0
 	terminalLineHeight            = 1.4
 	wrappedColumns                = 100
+	compactLineHeight             = 13.2
 	footerStatusMaxCells          = 24
 	footerStatusMinCells          = 8
 	footerStatusCellPixels        = 9 * terminalCharRatio
@@ -242,17 +243,13 @@ func RenderHTML(input Input, themeName string) string {
 	if bufferRows <= 0 {
 		bufferRows = input.VisibleRows
 	}
-	layoutColumns := input.Columns
+	renderColumns, fontSize, lineHeight := readableTerminalLayout(input.Columns)
 	if input.Compact {
-		layoutColumns = min(layoutColumns, 71)
-	}
-	renderColumns, fontSize, lineHeight := readableTerminalLayout(layoutColumns)
-	if input.Compact {
-		lineHeight = 13.2
+		renderColumns, fontSize, lineHeight = readableCompactTerminalLayout(input.Columns)
 	}
 	lineHeightCSS := fmt.Sprintf("%.2f", lineHeight)
 	if input.Compact {
-		lineHeightCSS = "13.2"
+		lineHeightCSS = fmt.Sprintf("%.1f", lineHeight)
 	}
 	columnLabel := fmt.Sprintf("%dx%d visible", input.Columns, input.VisibleRows)
 	if renderColumns < input.Columns {
@@ -268,7 +265,7 @@ func RenderHTML(input Input, themeName string) string {
 	}
 	whiteSpace, overflowWrap, wordBreak := "pre", "normal", "normal"
 	visualRows := bufferRows
-	wrapRows := input.Compact || renderColumns < input.Columns
+	wrapRows := renderColumns < input.Columns
 	if wrapRows {
 		whiteSpace, overflowWrap, wordBreak = "pre-wrap", "anywhere", "break-all"
 		visualRows = snapshotVisualRows(input.ANSI, bufferRows, renderColumns)
@@ -285,14 +282,21 @@ func RenderHTML(input Input, themeName string) string {
 	if status != "" {
 		statusHTML = fmt.Sprintf(`<span class="status">%s</span>`, html.EscapeString(status))
 	}
+	dimensions := fmt.Sprintf("%dx%d visible", input.Columns, input.VisibleRows)
+	if input.Compact {
+		dimensions = fmt.Sprintf("%d-col source", input.Columns)
+		if renderColumns < input.Columns {
+			dimensions = fmt.Sprintf("%d cols · wraps at %d", input.Columns, renderColumns)
+		}
+	}
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
 :root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:%dpx;height:%dpx;overflow:hidden;background:%s}.bar{width:100%%;height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;overflow:hidden;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100%%;height:calc(100%% - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:%s;overflow-wrap:%s;word-break:%s}.foot{width:100%%;height:22px;display:flex;align-items:center;justify-content:space-between;gap:%dpx;padding:0 12px;overflow:hidden;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}.foot span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.provenance{flex:1 1 auto}.status{flex:0 1 %dch;max-width:%dch;text-align:right;font-family:"SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace}.dimensions{flex:0 0 auto;text-align:right}
-</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span class="provenance">%s</span>%s<span class="dimensions">%dx%d visible</span></footer></main></body></html>`,
+</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span class="provenance">%s</span>%s<span class="dimensions">%s</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, logicalWidth, logicalHeight, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
 		theme.highlightBorder, theme.highlight, renderColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, wordBreak, footerGapPixels, theme.subtleBorder, theme.muted, theme.foot, statusBudget, statusBudget,
 		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
-		html.EscapeString(footer), statusHTML, input.Columns, input.VisibleRows)
+		html.EscapeString(footer), statusHTML, html.EscapeString(dimensions))
 }
 
 func snapshotFooterStatusCellBudget(input Input) int {
@@ -354,6 +358,16 @@ func readableTerminalLayout(columns int) (renderColumns int, fontSize, lineHeigh
 	return renderColumns, fontSize, fontSize * terminalLineHeight
 }
 
+func readableCompactTerminalLayout(columns int) (renderColumns int, fontSize, lineHeight float64) {
+	renderColumns, fontSize, _ = readableTerminalLayout(columns)
+	maxColumns := int(math.Floor(terminalWidth / (minTerminalFont * terminalCharRatio)))
+	if renderColumns > maxColumns {
+		renderColumns = maxColumns
+		fontSize = minTerminalFont
+	}
+	return renderColumns, fontSize, compactLineHeight
+}
+
 func renderWidth(input Input) int {
 	if input.Compact {
 		return LogicalWidth
@@ -374,9 +388,12 @@ func renderHeight(input Input) int {
 		// remains above the footer instead of being clipped by overflow:hidden.
 		return max(LogicalHeight, 76+int(math.Ceil(float64(visualRows)*lineHeight)))
 	}
-	renderColumns := min(input.Columns, 71)
-	visualRows := snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
-	height := 86 + int(math.Ceil(float64(visualRows)*13.2))
+	renderColumns, _, lineHeight := readableCompactTerminalLayout(input.Columns)
+	visualRows := input.BufferRows
+	if renderColumns < input.Columns {
+		visualRows = snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
+	}
+	height := 86 + int(math.Ceil(float64(visualRows)*lineHeight))
 	if height < 180 {
 		return 180
 	}

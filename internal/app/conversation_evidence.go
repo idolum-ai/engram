@@ -37,13 +37,22 @@ func lastNonBlankLine(lines []string) int {
 
 func isPassiveTerminalFooter(line string) bool {
 	line = strings.TrimSpace(line)
-	if strings.Count(line, "\u00b7") < 2 || !strings.Contains(line, "[") || !strings.HasSuffix(line, "]") {
+	separatorCount := strings.Count(line, "\u00b7")
+	if separatorCount < 1 {
 		return false
 	}
-	label := strings.ToLower(strings.Fields(line)[0])
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return false
+	}
+	label := strings.ToLower(fields[0])
 	for _, prefix := range []string{"gpt-", "claude", "gemini", "codex", "o1", "o3", "o4"} {
 		if strings.HasPrefix(label, prefix) {
-			return true
+			if separatorCount >= 2 && strings.Contains(line, "[") && strings.HasSuffix(line, "]") {
+				return true
+			}
+			tail := strings.TrimSpace(line[strings.LastIndex(line, "\u00b7")+len("\u00b7"):])
+			return tail == "~" || strings.HasPrefix(tail, "~/") || strings.HasPrefix(tail, "/")
 		}
 	}
 	return false

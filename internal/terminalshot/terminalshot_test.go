@@ -6,6 +6,7 @@ import (
 	"html"
 	"image"
 	"image/png"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -241,12 +242,33 @@ func TestCompactEvidencePreservesFittingPhysicalRows(t *testing.T) {
 	}
 }
 
+func TestReadableCompactTerminalLayoutPreservesRowsThroughMobileWidthLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		columns       int
+		renderColumns int
+		fontSize      float64
+	}{
+		{columns: 71, renderColumns: 71, fontSize: maxTerminalFont},
+		{columns: 80, renderColumns: 80, fontSize: terminalWidth / (80 * terminalCharRatio)},
+		{columns: 96, renderColumns: 96, fontSize: terminalWidth / (96 * terminalCharRatio)},
+		{columns: 97, renderColumns: 96, fontSize: minTerminalFont},
+		{columns: 200, renderColumns: 96, fontSize: minTerminalFont},
+	}
+	for _, test := range tests {
+		renderColumns, fontSize, lineHeight := readableCompactTerminalLayout(test.columns)
+		if renderColumns != test.renderColumns || math.Abs(fontSize-test.fontSize) > 0.001 || lineHeight != compactLineHeight {
+			t.Errorf("readableCompactTerminalLayout(%d) = (%d, %.3f, %.1f), want (%d, %.3f, %.1f)", test.columns, renderColumns, fontSize, lineHeight, test.renderColumns, test.fontSize, compactLineHeight)
+		}
+	}
+}
+
 func TestCompactEvidenceWrapsWidePanesAndEscapesFooter(t *testing.T) {
 	page := RenderHTML(Input{
 		ANSI: "left " + strings.Repeat("x", 150) + " right", Title: "build", Target: "[3]", CWD: "/tmp",
 		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, Footer: `<unsafe & footer>`,
 	}, "terminal")
-	for _, want := range []string{"width:71ch", "font:9.40px/13.2px", "white-space:pre-wrap", "overflow-wrap:anywhere", "word-break:break-all", "left ", " right", "&lt;unsafe &amp; footer&gt;"} {
+	for _, want := range []string{"width:96ch", "font:7.00px/13.2px", "white-space:pre-wrap", "overflow-wrap:anywhere", "word-break:break-all", "left ", " right", "&lt;unsafe &amp; footer&gt;", "200 cols · wraps at 96"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide compact HTML missing %q: %s", want, page)
 		}
@@ -270,9 +292,9 @@ func TestCompactEvidenceWrappedRowsExpandImageAndHighlights(t *testing.T) {
 	}
 	page := RenderHTML(input, "contrast-dark")
 	for _, want := range []string{
-		`top:10.0px;height:79.2px`,
-		`top:89.2px;height:79.2px`,
-		"width:71ch",
+		`top:10.0px;height:66.0px`,
+		`top:76.0px;height:66.0px`,
+		"width:96ch",
 		"white-space:pre-wrap",
 		"word-break:break-all",
 	} {
@@ -366,13 +388,13 @@ func TestSupportedScreenshotSurfacesContainTheirVisibleAreas(t *testing.T) {
 			name: "compact evidence",
 			input: Input{ANSI: "COMPACT BODY", Title: "evidence", Target: "[3]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
 				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "COMPACT FOOTER"},
-			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "COMPACT FOOTER",
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:7.00px/13.2px", footer: "COMPACT FOOTER",
 		},
 		{
 			name: "quiet guided frame",
 			input: Input{ANSI: " ", Title: "quiet", Target: "[4]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
 				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "QUIET FOOTER"},
-			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "QUIET FOOTER",
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre", font: "font:9.40px/13.2px", footer: "QUIET FOOTER",
 		},
 	}
 	for _, test := range tests {

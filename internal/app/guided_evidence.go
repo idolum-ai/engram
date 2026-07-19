@@ -15,8 +15,8 @@ import (
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
-const guidedEvidenceContextRows = 2
 const guidedEvidenceMaxRows = 18
+const guidedEvidenceContextRows = 2
 const guidedEvidenceMinExcerptBytes = 12
 const guidedCaptionBytes = 960
 const guidedTailRows = 10
@@ -445,15 +445,7 @@ func buildGuidedEvidenceCrop(session state.TerminalSession, capture tmux.StyledC
 	if last-first+1 > guidedEvidenceMaxRows {
 		return guidedEvidenceCrop{}, false
 	}
-	start := max(0, first-guidedEvidenceContextRows)
-	end := min(len(plainRows)-1, last+guidedEvidenceContextRows)
-	for end-start+1 > guidedEvidenceMaxRows {
-		if first-start > end-last {
-			start++
-		} else {
-			end--
-		}
-	}
+	start, end := boundedEvidenceBlock(plainRows, first, last, guidedEvidenceMaxRows)
 	highlights := make([]int, 0, len(indices))
 	for _, row := range indices {
 		highlights = append(highlights, row-start)
@@ -497,11 +489,10 @@ func buildGuidedRecentActivityCrop(session state.TerminalSession, capture tmux.S
 	if first < 0 {
 		return guidedEvidenceCrop{}, false
 	}
-	start := max(0, first-guidedEvidenceContextRows)
-	end := min(len(newRows)-1, last+guidedEvidenceContextRows)
-	if end-start+1 > guidedEvidenceMaxRows {
-		start = max(0, end-guidedEvidenceMaxRows+1)
+	if last-first+1 > guidedEvidenceMaxRows {
+		first = last - guidedEvidenceMaxRows + 1
 	}
+	start, end := boundedEvidenceBlock(newRows, first, last, guidedEvidenceMaxRows)
 	highlights := make([]int, 0, end-start+1)
 	for row := max(first, start); row <= min(last, end); row++ {
 		if !newMatched[row] && strings.TrimSpace(newRows[row]) != "" {
@@ -512,6 +503,22 @@ func buildGuidedRecentActivityCrop(session state.TerminalSession, capture tmux.S
 		return guidedEvidenceCrop{}, false
 	}
 	return buildGuidedRangeCrop(session, capture, newRows, ansiRows, start, end, highlights, "changed terminal region", guidedEvidenceChanged, theme), true
+}
+
+func boundedEvidenceBlock(rows []string, first, last, maxRows int) (int, int) {
+	first = max(0, first)
+	last = min(len(rows)-1, last)
+	if first > last || maxRows <= 0 {
+		return first, last
+	}
+	start, end := first, last
+	for context := 0; start > 0 && context < guidedEvidenceContextRows && strings.TrimSpace(rows[start-1]) != "" && end-start+1 < maxRows; context++ {
+		start--
+	}
+	for context := 0; end+1 < len(rows) && context < guidedEvidenceContextRows && strings.TrimSpace(rows[end+1]) != "" && end-start+1 < maxRows; context++ {
+		end++
+	}
+	return start, end
 }
 
 func buildGuidedTailCrop(session state.TerminalSession, capture tmux.StyledCapture, theme string) (guidedEvidenceCrop, bool) {

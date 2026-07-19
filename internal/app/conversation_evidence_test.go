@@ -56,6 +56,7 @@ func TestConversationEvidenceLeavesOrdinaryTerminalTextAlone(t *testing.T) {
 		want  string
 	}{
 		{input: "build passed\n$", want: "build passed\n$"},
+		{input: "build passed\ncodex · generated report", want: "build passed\ncodex · generated report"},
 		{input: "build passed\n\n\u203a Write tests for @filename", want: "build passed\n\n\u203a Write tests for @filename"},
 		{input: "build passed\nresult \u00b7 main \u00b7 checks [done]", want: "build passed\nresult \u00b7 main \u00b7 checks [done]"},
 		{input: "build failed\n\n> fatal finding\n\n  claude-sonnet \u00b7 ~ \u00b7 Main [default]", want: "build failed\n\n> fatal finding"},
