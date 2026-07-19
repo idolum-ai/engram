@@ -74,12 +74,15 @@ func TestSessionListMarkupNilWhenNoSessions(t *testing.T) {
 func TestSessionListMarkupWithSessions(t *testing.T) {
 	t.Parallel()
 
-	got := SessionListMarkup([]int{1}, nil)
+	got := SessionListMarkup([]SessionAction{{ID: 1, Token: "abc"}}, nil)
 	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 2 {
 		t.Fatalf("SessionListMarkup([1]) = %#v", got)
 	}
 	if got.InlineKeyboard[0][0].Text != "▶ 1" || got.InlineKeyboard[0][1].Text != "✕ 1" {
 		t.Fatalf("session actions = %#v", got.InlineKeyboard[0])
+	}
+	if got.InlineKeyboard[0][0].CallbackData != "session-watch:1:abc" || got.InlineKeyboard[0][1].CallbackData != "session-close:1:abc" {
+		t.Fatalf("session callback actions = %#v", got.InlineKeyboard[0])
 	}
 }
 
@@ -180,10 +183,22 @@ func TestAnchorMarkupAddsNumberedFileButtons(t *testing.T) {
 func TestRecoverMarkupOffersExactReattach(t *testing.T) {
 	t.Parallel()
 
-	got := RecoverMarkup(7)
+	got := RecoverMarkup(7, false)
 	want := InlineKeyboardButton{Text: "🧭 Link", CallbackData: "recover:7"}
 	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 1 || got.InlineKeyboard[0][0] != want {
-		t.Fatalf("RecoverMarkup(7) = %#v, want %#v", got, want)
+		t.Fatalf("RecoverMarkup(7, false) = %#v, want %#v", got, want)
+	}
+}
+
+func TestRecoveryMarkupsOfferExactResumeAndDismiss(t *testing.T) {
+	t.Parallel()
+	recover := RecoverMarkup(7, true)
+	if got := recover.InlineKeyboard[0][0]; got.CallbackData != "resume:7" {
+		t.Fatalf("resume button = %#v", got)
+	}
+	plan := RecoveryPlanMarkup([]SessionAction{{ID: 7, Token: "aaa"}, {ID: 9, Token: "bbb"}})
+	if len(plan.InlineKeyboard) != 3 || plan.InlineKeyboard[0][0].CallbackData != "plan-resume:7:aaa" || plan.InlineKeyboard[2][0].CallbackData != "plan-dismiss:all" {
+		t.Fatalf("recovery plan markup = %#v", plan)
 	}
 }
 
@@ -199,9 +214,10 @@ func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
 			Image: true, Voice: true, Raw: true, Arrows: true,
 			FileToken: "0123456789abcdef", FileCount: 4,
 		}),
-		"recover": RecoverMarkup(123456789),
+		"recover":       RecoverMarkup(123456789, true),
+		"recovery plan": RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
 		"sessions": SessionListMarkup(
-			[]int{1, 123456789},
+			[]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}},
 			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},
 		),
 		"close confirmation": CloseConfirmationMarkup("0123456789abcdef"),

@@ -15,7 +15,8 @@ Status: available on Linux.
 
 The normal headless deployment is one Engram process running as a systemd user
 service. It long-polls Telegram, observes local tmux, and preserves state under
-`~/.engram`. tmux continues running if Engram stops.
+`~/.engram`. The installed unit uses `KillMode=process`, so tmux and its terminal
+processes continue running if Engram stops or restarts.
 
 From a source checkout:
 

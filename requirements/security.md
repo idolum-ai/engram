@@ -122,6 +122,13 @@ privacy model must stay small and explicit.
   effects outside this guarantee.
 - Read-only inspection follows neither state-file symlinks nor pane-authored
   paths and never accepts Telegram identifiers or arbitrary tmux targets.
+- Recovery hook input and pane-local metadata are untrusted. Engram bounds JSON
+  input, validates provider and UUID syntax, requires the inherited immutable
+  pane ID, and revalidates the full stored tmux binding before persistence.
+- Recovery command previews use the normal secret redactor and a fixed byte
+  bound. They are sensitive state, advisory only, and never become automatic
+  shell effects. One-tap recovery is restricted to native resume commands for
+  the fixed `codex` and `claude` allowlist.
 
 - Telegram messages can cause shell input in tmux.
 - OpenAI transcription is untrusted input derivation, not a security boundary.

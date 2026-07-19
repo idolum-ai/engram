@@ -647,7 +647,10 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 		return nil
 	}
 	if ts.State == state.TerminalLost {
-		return telegram.RecoverMarkup(ts.ID)
+		if ts.PendingResume != nil {
+			return nil
+		}
+		return telegram.RecoverMarkup(ts.ID, validResumeProgram(ts.ResumeProgram) && validResumeSessionID(ts.ResumeSessionID))
 	}
 	return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{})
 }
@@ -682,6 +685,7 @@ func (a *App) scheduler(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	nextCapture := map[int]time.Time{}
+	nextRecovery := map[int]time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -694,7 +698,16 @@ func (a *App) scheduler(ctx context.Context) {
 				if ts.AnchorMessageID != 0 {
 					a.reconcileAnchorPresentation(ctx, ts.ID)
 				}
-				if !ts.WatchEnabled || ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
+				if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
+					delete(nextCapture, ts.ID)
+					delete(nextRecovery, ts.ID)
+					continue
+				}
+				if !now.Before(nextRecovery[ts.ID]) {
+					nextRecovery[ts.ID] = now.Add(10 * time.Second)
+					_ = a.reconcileRecoverySession(ctx, ts)
+				}
+				if !ts.WatchEnabled {
 					delete(nextCapture, ts.ID)
 					continue
 				}

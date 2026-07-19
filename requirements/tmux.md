@@ -168,10 +168,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   cannot be delivered safely, Engram renders the same bounded range as redacted
   plain text. Empty terminals use a quiet `guided view` frame. Engram never
   preserves stale pixels or falls back to a larger automatic screenshot.
-- The exact plain text corresponding to the selected guide rows, before visual
-  soft-wrapping, is retained
-  only in process memory and is available through `📄 Raw` while that canonical
-  message remains current.
+- The complete bounded logical-text frame underlying `🖼️ View`, before visual
+  soft-wrapping, is retained only in process memory and is available through
+  `📄 Raw` while that canonical message remains current. In guide mode this is
+  intentionally broader than the compact evidence crop displayed on the card.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.
@@ -183,11 +183,12 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   missing files, and credential-shaped paths are omitted. `links` contains at
   most four valid HTTP(S) URLs. Engram never asks the model to generate
   references or fetches an extracted URL.
-- `/raw` preserves the visible pane's physical wrapped lines and attributes.
-  `/dump` streams physical full scrollback to an attachment. Both captures are
-  conditionally executed against the stored server, window, and pane identity
-  in the same tmux command queue; a queued request is canceled if that binding
-  changed before its worker began.
+- `/raw` captures the same complete bounded, plain logical-text frame used by
+  `🖼️ View`. `/dump` streams the pane's complete retained tmux history as plain
+  logical text, joining terminal soft wraps and omitting ANSI styling. Both
+  captures are conditionally executed against the stored server, window, and
+  pane identity in the same tmux command queue; a queued request is canceled if
+  that binding changed before its worker began.
 - `/raw` and `/dump` stop before Telegram's 50 MiB upload ceiling.
 - `engram inspect frame <watch-id>` captures at most 64 recent plain-text rows
   without tmux paste buffers, strips terminal controls, and caps stdout at
@@ -212,3 +213,29 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - Inline close requires a separate, expiring confirm/cancel callback. A failed
   tmux close does not mark a session closed.
 - Closed and lost sessions do not refresh or retain input controls.
+- `/resume <id> <codex|claude> <session-uuid>` creates a replacement tmux
+  window for a lost watch, starts the allowlisted agent's native
+  resume command, and rebinds the existing watch ID and Telegram anchor. The
+  provider and UUID are persisted so later recoveries may use `/resume <id>`.
+  Before Enter, Engram durably binds the replacement window while retaining the
+  lost state. It refuses native resume if the original pane still exists and
+  reports success only after tmux observes the requested provider in the
+  replacement pane. Failed starts close the replacement and restore the prior
+  lost binding.
+- Closing is final: it clears persisted recovery metadata. New sessions reuse
+  the lowest closed watch ID before allocating another ID. Active and lost
+  watches are never recycled, so ordinary create/close use stays compact
+  without sacrificing recoverable conversations.
+- Engram records a bounded recovery event only when input was submitted with
+  Enter while tmux reported an allowlisted shell as the pane foreground
+  process. Input submitted while Codex, Claude, or another process is in the
+  foreground is conversation and is not recorded as a launch command.
+- `engram codex-hook` accepts only a Codex `SessionStart` JSON event and an
+  inherited immutable `TMUX_PANE`. It publishes bounded provider metadata to a
+  pane-local tmux option. The service accepts that metadata only between two
+  validations of the persisted pane, window, and server incarnation.
+- A shell command becomes process-observed only when a prompt, bounded later
+  validation sees its expected executable as the pane foreground process.
+  That evidence remains advisory and is never automatically replayed. A
+  provider UUID from a lifecycle hook or explicit `/resume` is required for
+  one-tap recovery.
