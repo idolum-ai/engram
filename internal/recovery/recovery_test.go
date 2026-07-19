@@ -45,3 +45,14 @@ func TestParseCodexSessionStartRejectsOtherEventsAndInvalidIDs(t *testing.T) {
 		t.Fatal("oversized hook input was accepted")
 	}
 }
+
+func TestEncodeAndDecodeEnforceTheSameMetadataBounds(t *testing.T) {
+	base := Metadata{Version: 1, Program: ProgramCodex, SessionID: "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"}
+	for _, cwd := range []string{strings.Repeat("x", 4097), "bad\x00path"} {
+		metadata := base
+		metadata.CWD = cwd
+		if _, err := Encode(metadata); err == nil {
+			t.Fatalf("Encode accepted invalid cwd of length %d", len(cwd))
+		}
+	}
+}

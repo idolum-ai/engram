@@ -647,6 +647,9 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 		return nil
 	}
 	if ts.State == state.TerminalLost {
+		if ts.PendingResume != nil {
+			return nil
+		}
 		return telegram.RecoverMarkup(ts.ID, validResumeProgram(ts.ResumeProgram) && validResumeSessionID(ts.ResumeSessionID))
 	}
 	return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{})

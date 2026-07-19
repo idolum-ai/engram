@@ -73,10 +73,11 @@ func ParseCodexSessionStart(input io.Reader, now time.Time) (Metadata, error) {
 }
 
 func Encode(metadata Metadata) (string, error) {
-	if !ValidProgram(metadata.Program) || !ValidSessionID(metadata.SessionID) {
-		return "", fmt.Errorf("invalid recovery metadata")
-	}
 	metadata.Version = 1
+	metadata, err := validateMetadata(metadata)
+	if err != nil {
+		return "", err
+	}
 	data, err := json.Marshal(metadata)
 	if err != nil {
 		return "", err
@@ -95,8 +96,13 @@ func Decode(value string) (Metadata, error) {
 	if err := json.Unmarshal([]byte(value), &metadata); err != nil {
 		return Metadata{}, fmt.Errorf("decode recovery metadata: %w", err)
 	}
+	return validateMetadata(metadata)
+}
+
+func validateMetadata(metadata Metadata) (Metadata, error) {
 	metadata.Program = strings.ToLower(strings.TrimSpace(metadata.Program))
 	metadata.SessionID = strings.ToLower(strings.TrimSpace(metadata.SessionID))
+	metadata.CWD = strings.TrimSpace(metadata.CWD)
 	if metadata.Version != 1 || !ValidProgram(metadata.Program) || !ValidSessionID(metadata.SessionID) {
 		return Metadata{}, fmt.Errorf("invalid recovery metadata")
 	}

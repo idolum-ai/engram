@@ -370,7 +370,7 @@ func (m Manager) RecoveryMetadata(ctx context.Context, paneID, windowID, serverI
 	}
 	value, err := m.Runner.Run(ctx, "show-options", "-p", "-q", "-v", "-t", paneID, EngramRecoveryOption)
 	if err != nil {
-		if missingTmuxTarget(err) {
+		if missingTmuxTarget(err) || missingTmuxServer(err) {
 			return recovery.Metadata{}, &IdentityError{Reason: "tmux pane identity is gone", Err: err}
 		}
 		return recovery.Metadata{}, err
@@ -404,7 +404,7 @@ func (m Manager) ValidatePane(ctx context.Context, paneID, windowID string) (Pan
 	}
 	pane, err := m.InspectPane(ctx, paneID)
 	if err != nil {
-		if missingTmuxTarget(err) {
+		if missingTmuxTarget(err) || missingTmuxServer(err) {
 			return Pane{}, &IdentityError{Reason: "tmux pane identity is gone", Err: err}
 		}
 		return Pane{}, err
@@ -428,7 +428,7 @@ func (m Manager) ValidateBinding(ctx context.Context, paneID, windowID, serverID
 	format := recordFormat(serverIDOption, "session_id", "window_id", "pane_id", "session_name", "window_index", "pane_index", "pane_active", "pane_current_path", "pane_current_command")
 	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, format)
 	if err != nil {
-		if missingTmuxTarget(err) {
+		if missingTmuxTarget(err) || missingTmuxServer(err) {
 			return Pane{}, &IdentityError{Reason: "tmux pane identity is gone", Err: err}
 		}
 		return Pane{}, err

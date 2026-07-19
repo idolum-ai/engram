@@ -284,6 +284,25 @@ func TestRecoveryEventsAreBoundedAndCloned(t *testing.T) {
 	if session.RecoveryEvents[0].Command == "changed" {
 		t.Fatal("recovery events shared backing storage")
 	}
+	session.PendingResume = &PendingResume{PreviousTmuxPaneID: "%1"}
+	cloned = cloneTerminalSession(session)
+	cloned.PendingResume.PreviousTmuxPaneID = "%2"
+	if session.PendingResume.PreviousTmuxPaneID != "%1" {
+		t.Fatal("pending resume shared pointer storage")
+	}
+}
+
+func TestClosedSessionNormalizationClearsRecoveryMetadata(t *testing.T) {
+	sessions := []TerminalSession{{
+		ID: 1, State: TerminalClosed, ResumeProgram: "codex",
+		ResumeSessionID: "019f7607-c8b0-74b3-87ca-64a7e6e7ede0",
+		PendingResume:   &PendingResume{PreviousTmuxPaneID: "%1"},
+		RecoveryEvents:  []RecoveryEvent{{Kind: "resume"}},
+	}}
+	normalizeTerminalSessions(sessions)
+	if sessions[0].ResumeProgram != "" || sessions[0].ResumeSessionID != "" || sessions[0].PendingResume != nil || len(sessions[0].RecoveryEvents) != 0 {
+		t.Fatalf("closed session retained recovery metadata: %#v", sessions[0])
+	}
 }
 
 func TestStorePersistsAnchorMode(t *testing.T) {
@@ -337,6 +356,60 @@ func TestSetAnchorModeRollsBackWhenPersistenceFails(t *testing.T) {
 	}
 }
 
+func TestRecoveryPlanHashPersistsAndRollsBackOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	store, err := Open(path, filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRecoveryPlanHash("plan-a"); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, filepath.Join(dir, "audit-2.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Snapshot().LastRecoveryPlanHash; got != "plan-a" {
+		t.Fatalf("persisted plan hash = %q", got)
+	}
+	if err := reopened.SetRecoveryPlanProgress("plan-pending", 2, []int{10, 11}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := reopened.Snapshot()
+	if snapshot.PendingRecoveryPlanHash != "plan-pending" || snapshot.PendingRecoveryPlanNextPage != 2 {
+		t.Fatalf("persisted plan progress = hash %q page %d", snapshot.PendingRecoveryPlanHash, snapshot.PendingRecoveryPlanNextPage)
+	}
+	snapshot.RecoveryPlanMessageIDs[0] = 99
+	if got := reopened.Snapshot().RecoveryPlanMessageIDs[0]; got != 10 {
+		t.Fatalf("recovery plan message IDs shared storage: %v", reopened.Snapshot().RecoveryPlanMessageIDs)
+	}
+	if err := reopened.CompleteRecoveryPlan("plan-complete", []int{10, 11}); err != nil {
+		t.Fatal(err)
+	}
+	completed := reopened.Snapshot()
+	if completed.LastRecoveryPlanHash != "plan-complete" || completed.PendingRecoveryPlanHash != "" || completed.PendingRecoveryPlanNextPage != 0 {
+		t.Fatalf("completed recovery plan = %#v", completed)
+	}
+	if err := reopened.SetRecoveryPlanProgress("plan-pending", 2, []int{10, 11}); err != nil {
+		t.Fatal(err)
+	}
+	reopened.path = filepath.Join(dir, "missing", "state.json")
+	if err := reopened.SetRecoveryPlanHash("plan-b"); err == nil {
+		t.Fatal("SetRecoveryPlanHash succeeded with an unwritable path")
+	}
+	if got := reopened.Snapshot().LastRecoveryPlanHash; got != "plan-complete" {
+		t.Fatalf("failed plan hash update retained %q", got)
+	}
+	if err := reopened.SetRecoveryPlanProgress("changed", 3, []int{12}); err == nil {
+		t.Fatal("SetRecoveryPlanProgress succeeded with an unwritable path")
+	}
+	progress := reopened.Snapshot()
+	if progress.PendingRecoveryPlanHash != "plan-pending" || progress.PendingRecoveryPlanNextPage != 2 || len(progress.RecoveryPlanMessageIDs) != 2 {
+		t.Fatalf("failed plan progress update retained %#v", progress)
+	}
+}
+
 func TestUpdateSessionRollsBackWhenReplacementDidNotOccur(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
@@ -358,6 +431,31 @@ func TestUpdateSessionRollsBackWhenReplacementDidNotOccur(t *testing.T) {
 	got, _ := store.FindSession(session.ID)
 	if got.Title != "original" || got.UpstreamMessageID != 0 {
 		t.Fatalf("in-memory state did not roll back: %#v", got)
+	}
+}
+
+func TestAllocateSessionRollsBackReusedIDWhenPersistenceFails(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed, err := store.AllocateSession("main", "@1", "%1", "closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(closed.ID, func(session *TerminalSession) {
+		session.State = TerminalClosed
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.path = filepath.Join(dir, "missing", "state.json")
+	if _, err := store.AllocateSession("main", "@2", "%2", "replacement"); err == nil {
+		t.Fatal("AllocateSession succeeded with an unwritable state path")
+	}
+	got, ok := store.FindSession(closed.ID)
+	if !ok || got.State != TerminalClosed || got.Title != "closed" || got.TmuxPaneID != "%1" {
+		t.Fatalf("failed allocation did not restore closed slot: %#v ok=%v", got, ok)
 	}
 }
 

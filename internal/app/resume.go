@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,10 +15,10 @@ import (
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
-const (
-	resumeProgramCodex  = recovery.ProgramCodex
-	resumeProgramClaude = recovery.ProgramClaude
-)
+const resumeProcessObservationTimeout = 5 * time.Second
+const resumeProcessSettlePeriod = 500 * time.Millisecond
+
+var errResumeProcessNotObserved = errors.New("resume process not observed")
 
 func parseResumeRequest(args string) (id int, program, sessionID string, ok bool) {
 	fields := strings.Fields(args)
@@ -74,6 +75,9 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 		if current.State != state.TerminalLost {
 			return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("[%d] is %s; only lost sessions can be resumed", id, current.State)}
 		}
+		if current.PendingResume != nil {
+			return actionResult{Outcome: actionUserError, Message: fmt.Sprintf("[%d] has an interrupted resume; restart Engram to reconcile it", id)}
+		}
 		if program == "" && sessionID == "" {
 			program = current.ResumeProgram
 			sessionID = current.ResumeSessionID
@@ -99,6 +103,17 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 		if err != nil {
 			return actionResult{Outcome: actionTmuxFailed, Message: "tmux server identity unavailable: " + err.Error()}
 		}
+		if current.TmuxServerID == serverID {
+			panes, listErr := a.Tmux.ListPanes(tmuxCtx)
+			if listErr != nil {
+				return actionResult{Outcome: actionTmuxFailed, Message: "could not verify whether the original pane still exists: " + listErr.Error()}
+			}
+			for _, candidate := range panes {
+				if candidate.ID == current.TmuxPaneID {
+					return actionResult{Outcome: actionUserError, Message: "the original pane still exists; use /sessions to reattach it instead"}
+				}
+			}
+		}
 		workdir := a.resumeWorkdir(current)
 		title := tmux.WindowTitle(id, firstNonEmpty(current.Title, program))
 		windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, tmuxSessionID, workdir, title)
@@ -106,23 +121,57 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 			return actionResult{Outcome: actionTmuxFailed, Message: "tmux window creation failed: " + err.Error()}
 		}
 		binding := mechanics.Binding{PaneID: paneID, WindowID: windowID, ServerID: serverID}
-		pane, err := a.terminalMechanics().SendCommand(tmuxCtx, binding, resumeCommand(program, sessionID))
-		if err != nil {
-			_, _ = a.terminalMechanics().CloseWindow(tmuxCtx, binding)
-			return actionResult{Outcome: actionTmuxFailed, Message: "session resume command failed: " + err.Error()}
-		}
-
 		now := time.Now().UTC()
-		updated, found, applied, updateErr := a.updateSessionIfCurrent(current, func(session *state.TerminalSession) {
+		prepared, found, applied, prepareErr := a.updateSessionIfCurrent(current, func(session *state.TerminalSession) {
+			session.PendingResume = &state.PendingResume{
+				StartedAt:               now,
+				PreviousTmuxSessionName: current.TmuxSessionName,
+				PreviousTmuxWindowID:    current.TmuxWindowID,
+				PreviousTmuxPaneID:      current.TmuxPaneID,
+				PreviousTmuxServerID:    current.TmuxServerID,
+				PreviousOrigin:          current.Origin,
+				PreviousCWD:             current.LastKnownCWD,
+				PreviousResumeProgram:   current.ResumeProgram,
+				PreviousResumeSessionID: current.ResumeSessionID,
+			}
 			session.TmuxSessionName = sessionName
 			session.TmuxWindowID = windowID
 			session.TmuxPaneID = paneID
 			session.TmuxServerID = serverID
 			session.Origin = state.TerminalOriginCreated
-			session.State = state.TerminalRunning
-			session.WatchEnabled = true
+			session.State = state.TerminalLost
+			session.WatchEnabled = false
 			session.ResumeProgram = program
 			session.ResumeSessionID = sessionID
+			session.LastKnownCWD = workdir
+		})
+		preparedCommitted := found && applied && (prepareErr == nil || state.PersistenceReachedReplacement(prepareErr))
+		if !preparedCommitted {
+			if cleanupErr := a.closeResumeWindow(binding); cleanupErr != nil {
+				return actionResult{Outcome: actionStateFailed, Message: "session changed while preparing resume; replacement cleanup also failed: " + cleanupErr.Error()}
+			}
+			return actionResult{Outcome: actionStateFailed, Message: "session changed while preparing resume"}
+		}
+		if prepareErr != nil {
+			_ = a.audit("state.session", "durability_uncertain", map[string]any{"session_id": id, "operation": "prepare_resume", "error": prepareErr.Error()})
+		}
+
+		_, err = a.terminalMechanics().SendCommand(tmuxCtx, binding, resumeCommand(program, sessionID))
+		if err != nil {
+			return a.abortPreparedResume(prepared, binding, "session resume command failed: "+err.Error(), actionTmuxFailed)
+		}
+		pane, err := a.waitForResumeProcess(tmuxCtx, binding, program)
+		if err != nil {
+			if !errors.Is(err, errResumeProcessNotObserved) {
+				return actionResult{Outcome: actionStateFailed, Message: "resume outcome is uncertain; the replacement remains linked and will be reconciled after restart: " + err.Error()}
+			}
+			return a.abortPreparedResume(prepared, binding, "session resume did not start: "+err.Error(), actionTmuxFailed)
+		}
+
+		updated, found, applied, updateErr := a.updateSessionIfCurrent(prepared, func(session *state.TerminalSession) {
+			session.State = state.TerminalRunning
+			session.WatchEnabled = true
+			session.PendingResume = nil
 			session.LastKnownCWD = firstNonEmpty(pane.CurrentPath, workdir)
 			session.LastActivityAt = now
 			session.LastRawCaptureHash = ""
@@ -143,8 +192,7 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 		})
 		committed := found && applied && (updateErr == nil || state.PersistenceReachedReplacement(updateErr))
 		if !committed {
-			_, _ = a.terminalMechanics().CloseWindow(tmuxCtx, binding)
-			return actionResult{Outcome: actionStateFailed, Message: "session changed while resuming"}
+			return a.abortPreparedResume(prepared, binding, "session changed while resuming", actionStateFailed)
 		}
 		if updateErr != nil {
 			_ = a.audit("state.session", "durability_uncertain", map[string]any{"session_id": id, "operation": "resume", "error": updateErr.Error()})
@@ -160,6 +208,81 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 		a.queueRefresh(resumed.ID, true, 0)
 	}
 	return result
+}
+
+func (a *App) waitForResumeProcess(ctx context.Context, binding mechanics.Binding, program string) (tmux.Pane, error) {
+	deadline := time.Now().Add(resumeProcessObservationTimeout)
+	var firstObserved time.Time
+	for {
+		pane, err := a.terminalMechanics().Validate(ctx, binding)
+		if err != nil {
+			return tmux.Pane{}, err
+		}
+		if commandExecutable(pane.CurrentCmd) == program {
+			if firstObserved.IsZero() {
+				firstObserved = time.Now()
+			} else if time.Since(firstObserved) >= resumeProcessSettlePeriod {
+				return pane, nil
+			}
+		} else {
+			firstObserved = time.Time{}
+		}
+		if !time.Now().Before(deadline) {
+			return tmux.Pane{}, fmt.Errorf("%w: %s was not observed as the pane foreground process", errResumeProcessNotObserved, program)
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return tmux.Pane{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (a *App) closeResumeWindow(binding mechanics.Binding) error {
+	cleanupCtx, cancel := tmux.TimeoutContext(context.Background())
+	defer cancel()
+	_, err := a.terminalMechanics().CloseWindow(cleanupCtx, binding)
+	return err
+}
+
+func (a *App) restorePreparedResume(prepared state.TerminalSession) error {
+	pending := prepared.PendingResume
+	if pending == nil {
+		return fmt.Errorf("pending resume metadata is missing")
+	}
+	_, found, applied, err := a.updateSessionIfCurrent(prepared, func(session *state.TerminalSession) {
+		session.TmuxSessionName = pending.PreviousTmuxSessionName
+		session.TmuxWindowID = pending.PreviousTmuxWindowID
+		session.TmuxPaneID = pending.PreviousTmuxPaneID
+		session.TmuxServerID = pending.PreviousTmuxServerID
+		session.Origin = pending.PreviousOrigin
+		session.LastKnownCWD = pending.PreviousCWD
+		session.ResumeProgram = pending.PreviousResumeProgram
+		session.ResumeSessionID = pending.PreviousResumeSessionID
+		session.PendingResume = nil
+		session.State = state.TerminalLost
+		session.WatchEnabled = false
+	})
+	if err != nil {
+		_ = a.audit("state.session", "failed", map[string]any{"session_id": prepared.ID, "operation": "rollback_resume", "error": err.Error()})
+		return err
+	}
+	if !found || !applied {
+		return fmt.Errorf("session changed before resume rollback")
+	}
+	return nil
+}
+
+func (a *App) abortPreparedResume(prepared state.TerminalSession, binding mechanics.Binding, message string, outcome actionOutcome) actionResult {
+	if err := a.closeResumeWindow(binding); err != nil {
+		return actionResult{Outcome: actionStateFailed, Message: message + "; replacement cleanup failed and remains linked to this watch: " + err.Error()}
+	}
+	if err := a.restorePreparedResume(prepared); err != nil {
+		return actionResult{Outcome: actionStateFailed, Message: message + "; recovery state rollback failed: " + err.Error()}
+	}
+	return actionResult{Outcome: outcome, Message: message}
 }
 
 func (a *App) resumeWorkdir(session state.TerminalSession) string {
