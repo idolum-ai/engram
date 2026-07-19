@@ -10,14 +10,14 @@ func TestParseCodexSessionStart(t *testing.T) {
 	now := time.Date(2026, 7, 18, 21, 0, 0, 0, time.UTC)
 	metadata, err := ParseCodexSessionStart(strings.NewReader(`{
   "session_id":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0",
-  "cwd":"/work/gleipnir",
+  "cwd":"/work/gleipnir ",
   "hook_event_name":"SessionStart",
   "source":"resume"
 }`), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Program != ProgramCodex || metadata.Source != "resume" || metadata.CWD != "/work/gleipnir" || !metadata.Observed.Equal(now) {
+	if metadata.Program != ProgramCodex || metadata.Source != "resume" || metadata.CWD != "/work/gleipnir " || !metadata.Observed.Equal(now) {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 	encoded, err := Encode(metadata)
@@ -25,7 +25,7 @@ func TestParseCodexSessionStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	decoded, err := Decode(encoded)
-	if err != nil || decoded.SessionID != metadata.SessionID {
+	if err != nil || decoded.SessionID != metadata.SessionID || decoded.CWD != metadata.CWD {
 		t.Fatalf("decoded = %#v err=%v", decoded, err)
 	}
 }

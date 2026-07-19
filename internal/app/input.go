@@ -84,6 +84,9 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 	if ts.State == state.TerminalClosed {
 		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "session is closed"}}
 	}
+	if ts.PendingResume != nil {
+		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}}
+	}
 	if expectedBinding != nil && !sameTerminalBinding(ts, *expectedBinding) {
 		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "session changed before input could be sent"}}
 	}
@@ -194,6 +197,9 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	}
 	if ts.State == state.TerminalClosed {
 		return actionResult{Outcome: actionUserError, Message: "session is closed"}
+	}
+	if ts.PendingResume != nil {
+		return actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}
 	}
 	if expectedBinding != nil && !sameTerminalBinding(ts, *expectedBinding) {
 		return actionResult{Outcome: actionUserError, Message: "session changed before keys could be sent"}

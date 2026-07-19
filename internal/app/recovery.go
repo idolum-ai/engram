@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -186,18 +185,6 @@ func recoveryMetadataChange(session state.TerminalSession, metadata recovery.Met
 		}
 	}
 	return true
-}
-
-func readHostBootID() string {
-	data, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if err != nil {
-		return ""
-	}
-	id := strings.TrimSpace(string(data))
-	if !recovery.ValidSessionID(id) {
-		return ""
-	}
-	return strings.ToLower(id)
 }
 
 type recoveryPlanEntry struct {
@@ -465,7 +452,7 @@ func (a *App) reconcilePendingResume(ctx context.Context, expected state.Termina
 			session.State = state.TerminalRunning
 			session.WatchEnabled = true
 			session.PendingResume = nil
-			session.LastKnownCWD = firstNonEmpty(pane.CurrentPath, session.LastKnownCWD)
+			session.LastKnownCWD = firstNonEmptyExact(pane.CurrentPath, session.LastKnownCWD)
 			session.LastActivityAt = now
 			session.RecordRecoveryEvent(state.RecoveryEvent{
 				At: now, Kind: "resume", Command: resumeCommand(session.ResumeProgram, session.ResumeSessionID),

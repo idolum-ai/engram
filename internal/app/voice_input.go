@@ -188,7 +188,7 @@ func (a *App) voiceReplyStillDeliverable(chatID int64, messageID int, expected s
 
 func (a *App) voiceReplyStillDeliverableLocked(chatID int64, messageID int, expected state.TerminalSession) bool {
 	current, targetState, found := a.Store.FindReplyTarget(chatID, messageID)
-	return found && targetState == state.ReplyTargetCurrent && current.State != state.TerminalClosed && sameTerminalBinding(current, expected)
+	return found && targetState == state.ReplyTargetCurrent && current.State != state.TerminalClosed && current.PendingResume == nil && sameTerminalBinding(current, expected)
 }
 
 func (a *App) deliverVoiceInput(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int, text string) actionResult {

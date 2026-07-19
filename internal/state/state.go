@@ -996,17 +996,14 @@ func sessionAllocationSlot(sessions []TerminalSession) (int, int, error) {
 			return id, -1, nil
 		}
 	}
-	maxID := 0
-	for _, session := range sessions {
-		if session.ID > maxID {
-			maxID = session.ID
-		}
-	}
-	return maxID + 1, -1, nil
+	return 0, -1, fmt.Errorf("terminal session capacity of %d reached; close a watch before creating another", maxTerminalSessions)
 }
 
 func nextSessionID(sessions []TerminalSession) int {
-	id, _, _ := sessionAllocationSlot(sessions)
+	id, _, err := sessionAllocationSlot(sessions)
+	if err != nil {
+		return maxTerminalSessions + 1
+	}
 	return id
 }
 
@@ -1118,10 +1115,10 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 	}
 	sort.SliceStable(indices, func(i, j int) bool {
 		a, b := sessions[indices[i]], sessions[indices[j]]
-		aActive := a.State == TerminalRunning
-		bActive := b.State == TerminalRunning
-		if aActive != bActive {
-			return aActive
+		aProtected := a.State == TerminalRunning || a.State == TerminalLost
+		bProtected := b.State == TerminalRunning || b.State == TerminalLost
+		if aProtected != bProtected {
+			return aProtected
 		}
 		aTime, bTime := sessionRecency(a), sessionRecency(b)
 		if !aTime.Equal(bTime) {
