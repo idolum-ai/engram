@@ -218,6 +218,29 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 	}
 }
 
+func TestCompactEvidencePreservesFittingPhysicalRows(t *testing.T) {
+	t.Parallel()
+	const columns = 80
+	input := Input{
+		ANSI: strings.Repeat("─", columns), Title: "codex", Target: "[8]", CWD: "/Users/daniel",
+		Columns: columns, VisibleRows: 24, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "changed terminal region",
+	}
+	page := RenderHTML(input, "terminal")
+
+	if !strings.Contains(page, "width:80ch") {
+		t.Errorf("compact 80-column pane did not retain its physical width")
+	}
+	if !strings.Contains(page, "tab-size:8;white-space:pre;overflow-wrap:normal;word-break:normal") {
+		t.Errorf("compact 80-column pane permits synthetic line wrapping")
+	}
+	if !strings.Contains(page, `top:10.0px;height:13.2px`) {
+		t.Errorf("single highlighted physical row expanded into multiple visual rows")
+	}
+	if strings.Contains(page, ">80x24 visible</span>") {
+		t.Errorf("compact evidence labels the source dimensions as if the full viewport were rendered")
+	}
+}
+
 func TestCompactEvidenceWrapsWidePanesAndEscapesFooter(t *testing.T) {
 	page := RenderHTML(Input{
 		ANSI: "left " + strings.Repeat("x", 150) + " right", Title: "build", Target: "[3]", CWD: "/tmp",

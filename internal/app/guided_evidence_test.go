@@ -50,6 +50,33 @@ func TestBuildGuidedEvidenceCropRejectsWidelySeparatedEvidence(t *testing.T) {
 	}
 }
 
+func TestGuidedEvidenceContextStopsAtBlankBlockBoundaries(t *testing.T) {
+	text := strings.Join([]string{
+		"orphaned tail from the previous block",
+		"",
+		"decisive result starts here",
+		"and finishes on this row",
+		"",
+		"› Run /review on my current changes",
+	}, "\n")
+	capture := tmux.StyledCapture{Text: text, ANSI: text, Columns: 80, VisibleRows: 24, BufferRows: 6}
+	crop, ok := buildGuidedEvidenceCrop(
+		state.TerminalSession{ID: 8, Title: "codex"},
+		capture,
+		[]string{"decisive result starts here and finishes on this row"},
+		"terminal",
+	)
+	if !ok {
+		t.Fatal("decisive evidence did not produce a crop")
+	}
+	if crop.plain != "decisive result starts here\nand finishes on this row" {
+		t.Errorf("evidence crop crossed blank block boundaries: %q", crop.plain)
+	}
+	if !reflect.DeepEqual(crop.input.HighlightRows, []int{0, 1}) {
+		t.Errorf("highlight rows = %v, want [0 1] relative to the bounded block", crop.input.HighlightRows)
+	}
+}
+
 func TestGuidedEvidenceCaptionBoundsProseAndKeepsFileBindings(t *testing.T) {
 	app := &App{}
 	session := state.TerminalSession{ID: 4, State: state.TerminalRunning, Title: "release", LastKnownCWD: "/work/engram"}

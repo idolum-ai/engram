@@ -22,6 +22,19 @@ func TestConversationEvidenceDropsTrailingIdlePromptChrome(t *testing.T) {
 	}
 }
 
+func TestConversationEvidenceOmitsPassiveComposerWithCurrentStatusShape(t *testing.T) {
+	input := strings.Join([]string{
+		"Google Cloud CLI is installed.",
+		"",
+		"› Run /review on my current changes",
+		"",
+		"gpt-5.6-sol high · ~",
+	}, "\n")
+	if got, want := conversationEvidence(input), "Google Cloud CLI is installed."; got != want {
+		t.Errorf("conversationEvidence() = %q, want %q", got, want)
+	}
+}
+
 func TestConversationEvidenceKeepsChromeWhenItIsTheOnlyIdleEvidence(t *testing.T) {
 	input := "\u203a Write tests for @filename\n\n  gpt-5.6-sol high \u00b7 ~/engram \u00b7 Main [default]"
 	if got := conversationEvidence(input); got != input {
