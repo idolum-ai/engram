@@ -733,7 +733,7 @@ func TestLiveChromiumCompactColumnBoundaryPreservesPixels(t *testing.T) {
 		t.Fatalf("96-column physical rows did not remain distinct: red=%v blue=%v ok=%v", red, blue, ok)
 	}
 	fitHighlight := yellowHighlightBounds(fit)
-	if fitHighlight.Empty() || fitHighlight.Dy() > int(math.Ceil(compactLineHeight*PixelRatio))+3 {
+	if fitHighlight.Empty() || !pixelSizeNear(fitHighlight.Dy(), compactLineHeight*PixelRatio, 3) {
 		t.Fatalf("96-column single-row highlight bounds = %v", fitHighlight)
 	}
 
@@ -743,11 +743,13 @@ func TestLiveChromiumCompactColumnBoundaryPreservesPixels(t *testing.T) {
 		Columns: 97, VisibleRows: 24, BufferRows: 1, Compact: true, HighlightRows: []int{0},
 	})
 	green, ok := matchingPixelBounds(wrapped, func(r, g, b uint32) bool { return r < 0x3000 && g > 0xe000 && b < 0x3000 })
-	if !ok || green.Min.X > 24*PixelRatio || green.Min.Y < 64*PixelRatio {
+	secondRowTop := (54 + compactLineHeight) * PixelRatio
+	secondRowBottom := (54 + 2*compactLineHeight) * PixelRatio
+	if !ok || green.Min.X > 24*PixelRatio || float64(green.Min.Y) < secondRowTop-3 || float64(green.Max.Y) > secondRowBottom+3 {
 		t.Fatalf("97th-column wrapped sentinel is missing from the second visual row: bounds=%v ok=%v", green, ok)
 	}
 	wrappedHighlight := yellowHighlightBounds(wrapped)
-	if wrappedHighlight.Empty() || wrappedHighlight.Dy() < int(math.Floor(2*compactLineHeight*PixelRatio))-3 {
+	if wrappedHighlight.Empty() || !pixelSizeNear(wrappedHighlight.Dy(), 2*compactLineHeight*PixelRatio, 3) {
 		t.Fatalf("97-column wrapped highlight bounds = %v", wrappedHighlight)
 	}
 }
@@ -793,6 +795,10 @@ func yellowHighlightBounds(img image.Image) image.Rectangle {
 		return r > 0xd000 && g > 0xa000 && b < 0x8000
 	})
 	return bounds
+}
+
+func pixelSizeNear(got int, want, tolerance float64) bool {
+	return math.Abs(float64(got)-want) <= tolerance
 }
 
 func TestLiveChromiumWideRender(t *testing.T) {

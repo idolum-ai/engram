@@ -2,8 +2,6 @@ package app
 
 import (
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 // conversationEvidence removes a model-status footer and its paired known
@@ -79,21 +77,42 @@ func isVersionedGPTLabel(label string) bool {
 	if suffix == label || suffix == "" {
 		return false
 	}
-	first, _ := utf8.DecodeRuneInString(suffix)
-	if !unicode.IsDigit(first) {
+	index := consumeASCIIDigits(suffix, 0)
+	if index == 0 {
 		return false
 	}
-	hasDigit := false
-	for _, r := range suffix {
-		switch {
-		case unicode.IsDigit(r):
-			hasDigit = true
-		case unicode.IsLetter(r), r == '.', r == '-':
-		default:
+	for index < len(suffix) && suffix[index] == '.' {
+		index++
+		next := consumeASCIIDigits(suffix, index)
+		if next == index {
+			return false
+		}
+		index = next
+	}
+	if index < len(suffix) && suffix[index] == 'o' {
+		index++
+	}
+	for index < len(suffix) {
+		if suffix[index] != '-' {
+			return false
+		}
+		index++
+		start := index
+		for index < len(suffix) && (suffix[index] >= 'a' && suffix[index] <= 'z' || suffix[index] >= '0' && suffix[index] <= '9') {
+			index++
+		}
+		if index == start {
 			return false
 		}
 	}
-	return hasDigit
+	return true
+}
+
+func consumeASCIIDigits(value string, start int) int {
+	for start < len(value) && value[start] >= '0' && value[start] <= '9' {
+		start++
+	}
+	return start
 }
 
 func isModelEffort(value string) bool {
