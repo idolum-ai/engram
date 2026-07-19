@@ -282,7 +282,8 @@ the bot channel and must be revoked immediately.
   the same canonical Telegram message. The selected model identifies short
   verbatim excerpts in its existing request; Engram requires them to occur
   uniquely in both the model's cleaned input and physical terminal rows, adds
-  bounded context, and highlights the matched rows. The footer calls these
+  up to two context rows without crossing a blank terminal-block boundary, and
+  highlights the matched rows. The footer calls these
   quoted terminal text rather than implying semantic verification. If a model
   excerpt cannot be admitted, Engram deterministically shows the last changed
   on-screen physical-row region from the last accepted frame, then a bounded
@@ -291,10 +292,15 @@ the bot channel and must be revoked immediately.
   its provenance. If styled rows contain a configured secret or cannot be
   aligned safely, Engram renders the bounded tail as redacted plain text. A
   truly empty terminal uses a quiet guide-only frame so the prose remains the
-  focus. Compact crops preserve every selected physical row and soft-wrap it at
-  71 terminal cells, account for tabs, wide and combining characters, preserve
-  inherited terminal styling, and enforce the accessible contrast floor. Highlights
-  cover every wrapped visual fragment of a selected row. The message ID,
+  focus. Compact crops preserve physical row boundaries through the 96-column
+  mobile readability limit, shrinking the font only as far as 7px. Genuinely
+  wider rows use a disclosed 96-column soft-wrap fallback rather than silently
+  clipping text. Crops account for tabs, wide and combining characters,
+  preserve inherited terminal styling, and enforce the accessible contrast
+  floor. Context stops at blank terminal-block boundaries so unrelated
+  neighboring output and passive composer chrome do not enter the card.
+  Highlights cover the selected physical row or every disclosed wrapped
+  fragment of a wider row. The message ID,
   pin, controls, and reply route do not change.
   Every media anchor also offers `📄 Raw`, which returns the exact delivered
   snapshot frame or the complete unwrapped selected guide rows as a bounded plain UTF-8 text attachment for

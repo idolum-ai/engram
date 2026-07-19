@@ -6,6 +6,7 @@ import (
 	"html"
 	"image"
 	"image/png"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -218,12 +219,56 @@ func TestCompactEvidenceHTMLHighlightsOnlySelectedRows(t *testing.T) {
 	}
 }
 
+func TestCompactEvidencePreservesFittingPhysicalRows(t *testing.T) {
+	t.Parallel()
+	const columns = 80
+	input := Input{
+		ANSI: strings.Repeat("─", columns), Title: "codex", Target: "[8]", CWD: "/Users/daniel",
+		Columns: columns, VisibleRows: 24, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "changed terminal region",
+	}
+	page := RenderHTML(input, "terminal")
+
+	if !strings.Contains(page, "width:80ch") {
+		t.Errorf("compact 80-column pane did not retain its physical width")
+	}
+	if !strings.Contains(page, "tab-size:8;white-space:pre;overflow-wrap:normal;word-break:normal") {
+		t.Errorf("compact 80-column pane permits synthetic line wrapping")
+	}
+	if !strings.Contains(page, `top:10.0px;height:13.2px`) {
+		t.Errorf("single highlighted physical row expanded into multiple visual rows")
+	}
+	if strings.Contains(page, ">80x24 visible</span>") {
+		t.Errorf("compact evidence labels the source dimensions as if the full viewport were rendered")
+	}
+}
+
+func TestReadableCompactTerminalLayoutPreservesRowsThroughMobileWidthLimit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		columns       int
+		renderColumns int
+		fontSize      float64
+	}{
+		{columns: 71, renderColumns: 71, fontSize: maxTerminalFont},
+		{columns: 80, renderColumns: 80, fontSize: terminalWidth / (80 * terminalCharRatio)},
+		{columns: 96, renderColumns: 96, fontSize: terminalWidth / (96 * terminalCharRatio)},
+		{columns: 97, renderColumns: 96, fontSize: minTerminalFont},
+		{columns: 200, renderColumns: 96, fontSize: minTerminalFont},
+	}
+	for _, test := range tests {
+		renderColumns, fontSize, lineHeight := readableCompactTerminalLayout(test.columns)
+		if renderColumns != test.renderColumns || math.Abs(fontSize-test.fontSize) > 0.001 || lineHeight != compactLineHeight {
+			t.Errorf("readableCompactTerminalLayout(%d) = (%d, %.3f, %.1f), want (%d, %.3f, %.1f)", test.columns, renderColumns, fontSize, lineHeight, test.renderColumns, test.fontSize, compactLineHeight)
+		}
+	}
+}
+
 func TestCompactEvidenceWrapsWidePanesAndEscapesFooter(t *testing.T) {
 	page := RenderHTML(Input{
 		ANSI: "left " + strings.Repeat("x", 150) + " right", Title: "build", Target: "[3]", CWD: "/tmp",
 		Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, Footer: `<unsafe & footer>`,
 	}, "terminal")
-	for _, want := range []string{"width:71ch", "font:9.40px/13.2px", "white-space:pre-wrap", "overflow-wrap:anywhere", "word-break:break-all", "left ", " right", "&lt;unsafe &amp; footer&gt;"} {
+	for _, want := range []string{"width:96ch", "font:7.00px/13.2px", "white-space:pre-wrap", "overflow-wrap:anywhere", "word-break:break-all", "left ", " right", "&lt;unsafe &amp; footer&gt;", "200 cols · wraps at 96"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("wide compact HTML missing %q: %s", want, page)
 		}
@@ -247,9 +292,9 @@ func TestCompactEvidenceWrappedRowsExpandImageAndHighlights(t *testing.T) {
 	}
 	page := RenderHTML(input, "contrast-dark")
 	for _, want := range []string{
-		`top:10.0px;height:79.2px`,
-		`top:89.2px;height:79.2px`,
-		"width:71ch",
+		`top:10.0px;height:66.0px`,
+		`top:76.0px;height:66.0px`,
+		"width:96ch",
 		"white-space:pre-wrap",
 		"word-break:break-all",
 	} {
@@ -343,13 +388,13 @@ func TestSupportedScreenshotSurfacesContainTheirVisibleAreas(t *testing.T) {
 			name: "compact evidence",
 			input: Input{ANSI: "COMPACT BODY", Title: "evidence", Target: "[3]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
 				Columns: 200, VisibleRows: 60, BufferRows: 1, Compact: true, HighlightRows: []int{0}, Footer: "COMPACT FOOTER"},
-			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "COMPACT FOOTER",
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:7.00px/13.2px", footer: "COMPACT FOOTER",
 		},
 		{
 			name: "quiet guided frame",
 			input: Input{ANSI: " ", Title: "quiet", Target: "[4]", CWD: "/a/very/long/current/working/directory/that/must/stay/in/the/header",
 				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "QUIET FOOTER"},
-			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre-wrap", font: "font:9.40px/13.2px", footer: "QUIET FOOTER",
+			width: LogicalWidth, height: 180, bodyLayout: "white-space:pre", font: "font:9.40px/13.2px", footer: "QUIET FOOTER",
 		},
 	}
 	for _, test := range tests {
@@ -666,6 +711,94 @@ func TestLiveChromiumCompactWrappedRender(t *testing.T) {
 	if visiblePixels == 0 {
 		t.Fatal("wrapped compact evidence rendered an empty terminal body")
 	}
+}
+
+func TestLiveChromiumCompactColumnBoundaryPreservesPixels(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "terminal")
+
+	fit := renderLiveSnapshotImage(t, renderer, Input{
+		ANSI:  strings.Repeat(" ", 95) + "\x1b[48;2;255;0;0mX\x1b[0m\n" + "\x1b[48;2;0;0;255mY\x1b[0m",
+		Title: "96-column boundary", Target: "[8]", CWD: "/tmp",
+		Columns: 96, VisibleRows: 24, BufferRows: 2, Compact: true, HighlightRows: []int{0},
+	})
+	red, ok := matchingPixelBounds(fit, func(r, g, b uint32) bool { return r > 0xe000 && g < 0x3000 && b < 0x3000 })
+	if !ok || red.Min.X < 380*PixelRatio {
+		t.Fatalf("96th-column red sentinel is clipped or misplaced: bounds=%v ok=%v", red, ok)
+	}
+	blue, ok := matchingPixelBounds(fit, func(r, g, b uint32) bool { return r < 0x3000 && g < 0x3000 && b > 0xe000 })
+	if !ok || blue.Min.X > 24*PixelRatio || red.Max.Y > blue.Min.Y {
+		t.Fatalf("96-column physical rows did not remain distinct: red=%v blue=%v ok=%v", red, blue, ok)
+	}
+	fitHighlight := yellowHighlightBounds(fit)
+	if fitHighlight.Empty() || !pixelSizeNear(fitHighlight.Dy(), compactLineHeight*PixelRatio, 3) {
+		t.Fatalf("96-column single-row highlight bounds = %v", fitHighlight)
+	}
+
+	wrapped := renderLiveSnapshotImage(t, renderer, Input{
+		ANSI:  strings.Repeat(" ", 96) + "\x1b[48;2;0;255;0mZ\x1b[0m",
+		Title: "97-column boundary", Target: "[8]", CWD: "/tmp",
+		Columns: 97, VisibleRows: 24, BufferRows: 1, Compact: true, HighlightRows: []int{0},
+	})
+	green, ok := matchingPixelBounds(wrapped, func(r, g, b uint32) bool { return r < 0x3000 && g > 0xe000 && b < 0x3000 })
+	secondRowTop := (54 + compactLineHeight) * PixelRatio
+	secondRowBottom := (54 + 2*compactLineHeight) * PixelRatio
+	if !ok || green.Min.X > 24*PixelRatio || float64(green.Min.Y) < secondRowTop-3 || float64(green.Max.Y) > secondRowBottom+3 {
+		t.Fatalf("97th-column wrapped sentinel is missing from the second visual row: bounds=%v ok=%v", green, ok)
+	}
+	wrappedHighlight := yellowHighlightBounds(wrapped)
+	if wrappedHighlight.Empty() || !pixelSizeNear(wrappedHighlight.Dy(), 2*compactLineHeight*PixelRatio, 3) {
+		t.Fatalf("97-column wrapped highlight bounds = %v", wrappedHighlight)
+	}
+}
+
+func renderLiveSnapshotImage(t *testing.T, renderer *Renderer, input Input) image.Image {
+	t.Helper()
+	path, err := renderer.Render(context.Background(), input, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+func matchingPixelBounds(img image.Image, matches func(r, g, b uint32) bool) (image.Rectangle, bool) {
+	bounds := img.Bounds()
+	minX, minY, maxX, maxY := bounds.Max.X, bounds.Max.Y, bounds.Min.X, bounds.Min.Y
+	found := false
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if !matches(r, g, b) {
+				continue
+			}
+			found = true
+			minX, minY = min(minX, x), min(minY, y)
+			maxX, maxY = max(maxX, x+1), max(maxY, y+1)
+		}
+	}
+	return image.Rect(minX, minY, maxX, maxY), found
+}
+
+func yellowHighlightBounds(img image.Image) image.Rectangle {
+	bounds, _ := matchingPixelBounds(img, func(r, g, b uint32) bool {
+		return r > 0xd000 && g > 0xa000 && b < 0x8000
+	})
+	return bounds
+}
+
+func pixelSizeNear(got int, want, tolerance float64) bool {
+	return math.Abs(float64(got)-want) <= tolerance
 }
 
 func TestLiveChromiumWideRender(t *testing.T) {

@@ -151,18 +151,22 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   from the same captured frame, with bounded prose below the media.
   Every model excerpt must first match one unique range in the cleaned semantic
   text sent to the provider, then one unique physical row range after whitespace
-  normalization. Engram adds at most two context rows on each side, highlights
-  only matched rows, and rejects a crop spanning more than 18 rows. Ambiguous,
+  normalization. Engram adds at most two context rows on each side without
+  crossing a blank terminal-block boundary, highlights only matched rows, and
+  rejects a crop spanning more than 18 rows. Ambiguous,
   fabricated, or widely separated model evidence falls back to the last
   changed on-screen physical-row region under the same continuity boundaries, then to
   the last meaningful non-empty terminal block capped at 10 rows. The crop
   footer identifies `quoted terminal text`, `changed terminal region`, or
   `current terminal tail`; tail rows are not highlighted. A crop carries the
   active SGR state from preceding rows. Compact crops preserve every complete
-  selected physical row and soft-wrap it at 71 terminal cells; no horizontal
-  viewport or column offset may discard text. The highlight border begins at
-  the content edge and covers every wrapped visual fragment belonging to a
-  highlighted physical row. Tabs, combining marks, and wide Unicode characters
+  selected physical row without reflow through the 96-column mobile readability
+  limit. Wider rows use a disclosed 96-column soft-wrap fallback; no horizontal
+  viewport or column offset may silently discard text. Compact footer dimensions
+  identify the source width and disclose wrapping instead of describing a crop
+  as the full visible pane. The highlight border begins at the content edge and
+  covers the physical row or every disclosed wrapped visual fragment belonging
+  to a highlighted wider row. Tabs, combining marks, and wide Unicode characters
   use terminal-cell widths. Crops enforce the accessible
   contrast floor regardless of the full-snapshot theme. If the styled tail
   cannot be delivered safely, Engram renders the same bounded range as redacted
