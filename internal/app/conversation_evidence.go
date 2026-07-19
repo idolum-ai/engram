@@ -1,6 +1,10 @@
 package app
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // conversationEvidence removes a model-status footer and its paired known
 // placeholder from model input. Raw captures remain unchanged for snapshots,
@@ -51,11 +55,54 @@ func isPassiveTerminalFooter(line string) bool {
 			if separatorCount >= 2 && strings.Contains(line, "[") && strings.HasSuffix(line, "]") {
 				return true
 			}
-			tail := strings.TrimSpace(line[strings.LastIndex(line, "\u00b7")+len("\u00b7"):])
-			return tail == "~" || strings.HasPrefix(tail, "~/") || strings.HasPrefix(tail, "/")
+			return separatorCount == 1 && isCompactGPTFooter(line)
 		}
 	}
 	return false
+}
+
+func isCompactGPTFooter(line string) bool {
+	separator := strings.Index(line, "\u00b7")
+	if separator < 0 {
+		return false
+	}
+	left := strings.Fields(strings.TrimSpace(line[:separator]))
+	if len(left) != 2 || !isVersionedGPTLabel(strings.ToLower(left[0])) || !isModelEffort(left[1]) {
+		return false
+	}
+	tail := strings.TrimSpace(line[separator+len("\u00b7"):])
+	return tail == "~" || strings.HasPrefix(tail, "~/") || strings.HasPrefix(tail, "/")
+}
+
+func isVersionedGPTLabel(label string) bool {
+	suffix := strings.TrimPrefix(label, "gpt-")
+	if suffix == label || suffix == "" {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(suffix)
+	if !unicode.IsDigit(first) {
+		return false
+	}
+	hasDigit := false
+	for _, r := range suffix {
+		switch {
+		case unicode.IsDigit(r):
+			hasDigit = true
+		case unicode.IsLetter(r), r == '.', r == '-':
+		default:
+			return false
+		}
+	}
+	return hasDigit
+}
+
+func isModelEffort(value string) bool {
+	switch strings.ToLower(value) {
+	case "minimal", "low", "medium", "high", "xhigh":
+		return true
+	default:
+		return false
+	}
 }
 
 func trailingPassivePromptStart(lines []string, end int) int {

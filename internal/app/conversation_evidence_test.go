@@ -23,15 +23,17 @@ func TestConversationEvidenceDropsTrailingIdlePromptChrome(t *testing.T) {
 }
 
 func TestConversationEvidenceOmitsPassiveComposerWithCurrentStatusShape(t *testing.T) {
-	input := strings.Join([]string{
-		"Google Cloud CLI is installed.",
-		"",
-		"› Run /review on my current changes",
-		"",
-		"gpt-5.6-sol high · ~",
-	}, "\n")
-	if got, want := conversationEvidence(input), "Google Cloud CLI is installed."; got != want {
-		t.Errorf("conversationEvidence() = %q, want %q", got, want)
+	for _, footer := range []string{"gpt-5.6-sol high · ~", "gpt-4o medium · ~/engram", "gpt-5 high · /work"} {
+		input := strings.Join([]string{
+			"Google Cloud CLI is installed.",
+			"",
+			"› Run /review on my current changes",
+			"",
+			footer,
+		}, "\n")
+		if got, want := conversationEvidence(input), "Google Cloud CLI is installed."; got != want {
+			t.Errorf("conversationEvidence() with %q = %q, want %q", footer, got, want)
+		}
 	}
 }
 
@@ -57,6 +59,13 @@ func TestConversationEvidenceLeavesOrdinaryTerminalTextAlone(t *testing.T) {
 	}{
 		{input: "build passed\n$", want: "build passed\n$"},
 		{input: "build passed\ncodex · generated report", want: "build passed\ncodex · generated report"},
+		{input: "build passed\ncodex · /tmp", want: "build passed\ncodex · /tmp"},
+		{input: "build passed\nclaude-check · ~/results", want: "build passed\nclaude-check · ~/results"},
+		{input: "build passed\no1 · /var/log", want: "build passed\no1 · /var/log"},
+		{input: "build passed\ngpt-report · /var/log", want: "build passed\ngpt-report · /var/log"},
+		{input: "build passed\ngpt-report5 high · /var/log", want: "build passed\ngpt-report5 high · /var/log"},
+		{input: "build passed\ngpt-5.6-sol · /tmp", want: "build passed\ngpt-5.6-sol · /tmp"},
+		{input: "build passed\ngpt-5.6-sol careful · /tmp", want: "build passed\ngpt-5.6-sol careful · /tmp"},
 		{input: "build passed\n\n\u203a Write tests for @filename", want: "build passed\n\n\u203a Write tests for @filename"},
 		{input: "build passed\nresult \u00b7 main \u00b7 checks [done]", want: "build passed\nresult \u00b7 main \u00b7 checks [done]"},
 		{input: "build failed\n\n> fatal finding\n\n  claude-sonnet \u00b7 ~ \u00b7 Main [default]", want: "build failed\n\n> fatal finding"},

@@ -713,6 +713,88 @@ func TestLiveChromiumCompactWrappedRender(t *testing.T) {
 	}
 }
 
+func TestLiveChromiumCompactColumnBoundaryPreservesPixels(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "terminal")
+
+	fit := renderLiveSnapshotImage(t, renderer, Input{
+		ANSI:  strings.Repeat(" ", 95) + "\x1b[48;2;255;0;0mX\x1b[0m\n" + "\x1b[48;2;0;0;255mY\x1b[0m",
+		Title: "96-column boundary", Target: "[8]", CWD: "/tmp",
+		Columns: 96, VisibleRows: 24, BufferRows: 2, Compact: true, HighlightRows: []int{0},
+	})
+	red, ok := matchingPixelBounds(fit, func(r, g, b uint32) bool { return r > 0xe000 && g < 0x3000 && b < 0x3000 })
+	if !ok || red.Min.X < 380*PixelRatio {
+		t.Fatalf("96th-column red sentinel is clipped or misplaced: bounds=%v ok=%v", red, ok)
+	}
+	blue, ok := matchingPixelBounds(fit, func(r, g, b uint32) bool { return r < 0x3000 && g < 0x3000 && b > 0xe000 })
+	if !ok || blue.Min.X > 24*PixelRatio || red.Max.Y > blue.Min.Y {
+		t.Fatalf("96-column physical rows did not remain distinct: red=%v blue=%v ok=%v", red, blue, ok)
+	}
+	fitHighlight := yellowHighlightBounds(fit)
+	if fitHighlight.Empty() || fitHighlight.Dy() > int(math.Ceil(compactLineHeight*PixelRatio))+3 {
+		t.Fatalf("96-column single-row highlight bounds = %v", fitHighlight)
+	}
+
+	wrapped := renderLiveSnapshotImage(t, renderer, Input{
+		ANSI:  strings.Repeat(" ", 96) + "\x1b[48;2;0;255;0mZ\x1b[0m",
+		Title: "97-column boundary", Target: "[8]", CWD: "/tmp",
+		Columns: 97, VisibleRows: 24, BufferRows: 1, Compact: true, HighlightRows: []int{0},
+	})
+	green, ok := matchingPixelBounds(wrapped, func(r, g, b uint32) bool { return r < 0x3000 && g > 0xe000 && b < 0x3000 })
+	if !ok || green.Min.X > 24*PixelRatio || green.Min.Y < 64*PixelRatio {
+		t.Fatalf("97th-column wrapped sentinel is missing from the second visual row: bounds=%v ok=%v", green, ok)
+	}
+	wrappedHighlight := yellowHighlightBounds(wrapped)
+	if wrappedHighlight.Empty() || wrappedHighlight.Dy() < int(math.Floor(2*compactLineHeight*PixelRatio))-3 {
+		t.Fatalf("97-column wrapped highlight bounds = %v", wrappedHighlight)
+	}
+}
+
+func renderLiveSnapshotImage(t *testing.T, renderer *Renderer, input Input) image.Image {
+	t.Helper()
+	path, err := renderer.Render(context.Background(), input, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return img
+}
+
+func matchingPixelBounds(img image.Image, matches func(r, g, b uint32) bool) (image.Rectangle, bool) {
+	bounds := img.Bounds()
+	minX, minY, maxX, maxY := bounds.Max.X, bounds.Max.Y, bounds.Min.X, bounds.Min.Y
+	found := false
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			if !matches(r, g, b) {
+				continue
+			}
+			found = true
+			minX, minY = min(minX, x), min(minY, y)
+			maxX, maxY = max(maxX, x+1), max(maxY, y+1)
+		}
+	}
+	return image.Rect(minX, minY, maxX, maxY), found
+}
+
+func yellowHighlightBounds(img image.Image) image.Rectangle {
+	bounds, _ := matchingPixelBounds(img, func(r, g, b uint32) bool {
+		return r > 0xd000 && g > 0xa000 && b < 0x8000
+	})
+	return bounds
+}
+
 func TestLiveChromiumWideRender(t *testing.T) {
 	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
 		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
