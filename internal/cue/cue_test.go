@@ -20,16 +20,83 @@ func TestExtractFeaturesMakesBoundedRegexes(t *testing.T) {
 	if len(features) == 0 || len(features) > MaxFeaturesPerFrame {
 		t.Fatalf("features = %#v", features)
 	}
-	urlPattern := features[0]
-	if !strings.Contains(urlPattern, `pull/[0-9]+`) {
-		t.Fatalf("URL feature = %q", urlPattern)
+	var repositoryPattern, shapePattern string
+	for _, pattern := range features {
+		switch {
+		case strings.HasPrefix(pattern, `https`) && strings.Contains(pattern, `engram/pull/[0-9]+`):
+			repositoryPattern = pattern
+		case strings.HasPrefix(pattern, `https`) && strings.Contains(pattern, `/[^/\s]+/pull/[0-9]+`):
+			shapePattern = pattern
+		}
 	}
-	expression := regexp.MustCompile(urlPattern)
+	if repositoryPattern == "" || shapePattern == "" {
+		t.Fatalf("URL features = %#v", features)
+	}
+	expression := regexp.MustCompile(repositoryPattern)
 	if !expression.MatchString("https://github.com/idolum-ai/engram/pull/99") {
-		t.Fatalf("URL feature %q did not match another PR", urlPattern)
+		t.Fatalf("URL feature %q did not match another PR", repositoryPattern)
 	}
 	if expression.MatchString("https://github.com/idolum-ai/other/pull/99") {
-		t.Fatalf("URL feature %q generalized the repository", urlPattern)
+		t.Fatalf("URL feature %q generalized the repository", repositoryPattern)
+	}
+	shape := regexp.MustCompile(shapePattern)
+	for _, target := range []string{
+		"https://github.com/idolum-ai/engram/pull/99",
+		"https://github.com/idolum-ai/grimoire/pull/6",
+	} {
+		if !shape.MatchString(target) {
+			t.Errorf("URL shape %q did not match %q", shapePattern, target)
+		}
+	}
+	for _, target := range []string{
+		"https://github.com/another-owner/engram/pull/99",
+		"https://github.com/idolum-ai/engram/issues/99",
+	} {
+		if shape.MatchString(target) {
+			t.Errorf("URL shape %q overgeneralized to %q", shapePattern, target)
+		}
+	}
+}
+
+func TestObserveLetsUnsafeVariantSupportSafeLongCue(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "cues.json"))
+	safe := "Imagine that you had the ideal panel to review this pull request. Who would those personas be? What would be their background? And what would be their obsession? Send sub-agents with those personas to review the pull request, gather all feedback into one packet, address it, and repeat until the panel is satisfied. Then let me know and I will review the pull request."
+	unsafe := "Regarding PR #28, " + safe
+	observations := []struct {
+		context Context
+		prompt  string
+	}{
+		{Context{Text: "https://github.com/idolum-ai/grimoire/pull/6"}, safe},
+		{Context{Text: "https://github.com/idolum-ai/engram/pull/26"}, safe},
+		{Context{Text: "https://github.com/idolum-ai/engram/pull/28"}, unsafe},
+	}
+	var candidate *Candidate
+	for index, observation := range observations {
+		var err error
+		candidate, err = store.Observe(observation.context, observation.prompt, time.Unix(int64(index+1), 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if candidate == nil {
+		t.Fatal("long semantic cluster did not produce a candidate")
+	}
+	if candidate.Name != "review-panel" || candidate.Prompt != safe || candidate.Support != 3 || candidate.ConfidencePercent != 100 {
+		t.Fatalf("candidate = %#v", candidate)
+	}
+	if !strings.Contains(candidate.Pattern, `/[^/\s]+/pull/[0-9]+`) {
+		t.Fatalf("candidate pattern = %q", candidate.Pattern)
+	}
+	if len(candidate.Variants) != 1 || candidate.Variants[0] != safe || promptReplaySafe(unsafe) {
+		t.Fatalf("candidate variants = %#v; unsafe replay=%v", candidate.Variants, promptReplaySafe(unsafe))
+	}
+	data, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "PR #28") {
+		t.Fatalf("unsafe evidence persisted in cue state:\n%s", data)
 	}
 }
 
@@ -66,6 +133,9 @@ func TestObserveRetainsHashesUntilAssociationRepeats(t *testing.T) {
 	candidate, err = store.Observe(Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/40 is ready for review."}, prompt, time.Unix(3, 0))
 	if err != nil || candidate == nil {
 		t.Fatalf("third Observe() candidate=%#v error=%v", candidate, err)
+	}
+	if candidate.Name == "" {
+		t.Fatal("candidate did not receive a compact name")
 	}
 	if candidate.Support != 3 || candidate.ConfidencePercent != 100 || !strings.Contains(candidate.Pattern, `pull/[0-9]+`) || candidate.Prompt != prompt {
 		t.Fatalf("candidate = %#v", candidate)
@@ -227,6 +297,9 @@ func TestCandidateAcceptMatchUseAndForget(t *testing.T) {
 	accepted, ok, err := store.Accept(candidate.ID, 100, 77, time.Unix(3, 0))
 	if err != nil || !ok {
 		t.Fatalf("Accept() cue=%#v ok=%v error=%v", accepted, ok, err)
+	}
+	if accepted.Name != candidate.Name {
+		t.Fatalf("accepted cue name = %q, want %q", accepted.Name, candidate.Name)
 	}
 	matches := store.Matches(Context{Text: "The checks passed for release candidate 20."}, 2)
 	if len(matches) != 1 || matches[0].CueID != accepted.ID || matches[0].Prompt != prompt || matches[0].MatchHash == "" {

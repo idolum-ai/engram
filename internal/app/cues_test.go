@@ -32,7 +32,7 @@ func TestCueMatchRendersAsExactCurrentAnchorSuggestion(t *testing.T) {
 		t.Fatalf("bound suggestions = %#v token=%q", ts.AnchorSuggestions, ts.AnchorSuggestionToken)
 	}
 	rendered := appendAnchorSuggestions("[7] running", ts.AnchorSuggestions)
-	if !strings.Contains(rendered, "suggested:\n```\n1. Review this pull request and report concrete findings.\n```") {
+	if !strings.Contains(rendered, "suggested:\n```\n1. review\n```") || strings.Contains(rendered, created.Prompt) {
 		t.Fatalf("rendered suggestion = %q", rendered)
 	}
 	markup := a.anchorMarkup(ts)
@@ -43,7 +43,7 @@ func TestCueMatchRendersAsExactCurrentAnchorSuggestion(t *testing.T) {
 	snapshotCaption, _ := a.snapshotAnchorCaption(ts, testCueCapture(), visibleReferences{})
 	guidedCaption, _ := a.guidedEvidenceCaption(ts, "The pull request is ready.", visibleReferences{})
 	for name, caption := range map[string]string{"snapshot": snapshotCaption, "guide": guidedCaption} {
-		if !strings.Contains(caption, "Review this pull request and report concrete findings.") {
+		if !strings.Contains(caption, "1. review") || strings.Contains(caption, created.Prompt) {
 			t.Fatalf("%s caption omitted cue:\n%s", name, caption)
 		}
 	}
@@ -245,11 +245,11 @@ func TestCueProposalCallbackPromotesOnlyItsExactMessage(t *testing.T) {
 func TestCueProposalShowsEscapedSimilarReplies(t *testing.T) {
 	t.Parallel()
 	got := cueProposalHTML(cue.Candidate{
-		Pattern: `ready for review`, Prompt: "Review this pull request.",
+		Name: "review-panel", Pattern: `ready for review`, Prompt: "Review this pull request.",
 		Variants: []string{"Review this pull request.", "Can you review <this> PR?"},
 		Support:  3, ConfidencePercent: 75,
 	})
-	for _, want := range []string{"Similar replies:", "Can you review &lt;this&gt; PR?", "3 similar replies", "75% consistency"} {
+	for _, want := range []string{"review-panel", "Similar replies:", "Can you review &lt;this&gt; PR?", "3 similar replies", "75% consistency"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("cueProposalHTML missing %q:\n%s", want, got)
 		}

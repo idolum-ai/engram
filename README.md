@@ -346,14 +346,21 @@ the bot channel and must be revoked immediately.
   can group similar reply wording during that process lifetime. Three replies
   are required, and the same deterministic frame feature must accompany at
   least 75% of that intent cluster. First observations persist only hashes; a
-  qualifying Save/Pass proposal contains the candidate regex, representative
-  redacted prompt, and up to three observed variants. Nothing inferred becomes
-  active without Save. Automatic learning ignores voice-derived input and
-  short or single-content-word replies and prompts containing concrete URLs,
-  absolute paths, or `#123` references so future suggestions cannot replay
-  vague intent or stale references. Past-tense external side-effect claims such
-  as “merged” or “deployed” are also excluded because terminal evidence cannot
-  establish them; all of these inputs can still be saved manually.
+  qualifying Save/Pass proposal contains a compact generated name, candidate
+  regex, complete representative redacted prompt, and up to three bounded
+  replay-safe observed-variant previews. Nothing inferred becomes active
+  without Save.
+  Automatic learning ignores voice-derived input and short or
+  single-content-word replies. Variants containing concrete URLs, absolute
+  paths, `#123` references, or past-tense external side-effect claims such as
+  “merged” or “deployed” may support a process-local similarity cluster, but
+  can never become its replayable representative. This lets context-specific
+  wording corroborate a recurring safe instruction without later replaying a
+  stale reference or unverifiable claim. Such inputs can still be saved
+  manually when exact replay is intentional. GitHub pull URLs additionally
+  expose a narrow host-and-owner-preserving pull-request shape so the same
+  action can recur across one owner's repositories without becoming a general
+  URL rule.
   Cues use Go's bounded, linear-time regexp engine; Engram does not run
   evaluator scripts, call a model or classifier, interpolate hidden text, or
   build an autonomous workflow.
@@ -611,9 +618,11 @@ Review this pull request and report concrete findings.
 ```
 
 Use `/cues forget review-pr` to remove it. Matching cues add a visible
-`suggested` block and numbered `▶️` controls to the current anchor. Learned
-candidate messages have `＋ Save` and `× Pass`; passing suppresses future
-learning proposals for the exact variants shown in that proposal.
+`suggested` block containing compact cue names and numbered `▶️` controls to
+the current anchor. The button sends the complete approved prompt; the anchor
+does not repeat it. Learned candidate messages show that full prompt and have
+`＋ Save` and `× Pass`; passing suppresses future learning proposals for the
+exact variants shown in that proposal.
 
 ### Nested environments
 

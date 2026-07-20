@@ -49,11 +49,11 @@ func (a *App) bindAnchorSuggestions(ts state.TerminalSession, text, program, cwd
 		if consumed[match.CueID] == match.MatchHash || strings.Contains(match.Prompt, "```") {
 			continue
 		}
-		entryBytes := len(fmt.Sprintf("%d. %s\n", len(suggestions)+1, match.Prompt))
+		entryBytes := len(fmt.Sprintf("%d. %s\n", len(suggestions)+1, match.Name))
 		if sectionBytes+entryBytes > maxAnchorCueSectionBytes {
 			continue
 		}
-		suggestions = append(suggestions, state.AnchorSuggestion{CueID: match.CueID, Prompt: match.Prompt, MatchHash: match.MatchHash})
+		suggestions = append(suggestions, state.AnchorSuggestion{CueID: match.CueID, Name: match.Name, Prompt: match.Prompt, MatchHash: match.MatchHash})
 		sectionBytes += entryBytes
 		if len(suggestions) == maxAnchorCueSuggestions {
 			break
@@ -67,7 +67,7 @@ func setAnchorSuggestions(ts *state.TerminalSession, suggestions []state.AnchorS
 	ts.AnchorSuggestions = append([]state.AnchorSuggestion(nil), suggestions...)
 	var identity []string
 	for _, suggestion := range suggestions {
-		identity = append(identity, suggestion.CueID, suggestion.Prompt, suggestion.MatchHash)
+		identity = append(identity, suggestion.CueID, suggestion.Name, suggestion.Prompt, suggestion.MatchHash)
 	}
 	if len(identity) == 0 {
 		ts.AnchorSuggestionToken = ""
@@ -83,7 +83,7 @@ func renderAnchorSuggestions(suggestions []state.AnchorSuggestion) string {
 	var b strings.Builder
 	b.WriteString("suggested:\n```\n")
 	for index, suggestion := range suggestions {
-		fmt.Fprintf(&b, "%d. %s\n", index+1, suggestion.Prompt)
+		fmt.Fprintf(&b, "%d. %s\n", index+1, firstNonEmpty(suggestion.Name, "cue"))
 	}
 	b.WriteString("```")
 	return b.String()
@@ -164,12 +164,12 @@ func cueProposalHTML(candidate cue.Candidate) string {
 	if len(candidate.Variants) > 1 {
 		lines := make([]string, 0, len(candidate.Variants))
 		for _, variant := range candidate.Variants {
-			lines = append(lines, "- "+variant)
+			lines = append(lines, "- "+headUTF8(strings.Join(strings.Fields(variant), " "), 160))
 		}
 		variants = "\n\nSimilar replies:\n<pre>" + html.EscapeString(strings.Join(lines, "\n")) + "</pre>"
 	}
-	return fmt.Sprintf("Possible cue\n\nWhen:\n<pre>%s</pre>\n\nSuggest:\n<pre>%s</pre>%s\n\nThis terminal pattern accompanied %d similar replies (%d%% consistency). Nothing will use this cue unless you save it.",
-		html.EscapeString(candidate.Pattern), html.EscapeString(candidate.Prompt), variants, candidate.Support, candidate.ConfidencePercent)
+	return fmt.Sprintf("Possible cue\n\nName: <code>%s</code>\n\nWhen:\n<pre>%s</pre>\n\nSuggest:\n<pre>%s</pre>%s\n\nThis terminal pattern accompanied %d similar replies (%d%% consistency). Nothing will use this cue unless you save it.",
+		html.EscapeString(candidate.Name), html.EscapeString(candidate.Pattern), html.EscapeString(candidate.Prompt), variants, candidate.Support, candidate.ConfidencePercent)
 }
 
 func (a *App) retireCueProposal(ctx context.Context, chatID int64, messageID int) {
@@ -244,7 +244,7 @@ func cueListText(snapshot cue.Snapshot) string {
 	if len(snapshot.Candidates) > 0 {
 		b.WriteString("\n\nAwaiting a proposal")
 		for _, item := range snapshot.Candidates {
-			fmt.Fprintf(&b, "\n%s: %s -> %s", item.ID[:6], item.Pattern, item.Prompt)
+			fmt.Fprintf(&b, "\n%s (%s): %s -> %s", firstNonEmpty(item.Name, "cue"), item.ID[:6], item.Pattern, item.Prompt)
 		}
 	}
 	return strings.TrimSpace(b.String())

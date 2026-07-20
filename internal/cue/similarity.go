@@ -34,6 +34,19 @@ var intentAliases = map[string]string{
 	"tests": "test", "tested": "test", "testing": "test",
 }
 
+var intentActionWords = map[string]bool{
+	"analyze": true, "build": true, "check": true, "comment": true,
+	"commit": true, "continue": true, "download": true, "fix": true,
+	"inspect": true, "install": true, "merge": true, "push": true,
+	"release": true, "report": true, "restart": true, "review": true,
+	"run": true, "test": true, "update": true,
+}
+
+var intentContextWords = map[string]bool{
+	"change": true, "code": true, "current": true, "pullrequest": true,
+	"result": true, "thing": true, "work": true,
+}
+
 type intentSignature struct {
 	normalized string
 	tokens     map[string]struct{}
@@ -44,13 +57,32 @@ func promptLearnable(prompt string) bool {
 	if !promptEligible(prompt) || len(strings.TrimSpace(prompt)) < minLearnablePromptBytes {
 		return false
 	}
-	if len(visibleURL.FindAllString(prompt, 1)) > 0 || absolutePathToken.MatchString(prompt) || concreteNumberReference.MatchString(prompt) || externalStateAssertion.MatchString(prompt) {
-		return false
-	}
 	return len(makeIntentSignature(prompt).tokens) >= 2
 }
 
+func promptReplaySafe(prompt string) bool {
+	return len(visibleURL.FindAllString(prompt, 1)) == 0 &&
+		!absolutePathToken.MatchString(prompt) &&
+		!concreteNumberReference.MatchString(prompt) &&
+		!externalStateAssertion.MatchString(prompt)
+}
+
 func makeIntentSignature(prompt string) intentSignature {
+	words := intentWords(prompt)
+	tokens := make(map[string]struct{}, len(words))
+	for _, value := range words {
+		tokens[value] = struct{}{}
+	}
+	ordered := make([]string, 0, len(tokens))
+	for value := range tokens {
+		ordered = append(ordered, value)
+	}
+	sort.Strings(ordered)
+	normalized := strings.Join(ordered, " ")
+	return intentSignature{normalized: normalized, tokens: tokens, trigrams: intentTrigrams(normalized)}
+}
+
+func intentWords(prompt string) []string {
 	prompt = strings.ToLower(prompt)
 	prompt = strings.NewReplacer("pull request", "pullrequest", "pull-request", "pullrequest").Replace(prompt)
 	var words []string
@@ -85,17 +117,66 @@ func makeIntentSignature(prompt string) intentSignature {
 	}
 	flush()
 
-	tokens := make(map[string]struct{}, len(words))
-	for _, value := range words {
-		tokens[value] = struct{}{}
+	return words
+}
+
+func suggestCueName(prompt string) string {
+	words := intentWords(prompt)
+	if len(words) == 0 {
+		return "cue"
 	}
-	ordered := make([]string, 0, len(tokens))
-	for value := range tokens {
-		ordered = append(ordered, value)
+	for index, word := range words {
+		if !intentActionWords[word] {
+			continue
+		}
+		partner := ""
+		for previous := index - 1; previous >= 0; previous-- {
+			if !intentActionWords[words[previous]] && !intentContextWords[words[previous]] {
+				partner = words[previous]
+				break
+			}
+		}
+		if partner == "" {
+			for following := index + 1; following < len(words); following++ {
+				if !intentActionWords[words[following]] && !intentContextWords[words[following]] {
+					partner = words[following]
+					break
+				}
+			}
+		}
+		if partner != "" {
+			return boundedCueName(word + "-" + partner)
+		}
+		return boundedCueName(word)
 	}
-	sort.Strings(ordered)
-	normalized := strings.Join(ordered, " ")
-	return intentSignature{normalized: normalized, tokens: tokens, trigrams: intentTrigrams(normalized)}
+	if len(words) > 1 {
+		return boundedCueName(words[0] + "-" + words[1])
+	}
+	return boundedCueName(words[0])
+}
+
+func boundedCueName(value string) string {
+	var cleaned strings.Builder
+	dash := false
+	for _, r := range strings.ToLower(value) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' {
+			cleaned.WriteRune(r)
+			dash = false
+			continue
+		}
+		if cleaned.Len() > 0 && !dash {
+			cleaned.WriteByte('-')
+			dash = true
+		}
+	}
+	value = strings.Trim(cleaned.String(), "-")
+	if len(value) > 32 {
+		value = strings.TrimRight(value[:32], "-")
+	}
+	if value == "" {
+		return "cue"
+	}
+	return value
 }
 
 func normalizeIntentWord(value string) string {

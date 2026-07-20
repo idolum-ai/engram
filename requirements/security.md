@@ -116,11 +116,12 @@ privacy model must stay small and explicit.
   displayed variants. `cues.json` is a private regular file, rejects symlinks,
   and is subject to the same sensitive local-state posture as `state.json`.
 - Automatic cue learning rejects voice-derived, short, or single-content-word
-  inputs and prompts containing concrete URLs, absolute paths, or `#123`
-  references. Past-tense claims of external side effects such as merge,
-  release, publication, approval, or deployment are also excluded. Explicit
-  `/cues save` remains available when a fixed reference or assertion is
-  intentional.
+  inputs. Prompts containing concrete URLs, absolute paths, `#123` references,
+  or past-tense claims of external side effects such as merge, release,
+  publication, approval, or deployment may contribute only process-local
+  semantic evidence. They cannot become a candidate's replayable
+  representative or persisted proposal variant. Explicit `/cues save` remains
+  available when a fixed reference or assertion is intentional.
 - Terminal text may cause an approved regex to display a suggestion but can
   never cause automatic input. A cue callback is explicit human authorization
   for one exact visible prompt and still requires current anchor and tmux

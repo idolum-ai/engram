@@ -90,6 +90,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   in a bounded 256-observation process-memory window. They are discarded on
   restart. Persisted exact prompt hashes can still establish an exact repeated
   association after restart, but cannot reconstruct fuzzy similarity.
+- Context-specific cue variants may count toward a process-local semantic
+  association, but only a variant without concrete URLs, paths, issue numbers,
+  or external side-effect claims can become the representative prompt or
+  persisted proposal evidence.
 - Session state persists only runtime facts used for recovery or rendering.
   Legacy write-only fields are ignored and disappear on the next save. Legacy
   terminal states other than `running`, `lost`, and `closed` normalize to

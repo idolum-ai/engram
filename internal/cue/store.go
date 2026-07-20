@@ -44,6 +44,7 @@ type memoryObservation struct {
 	prompt        string
 	signature     intentSignature
 	featureHashes []string
+	replaySafe    bool
 }
 
 type persistenceError struct {
@@ -142,23 +143,25 @@ func (s *Store) Observe(context Context, prompt string, now time.Time) (*Candida
 	previous := clonePersistedState(s.state)
 	previousMemory := append([]memoryObservation(nil), s.memory...)
 	s.state.Observations = append(s.state.Observations, Observation{PromptHash: pHash, FeatureHashes: hashes, At: now.UTC()})
-	s.memory = append(s.memory, memoryObservation{prompt: prompt, signature: signature, featureHashes: append([]string(nil), hashes...)})
+	s.memory = append(s.memory, memoryObservation{
+		prompt: prompt, signature: signature, featureHashes: append([]string(nil), hashes...), replaySafe: promptReplaySafe(prompt),
+	})
 	s.pruneLocked()
 	intentCluster := s.intentClusterLocked(signature)
 
 	var proposed *Candidate
 	for _, feature := range features {
 		fHash := featureHash(feature)
-		support, intentUses, variants := intentAssociation(intentCluster, fHash)
+		support, intentUses, safeVariants := intentAssociation(intentCluster, fHash)
 		exactSupport, exactUses, _ := associationCounts(s.state.Observations, pHash, fHash)
-		exactQualified := exactSupport >= MinimumSupport && exactSupport*100/exactUses >= 75
+		exactQualified := promptReplaySafe(prompt) && exactSupport >= MinimumSupport && exactSupport*100/exactUses >= 75
 		if exactQualified && (support < MinimumSupport || exactSupport*100/exactUses > support*100/max(1, intentUses)) {
-			support, intentUses, variants = exactSupport, exactUses, []string{prompt}
+			support, intentUses, safeVariants = exactSupport, exactUses, []string{prompt}
 		}
 		if support < MinimumSupport || support*100/intentUses < 75 {
 			continue
 		}
-		representative := representativePrompt(variants)
+		representative := representativePrompt(safeVariants)
 		if representative == "" {
 			continue
 		}
@@ -167,7 +170,7 @@ func (s *Store) Observe(context Context, prompt string, now time.Time) (*Candida
 			if s.state.Candidates[index].ProposalMessageID == 0 {
 				s.state.Candidates[index].Support = support
 				s.state.Candidates[index].ConfidencePercent = support * 100 / intentUses
-				s.state.Candidates[index].Variants = append([]string(nil), variants...)
+				s.state.Candidates[index].Variants = append([]string(nil), safeVariants...)
 				candidate := s.state.Candidates[index]
 				proposed = &candidate
 			}
@@ -177,7 +180,8 @@ func (s *Store) Observe(context Context, prompt string, now time.Time) (*Candida
 			continue
 		}
 		candidate := Candidate{
-			ID: id, Pattern: feature.pattern, Prompt: representative, Variants: append([]string(nil), variants...), FeatureKind: feature.kind,
+			ID: id, Name: suggestCueName(representative), Pattern: feature.pattern, Prompt: representative,
+			Variants: append([]string(nil), safeVariants...), FeatureKind: feature.kind,
 			Support: support, ConfidencePercent: support * 100 / intentUses, CreatedAt: now.UTC(),
 		}
 		s.state.Candidates = append(s.state.Candidates, candidate)
@@ -268,8 +272,12 @@ func (s *Store) Accept(id string, chatID int64, messageID int, now time.Time) (C
 	}
 	previous := clonePersistedState(s.state)
 	candidate := s.state.Candidates[index]
+	name := candidate.Name
+	if name == "" {
+		name = "cue-" + candidate.ID[:6]
+	}
 	created := Cue{
-		ID: cueID(candidate.Pattern, candidate.Prompt), Name: "cue-" + candidate.ID[:6],
+		ID: cueID(candidate.Pattern, candidate.Prompt), Name: s.uniqueCueNameLocked(name, candidate.ID),
 		Pattern: candidate.Pattern, Prompt: candidate.Prompt, CreatedAt: now.UTC(),
 	}
 	for _, existing := range s.state.Cues {
@@ -290,6 +298,19 @@ func (s *Store) Accept(id string, chatID int64, messageID int, now time.Time) (C
 		return created, true, err
 	}
 	return created, true, nil
+}
+
+func (s *Store) uniqueCueNameLocked(preferred, candidateID string) string {
+	preferred = boundedCueName(preferred)
+	for _, existing := range s.state.Cues {
+		if existing.Name != preferred {
+			continue
+		}
+		suffix := "-" + candidateID[:4]
+		base := strings.TrimRight(preferred[:min(len(preferred), 32-len(suffix))], "-")
+		return base + suffix
+	}
+	return preferred
 }
 
 func (s *Store) Reject(id string, chatID int64, messageID int) (bool, error) {
@@ -415,29 +436,29 @@ func (s *Store) intentClusterLocked(signature intentSignature) []memoryObservati
 	return cluster
 }
 
-func intentAssociation(cluster []memoryObservation, featureHash string) (support, uses int, variants []string) {
-	seenVariants := make(map[string]bool)
+func intentAssociation(cluster []memoryObservation, featureHash string) (support, uses int, safeVariants []string) {
+	seenSafe := make(map[string]bool)
 	for _, observation := range cluster {
 		uses++
 		if !containsString(observation.featureHashes, featureHash) {
 			continue
 		}
 		support++
-		if !seenVariants[observation.prompt] {
-			seenVariants[observation.prompt] = true
-			variants = append(variants, observation.prompt)
+		if observation.replaySafe && !seenSafe[observation.prompt] {
+			seenSafe[observation.prompt] = true
+			safeVariants = append(safeVariants, observation.prompt)
 		}
 	}
-	sort.SliceStable(variants, func(i, j int) bool {
-		if len(variants[i]) != len(variants[j]) {
-			return len(variants[i]) < len(variants[j])
+	sort.SliceStable(safeVariants, func(i, j int) bool {
+		if len(safeVariants[i]) != len(safeVariants[j]) {
+			return len(safeVariants[i]) < len(safeVariants[j])
 		}
-		return variants[i] < variants[j]
+		return safeVariants[i] < safeVariants[j]
 	})
-	if len(variants) > MaxCandidateVariants {
-		variants = variants[:MaxCandidateVariants]
+	if len(safeVariants) > MaxCandidateVariants {
+		safeVariants = safeVariants[:MaxCandidateVariants]
 	}
-	return support, uses, variants
+	return support, uses, safeVariants
 }
 
 func representativePrompt(variants []string) string {
@@ -565,6 +586,11 @@ func validateState(state persistedState) error {
 		if len(candidate.ID) != 16 || len(candidate.Pattern) > MaxPatternBytes || !promptEligible(candidate.Prompt) || len(candidate.Variants) > MaxCandidateVariants {
 			return fmt.Errorf("invalid cue candidate")
 		}
+		if candidate.Name != "" {
+			if err := validateCueName(candidate.Name); err != nil {
+				return fmt.Errorf("invalid cue candidate name: %w", err)
+			}
+		}
 		for _, variant := range candidate.Variants {
 			if !promptEligible(variant) {
 				return fmt.Errorf("invalid cue candidate variant")
@@ -578,14 +604,8 @@ func validateState(state persistedState) error {
 }
 
 func validateCueFields(name, pattern, prompt string) error {
-	if name == "" || len(name) > 32 {
-		return fmt.Errorf("cue name must contain 1 to 32 characters")
-	}
-	for _, r := range name {
-		if unicodeCueName(r) {
-			continue
-		}
-		return fmt.Errorf("cue name may contain lowercase letters, digits, '-' and '_'")
+	if err := validateCueName(name); err != nil {
+		return err
 	}
 	if len(pattern) == 0 || len(pattern) > MaxPatternBytes {
 		return fmt.Errorf("cue regex must contain 1 to %d bytes", MaxPatternBytes)
@@ -595,6 +615,18 @@ func validateCueFields(name, pattern, prompt string) error {
 	}
 	if !promptEligible(prompt) {
 		return fmt.Errorf("cue prompt must contain 8 to %d bytes and cannot be a voice marker or Markdown fence", MaxPromptBytes)
+	}
+	return nil
+}
+
+func validateCueName(name string) error {
+	if name == "" || len(name) > 32 {
+		return fmt.Errorf("cue name must contain 1 to 32 characters")
+	}
+	for _, r := range name {
+		if !unicodeCueName(r) {
+			return fmt.Errorf("cue name may contain lowercase letters, digits, '-' and '_'")
+		}
 	}
 	return nil
 }

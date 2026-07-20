@@ -81,14 +81,15 @@ Telegram is Engram's only user interface.
   numbered entry. The callback contains no path: it resolves through the
   current anchor's exact process-local file-list token and then uses the same
   validation, bounded snapshot, queue, and upload path as `/download`.
-- A canonical anchor may display at most two exact approved cue prompts and
+- A canonical anchor may display at most two compact approved cue names and
   matching `▶️ n` controls. Each callback is bound to the current anchor's
-  process-local cue token and immutable terminal identity. It sends the visible
-  prompt through the ordinary guarded command path and becomes inert for the
-  current match episode after one successful send.
+  process-local cue token and immutable terminal identity. It sends the
+  complete approved prompt through the ordinary guarded command path and
+  becomes inert for the current match episode after one successful send.
 - Three similar replies associated with one deterministic terminal feature may
-  create one non-routable proposal reply with its exact regex, representative
-  redacted prompt, up to three observed variants, support, and consistency.
+  create one non-routable proposal reply with a compact generated name, its
+  exact regex, complete representative redacted prompt, up to three bounded
+  replay-safe observed-variant previews, support, and consistency.
   Similarity uses only bounded process-local token/trigram sets; the feature
   must accompany at least 75% of the local intent cluster. `＋ Save` promotes
   only that bound proposal; `× Pass` removes its plaintext and suppresses the

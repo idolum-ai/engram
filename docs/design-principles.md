@@ -170,8 +170,11 @@ suggestion on the current anchor but never executes it. Engram may compare
 reply wording with a small deterministic similarity measure in bounded process
 memory, then propose a representative input only after that intent repeatedly
 coincides with the same terminal evidence. Only explicit user promotion makes
-it active. This is conditional replay, not inferred intent, hidden expansion,
-or a workflow engine.
+it active. Context-specific variants may corroborate repetition but may not
+become the replayable representative. The anchor names an approved cue
+compactly while its control still sends the complete user-reviewed input.
+This is conditional replay, not inferred intent, hidden expansion, or a
+workflow engine.
 
 ### Existing tmux first
 

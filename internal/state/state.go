@@ -127,6 +127,7 @@ type TerminalSession struct {
 
 type AnchorSuggestion struct {
 	CueID     string
+	Name      string
 	Prompt    string
 	MatchHash string
 }

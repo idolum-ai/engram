@@ -19,7 +19,7 @@ const (
 	MaxSuppressed        = 128
 	MaxFeaturesPerFrame  = 12
 	MaxCandidateVariants = 3
-	MaxPromptBytes       = 280
+	MaxPromptBytes       = 2000
 	MaxPatternBytes      = 512
 	MinimumSupport       = 3
 )
@@ -43,6 +43,7 @@ type Cue struct {
 
 type Candidate struct {
 	ID                string    `json:"id"`
+	Name              string    `json:"name,omitempty"`
 	Pattern           string    `json:"pattern"`
 	Prompt            string    `json:"prompt"`
 	Variants          []string  `json:"variants,omitempty"`
@@ -103,6 +104,9 @@ func extractFeatures(context Context, prompt string) []feature {
 		if pattern, ok := urlPattern(raw); ok {
 			add(feature{kind: "url", pattern: pattern, source: raw, score: 10_000 + len(raw)})
 		}
+		if pattern, ok := githubPullURLShapePattern(raw); ok {
+			add(feature{kind: "url_shape", pattern: pattern, source: raw, score: 9_000 + len(raw)})
+		}
 	}
 	for _, raw := range strings.Split(context.Text, "\n") {
 		line := strings.Join(strings.Fields(raw), " ")
@@ -133,6 +137,30 @@ func urlPattern(raw string) (string, bool) {
 		path = "/"
 	}
 	return regexp.QuoteMeta(parsed.Scheme+"://"+parsed.Host) + variableLiteralPattern(path), true
+}
+
+func githubPullURLShapePattern(raw string) (string, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
+		return "", false
+	}
+	segments := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
+	if len(segments) != 4 || segments[0] == "" || segments[1] == "" || segments[2] != "pull" || !allDigits(segments[3]) {
+		return "", false
+	}
+	return regexp.QuoteMeta("https://github.com/"+segments[0]) + `/[^/\s]+/pull/[0-9]+`, true
+}
+
+func allDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func linePattern(line string) string {
