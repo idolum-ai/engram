@@ -87,6 +87,7 @@ func TestPreflightDoesNotCallTelegramOrGuideProvider(t *testing.T) {
 		"anthropic_api: not_called",
 		"openai_api: not_called",
 		"polling: not_started",
+		"cues: off",
 		"status: ok",
 	} {
 		if !strings.Contains(stdout, want) {

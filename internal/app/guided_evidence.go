@@ -54,6 +54,7 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 	if !ok {
 		return false
 	}
+	current = a.bindAnchorSuggestions(current, frame.JoinedText, "", current.LastKnownCWD)
 	caption, files := a.guidedEvidenceCaption(current, current.LastSummary, refs)
 	presentationHash := firstNonEmpty(frame.PresentationHash, frame.FrameHash)
 	renderHash := sha(caption + "\x00" + presentationHash)
@@ -71,6 +72,7 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 			session.LastRenderHash = renderHash
 			session.LastAnchorEditAt = time.Now().UTC()
 			setAnchorFiles(session, files)
+			setAnchorSuggestions(session, presented.AnchorSuggestions)
 			updated = true
 		}
 	}); err != nil {
@@ -116,6 +118,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	if latest.Title != expected.Title {
 		return false
 	}
+	latest = a.bindAnchorSuggestions(latest, accessibleCaptureText(capture), capture.CurrentCmd, capture.CurrentPath)
 	caption, files := a.guidedEvidenceCaption(latest, summary, refs)
 	renderHash := sha(caption + "\x00" + crop.hash)
 	finish := func() bool {
@@ -170,6 +173,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 				session.LastRenderHash = renderHash
 				session.LastAnchorEditAt = time.Now().UTC()
 				setAnchorFiles(session, files)
+				setAnchorSuggestions(session, presented.AnchorSuggestions)
 				replaced = true
 			}
 		})
@@ -206,6 +210,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 			session.LastRenderHash = renderHash
 			session.LastAnchorEditAt = time.Now().UTC()
 			setAnchorFiles(session, files)
+			setAnchorSuggestions(session, presented.AnchorSuggestions)
 			updated = true
 		}
 	})
@@ -238,6 +243,14 @@ func (a *App) guidedEvidenceCaption(session state.TerminalSession, summary strin
 		return headUTF8(header, guidedCaptionBytes), nil
 	}
 	referenceBudget := min(300, remaining/3)
+	cueSection := renderAnchorSuggestions(session.AnchorSuggestions)
+	if cueSection != "" {
+		remaining -= len(cueSection) + 2
+		if remaining <= 0 {
+			return headUTF8(header, guidedCaptionBytes), nil
+		}
+		referenceBudget = min(referenceBudget, remaining/3)
+	}
 	references, files := renderSnapshotReferenceSetWithFiles(refs, referenceBudget)
 	summaryBudget := remaining
 	if references != "" {
@@ -247,6 +260,9 @@ func (a *App) guidedEvidenceCaption(session state.TerminalSession, summary strin
 	caption := header + "\n\n" + summary
 	if references != "" {
 		caption += "\n\n" + references
+	}
+	if cueSection != "" {
+		caption += "\n\n" + cueSection
 	}
 	return caption, files
 }

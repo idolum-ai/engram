@@ -106,6 +106,18 @@ privacy model must stay small and explicit.
   metadata, and the selected anchor mode. Raw terminal captures and upstream
   payloads are retained only in process memory and are omitted from persisted
   state.
+- Cue learning is disabled by default. When enabled, a first association stores
+  only a hash of the redacted prompt and hashes of bounded deterministic frame
+  features. Plaintext is retained only when a repeated association becomes a
+  proposal or the user explicitly saves a cue. Passing a proposal deletes its
+  plaintext and retains only a suppression fingerprint. `cues.json` is a
+  private regular file, rejects symlinks, and is subject to the same sensitive
+  local-state posture as `state.json`.
+- Terminal text may cause an approved regex to display a suggestion but can
+  never cause automatic input. A cue callback is explicit human authorization
+  for one exact visible prompt and still requires current anchor and tmux
+  binding validation. Engram runs no cue evaluator scripts and sends no cue
+  content to a model provider.
 - `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
   treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.

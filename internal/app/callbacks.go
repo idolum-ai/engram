@@ -239,6 +239,96 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.reply(ctx, msg, result.Message)
 		}
 		return result.status("callback")
+	case "cue-send":
+		id, token, index, ok := parseCueSendCallback(parts[1])
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "bad cue reference")
+			return "failed_bad_callback_cue"
+		}
+		validated, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		suggestion, ok := resolveAnchorSuggestion(validated, token, index)
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "cue list changed; refresh the card")
+			return "callback_user_error"
+		}
+		if a.cueMatchConsumed(id, suggestion) {
+			a.answerCallback(ctx, cb.ID, "cue already sent for this match")
+			return "callback_user_error"
+		}
+		if !a.answerCallback(ctx, cb.ID, "sending suggestion") {
+			return "callback_telegram_failed"
+		}
+		result := a.sendInputExpected(ctx, id, suggestion.Prompt, "cue", true, &validated)
+		if result.OK() {
+			a.consumeCueMatch(id, suggestion)
+			if a.Cues != nil {
+				if err := a.Cues.RecordUse(suggestion.CueID); err != nil {
+					_ = a.audit("cue.use", "state_failed", map[string]any{"cue_id": suggestion.CueID, "error": err.Error()})
+				}
+			}
+			_ = a.audit("cue.use", "ok", map[string]any{"cue_id": suggestion.CueID, "session_id": id})
+		} else {
+			msg := *cb.Message
+			msg.From = &cb.From
+			a.reply(ctx, msg, result.Message)
+		}
+		return result.status("callback")
+	case "cue-save":
+		if a.Cues == nil || cb.Message == nil {
+			a.answerCallback(ctx, cb.ID, "cues are unavailable")
+			return "callback_user_error"
+		}
+		created, ok, err := a.Cues.Accept(parts[1], cb.Message.Chat.ID, cb.Message.MessageID, time.Now().UTC())
+		if err != nil && !ok {
+			a.answerCallback(ctx, cb.ID, "could not save cue")
+			return "callback_state_failed"
+		}
+		if !ok {
+			a.answerCallback(ctx, cb.ID, "cue proposal is stale")
+			return "callback_user_error"
+		}
+		if err != nil {
+			_ = a.audit("cue.proposal", "durability_uncertain", map[string]any{"candidate_id": parts[1], "cue_id": created.ID, "error": err.Error()})
+		}
+		answered := a.answerCallback(ctx, cb.ID, "saved "+created.Name)
+		a.retireCueProposal(ctx, cb.Message.Chat.ID, cb.Message.MessageID)
+		for _, session := range a.Store.Snapshot().TerminalSessions {
+			if session.State == state.TerminalRunning && session.WatchEnabled {
+				a.queueManualRefresh(session.ID)
+			}
+		}
+		_ = a.audit("cue.proposal", "accepted", map[string]any{"candidate_id": parts[1], "cue_id": created.ID})
+		if !answered {
+			return "callback_telegram_failed"
+		}
+		return "callback_ok"
+	case "cue-pass":
+		if a.Cues == nil || cb.Message == nil {
+			a.answerCallback(ctx, cb.ID, "cues are unavailable")
+			return "callback_user_error"
+		}
+		rejected, err := a.Cues.Reject(parts[1], cb.Message.Chat.ID, cb.Message.MessageID)
+		if err != nil && !rejected {
+			a.answerCallback(ctx, cb.ID, "could not dismiss cue")
+			return "callback_state_failed"
+		}
+		if !rejected {
+			a.answerCallback(ctx, cb.ID, "cue proposal is stale")
+			return "callback_user_error"
+		}
+		if err != nil {
+			_ = a.audit("cue.proposal", "durability_uncertain", map[string]any{"candidate_id": parts[1], "error": err.Error()})
+		}
+		answered := a.answerCallback(ctx, cb.ID, "noted")
+		a.retireCueProposal(ctx, cb.Message.Chat.ID, cb.Message.MessageID)
+		_ = a.audit("cue.proposal", "rejected", map[string]any{"candidate_id": parts[1]})
+		if !answered {
+			return "callback_telegram_failed"
+		}
+		return "callback_ok"
 	case "file":
 		id, token, index, ok := parseFileCallback(parts[1])
 		if !ok {
@@ -336,6 +426,22 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
+}
+
+func parseCueSendCallback(value string) (int, string, int, bool) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 3 || len(parts[1]) != 16 {
+		return 0, "", 0, false
+	}
+	id, idErr := strconv.Atoi(parts[0])
+	index, indexErr := strconv.Atoi(parts[2])
+	if idErr != nil || indexErr != nil || id <= 0 || index <= 0 {
+		return 0, "", 0, false
+	}
+	if _, err := hex.DecodeString(parts[1]); err != nil {
+		return 0, "", 0, false
+	}
+	return id, parts[1], index, true
 }
 
 func (a *App) validateSessionListCallback(ctx context.Context, cb telegram.CallbackQuery, value string) (int, state.TerminalSession, string) {

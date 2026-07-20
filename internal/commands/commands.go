@@ -22,6 +22,7 @@ type BotCommand struct {
 var registry = []Metadata{
 	{Command: "help", Usage: "/help", Description: "Show available commands", Category: "service"},
 	{Command: "status", Usage: "/status", Description: "Show service, state, and tmux status", Category: "service"},
+	{Command: "cues", Usage: "/cues", Description: "List or manage local terminal cues", Category: "service"},
 	{Command: "mode", Usage: "/mode [guide|snapshot]", Description: "Show or change the live anchor mode", Category: "service"},
 	{Command: "logs", Usage: "/logs", Description: "Send service audit logs as an attachment", Category: "service"},
 	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions", Category: "service"},

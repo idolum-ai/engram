@@ -24,6 +24,8 @@ const (
 	AnchorModeSnapshot              = "snapshot"
 	VoiceInputModePath              = "path"
 	VoiceInputModeTranscribe        = "transcribe"
+	CuesModeOff                     = "off"
+	CuesModeOn                      = "on"
 )
 
 type Config struct {
@@ -39,6 +41,7 @@ type Config struct {
 	OpenAIModel                string
 	OpenAITranscriptionModel   string
 	VoiceInputMode             string
+	CuesMode                   string
 	Home                       string
 	Workdir                    string
 	TmuxSession                string
@@ -90,6 +93,7 @@ func Load(path string) (Config, error) {
 		OpenAIModel:                firstNonEmpty(values["OPENAI_MODEL"], DefaultOpenAIModel),
 		OpenAITranscriptionModel:   firstNonEmpty(values["OPENAI_TRANSCRIPTION_MODEL"], DefaultOpenAITranscriptionModel),
 		VoiceInputMode:             strings.ToLower(firstNonEmpty(values["VOICE_INPUT_MODE"], VoiceInputModePath)),
+		CuesMode:                   strings.ToLower(firstNonEmpty(values["ENGRAM_CUES"], CuesModeOff)),
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
@@ -154,6 +158,11 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("VOICE_INPUT_MODE must be path or transcribe")
+	}
+	switch c.EffectiveCuesMode() {
+	case CuesModeOff, CuesModeOn:
+	default:
+		return fmt.Errorf("ENGRAM_CUES must be off or on")
 	}
 	if c.VoiceTranscriptionConfigured() && c.OpenAITranscriptionModel != DefaultOpenAITranscriptionModel {
 		return fmt.Errorf("OPENAI_TRANSCRIPTION_MODEL must be %s", DefaultOpenAITranscriptionModel)
@@ -239,11 +248,18 @@ func (c Config) VoiceTranscriptionConfigured() bool {
 	return c.EffectiveVoiceInputMode() == VoiceInputModeTranscribe && strings.TrimSpace(c.OpenAIAPIKey) != ""
 }
 
+func (c Config) EffectiveCuesMode() string {
+	return strings.ToLower(firstNonEmpty(strings.TrimSpace(c.CuesMode), CuesModeOff))
+}
+
+func (c Config) CuesEnabled() bool { return c.EffectiveCuesMode() == CuesModeOn }
+
 func (c Config) EffectiveTelegramAPIBase() string {
 	return strings.TrimRight(firstNonEmpty(strings.TrimSpace(c.TelegramAPIBase), DefaultTelegramAPIBase), "/")
 }
 
 func (c Config) StatePath() string     { return filepath.Join(c.Home, "state.json") }
+func (c Config) CuePath() string       { return filepath.Join(c.Home, "cues.json") }
 func (c Config) AuditPath() string     { return filepath.Join(c.Home, "audit.jsonl") }
 func (c Config) LockDir() string       { return filepath.Join(c.Home, "locks") }
 func (c Config) AttachmentDir() string { return filepath.Join(c.ArtifactDir(), "attachments") }

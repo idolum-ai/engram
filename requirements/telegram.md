@@ -24,6 +24,9 @@ Telegram is Engram's only user interface.
   configured guide provider from locally probed Chromium. `/mode guide` or `/mode
   snapshot` begins migration only when the target capability is available, and
   the selected mode persists across restart.
+- `/cues` lists local approved and pending cues when `ENGRAM_CUES=on`; it may
+  add one explicitly from a name, regex, and prompt or forget one by name.
+  Cue commands never enable the feature at runtime.
 
 ## Delivery
 
@@ -78,6 +81,16 @@ Telegram is Engram's only user interface.
   numbered entry. The callback contains no path: it resolves through the
   current anchor's exact process-local file-list token and then uses the same
   validation, bounded snapshot, queue, and upload path as `/download`.
+- A canonical anchor may display at most two exact approved cue prompts and
+  matching `▶️ n` controls. Each callback is bound to the current anchor's
+  process-local cue token and immutable terminal identity. It sends the visible
+  prompt through the ordinary guarded command path and becomes inert for the
+  current match episode after one successful send.
+- A repeated candidate association may create one non-routable proposal reply
+  with its exact regex, redacted prompt, support, and confidence. `＋ Save`
+  promotes only that bound proposal; `× Pass` removes its plaintext and
+  suppresses future proposals for the same prompt. Proposal callbacks require
+  the configured user, chat, candidate ID, and exact proposal message.
 - `🖼️ View` queues a one-off image reply to a guide anchor. `🗣️ Talk` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces

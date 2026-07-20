@@ -249,7 +249,7 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 	if cfg.VoiceTranscriptionConfigured() {
 		voiceStatus = "transcribe, configured but not probed (openai/" + cfg.OpenAITranscriptionModel + ")"
 	}
-	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nprovider: %s\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\nopenai_api: not_called\npolling: not_started\nstatus: ok\n",
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nguide: %s\nvoice input: %s\ncues: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nprovider: %s\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\nopenai_api: not_called\npolling: not_started\nstatus: ok\n",
 		mode,
 		version.String(),
 		cfg.EnvPath,
@@ -262,6 +262,7 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 		anchorMode,
 		guideStatus,
 		voiceStatus,
+		cfg.EffectiveCuesMode(),
 		snapshotPath,
 		cfg.TelegramAllowedUserID,
 		cfg.TelegramChatID,

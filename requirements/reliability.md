@@ -80,6 +80,12 @@ exports a bounded recent tail, not an unbounded full audit file.
 - Raw terminal captures are not written to state. Their hashes and bounded
   conversational renderings may remain persisted; current raw capture may
   remain in process memory until restart or pruning.
+- Cue state uses a separate atomically replaced mode-`0600` file. It retains at
+  most 256 hash-only observations, 32 plaintext proposals, 64 approved cues,
+  and 128 suppression fingerprints. Cue persistence or proposal-delivery
+  failure never changes the result of already successful tmux input. A
+  proposal that could not be delivered remains retryable without duplicating
+  active cues.
 - Session state persists only runtime facts used for recovery or rendering.
   Legacy write-only fields are ignored and disappear on the next save. Legacy
   terminal states other than `running`, `lost`, and `closed` normalize to

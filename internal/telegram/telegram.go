@@ -531,6 +531,8 @@ type AnchorMarkupOptions struct {
 	Arrows    bool
 	FileToken string
 	FileCount int
+	CueToken  string
+	CueCount  int
 }
 
 func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
@@ -552,6 +554,13 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 		}
 		rows = append(rows, files)
 	}
+	if options.CueToken != "" && options.CueCount > 0 {
+		cues := make([]InlineKeyboardButton, 0, options.CueCount)
+		for index := 1; index <= options.CueCount; index++ {
+			cues = append(cues, Button(fmt.Sprintf("▶️ %d", index), fmt.Sprintf("cue-send:%d:%s:%d", sessionID, options.CueToken, index)))
+		}
+		rows = append(rows, cues)
+	}
 	rows = append(rows, []InlineKeyboardButton{
 		Button("Esc", fmt.Sprintf("key:%d:esc", sessionID)),
 		Button("Escx2", fmt.Sprintf("key:%d:esc2", sessionID)),
@@ -568,6 +577,13 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 		})
 	}
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func CueProposalMarkup(candidateID string) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("＋ Save", "cue-save:"+candidateID),
+		Button("× Pass", "cue-pass:"+candidateID),
+	}}}
 }
 
 func ClearMarkup() *InlineKeyboardMarkup {

@@ -80,47 +80,55 @@ type PendingResume struct {
 }
 
 type TerminalSession struct {
-	ID                       int             `json:"id"`
-	TmuxSessionName          string          `json:"tmux_session_name"`
-	TmuxWindowID             string          `json:"tmux_window_id"`
-	TmuxPaneID               string          `json:"tmux_pane_id"`
-	TmuxServerID             string          `json:"tmux_server_id,omitempty"`
-	Origin                   TerminalOrigin  `json:"origin,omitempty"`
-	Title                    string          `json:"title"`
-	LastKnownCWD             string          `json:"last_known_cwd,omitempty"`
-	State                    TerminalState   `json:"state"`
-	CreatedAt                time.Time       `json:"created_at"`
-	UpdatedAt                time.Time       `json:"updated_at"`
-	LastActivityAt           time.Time       `json:"last_activity_at"`
-	LastRawCaptureHash       string          `json:"last_raw_capture_hash,omitempty"`
-	LastSnapshotCaptureHash  string          `json:"last_snapshot_capture_hash,omitempty"`
-	LastSnapshotAttemptAt    time.Time       `json:"last_snapshot_attempt_at,omitempty"`
-	LastRenderHash           string          `json:"last_render_hash,omitempty"`
-	LastSummary              string          `json:"last_summary,omitempty"`
-	SummaryMessageID         int             `json:"summary_message_id,omitempty"`
-	SnapshotMessageID        int             `json:"snapshot_message_id,omitempty"`
-	UpstreamMessageID        int             `json:"upstream_message_id,omitempty"`
-	SeenUpstreamSignalIDs    []string        `json:"seen_upstream_signal_ids,omitempty"`
-	LastUpstreamSignalAt     time.Time       `json:"last_upstream_signal_at,omitempty"`
-	UpstreamRetryAt          time.Time       `json:"upstream_retry_at,omitempty"`
-	StaleAlternateMessageIDs []int           `json:"stale_alternate_message_ids,omitempty"`
-	AnchorChatID             int64           `json:"anchor_chat_id,omitempty"`
-	AnchorMessageID          int             `json:"anchor_message_id,omitempty"`
-	AnchorFormat             string          `json:"anchor_format,omitempty"`
-	RetiringAnchorMessageID  int             `json:"retiring_anchor_message_id,omitempty"`
-	RetiringAnchorFormat     string          `json:"retiring_anchor_format,omitempty"`
-	RetiringAnchorRetryAt    time.Time       `json:"retiring_anchor_retry_at,omitempty"`
-	AnchorPinned             bool            `json:"anchor_pinned,omitempty"`
-	AnchorPinKnown           bool            `json:"anchor_pin_known,omitempty"`
-	WatchEnabled             bool            `json:"watch_enabled"`
-	ResumeProgram            string          `json:"resume_program,omitempty"`
-	ResumeSessionID          string          `json:"resume_session_id,omitempty"`
-	PendingResume            *PendingResume  `json:"pending_resume,omitempty"`
-	RecoveryEvents           []RecoveryEvent `json:"recovery_events,omitempty"`
-	LastAnchorEditAt         time.Time       `json:"last_anchor_edit_at,omitempty"`
-	LastRawCapture           string          `json:"last_raw_capture,omitempty"`
-	AnchorFiles              []string        `json:"-"`
-	AnchorFileToken          string          `json:"-"`
+	ID                       int                `json:"id"`
+	TmuxSessionName          string             `json:"tmux_session_name"`
+	TmuxWindowID             string             `json:"tmux_window_id"`
+	TmuxPaneID               string             `json:"tmux_pane_id"`
+	TmuxServerID             string             `json:"tmux_server_id,omitempty"`
+	Origin                   TerminalOrigin     `json:"origin,omitempty"`
+	Title                    string             `json:"title"`
+	LastKnownCWD             string             `json:"last_known_cwd,omitempty"`
+	State                    TerminalState      `json:"state"`
+	CreatedAt                time.Time          `json:"created_at"`
+	UpdatedAt                time.Time          `json:"updated_at"`
+	LastActivityAt           time.Time          `json:"last_activity_at"`
+	LastRawCaptureHash       string             `json:"last_raw_capture_hash,omitempty"`
+	LastSnapshotCaptureHash  string             `json:"last_snapshot_capture_hash,omitempty"`
+	LastSnapshotAttemptAt    time.Time          `json:"last_snapshot_attempt_at,omitempty"`
+	LastRenderHash           string             `json:"last_render_hash,omitempty"`
+	LastSummary              string             `json:"last_summary,omitempty"`
+	SummaryMessageID         int                `json:"summary_message_id,omitempty"`
+	SnapshotMessageID        int                `json:"snapshot_message_id,omitempty"`
+	UpstreamMessageID        int                `json:"upstream_message_id,omitempty"`
+	SeenUpstreamSignalIDs    []string           `json:"seen_upstream_signal_ids,omitempty"`
+	LastUpstreamSignalAt     time.Time          `json:"last_upstream_signal_at,omitempty"`
+	UpstreamRetryAt          time.Time          `json:"upstream_retry_at,omitempty"`
+	StaleAlternateMessageIDs []int              `json:"stale_alternate_message_ids,omitempty"`
+	AnchorChatID             int64              `json:"anchor_chat_id,omitempty"`
+	AnchorMessageID          int                `json:"anchor_message_id,omitempty"`
+	AnchorFormat             string             `json:"anchor_format,omitempty"`
+	RetiringAnchorMessageID  int                `json:"retiring_anchor_message_id,omitempty"`
+	RetiringAnchorFormat     string             `json:"retiring_anchor_format,omitempty"`
+	RetiringAnchorRetryAt    time.Time          `json:"retiring_anchor_retry_at,omitempty"`
+	AnchorPinned             bool               `json:"anchor_pinned,omitempty"`
+	AnchorPinKnown           bool               `json:"anchor_pin_known,omitempty"`
+	WatchEnabled             bool               `json:"watch_enabled"`
+	ResumeProgram            string             `json:"resume_program,omitempty"`
+	ResumeSessionID          string             `json:"resume_session_id,omitempty"`
+	PendingResume            *PendingResume     `json:"pending_resume,omitempty"`
+	RecoveryEvents           []RecoveryEvent    `json:"recovery_events,omitempty"`
+	LastAnchorEditAt         time.Time          `json:"last_anchor_edit_at,omitempty"`
+	LastRawCapture           string             `json:"last_raw_capture,omitempty"`
+	AnchorFiles              []string           `json:"-"`
+	AnchorFileToken          string             `json:"-"`
+	AnchorSuggestions        []AnchorSuggestion `json:"-"`
+	AnchorSuggestionToken    string             `json:"-"`
+}
+
+type AnchorSuggestion struct {
+	CueID     string
+	Prompt    string
+	MatchHash string
 }
 
 func (s TerminalSession) HasSeenUpstreamSignal(recordID string) bool {
@@ -1277,6 +1285,7 @@ func cloneTerminalSession(in TerminalSession) TerminalSession {
 		out.PendingResume = &pending
 	}
 	out.AnchorFiles = append([]string(nil), in.AnchorFiles...)
+	out.AnchorSuggestions = append([]AnchorSuggestion(nil), in.AnchorSuggestions...)
 	out.StaleAlternateMessageIDs = append([]int(nil), in.StaleAlternateMessageIDs...)
 	out.SeenUpstreamSignalIDs = append([]string(nil), in.SeenUpstreamSignalIDs...)
 	out.RecoveryEvents = append([]RecoveryEvent(nil), in.RecoveryEvents...)

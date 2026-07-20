@@ -199,6 +199,7 @@ privacy boundaries below before running commands that may print secrets.
 | `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
+| `ENGRAM_CUES` | `off` | no | `on` enables local regex-triggered input suggestions and opt-in learning. Changing it requires a restart. Repeated candidates and approved cues may retain redacted prompt text in `~/.engram/cues.json`. |
 | `ENGRAM_SNAPSHOT_BROWSER` | auto-detected headless shell, with Linux browser fallbacks | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. macOS auto-detection accepts dedicated headless executables only; an explicit value may opt into a desktop browser. |
 | `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Live and on-demand snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_SNAPSHOT_STATUS_COMMAND` | none | no | Trusted local shell command whose sanitized one-line stdout occupies a bounded snapshot-footer slot. It runs only while an image is already being rendered, from the pane directory when available. |
@@ -336,6 +337,17 @@ the bot channel and must be revoked immediately.
   transcription to path delivery after an error. After successful delivery,
   Engram replies with the normalized transcript so the user can verify what
   reached the pane.
+- **Local cues:** With `ENGRAM_CUES=on`, an approved Go regular expression may
+  expose one exact, user-authored input suggestion on a matching current
+  anchor. A numbered `▶️` button sends it through the same pane-identity guard
+  as an ordinary reply; matching alone never executes input or creates a
+  notification. Learning associates successful text replies with the exact
+  process-local anchor frame the user saw. A first observation persists only
+  hashes. A repeated, sufficiently specific association may produce one
+  Save/Pass proposal containing the candidate regex and redacted prompt.
+  Nothing inferred becomes active without Save. Cues use Go's bounded,
+  linear-time regexp engine; Engram does not run evaluator scripts, call a
+  classifier, interpolate hidden text, or build an autonomous workflow.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
   one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
@@ -344,6 +356,10 @@ the bot channel and must be revoked immediately.
   reply aliases, conversational renderings, and selected anchor mode. Raw
   terminal captures and upstream payloads remain in process
   memory for rendering but are omitted from `state.json`.
+  When cues are enabled, `cues.json` separately contains a bounded window of
+  prompt and feature hashes plus plaintext only for repeated proposals and
+  explicitly approved cues. Configured secrets are redacted before cue
+  observation, but best-effort redaction cannot make arbitrary prompts safe.
   Files are created with private permissions, but anyone with access to the
   host account can read them.
 - **Attachments and generated files:** Engram prefers
@@ -557,6 +573,7 @@ locally for machine-readable metadata. Common commands are:
 - `/logs`
 - `/status`
 - `/mode [guide|snapshot]`
+- `/cues`
 
 Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
@@ -572,6 +589,20 @@ replying to a stale view produces a short error and never reaches tmux.
 Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
 `Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
 directional row.
+
+With `ENGRAM_CUES=on`, `/cues` lists active and proposed cues. A cue can also
+be added explicitly with one message:
+
+```text
+/cues save review-pr
+https://github\.com/idolum-ai/engram/pull/[0-9]+
+Review this pull request and report concrete findings.
+```
+
+Use `/cues forget review-pr` to remove it. Matching cues add a visible
+`suggested` block and numbered `▶️` controls to the current anchor. Learned
+candidate messages have `＋ Save` and `× Pass`; passing suppresses future
+learning proposals for that exact prompt.
 
 ### Nested environments
 

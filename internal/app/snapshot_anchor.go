@@ -132,6 +132,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
 	refs := a.visibleReferencesForStyledCapture(presentationText, capture.Hyperlinks)
+	current = a.bindAnchorSuggestions(current, presentationText, capture.CurrentCmd, capture.CurrentPath)
 	caption, files := a.snapshotAnchorCaption(current, capture, refs)
 	captureHash := snapshotAnchorHash(current, capture, presentationText, caption, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
@@ -180,6 +181,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if latest.Title != current.Title {
 		return
 	}
+	latest = a.bindAnchorSuggestions(latest, presentationText, capture.CurrentCmd, capture.CurrentPath)
 	caption, files = a.snapshotAnchorCaption(latest, capture, refs)
 	captureHash = snapshotAnchorHash(latest, capture, presentationText, caption, a.Config.SnapshotTheme)
 	presented := bindAnchorFiles(latest, files)
@@ -216,6 +218,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 				session.LastKnownCWD = capture.CurrentPath
 				session.LastAnchorEditAt = time.Now().UTC()
 				setAnchorFiles(session, files)
+				setAnchorSuggestions(session, presented.AnchorSuggestions)
 				replaced = true
 			}
 		})
@@ -251,6 +254,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 			session.LastKnownCWD = capture.CurrentPath
 			session.LastAnchorEditAt = time.Now().UTC()
 			setAnchorFiles(session, files)
+			setAnchorSuggestions(session, presented.AnchorSuggestions)
 			updated = true
 		}
 	})
@@ -288,15 +292,26 @@ func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.Style
 	details := title + "\n" + cwd
 	detailBytes := max(0, safeCaptionBytes-len(prefix)-len(suffix))
 	caption := prefix + headUTF8(details, detailBytes) + suffix
-	if references, files := renderSnapshotReferenceSetWithFiles(refs, safeCaptionBytes-len(caption)-2); references != "" {
+	cueSection := renderAnchorSuggestions(ts.AnchorSuggestions)
+	cueReserve := 0
+	if cueSection != "" {
+		cueReserve = len(cueSection) + 2
+	}
+	if references, files := renderSnapshotReferenceSetWithFiles(refs, safeCaptionBytes-len(caption)-2-cueReserve); references != "" {
 		caption += "\n\n" + references
+		if cueSection != "" {
+			caption += "\n\n" + cueSection
+		}
 		return caption, files
+	}
+	if cueSection != "" {
+		caption += "\n\n" + cueSection
 	}
 	return caption, nil
 }
 
 func (a *App) updateMediaAnchorCaptionLocked(ctx context.Context, ts state.TerminalSession, summary string, final bool) {
-	caption := fmt.Sprintf("[%d] %s · %s\n%s", ts.ID, ts.State, a.redactText(firstNonEmpty(ts.Title, "terminal")), a.redactText(summary))
+	caption := appendAnchorSuggestions(fmt.Sprintf("[%d] %s · %s\n%s", ts.ID, ts.State, a.redactText(firstNonEmpty(ts.Title, "terminal")), a.redactText(summary)), ts.AnchorSuggestions)
 	renderHash := sha(caption)
 	if renderHash == ts.LastRenderHash && !final {
 		return
@@ -321,6 +336,7 @@ func (a *App) updateMediaAnchorCaptionLocked(ctx context.Context, ts state.Termi
 		session.LastRenderHash = renderHash
 		session.LastAnchorEditAt = time.Now().UTC()
 		setAnchorFiles(session, nil)
+		setAnchorSuggestions(session, ts.AnchorSuggestions)
 		if session.State == state.TerminalClosed || session.State == state.TerminalLost {
 			session.LastSnapshotCaptureHash = ""
 		}

@@ -193,6 +193,35 @@ ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", 
 	if cfg.EffectiveVoiceInputMode() != VoiceInputModePath || cfg.VoiceTranscriptionConfigured() {
 		t.Fatalf("voice defaults = mode:%q transcription:%v", cfg.EffectiveVoiceInputMode(), cfg.VoiceTranscriptionConfigured())
 	}
+	if cfg.CuesEnabled() || cfg.EffectiveCuesMode() != CuesModeOff || cfg.CuePath() != filepath.Join(cfg.Home, "cues.json") {
+		t.Fatalf("cue defaults = mode:%q enabled:%v path:%q", cfg.EffectiveCuesMode(), cfg.CuesEnabled(), cfg.CuePath())
+	}
+}
+
+func TestLoadEnablesCuesExplicitly(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte("TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_ANCHOR_MODE=snapshot\nENGRAM_CUES=on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.CuesEnabled() {
+		t.Fatal("cues were not enabled")
+	}
+}
+
+func TestLoadRejectsUnknownCuesMode(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	if err := os.WriteFile(env, []byte("TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_ANCHOR_MODE=snapshot\nENGRAM_CUES=maybe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "ENGRAM_CUES") {
+		t.Fatalf("Load error = %v", err)
+	}
 }
 
 func TestLoadRejectsUnsupportedTranscriptionModelWhenEnabled(t *testing.T) {

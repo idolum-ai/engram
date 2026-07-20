@@ -15,6 +15,7 @@ import (
 	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/cue"
 	"github.com/idolum-ai/engram/internal/guide"
 	"github.com/idolum-ai/engram/internal/lockfile"
 	"github.com/idolum-ai/engram/internal/openai"
@@ -32,6 +33,7 @@ type App struct {
 	Telegram                      *telegram.Client
 	Guide                         guide.Renderer
 	Transcriber                   voiceTranscriber
+	Cues                          *cue.Store
 	Tmux                          tmux.Manager
 	Snapshots                     snapshotRenderer
 	footerStatusRunner            snapshotFooterStatusRunner
@@ -66,6 +68,8 @@ type App struct {
 	conversationGates             map[int]*conversationGate
 	closeConfirmMu                sync.Mutex
 	closeConfirms                 map[string]closeConfirmation
+	cueMu                         sync.Mutex
+	consumedCueMatches            map[int]map[string]string
 	sessionLocks                  keyedMutexSet
 	anchorLocks                   keyedMutexSet
 	disclosureLocks               keyedMutexSet
@@ -117,6 +121,14 @@ func New(cfg config.Config) (*App, error) {
 		l.Close()
 		return nil, err
 	}
+	var cueStore *cue.Store
+	if cfg.CuesEnabled() {
+		cueStore, err = cue.Open(cfg.CuePath())
+		if err != nil {
+			l.Close()
+			return nil, fmt.Errorf("open cue state: %w", err)
+		}
+	}
 	pendingRecoveryBootID := store.Snapshot().PendingRecoveryBootID
 	if bootID := readHostBootID(); bootID != "" {
 		pendingRecoveryBootID, _, err = store.ObserveHostBoot(bootID)
@@ -151,6 +163,7 @@ func New(cfg config.Config) (*App, error) {
 		Telegram:                      telegramClient,
 		Guide:                         guideRenderer,
 		Transcriber:                   transcriber,
+		Cues:                          cueStore,
 		Tmux:                          tmux.New(tmux.ExecRunner{}),
 		Snapshots:                     snapshotRenderer,
 		mode:                          mode,
@@ -172,6 +185,7 @@ func New(cfg config.Config) (*App, error) {
 		conversationEpochs:            map[int]conversationEpoch{},
 		conversationGates:             map[int]*conversationGate{},
 		closeConfirms:                 map[string]closeConfirmation{},
+		consumedCueMatches:            map[int]map[string]string{},
 		pendingRecoveryBootID:         pendingRecoveryBootID,
 		pendingRecoveryPlanMessageIDs: append([]int(nil), stateSnapshot.RecoveryPlanMessageIDs...),
 		pendingRecoveryPlanHash:       stateSnapshot.PendingRecoveryPlanHash,
@@ -328,9 +342,12 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if input, ok := escapedSlashInput(text); ok {
 		if msg.ReplyToMessage != nil {
 			if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
+				frame, _ := a.snapshotTextFrame(ts)
 				result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, input)
 				if !result.OK() {
 					a.reply(ctx, msg, result.Message)
+				} else {
+					a.observeCueReply(ctx, msg, ts, frame, input)
 				}
 				return result.status("anchor_reply")
 			} else if found && targetState == state.ReplyTargetStale {
@@ -346,9 +363,12 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	if msg.ReplyToMessage != nil {
 		if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
+			frame, _ := a.snapshotTextFrame(ts)
 			result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, text)
 			if !result.OK() {
 				a.reply(ctx, msg, result.Message)
+			} else {
+				a.observeCueReply(ctx, msg, ts, frame, text)
 			}
 			return result.status("anchor_reply")
 		} else if found && targetState == state.ReplyTargetStale {
@@ -396,6 +416,12 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		a.reply(ctx, msg, commands.HelpText())
 	case "status":
 		a.reply(ctx, msg, a.statusText())
+	case "cues":
+		result := a.handleCuesCommand(ctx, msg, args)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "mode":
 		if strings.TrimSpace(args) == "" {
 			a.reply(ctx, msg, a.modeText())
@@ -687,13 +713,19 @@ func (a *App) statusText() string {
 	if a.Config.EffectiveVoiceInputMode() == config.VoiceInputModeTranscribe {
 		voiceStatus = "transcribe, configured but not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	cueStatus := "off"
+	if a.Cues != nil {
+		snapshot := a.Cues.Snapshot()
+		cueStatus = fmt.Sprintf("on (%d active, %d proposed, %d observations)", len(snapshot.Cues), len(snapshot.Candidates), snapshot.Observations)
+	}
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\ncues: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
 		a.anchorMode(),
 		guideStatus,
 		voiceStatus,
+		cueStatus,
 		a.snapshotStatus(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),

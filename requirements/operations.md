@@ -28,6 +28,10 @@ runtime state.
 - `VOICE_INPUT_MODE` independently selects `path` or `transcribe` at startup.
   It defaults to local durable path delivery. Transcription requires an OpenAI
   credential and does not become active merely because that credential exists.
+- `ENGRAM_CUES` accepts `off` or `on` and defaults to `off`. It is a startup
+  privacy boundary: runtime commands cannot enable observation or persistence.
+  Enabled cue state lives in a separate private `cues.json` under
+  `ENGRAM_HOME`.
 - Optional dependencies are checked at startup. A configured guide client or
   probed renderer enables its corresponding alternate view and `/mode` target.
 - `/mode [guide|snapshot]` persists the selection and begins anchor migration

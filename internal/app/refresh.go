@@ -171,6 +171,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if updated && guideErr == nil {
 		_ = a.audit("terminal.guide", "updated", map[string]any{"session_id": id})
 	}
+	if updated {
+		if current, found := a.Store.FindSession(id); found {
+			a.rememberAnchorTextFrameWithPresentation(current, accessibleCaptureText(capture), sha(capture.ANSI+"\x00"+accessibleCaptureText(capture)), hash)
+		}
+	}
 }
 
 func guideCaptureHash(text, sessionTitle string, capture tmux.StyledCapture) string {
@@ -301,12 +306,13 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 		}
 		final = true
 	}
+	ts = a.bindAnchorSuggestions(ts, ts.LastRawCapture, "", ts.LastKnownCWD)
 	refs := a.visibleReferences(ts.LastRawCapture)
 	if referenceOverride != nil {
 		refs = *referenceOverride
 	}
 	references, files := renderReferencesWithFiles(refs, true, maxGuideReferenceBytes)
-	rendered := renderLocalWithReferences(ts, a.redactText(summary), references)
+	rendered := appendAnchorSuggestions(renderLocalWithReferences(ts, a.redactText(summary), references), ts.AnchorSuggestions)
 	renderHash := sha(rendered)
 	if !a.snapshotAnchors() && (ts.AnchorFormat == anchorFormatSnapshot || ts.AnchorFormat == anchorFormatGuideEvidence && !a.snapshotReady) {
 		a.rotateMediaAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
@@ -360,6 +366,7 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 				s.LastRenderHash = renderHash
 				s.LastAnchorEditAt = time.Now().UTC()
 				setAnchorFiles(s, files)
+				setAnchorSuggestions(s, presented.AnchorSuggestions)
 				applied = true
 			})
 			committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))
@@ -396,6 +403,7 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 		s.LastRenderHash = renderHash
 		s.LastAnchorEditAt = time.Now().UTC()
 		setAnchorFiles(s, files)
+		setAnchorSuggestions(s, presented.AnchorSuggestions)
 		applied = true
 	}); err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "error": err.Error()})
@@ -664,6 +672,8 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),
+			CueToken:  ts.AnchorSuggestionToken,
+			CueCount:  len(ts.AnchorSuggestions),
 		})
 	}
 	return anchorMarkup(ts)

@@ -180,6 +180,34 @@ func TestAnchorMarkupAddsNumberedFileButtons(t *testing.T) {
 	}
 }
 
+func TestAnchorMarkupAddsNumberedCueButtons(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{CueToken: "0123456789abcdef", CueCount: 2})
+	if got == nil || len(got.InlineKeyboard) != 3 {
+		t.Fatalf("AnchorMarkup rows = %#v, want actions, cues, and keys", got)
+	}
+	want := []InlineKeyboardButton{
+		{Text: "▶️ 1", CallbackData: "cue-send:7:0123456789abcdef:1"},
+		{Text: "▶️ 2", CallbackData: "cue-send:7:0123456789abcdef:2"},
+	}
+	if !reflect.DeepEqual(got.InlineKeyboard[1], want) {
+		t.Fatalf("cue buttons = %#v, want %#v", got.InlineKeyboard[1], want)
+	}
+}
+
+func TestCueProposalMarkup(t *testing.T) {
+	t.Parallel()
+	got := CueProposalMarkup("0123456789abcdef")
+	want := []InlineKeyboardButton{
+		{Text: "＋ Save", CallbackData: "cue-save:0123456789abcdef"},
+		{Text: "× Pass", CallbackData: "cue-pass:0123456789abcdef"},
+	}
+	if got == nil || len(got.InlineKeyboard) != 1 || !reflect.DeepEqual(got.InlineKeyboard[0], want) {
+		t.Fatalf("CueProposalMarkup = %#v, want %#v", got, want)
+	}
+}
+
 func TestRecoverMarkupOffersExactReattach(t *testing.T) {
 	t.Parallel()
 
@@ -213,7 +241,9 @@ func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
 		"anchor": AnchorMarkup(123456789, AnchorMarkupOptions{
 			Image: true, Voice: true, Raw: true, Arrows: true,
 			FileToken: "0123456789abcdef", FileCount: 4,
+			CueToken: "fedcba9876543210", CueCount: 2,
 		}),
+		"cue proposal":  CueProposalMarkup("0123456789abcdef"),
 		"recover":       RecoverMarkup(123456789, true),
 		"recovery plan": RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
 		"sessions": SessionListMarkup(
