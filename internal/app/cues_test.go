@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -142,6 +143,55 @@ func TestSuccessfulAnchorRepliesLearnAndProposeCue(t *testing.T) {
 	}
 	if !strings.Contains(proposalText, "Possible cue") || !strings.Contains(proposalText, prompt) || !strings.Contains(proposalText, `pull/[0-9]+`) {
 		t.Fatalf("proposal text = %q", proposalText)
+	}
+}
+
+func TestCueObservationRedactsConfiguredSecretsBeforeProposal(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	app.refreshHook = func(context.Context, int, bool) {}
+	app.Config.AnthropicAPIKey = "configured-secret-material"
+	cuePath := filepath.Join(t.TempDir(), "cues.json")
+	cues, err := cue.Open(cuePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Cues = cues
+	session, ok := app.Store.FindSession(1)
+	if !ok {
+		t.Fatal("session missing")
+	}
+	frameText := "Deployment token configured-secret-material failed after attempt 38."
+	app.rememberAnchorTextFrame(session, frameText, "frame-hash")
+
+	var proposalText string
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		proposalText, _ = body["text"].(string)
+		return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
+	})}
+	prompt := "Inspect the failed deployment and report the cause."
+	for index := 0; index < 2; index++ {
+		status := app.handleUpdate(context.Background(), telegram.Update{Message: &telegram.Message{
+			MessageID: 80 + index, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 42}, Text: prompt,
+			ReplyToMessage: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+		}})
+		if status != "anchor_reply_ok" {
+			t.Fatalf("reply %d status = %q", index+1, status)
+		}
+	}
+	app.refreshWG.Wait()
+	if strings.Contains(proposalText, "configured-secret-material") || !strings.Contains(proposalText, "redacted") {
+		t.Fatalf("proposal did not redact configured secret: %q", proposalText)
+	}
+	data, err := os.ReadFile(cuePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "configured-secret-material") {
+		t.Fatalf("cue state retained configured secret: %s", data)
 	}
 }
 

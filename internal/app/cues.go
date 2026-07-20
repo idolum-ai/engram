@@ -127,7 +127,7 @@ func (a *App) observeCueReply(ctx context.Context, msg telegram.Message, session
 		return
 	}
 	candidate, err := a.Cues.Observe(cue.Context{
-		Text: frame.JoinedText, Program: "", CWD: session.LastKnownCWD,
+		Text: a.redactText(frame.JoinedText), Program: "", CWD: a.redactText(session.LastKnownCWD),
 	}, a.redactText(text), time.Now().UTC())
 	if err != nil {
 		outcome := "failed"
