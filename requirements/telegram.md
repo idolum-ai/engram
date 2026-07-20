@@ -86,11 +86,14 @@ Telegram is Engram's only user interface.
   process-local cue token and immutable terminal identity. It sends the visible
   prompt through the ordinary guarded command path and becomes inert for the
   current match episode after one successful send.
-- A repeated candidate association may create one non-routable proposal reply
-  with its exact regex, redacted prompt, support, and confidence. `＋ Save`
-  promotes only that bound proposal; `× Pass` removes its plaintext and
-  suppresses future proposals for the same prompt. Proposal callbacks require
-  the configured user, chat, candidate ID, and exact proposal message.
+- Three similar replies associated with one deterministic terminal feature may
+  create one non-routable proposal reply with its exact regex, representative
+  redacted prompt, up to three observed variants, support, and consistency.
+  Similarity uses only bounded process-local token/trigram sets; the feature
+  must accompany at least 75% of the local intent cluster. `＋ Save` promotes
+  only that bound proposal; `× Pass` removes its plaintext and suppresses the
+  exact displayed variants. Proposal callbacks require the configured user,
+  chat, candidate ID, and exact proposal message.
 - `🖼️ View` queues a one-off image reply to a guide anchor. `🗣️ Talk` queues one model
   request over the shared bounded frame's semantic evidence and replies
   conversationally to a snapshot anchor. Neither blocks polling or replaces

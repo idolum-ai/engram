@@ -34,9 +34,16 @@ type Snapshot struct {
 }
 
 type Store struct {
-	mu    sync.Mutex
-	path  string
-	state persistedState
+	mu     sync.Mutex
+	path   string
+	state  persistedState
+	memory []memoryObservation
+}
+
+type memoryObservation struct {
+	prompt        string
+	signature     intentSignature
+	featureHashes []string
 }
 
 type persistenceError struct {
@@ -105,14 +112,14 @@ func (s *Store) Snapshot() Snapshot {
 	defer s.mu.Unlock()
 	return Snapshot{
 		Cues:         append([]Cue(nil), s.state.Cues...),
-		Candidates:   append([]Candidate(nil), s.state.Candidates...),
+		Candidates:   cloneCandidates(s.state.Candidates),
 		Observations: len(s.state.Observations),
 	}
 }
 
 func (s *Store) Observe(context Context, prompt string, now time.Time) (*Candidate, error) {
 	prompt = strings.TrimSpace(prompt)
-	if !promptEligible(prompt) {
+	if !promptLearnable(prompt) {
 		return nil, nil
 	}
 	features := extractFeatures(context, prompt)
@@ -124,42 +131,54 @@ func (s *Store) Observe(context Context, prompt string, now time.Time) (*Candida
 	}
 	pHash := promptHash(prompt)
 	hashes := make([]string, 0, len(features))
-	byHash := make(map[string]feature, len(features))
 	for _, feature := range features {
 		hash := featureHash(feature)
 		hashes = append(hashes, hash)
-		byHash[hash] = feature
 	}
+	signature := makeIntentSignature(prompt)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := clonePersistedState(s.state)
+	previousMemory := append([]memoryObservation(nil), s.memory...)
 	s.state.Observations = append(s.state.Observations, Observation{PromptHash: pHash, FeatureHashes: hashes, At: now.UTC()})
+	s.memory = append(s.memory, memoryObservation{prompt: prompt, signature: signature, featureHashes: append([]string(nil), hashes...)})
 	s.pruneLocked()
+	intentCluster := s.intentClusterLocked(signature)
 
 	var proposed *Candidate
 	for _, feature := range features {
 		fHash := featureHash(feature)
-		support, promptUses, featureUses := associationCounts(s.state.Observations, pHash, fHash)
-		if support < MinimumSupport || support*100/promptUses < 75 || support*100/featureUses < 75 {
+		support, intentUses, variants := intentAssociation(intentCluster, fHash)
+		exactSupport, exactUses, _ := associationCounts(s.state.Observations, pHash, fHash)
+		exactQualified := exactSupport >= MinimumSupport && exactSupport*100/exactUses >= 75
+		if exactQualified && (support < MinimumSupport || exactSupport*100/exactUses > support*100/max(1, intentUses)) {
+			support, intentUses, variants = exactSupport, exactUses, []string{prompt}
+		}
+		if support < MinimumSupport || support*100/intentUses < 75 {
 			continue
 		}
-		id := pairID(pHash, fHash)
+		representative := representativePrompt(variants)
+		if representative == "" {
+			continue
+		}
+		id := pairID(digest(makeIntentSignature(representative).normalized), fHash)
 		if index := s.candidateByIDLocked(id); index >= 0 {
 			if s.state.Candidates[index].ProposalMessageID == 0 {
 				s.state.Candidates[index].Support = support
-				s.state.Candidates[index].ConfidencePercent = min(support*100/promptUses, support*100/featureUses)
+				s.state.Candidates[index].ConfidencePercent = support * 100 / intentUses
+				s.state.Candidates[index].Variants = append([]string(nil), variants...)
 				candidate := s.state.Candidates[index]
 				proposed = &candidate
 			}
 			break
 		}
-		if s.knownLocked(id, feature.pattern, prompt) {
+		if s.knownLocked(id, feature.pattern, representative) {
 			continue
 		}
 		candidate := Candidate{
-			ID: id, Pattern: feature.pattern, Prompt: prompt, FeatureKind: feature.kind,
-			Support: support, ConfidencePercent: min(support*100/promptUses, support*100/featureUses), CreatedAt: now.UTC(),
+			ID: id, Pattern: feature.pattern, Prompt: representative, Variants: append([]string(nil), variants...), FeatureKind: feature.kind,
+			Support: support, ConfidencePercent: support * 100 / intentUses, CreatedAt: now.UTC(),
 		}
 		s.state.Candidates = append(s.state.Candidates, candidate)
 		proposed = &candidate
@@ -168,6 +187,7 @@ func (s *Store) Observe(context Context, prompt string, now time.Time) (*Candida
 	if err := s.saveLocked(); err != nil {
 		if !PersistenceReachedReplacement(err) {
 			s.state = previous
+			s.memory = previousMemory
 			return nil, err
 		}
 		return proposed, err
@@ -280,9 +300,12 @@ func (s *Store) Reject(id string, chatID int64, messageID int) (bool, error) {
 		return false, nil
 	}
 	previous := clonePersistedState(s.state)
-	promptSuppression := "prompt:" + promptHash(s.state.Candidates[index].Prompt)
+	candidate := s.state.Candidates[index]
 	s.state.Candidates = append(s.state.Candidates[:index], s.state.Candidates[index+1:]...)
-	s.state.Suppressed = append(s.state.Suppressed, id, promptSuppression)
+	s.state.Suppressed = append(s.state.Suppressed, id, "prompt:"+promptHash(candidate.Prompt))
+	for _, variant := range candidate.Variants {
+		s.state.Suppressed = append(s.state.Suppressed, "prompt:"+promptHash(variant))
+	}
 	s.pruneLocked()
 	if err := s.saveLocked(); err != nil {
 		if !PersistenceReachedReplacement(err) {
@@ -382,17 +405,59 @@ func associationCounts(observations []Observation, promptHash, featureHash strin
 	return support, promptUses, featureUses
 }
 
+func (s *Store) intentClusterLocked(signature intentSignature) []memoryObservation {
+	cluster := make([]memoryObservation, 0, len(s.memory))
+	for _, observation := range s.memory {
+		if intentSimilarity(signature, observation.signature) >= IntentSimilarityThreshold {
+			cluster = append(cluster, observation)
+		}
+	}
+	return cluster
+}
+
+func intentAssociation(cluster []memoryObservation, featureHash string) (support, uses int, variants []string) {
+	seenVariants := make(map[string]bool)
+	for _, observation := range cluster {
+		uses++
+		if !containsString(observation.featureHashes, featureHash) {
+			continue
+		}
+		support++
+		if !seenVariants[observation.prompt] {
+			seenVariants[observation.prompt] = true
+			variants = append(variants, observation.prompt)
+		}
+	}
+	sort.SliceStable(variants, func(i, j int) bool {
+		if len(variants[i]) != len(variants[j]) {
+			return len(variants[i]) < len(variants[j])
+		}
+		return variants[i] < variants[j]
+	})
+	if len(variants) > MaxCandidateVariants {
+		variants = variants[:MaxCandidateVariants]
+	}
+	return support, uses, variants
+}
+
+func representativePrompt(variants []string) string {
+	if len(variants) == 0 {
+		return ""
+	}
+	return variants[0]
+}
+
 func (s *Store) knownLocked(id, pattern, prompt string) bool {
 	if containsString(s.state.Suppressed, id) || containsString(s.state.Suppressed, "prompt:"+promptHash(prompt)) {
 		return true
 	}
 	for _, candidate := range s.state.Candidates {
-		if candidate.ID == id || candidate.Pattern == pattern && candidate.Prompt == prompt {
+		if candidate.ID == id || candidate.Pattern == pattern && intentSimilarity(makeIntentSignature(candidate.Prompt), makeIntentSignature(prompt)) >= IntentSimilarityThreshold {
 			return true
 		}
 	}
 	for _, cue := range s.state.Cues {
-		if cue.Pattern == pattern && cue.Prompt == prompt {
+		if cue.Pattern == pattern && intentSimilarity(makeIntentSignature(cue.Prompt), makeIntentSignature(prompt)) >= IntentSimilarityThreshold {
 			return true
 		}
 	}
@@ -426,6 +491,9 @@ func (s *Store) pruneLocked() {
 	}
 	if len(s.state.Suppressed) > MaxSuppressed {
 		s.state.Suppressed = append([]string(nil), s.state.Suppressed[len(s.state.Suppressed)-MaxSuppressed:]...)
+	}
+	if len(s.memory) > MaxObservations {
+		s.memory = append([]memoryObservation(nil), s.memory[len(s.memory)-MaxObservations:]...)
 	}
 }
 
@@ -494,8 +562,13 @@ func validateState(state persistedState) error {
 		}
 	}
 	for _, candidate := range state.Candidates {
-		if len(candidate.ID) != 16 || len(candidate.Pattern) > MaxPatternBytes || !promptEligible(candidate.Prompt) {
+		if len(candidate.ID) != 16 || len(candidate.Pattern) > MaxPatternBytes || !promptEligible(candidate.Prompt) || len(candidate.Variants) > MaxCandidateVariants {
 			return fmt.Errorf("invalid cue candidate")
+		}
+		for _, variant := range candidate.Variants {
+			if !promptEligible(variant) {
+				return fmt.Errorf("invalid cue candidate variant")
+			}
 		}
 		if _, err := regexp.Compile(candidate.Pattern); err != nil {
 			return fmt.Errorf("invalid cue candidate pattern: %w", err)
@@ -551,12 +624,20 @@ func containsString(values []string, value string) bool {
 func clonePersistedState(in persistedState) persistedState {
 	out := in
 	out.Cues = append([]Cue(nil), in.Cues...)
-	out.Candidates = append([]Candidate(nil), in.Candidates...)
+	out.Candidates = cloneCandidates(in.Candidates)
 	out.Observations = append([]Observation(nil), in.Observations...)
 	for index := range out.Observations {
 		out.Observations[index].FeatureHashes = append([]string(nil), in.Observations[index].FeatureHashes...)
 	}
 	out.Suppressed = append([]string(nil), in.Suppressed...)
+	return out
+}
+
+func cloneCandidates(in []Candidate) []Candidate {
+	out := append([]Candidate(nil), in...)
+	for index := range out {
+		out[index].Variants = append([]string(nil), in[index].Variants...)
+	}
 	return out
 }
 

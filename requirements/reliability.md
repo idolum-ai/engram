@@ -86,6 +86,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   failure never changes the result of already successful tmux input. A
   proposal that could not be delivered remains retryable without duplicating
   active cues.
+- Cue intent signatures and redacted prompt wording used for similarity remain
+  in a bounded 256-observation process-memory window. They are discarded on
+  restart. Persisted exact prompt hashes can still establish an exact repeated
+  association after restart, but cannot reconstruct fuzzy similarity.
 - Session state persists only runtime facts used for recovery or rendering.
   Legacy write-only fields are ignored and disappear on the next save. Legacy
   terminal states other than `running`, `lost`, and `closed` normalize to

@@ -13,14 +13,15 @@ import (
 )
 
 const (
-	MaxActiveCues       = 64
-	MaxCandidates       = 32
-	MaxObservations     = 256
-	MaxSuppressed       = 128
-	MaxFeaturesPerFrame = 12
-	MaxPromptBytes      = 280
-	MaxPatternBytes     = 512
-	MinimumSupport      = 2
+	MaxActiveCues        = 64
+	MaxCandidates        = 32
+	MaxObservations      = 256
+	MaxSuppressed        = 128
+	MaxFeaturesPerFrame  = 12
+	MaxCandidateVariants = 3
+	MaxPromptBytes       = 280
+	MaxPatternBytes      = 512
+	MinimumSupport       = 3
 )
 
 var visibleURL = regexp.MustCompile(`https?://[^\s<>"']+`)
@@ -44,6 +45,7 @@ type Candidate struct {
 	ID                string    `json:"id"`
 	Pattern           string    `json:"pattern"`
 	Prompt            string    `json:"prompt"`
+	Variants          []string  `json:"variants,omitempty"`
 	FeatureKind       string    `json:"feature_kind"`
 	Support           int       `json:"support"`
 	ConfidencePercent int       `json:"confidence_percent"`

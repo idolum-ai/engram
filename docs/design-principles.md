@@ -166,8 +166,10 @@ controls unless the terminal itself is about Engram.
 
 Approved local cues follow the same boundary. A cue is one user-visible regular
 expression paired with one exact suggested input. Matching may reveal the
-suggestion on the current anchor but never executes it. Engram may notice a
-repeated association and propose that pair; only explicit user promotion makes
+suggestion on the current anchor but never executes it. Engram may compare
+reply wording with a small deterministic similarity measure in bounded process
+memory, then propose a representative input only after that intent repeatedly
+coincides with the same terminal evidence. Only explicit user promotion makes
 it active. This is conditional replay, not inferred intent, hidden expansion,
 or a workflow engine.
 

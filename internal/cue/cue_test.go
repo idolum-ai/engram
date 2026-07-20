@@ -2,6 +2,7 @@ package cue
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -59,11 +60,134 @@ func TestObserveRetainsHashesUntilAssociationRepeats(t *testing.T) {
 	}
 
 	candidate, err = store.Observe(Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/39 is ready for review."}, prompt, time.Unix(2, 0))
-	if err != nil || candidate == nil {
+	if err != nil || candidate != nil {
 		t.Fatalf("second Observe() candidate=%#v error=%v", candidate, err)
 	}
-	if candidate.Support != 2 || candidate.ConfidencePercent != 100 || !strings.Contains(candidate.Pattern, `pull/[0-9]+`) || candidate.Prompt != prompt {
+	candidate, err = store.Observe(Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/40 is ready for review."}, prompt, time.Unix(3, 0))
+	if err != nil || candidate == nil {
+		t.Fatalf("third Observe() candidate=%#v error=%v", candidate, err)
+	}
+	if candidate.Support != 3 || candidate.ConfidencePercent != 100 || !strings.Contains(candidate.Pattern, `pull/[0-9]+`) || candidate.Prompt != prompt {
 		t.Fatalf("candidate = %#v", candidate)
+	}
+}
+
+func TestObserveClustersSimilarPromptsInMemory(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "cues.json"))
+	prompts := []string{
+		"Review this pull request and report concrete findings.",
+		"Can you please review the PR and report concrete findings?",
+		"Send reviewers to check this pull request and report findings.",
+	}
+	var candidate *Candidate
+	for index, prompt := range prompts {
+		context := Context{Text: fmt.Sprintf("Pull request https://github.com/idolum-ai/engram/pull/%d is ready for review.", 38+index)}
+		var err error
+		candidate, err = store.Observe(context, prompt, time.Unix(int64(index+1), 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index < 2 && candidate != nil {
+			t.Fatalf("candidate appeared after %d observations: %#v", index+1, candidate)
+		}
+	}
+	if candidate == nil || candidate.Support != 3 || candidate.ConfidencePercent != 100 || len(candidate.Variants) != 3 {
+		t.Fatalf("semantic candidate = %#v", candidate)
+	}
+	if candidate.Prompt != prompts[0] {
+		t.Fatalf("representative prompt = %q, want shortest %q", candidate.Prompt, prompts[0])
+	}
+	snapshot := store.Snapshot()
+	snapshot.Candidates[0].Variants[0] = "mutated"
+	if got := store.Snapshot().Candidates[0].Variants[0]; got == "mutated" {
+		t.Fatal("Snapshot exposed persisted candidate variants")
+	}
+}
+
+func TestSemanticSimilarityDoesNotSurviveRestart(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "cues.json")
+	store := openTestStore(t, path)
+	context := Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/38 is ready for review."}
+	for index, prompt := range []string{
+		"Review this pull request and report concrete findings.",
+		"Can you please review the PR and report concrete findings?",
+	} {
+		if candidate, err := store.Observe(context, prompt, time.Unix(int64(index+1), 0)); err != nil || candidate != nil {
+			t.Fatalf("pre-restart candidate=%#v error=%v", candidate, err)
+		}
+	}
+	store = openTestStore(t, path)
+	if candidate, err := store.Observe(context, "Send reviewers to check this pull request and report findings.", time.Unix(3, 0)); err != nil || candidate != nil {
+		t.Fatalf("post-restart semantic candidate=%#v error=%v", candidate, err)
+	}
+}
+
+func TestExactHashAssociationSurvivesRestart(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "cues.json")
+	store := openTestStore(t, path)
+	context := Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/38 is ready for review."}
+	prompt := "Review this pull request and report concrete findings."
+	for index := 0; index < 2; index++ {
+		if candidate, err := store.Observe(context, prompt, time.Unix(int64(index+1), 0)); err != nil || candidate != nil {
+			t.Fatalf("pre-restart candidate=%#v error=%v", candidate, err)
+		}
+	}
+	store = openTestStore(t, path)
+	candidate, err := store.Observe(context, prompt, time.Unix(3, 0))
+	if err != nil || candidate == nil || candidate.Support != 3 {
+		t.Fatalf("post-restart exact candidate=%#v error=%v", candidate, err)
+	}
+}
+
+func TestObserveAllowsOneTerminalFeatureToSupportSeveralActions(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "cues.json"))
+	context := Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/38 is ready for review."}
+	for index, prompt := range []string{
+		"Explain the current architecture in plain language.",
+		"Run the complete test suite and report failures.",
+		"Check whether the documentation needs an update.",
+		"Review this pull request and report concrete findings.",
+		"Can you please review the PR and report concrete findings?",
+		"Send reviewers to check this pull request and report findings.",
+	} {
+		candidate, err := store.Observe(context, prompt, time.Unix(int64(index+1), 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 5 && candidate == nil {
+			t.Fatal("common terminal feature prevented a specific intent proposal")
+		}
+	}
+}
+
+func TestSemanticClusterUsesItsOwnConsistencyOverOneOffExactWording(t *testing.T) {
+	t.Parallel()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "cues.json"))
+	target := Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/38 is ready for review."}
+	other := Context{Text: "The local documentation build completed successfully after 38 seconds."}
+	observations := []struct {
+		context Context
+		prompt  string
+	}{
+		{target, "Review this pull request and report concrete findings."},
+		{target, "Can you please review the PR and report concrete findings?"},
+		{other, "Review this PR and report concrete findings."},
+		{target, "Reviewers should inspect this PR and report concrete findings."},
+	}
+	var candidate *Candidate
+	for index, observation := range observations {
+		var err error
+		candidate, err = store.Observe(observation.context, observation.prompt, time.Unix(int64(index+1), 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if candidate == nil || candidate.Support != 3 || candidate.ConfidencePercent != 75 {
+		t.Fatalf("75%% semantic candidate = %#v", candidate)
 	}
 }
 
@@ -90,9 +214,12 @@ func TestCandidateAcceptMatchUseAndForget(t *testing.T) {
 	if candidate, err := store.Observe(context, prompt, time.Unix(1, 0)); err != nil || candidate != nil {
 		t.Fatalf("first Observe() candidate=%#v error=%v", candidate, err)
 	}
-	candidate, err := store.Observe(Context{Text: "The checks passed for release candidate 19."}, prompt, time.Unix(2, 0))
-	if err != nil || candidate == nil {
+	if candidate, err := store.Observe(Context{Text: "The checks passed for release candidate 19."}, prompt, time.Unix(2, 0)); err != nil || candidate != nil {
 		t.Fatalf("second Observe() candidate=%#v error=%v", candidate, err)
+	}
+	candidate, err := store.Observe(Context{Text: "The checks passed for release candidate 20."}, prompt, time.Unix(3, 0))
+	if err != nil || candidate == nil {
+		t.Fatalf("third Observe() candidate=%#v error=%v", candidate, err)
 	}
 	if err := store.BindProposal(candidate.ID, 100, 77); err != nil {
 		t.Fatal(err)
@@ -123,7 +250,8 @@ func TestCandidateRejectSuppressesSameAssociation(t *testing.T) {
 	context := Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/38 is ready for review."}
 	prompt := "Review this pull request and report concrete findings."
 	_, _ = store.Observe(context, prompt, time.Unix(1, 0))
-	candidate, _ := store.Observe(context, prompt, time.Unix(2, 0))
+	_, _ = store.Observe(context, prompt, time.Unix(2, 0))
+	candidate, _ := store.Observe(context, prompt, time.Unix(3, 0))
 	if candidate == nil {
 		t.Fatal("candidate was not learned")
 	}
@@ -133,7 +261,7 @@ func TestCandidateRejectSuppressesSameAssociation(t *testing.T) {
 	if rejected, err := store.Reject(candidate.ID, 100, 77); err != nil || !rejected {
 		t.Fatalf("Reject() rejected=%v error=%v", rejected, err)
 	}
-	if candidate, err := store.Observe(context, prompt, time.Unix(3, 0)); err != nil || candidate != nil {
+	if candidate, err := store.Observe(context, prompt, time.Unix(4, 0)); err != nil || candidate != nil {
 		t.Fatalf("suppressed association candidate=%#v error=%v", candidate, err)
 	}
 	data, err := os.ReadFile(filepath.Join(filepath.Dir(store.path), "cues.json"))

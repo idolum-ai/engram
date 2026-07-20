@@ -108,11 +108,19 @@ privacy model must stay small and explicit.
   state.
 - Cue learning is disabled by default. When enabled, a first association stores
   only a hash of the redacted prompt and hashes of bounded deterministic frame
-  features. Plaintext is retained only when a repeated association becomes a
-  proposal or the user explicitly saves a cue. Passing a proposal deletes its
-  plaintext and retains only a suppression fingerprint. `cues.json` is a
-  private regular file, rejects symlinks, and is subject to the same sensitive
-  local-state posture as `state.json`.
+  features. Redacted reply wording and its local token/trigram signature remain
+  in bounded process memory for similarity comparison and disappear on
+  restart. Plaintext is retained only when a three-observation association
+  becomes a proposal or the user explicitly saves a cue. Passing a proposal
+  deletes its plaintext and retains suppression fingerprints for the exact
+  displayed variants. `cues.json` is a private regular file, rejects symlinks,
+  and is subject to the same sensitive local-state posture as `state.json`.
+- Automatic cue learning rejects voice-derived, short, or single-content-word
+  inputs and prompts containing concrete URLs, absolute paths, or `#123`
+  references. Past-tense claims of external side effects such as merge,
+  release, publication, approval, or deployment are also excluded. Explicit
+  `/cues save` remains available when a fixed reference or assertion is
+  intentional.
 - Terminal text may cause an approved regex to display a suggestion but can
   never cause automatic input. A cue callback is explicit human authorization
   for one exact visible prompt and still requires current anchor and tmux

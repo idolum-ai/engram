@@ -124,7 +124,7 @@ func TestSuccessfulAnchorRepliesLearnAndProposeCue(t *testing.T) {
 		return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
 	})}
 	prompt := "Review this pull request and report concrete findings."
-	for index := 0; index < 2; index++ {
+	for index := 0; index < 3; index++ {
 		status := app.handleUpdate(context.Background(), telegram.Update{Message: &telegram.Message{
 			MessageID: 80 + index, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 42}, Text: prompt,
 			ReplyToMessage: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
@@ -134,7 +134,7 @@ func TestSuccessfulAnchorRepliesLearnAndProposeCue(t *testing.T) {
 		}
 	}
 	app.refreshWG.Wait()
-	if len(runner.calls) != 8 {
+	if len(runner.calls) != 12 {
 		t.Fatalf("reply tmux calls = %#v", runner.calls)
 	}
 	snapshot := cues.Snapshot()
@@ -173,7 +173,7 @@ func TestCueObservationRedactsConfiguredSecretsBeforeProposal(t *testing.T) {
 		return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
 	})}
 	prompt := "Inspect the failed deployment and report the cause."
-	for index := 0; index < 2; index++ {
+	for index := 0; index < 3; index++ {
 		status := app.handleUpdate(context.Background(), telegram.Update{Message: &telegram.Message{
 			MessageID: 80 + index, Chat: telegram.Chat{ID: 100}, From: &telegram.User{ID: 42}, Text: prompt,
 			ReplyToMessage: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
@@ -204,7 +204,8 @@ func TestCueProposalCallbackPromotesOnlyItsExactMessage(t *testing.T) {
 	contextFrame := cue.Context{Text: "Pull request https://github.com/idolum-ai/engram/pull/38 is ready for review."}
 	prompt := "Review this pull request and report concrete findings."
 	_, _ = cues.Observe(contextFrame, prompt, time.Unix(1, 0))
-	candidate, err := cues.Observe(contextFrame, prompt, time.Unix(2, 0))
+	_, _ = cues.Observe(contextFrame, prompt, time.Unix(2, 0))
+	candidate, err := cues.Observe(contextFrame, prompt, time.Unix(3, 0))
 	if err != nil || candidate == nil {
 		t.Fatalf("candidate=%#v error=%v", candidate, err)
 	}
@@ -238,6 +239,23 @@ func TestCueProposalCallbackPromotesOnlyItsExactMessage(t *testing.T) {
 	}
 	if !containsTestString(paths, "/botTOKEN/answerCallbackQuery") || !containsTestString(paths, "/botTOKEN/deleteMessage") {
 		t.Fatalf("Telegram paths = %#v", paths)
+	}
+}
+
+func TestCueProposalShowsEscapedSimilarReplies(t *testing.T) {
+	t.Parallel()
+	got := cueProposalHTML(cue.Candidate{
+		Pattern: `ready for review`, Prompt: "Review this pull request.",
+		Variants: []string{"Review this pull request.", "Can you review <this> PR?"},
+		Support:  3, ConfidencePercent: 75,
+	})
+	for _, want := range []string{"Similar replies:", "Can you review &lt;this&gt; PR?", "3 similar replies", "75% consistency"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cueProposalHTML missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "<this>") {
+		t.Fatalf("cueProposalHTML did not escape variant:\n%s", got)
 	}
 }
 

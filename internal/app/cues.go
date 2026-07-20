@@ -160,8 +160,16 @@ func (a *App) observeCueReply(ctx context.Context, msg telegram.Message, session
 }
 
 func cueProposalHTML(candidate cue.Candidate) string {
-	return fmt.Sprintf("Possible cue\n\nWhen:\n<pre>%s</pre>\n\nSuggest:\n<pre>%s</pre>\n\nObserved together %d times (%d%% association). Nothing will use this cue unless you save it.",
-		html.EscapeString(candidate.Pattern), html.EscapeString(candidate.Prompt), candidate.Support, candidate.ConfidencePercent)
+	variants := ""
+	if len(candidate.Variants) > 1 {
+		lines := make([]string, 0, len(candidate.Variants))
+		for _, variant := range candidate.Variants {
+			lines = append(lines, "- "+variant)
+		}
+		variants = "\n\nSimilar replies:\n<pre>" + html.EscapeString(strings.Join(lines, "\n")) + "</pre>"
+	}
+	return fmt.Sprintf("Possible cue\n\nWhen:\n<pre>%s</pre>\n\nSuggest:\n<pre>%s</pre>%s\n\nThis terminal pattern accompanied %d similar replies (%d%% consistency). Nothing will use this cue unless you save it.",
+		html.EscapeString(candidate.Pattern), html.EscapeString(candidate.Prompt), variants, candidate.Support, candidate.ConfidencePercent)
 }
 
 func (a *App) retireCueProposal(ctx context.Context, chatID int64, messageID int) {
