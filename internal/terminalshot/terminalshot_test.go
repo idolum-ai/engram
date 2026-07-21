@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -560,6 +561,47 @@ wait
 	}
 	if len(entries) != 0 {
 		t.Fatalf("canceled render left artifacts: %v", entries)
+	}
+}
+
+func TestExecRunnerCleansDescendantsAfterBrowserLeaderExit(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "descendant.pid")
+	browser := filepath.Join(dir, "browser")
+	writeExecutableContents(t, browser, fmt.Sprintf(`#!/bin/sh
+sleep 30 &
+printf '%%s\n' "$!" > %q
+exit 0
+`, pidPath))
+
+	done := make(chan error, 1)
+	go func() { done <- (ExecRunner{}).Run(context.Background(), browser) }()
+	descendantPID := waitForTestPID(t, pidPath)
+	defer syscall.Kill(descendantPID, syscall.SIGKILL)
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, exec.ErrWaitDelay) {
+			t.Fatalf("browser with a surviving descendant error = %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = syscall.Kill(descendantPID, syscall.SIGKILL)
+		<-done
+		t.Fatal("browser runner remained blocked after its process leader exited")
+	}
+	if !waitForTestProcessExit(descendantPID, time.Second) {
+		t.Fatalf("browser descendant %d survived leader exit", descendantPID)
+	}
+}
+
+func TestExecRunnerPreservesBoundedBrowserDiagnostics(t *testing.T) {
+	browser := filepath.Join(t.TempDir(), "browser")
+	writeExecutableContents(t, browser, "#!/bin/sh\nprintf 'browser diagnostic\\n' >&2\nexit 7\n")
+
+	err := (ExecRunner{}).Run(context.Background(), browser)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 || !strings.Contains(err.Error(), "browser diagnostic") {
+		t.Fatalf("browser failure = %v", err)
 	}
 }
 
