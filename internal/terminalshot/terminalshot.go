@@ -3,6 +3,7 @@ package terminalshot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"image/png"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -42,6 +44,7 @@ const (
 	footerDimensionsPixels        = 78
 	footerGapPixels               = 12
 	maxStatusBytes                = 4 << 10
+	browserWaitDelay              = 100 * time.Millisecond
 )
 
 type Input struct {
@@ -69,13 +72,34 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) error {
 	var output boundedBuffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
-	if err := cmd.Run(); err != nil {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killBrowserProcessGroup(cmd) }
+	cmd.WaitDelay = browserWaitDelay
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("snapshot browser: %w", err)
+	}
+	defer killBrowserProcessGroup(cmd)
+	if err := cmd.Wait(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
+		}
+		if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+			return nil
 		}
 		return fmt.Errorf("snapshot browser: %w: %s", err, strings.TrimSpace(output.String()))
 	}
 	return nil
+}
+
+func killBrowserProcessGroup(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return os.ErrProcessDone
+	}
+	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
 }
 
 type Renderer struct {
