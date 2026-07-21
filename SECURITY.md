@@ -49,8 +49,9 @@ failure are in scope.
 ## Operational Guidance
 
 - Keep `~/.engram/.env` and `~/.engram/templates.json` mode `0600` and their
-  parent directory mode `0700`. Engram rejects an unsafe or symlinked
-  `ENGRAM_HOME`.
+  parent directory mode `0700`. On upgrade, Engram safely tightens an existing
+  owner-controlled `ENGRAM_HOME` to `0700`; it rejects a foreign-owned,
+  non-directory, or symlinked home.
 - Use a dedicated Telegram bot in a direct message. Do not add it to groups.
 - Revoke and replace the bot token, Anthropic key, or OpenAI key immediately if
   exposed.

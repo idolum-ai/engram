@@ -38,7 +38,8 @@ install-service: install
 
 install-service-unit:
 	@test -x "$(BINDIR)/$(BINARY)" || { echo "missing executable $(BINDIR)/$(BINARY); install a source or release binary first" >&2; exit 1; }
-	mkdir -p $(HOME)/.config/systemd/user $(HOME)/.engram
+	mkdir -p $(HOME)/.config/systemd/user
+	install -d -m 0700 $(HOME)/.engram
 	@if [ ! -f "$(HOME)/.engram/.env" ]; then install -m 0600 .env.example "$(HOME)/.engram/.env"; fi
 	printf '%s\n' \
 		'[Unit]' \

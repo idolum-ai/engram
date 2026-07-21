@@ -110,6 +110,11 @@ privacy model must stay small and explicit.
 - `templates.json` contains exact user-authored template bodies in plaintext.
   It must be an owner-only regular file, must not follow symlinks, and must be
   treated like `.env`. Template audit events retain names but not bodies.
+- An existing owner-controlled `ENGRAM_HOME` is tightened to mode `0700` during
+  startup so upgrades do not trade availability for privacy. A foreign-owned,
+  non-directory, or symlinked home remains a hard failure. Canonical operating
+  system aliases in its parent path, such as macOS `/var`, are accepted only
+  after resolving and validating the parent; the home leaf is never followed.
 - `/templates export` is an explicit bulk disclosure of every remembered body
   to the authorized Telegram DM. It reuses the guarded local-file download path
   and removes its private transfer copy afterward.

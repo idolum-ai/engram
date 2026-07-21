@@ -93,10 +93,13 @@ The response also contains your DM text, so do not paste it into an issue.
 Create the protected runtime config:
 
 ```sh
-mkdir -p "$HOME/.engram"
+install -d -m 0700 "$HOME/.engram"
 install -m 0600 .env.example "$HOME/.engram/.env"
 ${EDITOR:-vi} "$HOME/.engram/.env"
 ```
+
+Upgrades safely tighten an existing owner-controlled `ENGRAM_HOME` to mode
+`0700`. Engram still rejects a foreign-owned, non-directory, or symlinked home.
 
 Set the two base values and choose one anchor mode:
 
