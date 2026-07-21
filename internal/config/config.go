@@ -406,7 +406,7 @@ func ensurePrivateDir(path string) error {
 }
 
 func ensurePrivateDirWithRepair(path string, repairPermissions bool) error {
-	resolvedPath, err := resolvedPrivateDirPath(path)
+	resolvedPath, err := preparePrivateDirPath(path)
 	if err != nil {
 		return fmt.Errorf("unsafe parent for private directory %s: %w", path, err)
 	}
@@ -427,6 +427,15 @@ func validatePrivateDir(path string) error {
 	return validatePrivateDirPath(resolvedPath, false)
 }
 
+func preparePrivateDirPath(path string) (string, error) {
+	path = filepath.Clean(path)
+	parent, err := ensurePrivateParent(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
 func resolvedPrivateDirPath(path string) (string, error) {
 	path = filepath.Clean(path)
 	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
@@ -437,6 +446,45 @@ func resolvedPrivateDirPath(path string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
+func ensurePrivateParent(path string) (string, error) {
+	path = filepath.Clean(path)
+	existing := path
+	var missing []string
+	for {
+		_, err := os.Lstat(existing)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(existing))
+		existing = parent
+	}
+
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", err
+	}
+	if err := rejectSymlinkComponents(resolved); err != nil {
+		return "", err
+	}
+	for index := len(missing) - 1; index >= 0; index-- {
+		resolved = filepath.Join(resolved, missing[index])
+		if err := os.Mkdir(resolved, 0o700); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+		if err := validatePrivateDirPath(resolved, false); err != nil {
+			return "", err
+		}
+	}
+	return resolved, nil
 }
 
 func validatePrivateDirPath(path string, repairPermissions bool) error {

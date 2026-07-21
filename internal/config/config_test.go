@@ -196,6 +196,34 @@ func TestEnsureDirsAcceptsResolvedHomeParent(t *testing.T) {
 	}
 }
 
+func TestEnsureDirsCreatesNestedCustomHome(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("TMPDIR", filepath.Join(root, "tmp"))
+	if err := os.Mkdir(os.Getenv("TMPDIR"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	home := filepath.Join(root, "missing", "nested", "home")
+	if err := EnsureDirs(Config{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "missing"),
+		filepath.Join(root, "missing", "nested"),
+		home,
+		filepath.Join(home, "locks"),
+	} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+			t.Fatalf("private path %s has mode %v", path, info.Mode())
+		}
+	}
+}
+
 func TestEnsureDirsRejectsUnsafeHome(t *testing.T) {
 	for _, test := range []struct {
 		name  string

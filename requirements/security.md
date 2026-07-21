@@ -115,6 +115,9 @@ privacy model must stay small and explicit.
   non-directory, or symlinked home remains a hard failure. Canonical operating
   system aliases in its parent path, such as macOS `/var`, are accepted only
   after resolving and validating the parent; the home leaf is never followed.
+  Missing custom-home parent components are created and validated individually
+  as owner-only real directories rather than followed through a recursive
+  symlink traversal.
 - `/templates export` is an explicit bulk disclosure of every remembered body
   to the authorized Telegram DM. It reuses the guarded local-file download path
   and removes its private transfer copy afterward.
