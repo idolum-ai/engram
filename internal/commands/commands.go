@@ -25,6 +25,8 @@ var registry = []Metadata{
 	{Command: "mode", Usage: "/mode [guide|snapshot]", Description: "Show or change the live anchor mode", Category: "service"},
 	{Command: "logs", Usage: "/logs", Description: "Send service audit logs as an attachment", Category: "service"},
 	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions", Category: "service"},
+	{Command: "remember", Usage: "/remember [<name> [text]]", Description: "List, inspect, or save an input template", Category: "input"},
+	{Command: "forget", Usage: "/forget <name>", Description: "Forget a saved input template", Category: "input"},
 	{Command: "sessions", Usage: "/sessions", Description: "List active terminal sessions with controls", Category: "session"},
 	{Command: "recovery", Usage: "/recovery", Description: "Show a deterministic plan for lost sessions", Category: "session"},
 	{Command: "attach", Usage: "/attach <tmux-target>", Description: "Track an existing tmux window or pane", Category: "session"},

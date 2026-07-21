@@ -21,6 +21,7 @@ import (
 	"github.com/idolum-ai/engram/internal/redact"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
+	"github.com/idolum-ai/engram/internal/templates"
 	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 	"github.com/idolum-ai/engram/internal/version"
@@ -29,6 +30,7 @@ import (
 type App struct {
 	Config                        config.Config
 	Store                         *state.Store
+	Templates                     *templates.Store
 	Telegram                      *telegram.Client
 	Guide                         guide.Renderer
 	Transcriber                   voiceTranscriber
@@ -117,6 +119,11 @@ func New(cfg config.Config) (*App, error) {
 		l.Close()
 		return nil, err
 	}
+	templateStore, err := templates.Open(cfg.TemplatePath())
+	if err != nil {
+		l.Close()
+		return nil, fmt.Errorf("open templates: %w", err)
+	}
 	pendingRecoveryBootID := store.Snapshot().PendingRecoveryBootID
 	if bootID := readHostBootID(); bootID != "" {
 		pendingRecoveryBootID, _, err = store.ObserveHostBoot(bootID)
@@ -148,6 +155,7 @@ func New(cfg config.Config) (*App, error) {
 	return &App{
 		Config:                        cfg,
 		Store:                         store,
+		Templates:                     templateStore,
 		Telegram:                      telegramClient,
 		Guide:                         guideRenderer,
 		Transcriber:                   transcriber,
@@ -328,9 +336,16 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if input, ok := escapedSlashInput(text); ok {
 		if msg.ReplyToMessage != nil {
 			if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-				result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, input)
+				expanded, names, err := a.expandTypedInput(input)
+				if err != nil {
+					a.reply(ctx, msg, err.Error())
+					return "anchor_reply_template_error"
+				}
+				result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, expanded)
 				if !result.OK() {
 					a.reply(ctx, msg, result.Message)
+				} else {
+					a.recordTemplateUse(names, "reply", ts.ID)
 				}
 				return result.status("anchor_reply")
 			} else if found && targetState == state.ReplyTargetStale {
@@ -346,9 +361,16 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	}
 	if msg.ReplyToMessage != nil {
 		if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-			result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, text)
+			expanded, names, err := a.expandTypedInput(text)
+			if err != nil {
+				a.reply(ctx, msg, err.Error())
+				return "anchor_reply_template_error"
+			}
+			result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, expanded)
 			if !result.OK() {
 				a.reply(ctx, msg, result.Message)
+			} else {
+				a.recordTemplateUse(names, "reply", ts.ID)
 			}
 			return result.status("anchor_reply")
 		} else if found && targetState == state.ReplyTargetStale {
@@ -358,7 +380,16 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		a.reply(ctx, msg, "session not found for this reply; use /sessions to find an active anchor")
 		return "anchor_reply_user_error"
 	}
-	return a.newSession(ctx, msg, text).status("new_session")
+	expanded, names, err := a.expandTypedInput(text)
+	if err != nil {
+		a.reply(ctx, msg, err.Error())
+		return "new_session_template_error"
+	}
+	result := a.newSession(ctx, msg, expanded)
+	if result.OK() {
+		a.recordTemplateUse(names, "new", 0)
+	}
+	return result.status("new_session")
 }
 
 func staleAlternateReply(id int) string {
@@ -394,6 +425,18 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 	switch cmd {
 	case "help":
 		a.reply(ctx, msg, commands.HelpText())
+	case "remember":
+		result := a.handleRememberCommand(ctx, msg, args)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
+	case "forget":
+		result := a.handleForgetCommand(ctx, msg, args)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "status":
 		a.reply(ctx, msg, a.statusText())
 	case "mode":
@@ -422,7 +465,17 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /new <text>")
 			return
 		}
-		status = a.newSession(ctx, msg, args).status("command")
+		expanded, names, err := a.expandTypedInput(args)
+		if err != nil {
+			status = "command_user_error"
+			a.reply(ctx, msg, err.Error())
+			return
+		}
+		result := a.newSession(ctx, msg, expanded)
+		status = result.status("command")
+		if result.OK() {
+			a.recordTemplateUse(names, "new", 0)
+		}
 	case "resume":
 		id, program, sessionID, ok := parseResumeRequest(args)
 		if !ok {
@@ -440,10 +493,18 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /"+cmd+" <id> <text>")
 			return
 		}
-		result := a.sendInput(ctx, id, rest, "command", true)
+		expanded, names, err := a.expandTypedInput(rest)
+		if err != nil {
+			status = "command_user_error"
+			a.reply(ctx, msg, err.Error())
+			return
+		}
+		result := a.sendInput(ctx, id, expanded, "command", true)
 		status = result.status("command")
 		if !result.OK() {
 			a.reply(ctx, msg, result.Message)
+		} else {
+			a.recordTemplateUse(names, "send", id)
 		}
 	case "text", "type":
 		id, rest, ok := parseIDRest(args)
@@ -452,10 +513,18 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 			a.reply(ctx, msg, "usage: /"+cmd+" <id> <text>")
 			return
 		}
-		result := a.sendInput(ctx, id, rest, "text", false)
+		expanded, names, err := a.expandTypedInput(rest)
+		if err != nil {
+			status = "command_user_error"
+			a.reply(ctx, msg, err.Error())
+			return
+		}
+		result := a.sendInput(ctx, id, expanded, "text", false)
 		status = result.status("command")
 		if !result.OK() {
 			a.reply(ctx, msg, result.Message)
+		} else {
+			a.recordTemplateUse(names, "text", id)
 		}
 	case "key":
 		id, rest, ok := parseIDRest(args)
@@ -678,6 +747,10 @@ func (a *App) intentionalArtifactPaths(capture string, hyperlinks []string) []st
 
 func (a *App) statusText() string {
 	st := a.Store.Snapshot()
+	templateCount := 0
+	if a.Templates != nil {
+		templateCount = len(a.Templates.List())
+	}
 	space := diskFree(a.Config.ArtifactDir())
 	guideStatus := "unavailable"
 	if a.guideAvailable {
@@ -687,7 +760,7 @@ func (a *App) statusText() string {
 	if a.Config.EffectiveVoiceInputMode() == config.VoiceInputModeTranscribe {
 		voiceStatus = "transcribe, configured but not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
@@ -695,6 +768,8 @@ func (a *App) statusText() string {
 		guideStatus,
 		voiceStatus,
 		a.snapshotStatus(),
+		templateCount,
+		a.Config.TemplatePath(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),
 		a.Config.AttachmentDir(),

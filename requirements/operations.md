@@ -55,7 +55,8 @@ runtime state.
   Engram does not edit Codex hook configuration during installation.
 - `make uninstall-service` removes the systemd user unit, and `make uninstall`
   removes the binary. Neither operation deletes tmux sessions, configuration,
-  state, logs, or artifacts in Engram's private runtime root.
+  state, remembered input templates, logs, or artifacts in Engram's private
+  runtime root.
 - Login lingering is an explicit optional host-policy choice, not an automatic
   installation step.
 
@@ -74,7 +75,8 @@ runtime state.
   capability, state path, audit path, attachment path, free artifact-filesystem
   space, poll time, and whether the conversational guide is enabled, including
   its selected provider and model. It separately reports effective voice input
-  mode and, for OpenAI transcription, its admitted model.
+  mode and, for OpenAI transcription, its admitted model, plus the remembered
+  template count and private store path.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.

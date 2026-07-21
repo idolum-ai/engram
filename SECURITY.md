@@ -42,17 +42,18 @@ failure are in scope.
   to retained local attachments whose paths are delivered as literal tmux
   input. Only explicit `VOICE_INPUT_MODE=transcribe` sends them to OpenAI
   `gpt-4o-transcribe` and delivers a bounded transcript instead.
-- State, logs, generated captures, and attachments remain on the local host and
-  may contain sensitive transcript data.
+- State, logs, generated captures, attachments, and exact user-authored input
+  templates remain on the local host and may contain sensitive data.
 
 ## Operational Guidance
 
-- Keep `~/.engram/.env` mode `0600` and its parent directory private.
+- Keep `~/.engram/.env` and `~/.engram/templates.json` mode `0600` and their
+  parent directory private.
 - Use a dedicated Telegram bot in a direct message. Do not add it to groups.
 - Revoke and replace the bot token, Anthropic key, or OpenAI key immediately if
   exposed.
-- Do not track `.env` files, state, logs, PEM files, generated captures, or
-  downloaded attachments.
+- Do not track `.env` files, state, input templates, logs, PEM files, generated
+  captures, or downloaded attachments.
 - Treat Engram's private runtime root as sensitive. Engram prefers a valid
   private `XDG_RUNTIME_DIR` and otherwise uses a UID-specific directory under
   the system temporary directory.

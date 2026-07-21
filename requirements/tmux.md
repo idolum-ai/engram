@@ -57,6 +57,12 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   reaching a reused pane ID.
 - A reply beginning `//` removes one slash and sends the resulting slash-led
   input downstream. `/text` omits Enter; `/key` sends validated tmux key names.
+- Before typed Telegram text reaches these existing input paths, Engram expands
+  user-authored `{name}` templates in one bounded pass. Remembered bodies are
+  inserted verbatim and are not scanned recursively. Unknown explicit names
+  containing `-` or `_` reject the entire input; simple brace expressions such
+  as `{err}` remain literal for source-code compatibility. Voice input never
+  expands templates.
 - Live anchors include `Esc`, `Escx2`, `^C`, `^D`, and `Enter`. Snapshot anchors
   additionally include the four arrow keys in a distinct `← ↑ ↓ →` row.
   `Escx2` waits 500 ms between Escape keys.

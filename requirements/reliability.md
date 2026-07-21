@@ -31,6 +31,12 @@ exports a bounded recent tail, not an unbounded full audit file.
 ## State
 
 - State lives under `~/.engram` by default.
+- User-authored input templates live separately in `templates.json` under the
+  same directory. The file is owner-only mode `0600`, rejects symlinks and
+  foreign ownership, and uses the same write-sync-rename-directory-sync
+  persistence boundary as session state. Template bodies are limited to 4,000
+  bytes, names to 32 bytes, the store to 64 entries, and each expanded input to
+  16 KiB.
 - State writes use a temporary file in the state directory with mode `0600`.
   Engram writes and syncs that file, closes it, atomically renames it over the
   previous state, and then syncs the parent directory. A failure before rename
@@ -67,6 +73,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   4 MiB and retains one predecessor capped at the same size. Rotation preserves
   complete recent JSONL records, including when adopting an oversized legacy
   log.
+- Template creation, removal, and successful expansion are audited by name and
+  route without recording the remembered body in the audit event.
 - Processed Telegram messages must still be tracked to avoid duplicate handling
   when Telegram or the process retries before the offset is durably advanced.
   The newest 2,000 message keys are retained. The existing schema stores boolean

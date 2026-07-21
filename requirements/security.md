@@ -106,6 +106,9 @@ privacy model must stay small and explicit.
   metadata, and the selected anchor mode. Raw terminal captures and upstream
   payloads are retained only in process memory and are omitted from persisted
   state.
+- `templates.json` contains exact user-authored template bodies in plaintext.
+  It must be an owner-only regular file, must not follow symlinks, and must be
+  treated like `.env`. Template audit events retain names but not bodies.
 - `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
   treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
@@ -131,6 +134,12 @@ privacy model must stay small and explicit.
   the fixed `codex` and `claude` allowlist.
 
 - Telegram messages can cause shell input in tmux.
+- Template expansion is explicit, local, one-pass text substitution. Engram
+  never learns templates from terminal or Telegram history, never infers a
+  trigger, and never executes a remembered body without a typed placeholder in
+  an otherwise authorized input route. Expanded text still enters ordinary
+  tmux input and may appear in tmux history or existing redacted recovery
+  previews.
 - OpenAI transcription is untrusted input derivation, not a security boundary.
   Transcripts must be valid UTF-8, contain no terminal or bidirectional control
   characters, normalize whitespace to one line, and remain within a fixed byte
