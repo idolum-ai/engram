@@ -45,9 +45,9 @@ unchanged, and schema migrations must remain covered by their normal tests.
    limitations. Editing the PR body reruns candidate validation. A raw commit
    list or untouched pull-request template is not sufficient.
 5. Wait for normal CI and the release-candidate workflow. The candidate workflow
-   checks the changelog version, runs the full gate and real-tmux integration,
-   builds every release archive, and uploads an artifact preview with checksums
-   and draft notes.
+   checks the changelog version, runs the full gate and hermetic real-tmux
+   integration on Linux and Darwin, builds every release archive, and uploads
+   an artifact preview with checksums and draft notes.
 6. Review the PR and its candidate artifacts. Merge only when the release text
    and binaries describe the same source.
 7. The release workflow verifies that the merged tree exactly matches the
@@ -145,7 +145,8 @@ tag.
 - [ ] Branch name, changelog heading, and proposed tag agree.
 - [ ] The branch contains current `main` and only release preparation.
 - [ ] PR notes explain impact, compatibility, and known limits.
-- [ ] `make check` and the real-tmux integration test pass.
+- [ ] `make check` and the hermetic real-tmux integration test pass on Linux and
+  Darwin.
 - [ ] Candidate archives exist for all four supported OS/architecture pairs.
 - [ ] A native candidate reports the intended version and commit.
 - [ ] Checksums cover exactly the published archives.

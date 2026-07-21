@@ -102,3 +102,25 @@ jobs:
             dist/*
             candidate-version.txt
             release-notes-preview.md
+
+  darwin-tmux:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'release/v'))
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install tmux
+        run: brew install tmux
+
+      - name: Real tmux integration on Darwin
+        run: ENGRAM_TMUX_INTEGRATION=1 go test ./internal/tmux -run '^TestTmuxIntegration' -count=1
