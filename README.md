@@ -252,11 +252,12 @@ the bot channel and must be revoked immediately.
 
 - **Telegram:** Engram long-polls the Bot API for messages and attachments, then
   sends messages, rotates and pins live anchors, edits retired anchors, and
-  sends requested files and terminal snapshot photos back to the configured DM.
+  sends requested files, remembered-template exports, and terminal snapshot
+  photos back to the configured DM.
   Telegram receives command text, summaries, terminal image snapshots, `/raw`,
-  `/dump`, `/logs`, and `/download` results sent through the bot. In Chromium
-  mode, every changed anchor frame is an exact, unredacted terminal image sent
-  automatically to Telegram at most once every ten seconds.
+  `/dump`, `/logs`, `/templates`, and `/download` results sent through the bot.
+  In Chromium mode, every changed anchor frame is an exact, unredacted terminal
+  image sent automatically to Telegram at most once every ten seconds.
 - **tmux and local processes:** Authorized messages can create windows and send
   literal shell input or key presses. Engram-created windows use tmux's global
   `default-size`, matching detached tmux operation even when the selected session
@@ -552,6 +553,7 @@ locally for machine-readable metadata. Common commands are:
 - `/new <text>`
 - `/remember [<name> [text]]`
 - `/forget <name>`
+- `/templates`
 - `/send <id> <text>`
 - `/text <id> <text>`
 - `/key <id> <keys...>`
@@ -578,7 +580,9 @@ Please {review-panel}
 ```
 
 Use `/remember` to list names, `/remember <name>` to inspect a body, and
-`/forget <name>` to remove it. Write `{{name}}` to send literal `{name}` text.
+`/forget <name>` to remove it. `/templates` downloads one consistent JSON
+snapshot of the private store as `engram-templates.json`. Write `{{name}}` to
+send literal `{name}` text.
 Templates do not expand recursively or from voice messages, and Engram never
 learns or triggers them from terminal output. Keep sensitive bodies out of
 templates when possible: `templates.json` retains exact plaintext, while

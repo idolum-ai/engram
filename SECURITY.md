@@ -36,7 +36,8 @@ failure are in scope.
   the supported deployment.
 - Authorized Telegram input can execute shell commands and key presses in tmux.
 - `/download` can upload a chosen local regular file to Telegram. `/raw` and
-  `/dump` upload terminal content.
+  `/dump` upload terminal content. `/templates` uploads the exact remembered
+  input bodies.
 - Bounded visible pane captures may be sent to the selected conversational
   provider, Anthropic Haiku or OpenAI Luna. Replied Telegram voice notes default
   to retained local attachments whose paths are delivered as literal tmux

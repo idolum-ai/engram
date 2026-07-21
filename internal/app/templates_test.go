@@ -3,12 +3,16 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/templates"
 )
@@ -127,6 +131,94 @@ func TestTypedInputRoutesExpandTemplates(t *testing.T) {
 				t.Fatalf("tmux calls = %#v", runner.calls)
 			}
 		})
+	}
+}
+
+func TestTemplatesCommandUploadsPrivateStoreSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("TMPDIR", dir)
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateStore, err := templates.Open(filepath.Join(dir, "templates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := templateStore.Put("review-panel", "Review carefully.", time.Unix(7, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	var uploaded []byte
+	var filename, caption string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendDocument" {
+			t.Fatalf("path = %s", req.URL.Path)
+		}
+		if err := req.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatal(err)
+		}
+		files := req.MultipartForm.File["document"]
+		if len(files) != 1 {
+			t.Fatalf("documents = %d", len(files))
+		}
+		filename = files[0].Filename
+		caption = req.FormValue("caption")
+		file, err := files[0].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		uploaded, err = io.ReadAll(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return anchorKeyJSONResponse(`{"message_id":120,"chat":{"id":100}}`), nil
+	})}
+	app := &App{
+		Config: config.Config{Home: dir, TelegramAllowedUserID: 42, TelegramChatID: 100},
+		Store:  store, Templates: templateStore, Telegram: client,
+		transferSlots: make(chan struct{}, 1),
+	}
+	app.transferSlots <- struct{}{}
+	if err := os.MkdirAll(app.Config.ArtifactDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if status := app.handleUpdate(context.Background(), textUpdate(401, "/templates", 0)); status != "command_ok" {
+		t.Fatalf("status = %q", status)
+	}
+	if _, _, err := templateStore.Put("review-panel", "A newer body.", time.Unix(8, 0)); err != nil {
+		t.Fatal(err)
+	}
+	<-app.transferSlots
+	app.transferWG.Wait()
+	if filename != "engram-templates.json" || caption != "Engram remembered input templates" {
+		t.Fatalf("filename=%q caption=%q", filename, caption)
+	}
+	var exported struct {
+		Version   int                  `json:"version"`
+		Templates []templates.Template `json:"templates"`
+	}
+	if err := json.Unmarshal(uploaded, &exported); err != nil {
+		t.Fatal(err)
+	}
+	if exported.Version != 1 || len(exported.Templates) != 1 || exported.Templates[0].Body != "Review carefully." {
+		t.Fatalf("export = %#v", exported)
+	}
+	matches, err := filepath.Glob(filepath.Join(app.Config.ArtifactDir(), "engram-templates-export-*.json"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("temporary exports = %#v, error=%v", matches, err)
+	}
+	audit, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(audit), "Review carefully") || strings.Contains(string(audit), "A newer body") {
+		t.Fatalf("audit retained a template body: %s", audit)
 	}
 }
 

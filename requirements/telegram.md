@@ -22,6 +22,8 @@ Telegram is Engram's only user interface.
 - Replies beginning `//` are escaped pane input, not Engram commands.
 - `/remember` lists templates, `/remember <name>` inspects one, and `/remember
   <name> <text>` creates or replaces one. `/forget <name>` removes one.
+- `/templates` uploads one consistent JSON snapshot of the complete private
+  template store with the stable Telegram filename `engram-templates.json`.
 - Typed terminal input expands explicit `{name}` placeholders once immediately
   before routing. `{{name}}` sends the literal `{name}` text. Expansion applies
   to ordinary replies and new sessions, escaped slash replies, `/new`, `/send`,

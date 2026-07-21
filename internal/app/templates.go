@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -85,6 +86,50 @@ func (a *App) handleForgetCommand(ctx context.Context, msg telegram.Message, arg
 	}
 	a.reply(ctx, msg, fmt.Sprintf("Forgot {%s}.", item.Name))
 	return actionResult{Outcome: actionOK, Message: "forgot template"}
+}
+
+func (a *App) exportTemplates(ctx context.Context, msg telegram.Message) actionResult {
+	if a.Templates == nil {
+		return actionResult{Outcome: actionStateFailed, Message: "template store is unavailable"}
+	}
+	data, err := a.Templates.ExportJSON()
+	if err != nil {
+		return actionResult{Outcome: actionStateFailed, Message: err.Error()}
+	}
+	if !a.queueTransfer(func(transferCtx context.Context) {
+		a.uploadTemplateExport(transferCtx, msg, data)
+	}) {
+		return actionResult{Outcome: actionStateFailed, Message: "template export is temporarily unavailable because Engram is stopping or its transfer queue is full"}
+	}
+	return actionResult{Outcome: actionOK, Message: "queued template export"}
+}
+
+func (a *App) uploadTemplateExport(ctx context.Context, msg telegram.Message, data []byte) {
+	if err := os.MkdirAll(a.Config.ArtifactDir(), 0o700); err != nil {
+		a.reply(ctx, msg, "template export error: "+err.Error())
+		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
+		return
+	}
+	file, path, err := createPredictableArtifact(a.Config.ArtifactDir(), "engram-templates-export-"+time.Now().UTC().Format("20060102T150405Z")+".json")
+	if err != nil {
+		a.reply(ctx, msg, "template export error: "+err.Error())
+		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
+		return
+	}
+	defer os.Remove(path)
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if err := firstError(writeErr, closeErr); err != nil {
+		a.reply(ctx, msg, "template export error: "+err.Error())
+		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
+		return
+	}
+	if _, err := a.Telegram.SendDocumentNamed(ctx, msg.Chat.ID, path, "engram-templates.json", "Engram remembered input templates"); err != nil {
+		a.reply(ctx, msg, "template export upload error: "+err.Error())
+		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
+		return
+	}
+	_ = a.audit("template.export", "ok", map[string]any{"bytes": len(data)})
 }
 
 func splitTemplateDefinition(args string) (string, string) {

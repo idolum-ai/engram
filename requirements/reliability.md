@@ -75,6 +75,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   log.
 - Template creation, removal, and successful expansion are audited by name and
   route without recording the remembered body in the audit event.
+- `/templates` snapshots the store before entering the bounded transfer queue,
+  uploads through a private temporary artifact, and removes that artifact after
+  success or failure. A concurrent template update cannot change an in-flight
+  export.
 - Processed Telegram messages must still be tracked to avoid duplicate handling
   when Telegram or the process retries before the offset is durably advanced.
   The newest 2,000 message keys are retained. The existing schema stores boolean

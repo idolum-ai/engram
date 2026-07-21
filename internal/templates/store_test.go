@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +94,32 @@ func TestExpandRejectsOversizedResult(t *testing.T) {
 	}
 	if _, _, err := store.Expand(strings.Repeat("{large}", MaxExpandedBytes/MaxBodyBytes+1)); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("oversized expansion error = %v", err)
+	}
+}
+
+func TestExportJSONIsAConsistentStoreSnapshot(t *testing.T) {
+	t.Parallel()
+	store, err := Open(filepath.Join(t.TempDir(), "templates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Put("review-panel", "Review carefully.", time.Unix(7, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := store.ExportJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exported persistedState
+	if err := json.Unmarshal(data, &exported); err != nil {
+		t.Fatal(err)
+	}
+	if exported.Version != currentVersion || len(exported.Templates) != 1 || exported.Templates[0].Body != "Review carefully." {
+		t.Fatalf("export = %#v", exported)
+	}
+	if !strings.HasSuffix(string(data), "\n") {
+		t.Fatal("export is not newline terminated")
 	}
 }
 

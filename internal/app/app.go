@@ -437,6 +437,12 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		if !result.OK() {
 			a.reply(ctx, msg, result.Message)
 		}
+	case "templates":
+		result := a.exportTemplates(ctx, msg)
+		status = result.status("command")
+		if !result.OK() {
+			a.reply(ctx, msg, result.Message)
+		}
 	case "status":
 		a.reply(ctx, msg, a.statusText())
 	case "mode":

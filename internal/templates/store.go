@@ -128,6 +128,18 @@ func (s *Store) Get(name string) (Template, bool) {
 	return Template{}, false
 }
 
+// ExportJSON returns one consistent snapshot in the same format used on disk.
+func (s *Store) ExportJSON() ([]byte, error) {
+	s.mu.Lock()
+	state := cloneState(s.state)
+	s.mu.Unlock()
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode template export: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
 func (s *Store) Put(name, body string, now time.Time) (Template, bool, error) {
 	name = strings.TrimSpace(name)
 	body = strings.TrimSpace(body)

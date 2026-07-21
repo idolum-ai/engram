@@ -29,7 +29,8 @@ privacy model must stay small and explicit.
 ## External Data Flow
 
 - Documentation must explain that Telegram receives commands, replies,
-  summaries, captures, logs, and files sent through bot commands.
+  summaries, captures, logs, remembered-template exports, and files sent
+  through bot commands.
 - A configured `TELEGRAM_API_BASE` replaces Telegram's public Bot API host for
   both method and file traffic. That endpoint receives the bot token and all
   Telegram-bound Engram data. HTTPS is strongly recommended; HTTP provides no
@@ -109,6 +110,10 @@ privacy model must stay small and explicit.
 - `templates.json` contains exact user-authored template bodies in plaintext.
   It must be an owner-only regular file, must not follow symlinks, and must be
   treated like `.env`. Template audit events retain names but not bodies.
+- `/templates` is an explicit disclosure of every remembered body to the
+  authorized Telegram DM. It exports a consistent in-memory snapshot rather
+  than uploading the live state path and removes its temporary copy after the
+  transfer.
 - `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
   treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
