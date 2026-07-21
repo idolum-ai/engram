@@ -581,8 +581,8 @@ exit 0
 
 	select {
 	case err := <-done:
-		if !errors.Is(err, exec.ErrWaitDelay) {
-			t.Fatalf("browser with a surviving descendant error = %v", err)
+		if err != nil {
+			t.Fatalf("successful browser leader with a surviving descendant error = %v", err)
 		}
 	case <-time.After(time.Second):
 		_ = syscall.Kill(descendantPID, syscall.SIGKILL)

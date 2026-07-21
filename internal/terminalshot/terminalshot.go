@@ -83,6 +83,9 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
+		if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+			return nil
+		}
 		return fmt.Errorf("snapshot browser: %w: %s", err, strings.TrimSpace(output.String()))
 	}
 	return nil
