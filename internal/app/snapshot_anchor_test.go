@@ -379,6 +379,9 @@ func TestGuideRendererUsesOnlySelectedConfiguredProvider(t *testing.T) {
 
 func TestSnapshotModeRequiresAvailableBrowser(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	app, err := New(config.Config{
 		TelegramBotToken:      "token",
 		TelegramAllowedUserID: 42,
@@ -396,6 +399,9 @@ func TestSnapshotModeRequiresAvailableBrowser(t *testing.T) {
 
 func TestNewPrefersAvailablePersistedModeOverEnvironmentMode(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -422,6 +428,38 @@ func TestNewPrefersAvailablePersistedModeOverEnvironmentMode(t *testing.T) {
 	defer a.Close()
 	if a.anchorMode() != config.AnchorModeGuide {
 		t.Fatalf("anchor mode = %q, want persisted guide", a.anchorMode())
+	}
+}
+
+func TestNewSerializesAllStateForSharedHome(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	base := config.Config{
+		TelegramBotToken:      "first-token",
+		TelegramAllowedUserID: 42,
+		TelegramChatID:        42,
+		AnthropicAPIKey:       "key",
+		AnthropicModel:        config.DefaultAnthropicModel,
+		AnchorMode:            config.AnchorModeGuide,
+		Home:                  dir,
+		Workdir:               dir,
+		SnapshotTheme:         "terminal",
+	}
+	first, err := New(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	secondConfig := base
+	secondConfig.TelegramBotToken = "second-token"
+	secondConfig.TelegramAllowedUserID = 43
+	secondConfig.TelegramChatID = 43
+	second, err := New(secondConfig)
+	if second != nil || err == nil || !strings.Contains(err.Error(), "another Engram process") {
+		t.Fatalf("second app=%#v error=%v", second, err)
 	}
 }
 

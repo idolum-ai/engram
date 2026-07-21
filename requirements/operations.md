@@ -85,7 +85,9 @@ runtime state.
 - `engram preflight`, `engram status`, and `engram dry-start` validate the local
   service surface without calling Telegram, a model provider, or starting
   polling. They report voice input mode separately from the selected guide.
-- `dry-start` may create and open local state; `preflight` must not.
+- `dry-start` may create and open local state; `preflight` must not. Dry start
+  acquires the same home-scoped writer lock as the service and fails while a
+  process already owns that home.
 - `engram inspect status`, `engram inspect sessions`, and
   `engram inspect frame <watch-id>` require no Telegram or presentation
   configuration, make no network request, and open no listener or worker.

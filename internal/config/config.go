@@ -383,7 +383,7 @@ func firstNonEmpty(values ...string) string {
 
 func EnsureDirs(cfg Config) error {
 	for _, dir := range []string{cfg.Home, cfg.LockDir()} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+		if err := ensurePrivateDir(dir); err != nil {
 			return err
 		}
 	}

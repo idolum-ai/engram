@@ -146,6 +146,34 @@ func TestEnsureDirsRejectsUnsafePreexistingArtifactRoot(t *testing.T) {
 	}
 }
 
+func TestEnsureDirsRejectsUnsafeHome(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(string) error
+	}{
+		{name: "symlink", setup: func(path string) error {
+			target := filepath.Join(filepath.Dir(path), "real-home")
+			if err := os.Mkdir(target, 0o700); err != nil {
+				return err
+			}
+			return os.Symlink(target, path)
+		}},
+		{name: "regular file", setup: func(path string) error { return os.WriteFile(path, []byte("occupied"), 0o600) }},
+		{name: "weak permissions", setup: func(path string) error { return os.Mkdir(path, 0o755) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent := canonicalTestTempDir(t)
+			home := filepath.Join(parent, "home")
+			if err := test.setup(home); err != nil {
+				t.Fatal(err)
+			}
+			if err := EnsureDirs(Config{Home: home}); err == nil {
+				t.Fatal("EnsureDirs accepted unsafe ENGRAM_HOME")
+			}
+		})
+	}
+}
+
 func TestLoadValidatesAndDefaults(t *testing.T) {
 	dir := t.TempDir()
 	env := filepath.Join(dir, ".env")

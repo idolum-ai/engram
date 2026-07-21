@@ -7,27 +7,27 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/idolum-ai/engram/internal/atomicfile"
 )
 
 const (
 	currentVersion   = 1
 	MaxTemplates     = 64
 	MaxNameBytes     = 32
-	MaxBodyBytes     = 4000
+	MaxBodyBytes     = 3800
 	MaxExpandedBytes = 16 * 1024
 	maxStateBytes    = 512 * 1024
 )
 
 type Template struct {
-	Name      string    `json:"name"`
-	Body      string    `json:"body"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Name string `json:"name"`
+	Body string `json:"body"`
 }
 
 type persistedState struct {
@@ -36,22 +36,25 @@ type persistedState struct {
 }
 
 type Store struct {
-	mu    sync.Mutex
-	path  string
-	state persistedState
+	mu              sync.Mutex
+	path            string
+	recoveredPath   string
+	recoveryWarning error
+	state           persistedState
+	writeFile       func(string, []byte) error
 }
 
-type atomicWriteError struct {
-	err      error
-	replaced bool
-}
+type validationError struct{ message string }
 
-func (e *atomicWriteError) Error() string { return e.err.Error() }
-func (e *atomicWriteError) Unwrap() error { return e.err }
+func (e *validationError) Error() string { return e.message }
+
+func IsValidationError(err error) bool {
+	var target *validationError
+	return errors.As(err, &target)
+}
 
 func PersistenceReachedReplacement(err error) bool {
-	var target *atomicWriteError
-	return errors.As(err, &target) && target.replaced
+	return atomicfile.ReachedReplacement(err)
 }
 
 func Open(path string) (*Store, error) {
@@ -62,40 +65,95 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create template state directory: %w", err)
 	}
-	store := &Store{path: path, state: persistedState{Version: currentVersion}}
+	store := &Store{
+		path:      path,
+		state:     persistedState{Version: currentVersion},
+		writeFile: atomicfile.Write,
+	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if os.IsNotExist(err) {
+		store.recoveredPath = latestRecoveryBackup(path)
 		return store, store.saveLocked()
 	}
 	if err != nil {
 		return nil, fmt.Errorf("open template state: %w", err)
 	}
-	defer file.Close()
 	if err := validateOpenedFile(file); err != nil {
+		file.Close()
 		return nil, err
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
+	closeErr := file.Close()
 	if err != nil {
 		return nil, fmt.Errorf("read template state: %w", err)
 	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close template state: %w", closeErr)
+	}
 	if len(data) > maxStateBytes {
-		return nil, fmt.Errorf("template state exceeds %d bytes", maxStateBytes)
+		return recoverCorrupt(store, fmt.Errorf("template state exceeds %d bytes", maxStateBytes))
 	}
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return nil, fmt.Errorf("template state is empty")
+		return recoverCorrupt(store, fmt.Errorf("template state is empty"))
+	}
+	var envelope struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return recoverCorrupt(store, fmt.Errorf("parse template state: %w", err))
+	}
+	if envelope.Version > currentVersion {
+		return nil, fmt.Errorf("template state schema version %d is newer than supported version %d", envelope.Version, currentVersion)
 	}
 	if err := json.Unmarshal(data, &store.state); err != nil {
-		return nil, fmt.Errorf("parse template state: %w", err)
-	}
-	if store.state.Version > currentVersion {
-		return nil, fmt.Errorf("template state schema version %d is newer than supported version %d", store.state.Version, currentVersion)
+		return recoverCorrupt(store, fmt.Errorf("parse template state: %w", err))
 	}
 	store.state.Version = currentVersion
 	if err := validateState(store.state); err != nil {
-		return nil, err
+		return recoverCorrupt(store, err)
 	}
 	return store, nil
 }
+
+func recoverCorrupt(store *Store, cause error) (*Store, error) {
+	backup := store.path + ".corrupt-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+	if err := os.Rename(store.path, backup); err != nil {
+		return nil, fmt.Errorf("%w; preserve corrupt templates: %w", cause, err)
+	}
+	if err := atomicfile.SyncDir(filepath.Dir(store.path)); err != nil {
+		return nil, fmt.Errorf("%w; backup at %s; sync backup directory: %w", cause, backup, err)
+	}
+	store.state = persistedState{Version: currentVersion}
+	store.recoveredPath = backup
+	if err := store.saveLocked(); err != nil {
+		if atomicfile.ReachedReplacement(err) {
+			store.recoveryWarning = err
+			return store, nil
+		}
+		return nil, fmt.Errorf("%w; backup at %s; initialize replacement: %w", cause, backup, err)
+	}
+	return store, nil
+}
+
+func latestRecoveryBackup(path string) string {
+	matches, _ := filepath.Glob(path + ".corrupt-*")
+	for index := len(matches) - 1; index >= 0; index-- {
+		file, err := os.OpenFile(matches[index], os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			continue
+		}
+		validationErr := validateOpenedFile(file)
+		closeErr := file.Close()
+		if validationErr == nil && closeErr == nil {
+			return matches[index]
+		}
+	}
+	return ""
+}
+
+func (s *Store) RecoveredPath() string { return s.recoveredPath }
+
+func (s *Store) RecoveryWarning() error { return s.recoveryWarning }
 
 func validateOpenedFile(file *os.File) error {
 	info, err := file.Stat()
@@ -128,31 +186,14 @@ func (s *Store) Get(name string) (Template, bool) {
 	return Template{}, false
 }
 
-// ExportJSON returns one consistent snapshot in the same format used on disk.
-func (s *Store) ExportJSON() ([]byte, error) {
-	s.mu.Lock()
-	state := cloneState(s.state)
-	s.mu.Unlock()
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("encode template export: %w", err)
-	}
-	return append(data, '\n'), nil
-}
-
-func (s *Store) Put(name, body string, now time.Time) (Template, bool, error) {
-	name = strings.TrimSpace(name)
-	body = strings.TrimSpace(body)
+func (s *Store) Put(name, body string) (Template, bool, error) {
 	if err := validateFields(name, body); err != nil {
 		return Template{}, false, err
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous := cloneState(s.state)
-	item := Template{Name: name, Body: body, UpdatedAt: now.UTC()}
+	item := Template{Name: name, Body: body}
 	created := true
 	for index := range s.state.Templates {
 		if s.state.Templates[index].Name == name {
@@ -201,8 +242,8 @@ func (s *Store) Forget(name string) (Template, bool, error) {
 	return Template{}, false, nil
 }
 
-// Expand performs one pass. Template bodies are appended verbatim and are
-// never scanned again, so remembered text cannot activate another template.
+// Expand recognizes only the explicit {engram:name} namespace and performs one
+// pass. Template bodies are never scanned again.
 func (s *Store) Expand(text string) (string, []string, error) {
 	s.mu.Lock()
 	items := append([]Template(nil), s.state.Templates...)
@@ -222,59 +263,54 @@ func (s *Store) Expand(text string) (string, []string, error) {
 		out.WriteString(value)
 		return nil
 	}
+	const prefix = "{engram:"
 	for index := 0; index < len(text); {
-		if strings.HasPrefix(text[index:], "{{") {
-			end := strings.Index(text[index+2:], "}}")
-			if end < 0 {
-				if err := appendValue(text[index:]); err != nil {
-					return "", nil, err
-				}
-				break
-			}
-			literal := "{" + text[index+2:index+2+end] + "}"
-			if err := appendValue(literal); err != nil {
-				return "", nil, err
-			}
-			index += 2 + end + 2
-			continue
-		}
-		if text[index] != '{' {
-			if err := appendValue(text[index : index+1]); err != nil {
-				return "", nil, err
-			}
-			index++
-			continue
-		}
-		end := strings.IndexByte(text[index+1:], '}')
-		if end < 0 {
+		relative := strings.Index(text[index:], prefix)
+		if relative < 0 {
 			if err := appendValue(text[index:]); err != nil {
 				return "", nil, err
 			}
 			break
 		}
-		name := text[index+1 : index+1+end]
-		if validateName(name) != nil {
-			literal := text[index : index+1+end+1]
-			if err := appendValue(literal); err != nil {
+		start := index + relative
+		if err := appendValue(text[index:start]); err != nil {
+			return "", nil, err
+		}
+		// Preserve nested source-language constructs such as ${engram:name}
+		// and {{engram:name}} byte-for-byte.
+		if start > 0 && (text[start-1] == '$' || text[start-1] == '{') {
+			if err := appendValue("{"); err != nil {
 				return "", nil, err
 			}
-			index += end + 2
+			index = start + 1
+			continue
+		}
+		end := strings.IndexByte(text[start+len(prefix):], '}')
+		if end < 0 {
+			if err := appendValue(text[start:]); err != nil {
+				return "", nil, err
+			}
+			break
+		}
+		closeIndex := start + len(prefix) + end
+		if closeIndex+1 < len(text) && text[closeIndex+1] == '}' {
+			if err := appendValue(text[start : closeIndex+1]); err != nil {
+				return "", nil, err
+			}
+			index = closeIndex + 1
+			continue
+		}
+		name := text[start+len(prefix) : closeIndex]
+		if validateName(name) != nil {
+			if err := appendValue(text[start : closeIndex+1]); err != nil {
+				return "", nil, err
+			}
+			index = closeIndex + 1
 			continue
 		}
 		body, ok := byName[name]
 		if !ok {
-			// Hyphenated and underscored names are explicit template syntax. A
-			// simple unknown word remains literal so ordinary code such as {err}
-			// does not become invalid terminal input.
-			if strings.ContainsAny(name, "-_") {
-				return "", nil, fmt.Errorf("unknown template {%s}; use /remember to list templates", name)
-			}
-			literal := text[index : index+1+end+1]
-			if err := appendValue(literal); err != nil {
-				return "", nil, err
-			}
-			index += end + 2
-			continue
+			return "", nil, fmt.Errorf("unknown template {engram:%s}; use /remember to list templates", name)
 		}
 		if err := appendValue(body); err != nil {
 			return "", nil, err
@@ -283,7 +319,7 @@ func (s *Store) Expand(text string) (string, []string, error) {
 			usedSet[name] = true
 			used = append(used, name)
 		}
-		index += end + 2
+		index = closeIndex + 1
 	}
 	return out.String(), used, nil
 }
@@ -310,20 +346,20 @@ func validateFields(name, body string) error {
 		return err
 	}
 	if len(body) == 0 || len(body) > MaxBodyBytes || strings.ContainsRune(body, '\x00') {
-		return fmt.Errorf("template body must contain 1 to %d bytes without NUL", MaxBodyBytes)
+		return &validationError{message: fmt.Sprintf("template body must contain 1 to %d bytes without NUL", MaxBodyBytes)}
 	}
 	return nil
 }
 
 func validateName(name string) error {
 	if len(name) == 0 || len(name) > MaxNameBytes {
-		return fmt.Errorf("template name must contain 1 to %d bytes", MaxNameBytes)
+		return &validationError{message: fmt.Sprintf("template name must contain 1 to %d bytes", MaxNameBytes)}
 	}
 	for _, r := range name {
 		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
 			continue
 		}
-		return fmt.Errorf("template name may contain lowercase letters, digits, '-' and '_'")
+		return &validationError{message: "template name may contain lowercase letters, digits, '-' and '_'"}
 	}
 	return nil
 }
@@ -334,54 +370,7 @@ func (s *Store) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode template state: %w", err)
 	}
-	dir := filepath.Dir(s.path)
-	file, err := os.CreateTemp(dir, "."+filepath.Base(s.path)+".tmp-*")
-	if err != nil {
-		return &atomicWriteError{err: fmt.Errorf("create template state temporary file: %w", err)}
-	}
-	temporary := file.Name()
-	renamed := false
-	defer func() {
-		if !renamed {
-			_ = os.Remove(temporary)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return &atomicWriteError{err: errors.Join(fmt.Errorf("chmod template state: %w", err), file.Close())}
-	}
-	if _, err := file.Write(data); err != nil {
-		return &atomicWriteError{err: errors.Join(fmt.Errorf("write template state: %w", err), file.Close())}
-	}
-	if err := file.Sync(); err != nil {
-		return &atomicWriteError{err: errors.Join(fmt.Errorf("sync template state: %w", err), file.Close())}
-	}
-	if err := file.Close(); err != nil {
-		return &atomicWriteError{err: fmt.Errorf("close template state: %w", err)}
-	}
-	if err := os.Rename(temporary, s.path); err != nil {
-		return &atomicWriteError{err: fmt.Errorf("replace template state: %w", err)}
-	}
-	renamed = true
-	if err := syncParentDir(dir); err != nil {
-		return &atomicWriteError{err: err, replaced: true}
-	}
-	return nil
-}
-
-func syncParentDir(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open template state directory for sync: %w", err)
-	}
-	syncErr := dir.Sync()
-	closeErr := dir.Close()
-	if runtime.GOOS == "darwin" && (errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP)) {
-		syncErr = nil
-	}
-	if err := errors.Join(syncErr, closeErr); err != nil {
-		return fmt.Errorf("sync template state directory: %w", err)
-	}
-	return nil
+	return s.writeFile(s.path, data)
 }
 
 func cloneState(in persistedState) persistedState {

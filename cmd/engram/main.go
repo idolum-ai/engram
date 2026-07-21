@@ -19,8 +19,10 @@ import (
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/inspect"
+	"github.com/idolum-ai/engram/internal/lockfile"
 	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/state"
+	"github.com/idolum-ai/engram/internal/templates"
 	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 	"github.com/idolum-ai/engram/internal/upstream"
@@ -198,12 +200,22 @@ func runDiagnostics(args []string, mode string) int {
 			fmt.Fprintln(os.Stderr, "dirs:", err)
 			return 1
 		}
+		homeLock, err := lockfile.Acquire(cfg.LockDir(), lockfile.Key("engram-home-state"))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "home lock:", err)
+			return 1
+		}
+		defer homeLock.Close()
 		store, err := state.Open(cfg.StatePath(), cfg.AuditPath())
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "state:", err)
 			return 1
 		}
 		_ = store
+		if _, err := templates.Open(cfg.TemplatePath()); err != nil {
+			fmt.Fprintln(os.Stderr, "templates:", err)
+			return 1
+		}
 	}
 	fmt.Print(formatDiagnostics(cfg, mode, st, stateErr == nil, anchorMode, snapshotPath))
 	return 0

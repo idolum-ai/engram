@@ -27,7 +27,7 @@ var registry = []Metadata{
 	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions", Category: "service"},
 	{Command: "remember", Usage: "/remember [<name> [text]]", Description: "List, inspect, or save an input template", Category: "input"},
 	{Command: "forget", Usage: "/forget <name>", Description: "Forget a saved input template", Category: "input"},
-	{Command: "templates", Usage: "/templates", Description: "Download remembered input templates as JSON", Category: "input"},
+	{Command: "templates", Usage: "/templates export", Description: "Export all remembered input templates as JSON", Category: "input"},
 	{Command: "sessions", Usage: "/sessions", Description: "List active terminal sessions with controls", Category: "session"},
 	{Command: "recovery", Usage: "/recovery", Description: "Show a deterministic plan for lost sessions", Category: "session"},
 	{Command: "attach", Usage: "/attach <tmux-target>", Description: "Track an existing tmux window or pane", Category: "session"},

@@ -36,7 +36,7 @@ failure are in scope.
   the supported deployment.
 - Authorized Telegram input can execute shell commands and key presses in tmux.
 - `/download` can upload a chosen local regular file to Telegram. `/raw` and
-  `/dump` upload terminal content. `/templates` uploads the exact remembered
+  `/dump` upload terminal content. `/templates export` uploads the exact remembered
   input bodies.
 - Bounded visible pane captures may be sent to the selected conversational
   provider, Anthropic Haiku or OpenAI Luna. Replied Telegram voice notes default
@@ -49,7 +49,8 @@ failure are in scope.
 ## Operational Guidance
 
 - Keep `~/.engram/.env` and `~/.engram/templates.json` mode `0600` and their
-  parent directory private.
+  parent directory mode `0700`. Engram rejects an unsafe or symlinked
+  `ENGRAM_HOME`.
 - Use a dedicated Telegram bot in a direct message. Do not add it to groups.
 - Revoke and replace the bot token, Anthropic key, or OpenAI key immediately if
   exposed.

@@ -336,6 +336,9 @@ func newVoiceInputTestApp(t *testing.T) (*App, *slashEscapeRunner, *fakeVoiceTra
 	runner := &slashEscapeRunner{}
 	transcriber := &fakeVoiceTranscriber{text: "please run the tests"}
 	cfg := config.Config{Home: dir, TelegramAllowedUserID: 42, TelegramChatID: 100, VoiceInputMode: config.VoiceInputModeTranscribe}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := config.EnsureDirs(cfg); err != nil {
 		t.Fatal(err)
 	}

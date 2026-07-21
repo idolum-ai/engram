@@ -22,13 +22,15 @@ Telegram is Engram's only user interface.
 - Replies beginning `//` are escaped pane input, not Engram commands.
 - `/remember` lists templates, `/remember <name>` inspects one, and `/remember
   <name> <text>` creates or replaces one. `/forget <name>` removes one.
-- `/templates` uploads one consistent JSON snapshot of the complete private
-  template store with the stable Telegram filename `engram-templates.json`.
-- Typed terminal input expands explicit `{name}` placeholders once immediately
-  before routing. `{{name}}` sends the literal `{name}` text. Expansion applies
-  to ordinary replies and new sessions, escaped slash replies, `/new`, `/send`,
-  `/run`, `/text`, and `/type`; it never applies to voice-note paths or
-  transcripts.
+- `/templates export` uploads one consistent JSON snapshot of the complete
+  private template store with the stable Telegram filename `templates.json`.
+- Typed terminal input expands explicit `{engram:name}` placeholders once
+  immediately before routing. Other brace forms remain literal. Expansion
+  applies to ordinary replies and new sessions, escaped slash replies, `/new`,
+  `/send`, and `/text`; it never applies to voice-note paths or transcripts.
+- `/text` rejects line breaks before tmux delivery, including line breaks
+  introduced by a template. It remains a staging command and cannot implicitly
+  submit remembered multiline input.
 - `/mode` reports the current and available presentations, distinguishing the
   configured guide provider from locally probed Chromium. `/mode guide` or `/mode
   snapshot` begins migration only when the target capability is available, and

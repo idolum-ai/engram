@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/templates"
+	"github.com/idolum-ai/engram/internal/tmux"
 )
 
 func TestRememberInspectExpandAndForgetTemplate(t *testing.T) {
@@ -47,11 +49,18 @@ func TestRememberInspectExpandAndForgetTemplate(t *testing.T) {
 			t.Fatalf("command status = %q", status)
 		}
 	}
-	if len(replies) != 3 || replies[0] != "Remembered {review-panel}." || !strings.Contains(replies[1], "{review-panel}") || !strings.Contains(replies[2], "Review carefully") {
+	if len(replies) != 3 || replies[0] != "Remembered {engram:review-panel}." || !strings.Contains(replies[1], "{engram:review-panel}") || !strings.Contains(replies[2], "Review carefully") {
 		t.Fatalf("replies = %#v", replies)
 	}
+	exactBody := "    if ready:\n        run() \n"
+	if status := app.handleUpdate(context.Background(), textUpdate(107, "/remember exact\n"+exactBody, 0)); status != "command_ok" {
+		t.Fatalf("exact remember status = %q", status)
+	}
+	if item, found := templateStore.Get("exact"); !found || item.Body != exactBody {
+		t.Fatalf("exact body = %q, found=%v", item.Body, found)
+	}
 
-	status := app.handleUpdate(context.Background(), textUpdate(104, "Before {review-panel} After {{review-panel}}.", 10))
+	status := app.handleUpdate(context.Background(), textUpdate(104, "Before {engram:review-panel} After {review-panel}.", 10))
 	if status != "anchor_reply_ok" {
 		t.Fatalf("expanded reply status = %q", status)
 	}
@@ -69,7 +78,7 @@ func TestRememberInspectExpandAndForgetTemplate(t *testing.T) {
 		t.Fatalf("forget status = %q", status)
 	}
 	before := len(runner.calls)
-	if status := app.handleUpdate(context.Background(), textUpdate(106, "Use {review-panel}", 10)); status != "anchor_reply_template_error" {
+	if status := app.handleUpdate(context.Background(), textUpdate(106, "Use {engram:review-panel}", 10)); status != "anchor_reply_template_error" {
 		t.Fatalf("forgotten expansion status = %q", status)
 	}
 	if len(runner.calls) != before || !strings.Contains(replies[len(replies)-1], "unknown template") {
@@ -83,17 +92,17 @@ func TestVoiceTranscriptionDoesNotExpandTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := templateStore.Put("review-panel", "expanded", time.Time{}); err != nil {
+	if _, _, err := templateStore.Put("review-panel", "expanded"); err != nil {
 		t.Fatal(err)
 	}
 	app.Templates = templateStore
-	transcriber.text = "please use {review-panel}"
+	transcriber.text = "please use {engram:review-panel}"
 	if status := app.handleUpdate(context.Background(), voiceReplyUpdate(201, 77)); status != "voice_reply_ok" {
 		t.Fatalf("voice status = %q", status)
 	}
 	app.transferWG.Wait()
 	app.refreshWG.Wait()
-	if len(runner.calls) != 4 || runner.calls[1][4] != "(transcribed) please use {review-panel}" {
+	if len(runner.calls) != 4 || runner.calls[1][4] != "(transcribed) please use {engram:review-panel}" {
 		t.Fatalf("voice input was expanded: %#v", runner.calls)
 	}
 }
@@ -107,9 +116,10 @@ func TestTypedInputRoutesExpandTemplates(t *testing.T) {
 		wantInput  string
 		wantCalls  int
 	}{
-		{name: "escaped slash reply", text: "//{review-panel}", replyTo: 10, wantStatus: "anchor_reply_ok", wantInput: "/Review carefully.", wantCalls: 4},
-		{name: "send command", text: "/send 1 Before {review-panel}", wantStatus: "command_ok", wantInput: "Before Review carefully.", wantCalls: 4},
-		{name: "text command", text: "/text 1 Before {review-panel}", wantStatus: "command_ok", wantInput: "Before Review carefully.", wantCalls: 3},
+		{name: "escaped slash reply", text: "  //{engram:review-panel}  ", replyTo: 10, wantStatus: "anchor_reply_ok", wantInput: "  /Review carefully.  ", wantCalls: 4},
+		{name: "literal whitespace reply", text: "  {engram:review-panel}  ", replyTo: 10, wantStatus: "anchor_reply_ok", wantInput: "  Review carefully.  ", wantCalls: 4},
+		{name: "send command", text: "/send 1  Before {engram:review-panel}  ", wantStatus: "command_ok", wantInput: " Before Review carefully.  ", wantCalls: 4},
+		{name: "text command", text: "/text 1  Before {engram:review-panel}  ", wantStatus: "command_ok", wantInput: " Before Review carefully.  ", wantCalls: 3},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -118,7 +128,7 @@ func TestTypedInputRoutesExpandTemplates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := templateStore.Put("review-panel", "Review carefully.", time.Time{}); err != nil {
+			if _, _, err := templateStore.Put("review-panel", "Review carefully."); err != nil {
 				t.Fatal(err)
 			}
 			app.Templates = templateStore
@@ -134,6 +144,208 @@ func TestTypedInputRoutesExpandTemplates(t *testing.T) {
 	}
 }
 
+func TestNewSessionRoutesPreserveWhitespaceAroundTemplates(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "plain message", text: "  {engram:review-panel}  ", want: "  Review carefully.  "},
+		{name: "new command", text: "/new  {engram:review-panel}  ", want: " Review carefully.  "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			templateStore, err := templates.Open(filepath.Join(dir, "templates.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := templateStore.Put("review-panel", "Review carefully."); err != nil {
+				t.Fatal(err)
+			}
+			runner := &newSessionRunner{}
+			client := telegram.New("TOKEN")
+			client.BaseURL = "https://api.telegram.org/botTOKEN"
+			client.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return anchorKeyJSONResponse(`{"message_id":120,"chat":{"id":100}}`), nil
+			})}
+			app := &App{
+				Config: config.Config{
+					TelegramAllowedUserID: 42,
+					TelegramChatID:        100,
+					TmuxSession:           "main",
+					Workdir:               dir,
+				},
+				Store:          store,
+				Templates:      templateStore,
+				Telegram:       client,
+				Tmux:           tmux.New(runner),
+				summaryQueued:  map[int]bool{},
+				summaryRunning: map[int]bool{},
+				summaryForce:   map[int]bool{},
+				sleepHook:      func(time.Duration) {},
+				refreshHook:    func(context.Context, int, bool) {},
+			}
+			if status := app.handleUpdate(context.Background(), textUpdate(401, test.text, 0)); status != "new_session_ok" && status != "command_ok" {
+				t.Fatalf("status = %q", status)
+			}
+			app.refreshWG.Wait()
+			var got string
+			for _, call := range runner.calls {
+				if len(call) > 4 && call[0] == "set-buffer" {
+					got = call[4]
+					break
+				}
+			}
+			if got != test.want {
+				t.Fatalf("tmux input = %q, want %q; calls=%#v", got, test.want, runner.calls)
+			}
+		})
+	}
+}
+
+func TestExactCommandPayloadParsing(t *testing.T) {
+	t.Parallel()
+	if got, ok := exactCommandPayload("  {engram:review-panel}  "); !ok || got != " {engram:review-panel}  " {
+		t.Fatalf("new payload = %q, ok=%v", got, ok)
+	}
+	for _, command := range []string{"send", "text"} {
+		id, got, ok := parseIDRestExact(" 1  {engram:review-panel}  ")
+		if !ok || id != 1 || got != " {engram:review-panel}  " {
+			t.Fatalf("%s payload id=%d text=%q ok=%v", command, id, got, ok)
+		}
+	}
+}
+
+func TestNewSessionMessagePreservesWhitespaceAroundTemplate(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateStore, err := templates.Open(filepath.Join(dir, "templates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := templateStore.Put("review-panel", "Review carefully."); err != nil {
+		t.Fatal(err)
+	}
+	runner := &newSessionRunner{}
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network unavailable")
+	})}
+	app := &App{
+		Config: config.Config{
+			TelegramAllowedUserID: 42,
+			TelegramChatID:        100,
+			TmuxSession:           "main",
+			Workdir:               dir,
+		},
+		Store:          store,
+		Templates:      templateStore,
+		Telegram:       client,
+		Tmux:           tmux.New(runner),
+		summaryQueued:  map[int]bool{},
+		summaryRunning: map[int]bool{},
+		summaryForce:   map[int]bool{},
+	}
+	if status := app.handleUpdate(context.Background(), textUpdate(310, "  {engram:review-panel}  ", 0)); status != "new_session_telegram_failed" {
+		t.Fatalf("status = %q", status)
+	}
+	for _, call := range runner.calls {
+		if len(call) == 5 && call[0] == "set-buffer" {
+			if call[4] != "  Review carefully.  " {
+				t.Fatalf("tmux input = %q", call[4])
+			}
+			return
+		}
+	}
+	t.Fatalf("tmux set-buffer call missing: %#v", runner.calls)
+}
+
+func TestTextInputRejectsLineBreaksBeforeTmux(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	result := app.sendInput(context.Background(), 1, "first\nsecond", "text", false)
+	if result.Outcome != actionUserError || !strings.Contains(result.Message, "one line") {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("multiline text reached tmux: %#v", runner.calls)
+	}
+}
+
+func TestTextCommandRejectsMultilineTemplateBeforeTmux(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	var reply string
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendMessage" {
+			t.Fatalf("path = %s", req.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		reply, _ = body["text"].(string)
+		return anchorKeyJSONResponse(`{"message_id":120,"chat":{"id":100}}`), nil
+	})}
+	templateStore, err := templates.Open(filepath.Join(t.TempDir(), "templates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := templateStore.Put("multiline", "first\nsecond"); err != nil {
+		t.Fatal(err)
+	}
+	app.Templates = templateStore
+	if status := app.handleUpdate(context.Background(), textUpdate(309, "/text 1 {engram:multiline}", 0)); status != "command_user_error" {
+		t.Fatalf("status = %q", status)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("multiline template reached tmux: %#v", runner.calls)
+	}
+	if !strings.Contains(reply, "one line") {
+		t.Fatalf("reply = %q", reply)
+	}
+}
+
+func TestPrepareTypedInputAuditsBeforeDeliveryWithoutBody(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	templateStore, err := templates.Open(filepath.Join(dir, "templates.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const body = "sensitive remembered body"
+	if _, _, err := templateStore.Put("review-panel", body); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{Store: store, Templates: templateStore}
+	expanded, err := app.prepareTypedInput("Use {engram:review-panel}", "send", 7)
+	if err != nil || expanded != "Use "+body {
+		t.Fatalf("expanded=%q error=%v", expanded, err)
+	}
+	audit, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(audit)
+	for _, want := range []string{`"type":"template.expand"`, `"status":"prepared"`, `"session_id":7`, `"route":"send"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("audit missing %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, body) {
+		t.Fatalf("audit retained template body: %s", text)
+	}
+}
+
 func TestTemplatesCommandUploadsPrivateStoreSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", "")
@@ -146,7 +358,7 @@ func TestTemplatesCommandUploadsPrivateStoreSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := templateStore.Put("review-panel", "Review carefully.", time.Unix(7, 0)); err != nil {
+	if _, _, err := templateStore.Put("review-panel", "Review carefully."); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,6 +367,9 @@ func TestTemplatesCommandUploadsPrivateStoreSnapshot(t *testing.T) {
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
 	client.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/botTOKEN/sendMessage" {
+			return anchorKeyJSONResponse(`{"message_id":119,"chat":{"id":100}}`), nil
+		}
 		if req.URL.Path != "/botTOKEN/sendDocument" {
 			t.Fatalf("path = %s", req.URL.Path)
 		}
@@ -188,15 +403,15 @@ func TestTemplatesCommandUploadsPrivateStoreSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if status := app.handleUpdate(context.Background(), textUpdate(401, "/templates", 0)); status != "command_ok" {
+	if status := app.handleUpdate(context.Background(), textUpdate(401, "/templates export", 0)); status != "command_ok" {
 		t.Fatalf("status = %q", status)
 	}
-	if _, _, err := templateStore.Put("review-panel", "A newer body.", time.Unix(8, 0)); err != nil {
+	if _, _, err := templateStore.Put("review-panel", "A newer body."); err != nil {
 		t.Fatal(err)
 	}
 	<-app.transferSlots
 	app.transferWG.Wait()
-	if filename != "engram-templates.json" || caption != "Engram remembered input templates" {
+	if filename != "templates.json" || caption != "templates.json" {
 		t.Fatalf("filename=%q caption=%q", filename, caption)
 	}
 	var exported struct {
@@ -209,7 +424,7 @@ func TestTemplatesCommandUploadsPrivateStoreSnapshot(t *testing.T) {
 	if exported.Version != 1 || len(exported.Templates) != 1 || exported.Templates[0].Body != "Review carefully." {
 		t.Fatalf("export = %#v", exported)
 	}
-	matches, err := filepath.Glob(filepath.Join(app.Config.ArtifactDir(), "engram-templates-export-*.json"))
+	matches, err := filepath.Glob(filepath.Join(app.Config.ArtifactDir(), "engram-download-*.bin"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("temporary exports = %#v, error=%v", matches, err)
 	}

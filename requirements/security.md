@@ -110,10 +110,9 @@ privacy model must stay small and explicit.
 - `templates.json` contains exact user-authored template bodies in plaintext.
   It must be an owner-only regular file, must not follow symlinks, and must be
   treated like `.env`. Template audit events retain names but not bodies.
-- `/templates` is an explicit disclosure of every remembered body to the
-  authorized Telegram DM. It exports a consistent in-memory snapshot rather
-  than uploading the live state path and removes its temporary copy after the
-  transfer.
+- `/templates export` is an explicit bulk disclosure of every remembered body
+  to the authorized Telegram DM. It reuses the guarded local-file download path
+  and removes its private transfer copy afterward.
 - `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
   treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
@@ -139,7 +138,8 @@ privacy model must stay small and explicit.
   the fixed `codex` and `claude` allowlist.
 
 - Telegram messages can cause shell input in tmux.
-- Template expansion is explicit, local, one-pass text substitution. Engram
+- Template expansion is explicit through `{engram:name}`, local, and one-pass.
+  Ordinary source and shell braces remain literal. Engram
   never learns templates from terminal or Telegram history, never infers a
   trigger, and never executes a remembered body without a typed placeholder in
   an otherwise authorized input route. Expanded text still enters ordinary
@@ -205,7 +205,9 @@ privacy model must stay small and explicit.
 
 ## Process Ownership
 
-- A lock prevents two Engram instances from polling the same Telegram settings.
+- One lock prevents two Engram instances from polling the same Telegram
+  settings. A second home-scoped lock prevents differently configured instances
+  from writing the same `state.json` or `templates.json`.
 - Service restart should preserve tmux sessions and state.
 - Nested environments signal only through terminal output. They receive no
   Telegram, model-provider, state-directory, or parent-tmux credentials and require

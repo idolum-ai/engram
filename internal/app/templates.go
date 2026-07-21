@@ -1,24 +1,25 @@
 package app
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"strings"
-	"time"
 
-	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/templates"
 )
 
-func (a *App) expandTypedInput(text string) (string, []string, error) {
+func (a *App) prepareTypedInput(text, route string, sessionID int) (string, error) {
 	if a.Templates == nil {
-		return text, nil, nil
+		return text, nil
 	}
-	return a.Templates.Expand(text)
+	expanded, names, err := a.Templates.Expand(text)
+	if err != nil {
+		return "", err
+	}
+	recordTemplateUse(a, names, route, sessionID)
+	return expanded, nil
 }
 
-func (a *App) recordTemplateUse(names []string, route string, sessionID int) {
+func recordTemplateUse(a *App, names []string, route string, sessionID int) {
 	if len(names) == 0 {
 		return
 	}
@@ -26,30 +27,31 @@ func (a *App) recordTemplateUse(names []string, route string, sessionID int) {
 	if sessionID > 0 {
 		payload["session_id"] = sessionID
 	}
-	_ = a.audit("template.expand", "ok", payload)
+	_ = a.audit("template.expand", "prepared", payload)
 }
 
-func (a *App) handleRememberCommand(ctx context.Context, msg telegram.Message, args string) actionResult {
+func (a *App) handleRememberCommand(args string) actionResult {
 	if a.Templates == nil {
 		return actionResult{Outcome: actionStateFailed, Message: "template store is unavailable"}
 	}
-	args = strings.TrimSpace(args)
-	if args == "" {
-		a.reply(ctx, msg, rememberedTemplateList(a.Templates.List()))
-		return actionResult{Outcome: actionOK, Message: "listed templates"}
+	name, body, hasBody := splitTemplateDefinition(args)
+	if name == "" {
+		return actionResult{Outcome: actionOK, Message: rememberedTemplateList(a.Templates.List())}
 	}
-	name, body := splitTemplateDefinition(args)
-	if body == "" {
+	if !hasBody {
 		item, found := a.Templates.Get(name)
 		if !found {
 			return actionResult{Outcome: actionUserError, Message: "template not found; use /remember to list templates"}
 		}
-		a.reply(ctx, msg, fmt.Sprintf("{%s}\n\n%s", item.Name, item.Body))
-		return actionResult{Outcome: actionOK, Message: "showed template"}
+		return actionResult{Outcome: actionOK, Message: fmt.Sprintf("{engram:%s}\n\n%s", item.Name, item.Body)}
 	}
-	item, created, err := a.Templates.Put(name, body, time.Now().UTC())
+	item, created, err := a.Templates.Put(name, body)
 	if err != nil && !templates.PersistenceReachedReplacement(err) {
-		return actionResult{Outcome: actionUserError, Message: err.Error()}
+		outcome := actionStateFailed
+		if templates.IsValidationError(err) {
+			outcome = actionUserError
+		}
+		return actionResult{Outcome: outcome, Message: err.Error()}
 	}
 	verb := "Updated"
 	if created {
@@ -57,14 +59,14 @@ func (a *App) handleRememberCommand(ctx context.Context, msg telegram.Message, a
 	}
 	if err != nil {
 		_ = a.audit("template.remember", "durability_uncertain", map[string]any{"name": item.Name, "error": err.Error()})
+		return actionResult{Outcome: actionStateFailed, Message: fmt.Sprintf("%s {engram:%s}, but disk durability is uncertain: %s", verb, item.Name, err)}
 	} else {
 		_ = a.audit("template.remember", "ok", map[string]any{"name": item.Name, "created": created})
 	}
-	a.reply(ctx, msg, fmt.Sprintf("%s {%s}.", verb, item.Name))
-	return actionResult{Outcome: actionOK, Message: "remembered template"}
+	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("%s {engram:%s}.", verb, item.Name)}
 }
 
-func (a *App) handleForgetCommand(ctx context.Context, msg telegram.Message, args string) actionResult {
+func (a *App) handleForgetCommand(args string) actionResult {
 	if a.Templates == nil {
 		return actionResult{Outcome: actionStateFailed, Message: "template store is unavailable"}
 	}
@@ -81,64 +83,25 @@ func (a *App) handleForgetCommand(ctx context.Context, msg telegram.Message, arg
 	}
 	if err != nil {
 		_ = a.audit("template.forget", "durability_uncertain", map[string]any{"name": item.Name, "error": err.Error()})
+		return actionResult{Outcome: actionStateFailed, Message: fmt.Sprintf("Forgot {engram:%s} in the running process, but disk durability is uncertain: %s", item.Name, err)}
 	} else {
 		_ = a.audit("template.forget", "ok", map[string]any{"name": item.Name})
 	}
-	a.reply(ctx, msg, fmt.Sprintf("Forgot {%s}.", item.Name))
-	return actionResult{Outcome: actionOK, Message: "forgot template"}
+	return actionResult{Outcome: actionOK, Message: fmt.Sprintf("Forgot {engram:%s}.", item.Name)}
 }
 
-func (a *App) exportTemplates(ctx context.Context, msg telegram.Message) actionResult {
-	if a.Templates == nil {
-		return actionResult{Outcome: actionStateFailed, Message: "template store is unavailable"}
-	}
-	data, err := a.Templates.ExportJSON()
-	if err != nil {
-		return actionResult{Outcome: actionStateFailed, Message: err.Error()}
-	}
-	if !a.queueTransfer(func(transferCtx context.Context) {
-		a.uploadTemplateExport(transferCtx, msg, data)
-	}) {
-		return actionResult{Outcome: actionStateFailed, Message: "template export is temporarily unavailable because Engram is stopping or its transfer queue is full"}
-	}
-	return actionResult{Outcome: actionOK, Message: "queued template export"}
-}
-
-func (a *App) uploadTemplateExport(ctx context.Context, msg telegram.Message, data []byte) {
-	if err := os.MkdirAll(a.Config.ArtifactDir(), 0o700); err != nil {
-		a.reply(ctx, msg, "template export error: "+err.Error())
-		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
-		return
-	}
-	file, path, err := createPredictableArtifact(a.Config.ArtifactDir(), "engram-templates-export-"+time.Now().UTC().Format("20060102T150405Z")+".json")
-	if err != nil {
-		a.reply(ctx, msg, "template export error: "+err.Error())
-		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
-		return
-	}
-	defer os.Remove(path)
-	_, writeErr := file.Write(data)
-	closeErr := file.Close()
-	if err := firstError(writeErr, closeErr); err != nil {
-		a.reply(ctx, msg, "template export error: "+err.Error())
-		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
-		return
-	}
-	if _, err := a.Telegram.SendDocumentNamed(ctx, msg.Chat.ID, path, "engram-templates.json", "Engram remembered input templates"); err != nil {
-		a.reply(ctx, msg, "template export upload error: "+err.Error())
-		_ = a.audit("template.export", "failed", map[string]any{"error": err.Error()})
-		return
-	}
-	_ = a.audit("template.export", "ok", map[string]any{"bytes": len(data)})
-}
-
-func splitTemplateDefinition(args string) (string, string) {
+func splitTemplateDefinition(args string) (string, string, bool) {
+	args = strings.TrimLeft(args, " \t\r\n")
 	for index, r := range args {
 		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
-			return args[:index], strings.TrimSpace(args[index:])
+			next := index + 1
+			if r == '\r' && next < len(args) && args[next] == '\n' {
+				next++
+			}
+			return args[:index], args[next:], true
 		}
 	}
-	return args, ""
+	return args, "", false
 }
 
 func rememberedTemplateList(items []templates.Template) string {
@@ -148,7 +111,7 @@ func rememberedTemplateList(items []templates.Template) string {
 	var b strings.Builder
 	b.WriteString("Remembered templates\n\n")
 	for _, item := range items {
-		fmt.Fprintf(&b, "{%s}\n", item.Name)
+		fmt.Fprintf(&b, "{engram:%s}\n", item.Name)
 	}
 	b.WriteString("\nUse /remember <name> to inspect one.")
 	return strings.TrimSpace(b.String())

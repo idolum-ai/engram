@@ -160,8 +160,9 @@ make install PREFIX="$HOME/.local"
 "$HOME/.local/bin/engram" run --env "$HOME/.engram/.env"
 ```
 
-Only one Engram process may poll a configured bot/user/chat tuple. Do not run a
-foreground copy while the systemd service is active.
+Only one Engram process may poll a configured bot/user/chat tuple, and only one
+process may own an `ENGRAM_HOME`. Do not run a foreground copy while the systemd
+service is active.
 
 ### 6. Verify the first session
 
@@ -255,7 +256,7 @@ the bot channel and must be revoked immediately.
   sends requested files, remembered-template exports, and terminal snapshot
   photos back to the configured DM.
   Telegram receives command text, summaries, terminal image snapshots, `/raw`,
-  `/dump`, `/logs`, `/templates`, and `/download` results sent through the bot.
+  `/dump`, `/logs`, `/templates export`, and `/download` results sent through the bot.
   In Chromium mode, every changed anchor frame is an exact, unredacted terminal
   image sent automatically to Telegram at most once every ten seconds.
 - **tmux and local processes:** Authorized messages can create windows and send
@@ -553,7 +554,7 @@ locally for machine-readable metadata. Common commands are:
 - `/new <text>`
 - `/remember [<name> [text]]`
 - `/forget <name>`
-- `/templates`
+- `/templates export`
 - `/send <id> <text>`
 - `/text <id> <text>`
 - `/key <id> <keys...>`
@@ -569,24 +570,26 @@ Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
 
-Remember exact input with `/remember <name> <text>`, then type `{name}` in an
-ordinary reply, a new-session message, or `/new`, `/send`, `/run`, `/text`, or
-`/type`. Engram substitutes the body once before using its normal guarded tmux
-input path. For example:
+Remember exact input with `/remember <name> <text>`, then type
+`{engram:name}` in an ordinary reply, a new-session message, or `/new`, `/send`,
+or `/text`. Engram substitutes the body once before using its normal guarded
+tmux input path. For example:
 
 ```text
 /remember review-panel Imagine the ideal panel to review this pull request...
-Please {review-panel}
+Please {engram:review-panel}
 ```
 
 Use `/remember` to list names, `/remember <name>` to inspect a body, and
-`/forget <name>` to remove it. `/templates` downloads one consistent JSON
-snapshot of the private store as `engram-templates.json`. Write `{{name}}` to
-send literal `{name}` text.
+`/forget <name>` to remove it. `/templates export` downloads one consistent
+snapshot of the private store as `templates.json`. Other brace syntax remains
+literal, including `{name}`, `${engram:name}`, and `{{engram:name}}`.
 Templates do not expand recursively or from voice messages, and Engram never
 learns or triggers them from terminal output. Keep sensitive bodies out of
 templates when possible: `templates.json` retains exact plaintext, while
-successful audit events record only the names and destination route. Expanded
+prepared-expansion audit events record only the names and destination route.
+`/text` accepts only one line, including after expansion, so a remembered body
+cannot submit input while staging text without Enter. Expanded
 shell input may still appear in tmux history and Engram's existing bounded,
 best-effort-redacted recovery previews.
 

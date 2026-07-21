@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -42,7 +43,7 @@ type App struct {
 	presentationMu                sync.RWMutex
 	guideAvailable                bool
 	snapshotReady                 bool
-	lock                          *lockfile.Lock
+	locks                         []*lockfile.Lock
 	startedAt                     time.Time
 	quitCode                      int
 	stopCh                        chan struct{}
@@ -114,21 +115,42 @@ func New(cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := state.Open(cfg.StatePath(), cfg.AuditPath())
+	homeLock, err := lockfile.Acquire(cfg.LockDir(), lockfile.Key("engram-home-state"), lockfile.Metadata{Details: map[string]string{
+		"scope":   "ENGRAM_HOME state and templates",
+		"version": version.String(),
+	}})
 	if err != nil {
 		l.Close()
 		return nil, err
 	}
+	closeLocks := func() {
+		_ = homeLock.Close()
+		_ = l.Close()
+	}
+	store, err := state.Open(cfg.StatePath(), cfg.AuditPath())
+	if err != nil {
+		closeLocks()
+		return nil, err
+	}
 	templateStore, err := templates.Open(cfg.TemplatePath())
 	if err != nil {
-		l.Close()
+		closeLocks()
 		return nil, fmt.Errorf("open templates: %w", err)
+	}
+	if backup := templateStore.RecoveredPath(); backup != "" {
+		status := "corrupt_replaced"
+		payload := map[string]any{"backup": backup}
+		if warning := templateStore.RecoveryWarning(); warning != nil {
+			status = "durability_uncertain"
+			payload["error"] = warning.Error()
+		}
+		_ = store.Audit("template.recover", status, payload)
 	}
 	pendingRecoveryBootID := store.Snapshot().PendingRecoveryBootID
 	if bootID := readHostBootID(); bootID != "" {
 		pendingRecoveryBootID, _, err = store.ObserveHostBoot(bootID)
 		if err != nil {
-			l.Close()
+			closeLocks()
 			return nil, fmt.Errorf("record host boot: %w", err)
 		}
 	}
@@ -142,12 +164,12 @@ func New(cfg config.Config) (*App, error) {
 		SnapshotReady:   snapshotReady,
 	})
 	if err != nil {
-		l.Close()
+		closeLocks()
 		return nil, err
 	}
 	if store.Snapshot().AnchorMode != mode {
 		if err := store.SetAnchorMode(mode); err != nil {
-			l.Close()
+			closeLocks()
 			return nil, err
 		}
 	}
@@ -164,7 +186,7 @@ func New(cfg config.Config) (*App, error) {
 		mode:                          mode,
 		guideAvailable:                guideRenderer != nil,
 		snapshotReady:                 snapshotReady,
-		lock:                          l,
+		locks:                         []*lockfile.Lock{homeLock, l},
 		startedAt:                     time.Now().UTC(),
 		stopCh:                        make(chan struct{}),
 		captureSlots:                  make(chan struct{}, maxConcurrentCaptures),
@@ -230,10 +252,13 @@ func (a *App) setAnchorMode(mode string) {
 }
 
 func (a *App) Close() error {
-	if a.lock != nil {
-		return a.lock.Close()
+	var closeErrs []error
+	for _, lock := range a.locks {
+		if lock != nil {
+			closeErrs = append(closeErrs, lock.Close())
+		}
 	}
-	return nil
+	return errors.Join(closeErrs...)
 }
 
 func (a *App) Run(ctx context.Context) int {
@@ -329,14 +354,14 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if doc, ok := msg.FileAttachment(); ok {
 		return a.handleAttachment(ctx, msg, doc).status("attachment")
 	}
-	text := strings.TrimSpace(msg.Text)
-	if text == "" {
+	routingText := strings.TrimSpace(msg.Text)
+	if routingText == "" {
 		return "skipped_empty_message"
 	}
-	if input, ok := escapedSlashInput(text); ok {
+	if input, ok := escapedSlashInput(msg.Text); ok {
 		if msg.ReplyToMessage != nil {
 			if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-				expanded, names, err := a.expandTypedInput(input)
+				expanded, err := a.prepareTypedInput(input, "reply", ts.ID)
 				if err != nil {
 					a.reply(ctx, msg, err.Error())
 					return "anchor_reply_template_error"
@@ -344,8 +369,6 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 				result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, expanded)
 				if !result.OK() {
 					a.reply(ctx, msg, result.Message)
-				} else {
-					a.recordTemplateUse(names, "reply", ts.ID)
 				}
 				return result.status("anchor_reply")
 			} else if found && targetState == state.ReplyTargetStale {
@@ -356,12 +379,12 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		a.reply(ctx, msg, "reply to a session anchor to send slash input; for example, //clear sends /clear")
 		return "handled_unroutable_slash_input"
 	}
-	if strings.HasPrefix(text, "/") {
-		return a.handleCommand(ctx, msg, text)
+	if strings.HasPrefix(routingText, "/") {
+		return a.handleCommand(ctx, msg, msg.Text)
 	}
 	if msg.ReplyToMessage != nil {
 		if ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID); found && targetState == state.ReplyTargetCurrent {
-			expanded, names, err := a.expandTypedInput(text)
+			expanded, err := a.prepareTypedInput(msg.Text, "reply", ts.ID)
 			if err != nil {
 				a.reply(ctx, msg, err.Error())
 				return "anchor_reply_template_error"
@@ -369,8 +392,6 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 			result := a.sendReplyInput(ctx, ts, msg.Chat.ID, msg.ReplyToMessage.MessageID, expanded)
 			if !result.OK() {
 				a.reply(ctx, msg, result.Message)
-			} else {
-				a.recordTemplateUse(names, "reply", ts.ID)
 			}
 			return result.status("anchor_reply")
 		} else if found && targetState == state.ReplyTargetStale {
@@ -380,15 +401,12 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		a.reply(ctx, msg, "session not found for this reply; use /sessions to find an active anchor")
 		return "anchor_reply_user_error"
 	}
-	expanded, names, err := a.expandTypedInput(text)
+	expanded, err := a.prepareTypedInput(msg.Text, "new", 0)
 	if err != nil {
 		a.reply(ctx, msg, err.Error())
 		return "new_session_template_error"
 	}
 	result := a.newSession(ctx, msg, expanded)
-	if result.OK() {
-		a.recordTemplateUse(names, "new", 0)
-	}
 	return result.status("new_session")
 }
 
@@ -397,10 +415,11 @@ func staleAlternateReply(id int) string {
 }
 
 func escapedSlashInput(text string) (string, bool) {
-	if !strings.HasPrefix(text, "//") {
+	start := len(text) - len(strings.TrimLeft(text, " \t\r\n"))
+	if !strings.HasPrefix(text[start:], "//") {
 		return "", false
 	}
-	return text[1:], true
+	return text[:start] + text[start+1:], true
 }
 
 func (a *App) authorized(msg *telegram.Message) bool {
@@ -415,34 +434,36 @@ func (a *App) authorized(msg *telegram.Message) bool {
 
 func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text string) (status string) {
 	status = "command_ok"
-	fields := strings.Fields(text)
+	fields := strings.Fields(strings.TrimSpace(text))
 	cmd := strings.TrimPrefix(fields[0], "/")
 	if at := strings.IndexByte(cmd, '@'); at >= 0 {
 		cmd = cmd[:at]
 	}
-	args := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
+	rawArgs := strings.TrimPrefix(strings.TrimLeft(text, " \t\r\n"), fields[0])
+	args := strings.TrimSpace(rawArgs)
 	_ = a.audit("telegram.command", "received", map[string]any{"command": cmd, "message_id": msg.MessageID})
 	switch cmd {
 	case "help":
 		a.reply(ctx, msg, commands.HelpText())
 	case "remember":
-		result := a.handleRememberCommand(ctx, msg, args)
+		result := a.handleRememberCommand(rawArgs)
 		status = result.status("command")
-		if !result.OK() {
+		if result.Message != "" {
 			a.reply(ctx, msg, result.Message)
 		}
 	case "forget":
-		result := a.handleForgetCommand(ctx, msg, args)
+		result := a.handleForgetCommand(args)
 		status = result.status("command")
-		if !result.OK() {
+		if result.Message != "" {
 			a.reply(ctx, msg, result.Message)
 		}
 	case "templates":
-		result := a.exportTemplates(ctx, msg)
-		status = result.status("command")
-		if !result.OK() {
-			a.reply(ctx, msg, result.Message)
+		if args != "export" {
+			status = "command_user_error"
+			a.reply(ctx, msg, "usage: /templates export")
+			return
 		}
+		status = a.download(ctx, msg, a.Config.TemplatePath()).status("command")
 	case "status":
 		a.reply(ctx, msg, a.statusText())
 	case "mode":
@@ -466,12 +487,13 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		}
 		status = a.attachTarget(ctx, msg, args).status("command")
 	case "new":
-		if args == "" {
+		input, ok := exactCommandPayload(rawArgs)
+		if !ok {
 			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /new <text>")
 			return
 		}
-		expanded, names, err := a.expandTypedInput(args)
+		expanded, err := a.prepareTypedInput(input, "new", 0)
 		if err != nil {
 			status = "command_user_error"
 			a.reply(ctx, msg, err.Error())
@@ -479,9 +501,6 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		}
 		result := a.newSession(ctx, msg, expanded)
 		status = result.status("command")
-		if result.OK() {
-			a.recordTemplateUse(names, "new", 0)
-		}
 	case "resume":
 		id, program, sessionID, ok := parseResumeRequest(args)
 		if !ok {
@@ -493,13 +512,13 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		status = result.status("command")
 		a.reply(ctx, msg, result.Message)
 	case "send", "run":
-		id, rest, ok := parseIDRest(args)
+		id, rest, ok := parseIDRestExact(rawArgs)
 		if !ok {
 			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /"+cmd+" <id> <text>")
 			return
 		}
-		expanded, names, err := a.expandTypedInput(rest)
+		expanded, err := a.prepareTypedInput(rest, "send", id)
 		if err != nil {
 			status = "command_user_error"
 			a.reply(ctx, msg, err.Error())
@@ -509,17 +528,15 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		status = result.status("command")
 		if !result.OK() {
 			a.reply(ctx, msg, result.Message)
-		} else {
-			a.recordTemplateUse(names, "send", id)
 		}
 	case "text", "type":
-		id, rest, ok := parseIDRest(args)
+		id, rest, ok := parseIDRestExact(rawArgs)
 		if !ok {
 			status = "command_user_error"
 			a.reply(ctx, msg, "usage: /"+cmd+" <id> <text>")
 			return
 		}
-		expanded, names, err := a.expandTypedInput(rest)
+		expanded, err := a.prepareTypedInput(rest, "text", id)
 		if err != nil {
 			status = "command_user_error"
 			a.reply(ctx, msg, err.Error())
@@ -529,8 +546,6 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		status = result.status("command")
 		if !result.OK() {
 			a.reply(ctx, msg, result.Message)
-		} else {
-			a.recordTemplateUse(names, "text", id)
 		}
 	case "key":
 		id, rest, ok := parseIDRest(args)
@@ -830,6 +845,40 @@ func parseIDRest(arg string) (int, string, bool) {
 		return 0, "", false
 	}
 	return n, strings.TrimSpace(strings.TrimPrefix(arg, fields[0])), true
+}
+
+func exactCommandPayload(rawArgs string) (string, bool) {
+	if rawArgs == "" {
+		return "", false
+	}
+	next := 1
+	if strings.HasPrefix(rawArgs, "\r\n") {
+		next = 2
+	} else if !strings.ContainsRune(" \t\r\n", rune(rawArgs[0])) {
+		return "", false
+	}
+	payload := rawArgs[next:]
+	return payload, strings.TrimSpace(payload) != ""
+}
+
+func parseIDRestExact(rawArgs string) (int, string, bool) {
+	arg := strings.TrimLeft(rawArgs, " \t\r\n")
+	for index, r := range arg {
+		if !strings.ContainsRune(" \t\r\n", r) {
+			continue
+		}
+		n, err := strconv.Atoi(strings.Trim(arg[:index], "[]"))
+		if err != nil || n <= 0 {
+			return 0, "", false
+		}
+		next := index + 1
+		if r == '\r' && next < len(arg) && arg[next] == '\n' {
+			next++
+		}
+		payload := arg[next:]
+		return n, payload, strings.TrimSpace(payload) != ""
+	}
+	return 0, "", false
 }
 
 func preview(s string) string {

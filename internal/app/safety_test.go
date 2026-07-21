@@ -743,9 +743,12 @@ func (safetyGuide) Converse(context.Context, guide.Input) (string, error) {
 	return "current terminal state", nil
 }
 
-type newSessionRunner struct{}
+type newSessionRunner struct {
+	calls [][]string
+}
 
-func (*newSessionRunner) Run(_ context.Context, args ...string) (string, error) {
+func (r *newSessionRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "list-sessions" {
 		return framedTmuxRecord("main", "$1", "1", "0"), nil
 	}
