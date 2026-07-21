@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/lockfile"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
@@ -110,6 +111,54 @@ func TestDryStartCreatesStateWithoutPolling(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("dry-start output missing %q:\n%s", want, stdout)
 		}
+	}
+}
+
+func TestDryStartRejectsFutureTemplateSchema(t *testing.T) {
+	env := writeTestEnv(t)
+	home := filepath.Join(filepath.Dir(env), "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, "templates.json")
+	data := []byte(`{"version":2,"templates":{"future":"shape"}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, code := captureCommand(t, func() int {
+		return run([]string{"dry-start", "--env", env})
+	})
+	if code != 1 || !strings.Contains(stderr, "templates:") || !strings.Contains(stderr, "newer") {
+		t.Fatalf("dry-start code=%d stderr=%q", code, stderr)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(data) {
+		t.Fatal("dry-start modified future template state")
+	}
+}
+
+func TestDryStartRejectsSharedHomeWhileWriterLockIsHeld(t *testing.T) {
+	env := writeTestEnv(t)
+	cfg, err := config.Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.EnsureDirs(cfg); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockfile.Acquire(cfg.LockDir(), lockfile.Key("engram-home-state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	_, stderr, code := captureCommand(t, func() int {
+		return run([]string{"dry-start", "--env", env})
+	})
+	if code != 1 || !strings.Contains(stderr, "home lock:") || !strings.Contains(stderr, "another Engram process") {
+		t.Fatalf("dry-start code=%d stderr=%q", code, stderr)
 	}
 }
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -245,6 +246,7 @@ func (c Config) EffectiveTelegramAPIBase() string {
 
 func (c Config) StatePath() string     { return filepath.Join(c.Home, "state.json") }
 func (c Config) AuditPath() string     { return filepath.Join(c.Home, "audit.jsonl") }
+func (c Config) TemplatePath() string  { return filepath.Join(c.Home, "templates.json") }
 func (c Config) LockDir() string       { return filepath.Join(c.Home, "locks") }
 func (c Config) AttachmentDir() string { return filepath.Join(c.ArtifactDir(), "attachments") }
 func (c Config) ArtifactDir() string   { return artifactRoot() }
@@ -381,10 +383,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 func EnsureDirs(cfg Config) error {
-	for _, dir := range []string{cfg.Home, cfg.LockDir()} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
+	if err := ensurePrivateHome(cfg.Home); err != nil {
+		return err
+	}
+	if err := ensurePrivateDir(cfg.LockDir()); err != nil {
+		return err
 	}
 	for _, dir := range []string{cfg.ArtifactDir(), cfg.AttachmentDir()} {
 		if err := ensurePrivateDir(dir); err != nil {
@@ -394,23 +397,97 @@ func EnsureDirs(cfg Config) error {
 	return nil
 }
 
+func ensurePrivateHome(path string) error {
+	return ensurePrivateDirWithRepair(path, true)
+}
+
 func ensurePrivateDir(path string) error {
-	if err := rejectSymlinkComponents(filepath.Dir(path)); err != nil {
+	return ensurePrivateDirWithRepair(path, false)
+}
+
+func ensurePrivateDirWithRepair(path string, repairPermissions bool) error {
+	resolvedPath, err := preparePrivateDirPath(path)
+	if err != nil {
 		return fmt.Errorf("unsafe parent for private directory %s: %w", path, err)
 	}
-	if err := os.Mkdir(path, 0o700); err != nil && !os.IsExist(err) {
+	if err := os.Mkdir(resolvedPath, 0o700); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("create private directory %s: %w", path, err)
 	}
-	if err := validatePrivateDir(path); err != nil {
+	if err := validatePrivateDirPath(resolvedPath, repairPermissions); err != nil {
 		return fmt.Errorf("unsafe private directory %s: %w", path, err)
 	}
 	return nil
 }
 
 func validatePrivateDir(path string) error {
-	if err := rejectSymlinkComponents(path); err != nil {
+	resolvedPath, err := resolvedPrivateDirPath(path)
+	if err != nil {
 		return err
 	}
+	return validatePrivateDirPath(resolvedPath, false)
+}
+
+func preparePrivateDirPath(path string) (string, error) {
+	path = filepath.Clean(path)
+	parent, err := ensurePrivateParent(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
+func resolvedPrivateDirPath(path string) (string, error) {
+	path = filepath.Clean(path)
+	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return "", err
+	}
+	if err := rejectSymlinkComponents(parent); err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(path)), nil
+}
+
+func ensurePrivateParent(path string) (string, error) {
+	path = filepath.Clean(path)
+	existing := path
+	var missing []string
+	for {
+		_, err := os.Lstat(existing)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(existing))
+		existing = parent
+	}
+
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", err
+	}
+	if err := rejectSymlinkComponents(resolved); err != nil {
+		return "", err
+	}
+	for index := len(missing) - 1; index >= 0; index-- {
+		resolved = filepath.Join(resolved, missing[index])
+		if err := os.Mkdir(resolved, 0o700); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+		if err := validatePrivateDirPath(resolved, false); err != nil {
+			return "", err
+		}
+	}
+	return resolved, nil
+}
+
+func validatePrivateDirPath(path string, repairPermissions bool) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return err
@@ -428,8 +505,30 @@ func validatePrivateDir(path string) error {
 	if stat.Uid != uint32(os.Getuid()) {
 		return fmt.Errorf("must be owned by uid %d", os.Getuid())
 	}
-	if info.Mode().Perm() != 0o700 {
+	if info.Mode().Perm() == 0o700 {
+		return nil
+	}
+	if !repairPermissions {
 		return fmt.Errorf("permissions must be 0700, got %04o", info.Mode().Perm())
+	}
+	return tightenPrivateDir(path)
+}
+
+func tightenPrivateDir(path string) error {
+	dir, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)
+	if err != nil {
+		return fmt.Errorf("open directory without following symlinks: %w", err)
+	}
+	if err := dir.Chmod(0o700); err != nil {
+		return errors.Join(fmt.Errorf("set permissions to 0700: %w", err), dir.Close())
+	}
+	info, statErr := dir.Stat()
+	closeErr := dir.Close()
+	if err := errors.Join(statErr, closeErr); err != nil {
+		return fmt.Errorf("verify permissions: %w", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		return fmt.Errorf("permissions remain %04o after tightening", info.Mode().Perm())
 	}
 	return nil
 }

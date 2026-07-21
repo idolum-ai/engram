@@ -29,7 +29,8 @@ privacy model must stay small and explicit.
 ## External Data Flow
 
 - Documentation must explain that Telegram receives commands, replies,
-  summaries, captures, logs, and files sent through bot commands.
+  summaries, captures, logs, remembered-template exports, and files sent
+  through bot commands.
 - A configured `TELEGRAM_API_BASE` replaces Telegram's public Bot API host for
   both method and file traffic. That endpoint receives the bot token and all
   Telegram-bound Engram data. HTTPS is strongly recommended; HTTP provides no
@@ -106,6 +107,20 @@ privacy model must stay small and explicit.
   metadata, and the selected anchor mode. Raw terminal captures and upstream
   payloads are retained only in process memory and are omitted from persisted
   state.
+- `templates.json` contains exact user-authored template bodies in plaintext.
+  It must be an owner-only regular file, must not follow symlinks, and must be
+  treated like `.env`. Template audit events retain names but not bodies.
+- An existing owner-controlled `ENGRAM_HOME` is tightened to mode `0700` during
+  startup so upgrades do not trade availability for privacy. A foreign-owned,
+  non-directory, or symlinked home remains a hard failure. Canonical operating
+  system aliases in its parent path, such as macOS `/var`, are accepted only
+  after resolving and validating the parent; the home leaf is never followed.
+  Missing custom-home parent components are created and validated individually
+  as owner-only real directories rather than followed through a recursive
+  symlink traversal.
+- `/templates export` is an explicit bulk disclosure of every remembered body
+  to the authorized Telegram DM. It reuses the guarded local-file download path
+  and removes its private transfer copy afterward.
 - `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
   treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
@@ -131,6 +146,13 @@ privacy model must stay small and explicit.
   the fixed `codex` and `claude` allowlist.
 
 - Telegram messages can cause shell input in tmux.
+- Template expansion is explicit through `{engram:name}`, local, and one-pass.
+  Ordinary source and shell braces remain literal. Engram
+  never learns templates from terminal or Telegram history, never infers a
+  trigger, and never executes a remembered body without a typed placeholder in
+  an otherwise authorized input route. Expanded text still enters ordinary
+  tmux input and may appear in tmux history or existing redacted recovery
+  previews.
 - OpenAI transcription is untrusted input derivation, not a security boundary.
   Transcripts must be valid UTF-8, contain no terminal or bidirectional control
   characters, normalize whitespace to one line, and remain within a fixed byte
@@ -191,7 +213,9 @@ privacy model must stay small and explicit.
 
 ## Process Ownership
 
-- A lock prevents two Engram instances from polling the same Telegram settings.
+- One lock prevents two Engram instances from polling the same Telegram
+  settings. A second home-scoped lock prevents differently configured instances
+  from writing the same `state.json` or `templates.json`.
 - Service restart should preserve tmux sessions and state.
 - Nested environments signal only through terminal output. They receive no
   Telegram, model-provider, state-directory, or parent-tmux credentials and require

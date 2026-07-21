@@ -31,6 +31,12 @@ exports a bounded recent tail, not an unbounded full audit file.
 ## State
 
 - State lives under `~/.engram` by default.
+- User-authored input templates live separately in `templates.json` under the
+  same directory. The file is owner-only mode `0600`, rejects symlinks and
+  foreign ownership, and uses the same write-sync-rename-directory-sync
+  persistence boundary as session state. Template bodies are limited to 3,800
+  bytes, names to 32 bytes, the store to 64 entries, and each expanded input to
+  16 KiB.
 - State writes use a temporary file in the state directory with mode `0600`.
   Engram writes and syncs that file, closes it, atomically renames it over the
   previous state, and then syncs the parent directory. A failure before rename
@@ -41,6 +47,17 @@ exports a bounded recent tail, not an unbounded full audit file.
   Session updates roll in-memory state back after a failure before replacement;
   after replacement they retain the visible new state and report uncertain
   durability so memory and the current state file do not diverge.
+- The state and template stores share one reviewed atomic-file primitive. If
+  template JSON is empty, malformed, oversized, or internally invalid, startup
+  preserves it beside the store with a `.corrupt-<timestamp>` suffix and starts
+  with an empty replacement. The backup rename is directory-synced first; if
+  replacement is interrupted, the next startup rediscovers the private backup
+  and retains the recovery signal. If replacement occurred but its directory
+  sync is uncertain, startup continues with the visible empty store and audits
+  the backup path plus the durability warning instead of losing the report on a
+  retry. A minimal version envelope is decoded before the current schema, so a
+  future schema remains untouched and prevents startup regardless of its payload
+  shape.
 - Attachment insertion has the same replacement boundary: a pre-replacement
   failure rolls back the in-memory record so its file may be removed, while an
   uncertain post-replacement result keeps both record and file and is audited.
@@ -67,6 +84,13 @@ exports a bounded recent tail, not an unbounded full audit file.
   4 MiB and retains one predecessor capped at the same size. Rotation preserves
   complete recent JSONL records, including when adopting an oversized legacy
   log.
+- Template creation and removal are audited by name. Expansion is audited as
+  prepared, with its route, before terminal delivery; no event records a
+  remembered body or claims that later tmux delivery succeeded.
+- `/templates export` opens and validates the exact private store file before
+  entering the bounded `/download` transfer path. The open descriptor is a
+  consistent snapshot even if an atomic template update follows; the private
+  transfer copy is removed after success or failure.
 - Processed Telegram messages must still be tracked to avoid duplicate handling
   when Telegram or the process retries before the offset is durably advanced.
   The newest 2,000 message keys are retained. The existing schema stores boolean

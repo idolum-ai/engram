@@ -146,6 +146,111 @@ func TestEnsureDirsRejectsUnsafePreexistingArtifactRoot(t *testing.T) {
 	}
 }
 
+func TestEnsureDirsTightensOwnerOwnedHome(t *testing.T) {
+	parent := canonicalTestTempDir(t)
+	home := filepath.Join(parent, "home")
+	if err := os.Mkdir(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDirs(Config{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("migrated ENGRAM_HOME permissions = %04o, want 0700", got)
+	}
+}
+
+func TestEnsureDirsAcceptsResolvedHomeParent(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	realParent := filepath.Join(root, "real")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasParent := filepath.Join(root, "alias")
+	if err := os.Symlink(realParent, aliasParent); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("TMPDIR", filepath.Join(root, "tmp"))
+	if err := os.Mkdir(os.Getenv("TMPDIR"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	home := filepath.Join(aliasParent, "home")
+	if err := EnsureDirs(Config{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(filepath.Join(realParent, "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("resolved ENGRAM_HOME metadata = %v", info.Mode())
+	}
+}
+
+func TestEnsureDirsCreatesNestedCustomHome(t *testing.T) {
+	root := canonicalTestTempDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("TMPDIR", filepath.Join(root, "tmp"))
+	if err := os.Mkdir(os.Getenv("TMPDIR"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	home := filepath.Join(root, "missing", "nested", "home")
+	if err := EnsureDirs(Config{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "missing"),
+		filepath.Join(root, "missing", "nested"),
+		home,
+		filepath.Join(home, "locks"),
+	} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+			t.Fatalf("private path %s has mode %v", path, info.Mode())
+		}
+	}
+}
+
+func TestEnsureDirsRejectsUnsafeHome(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(string) error
+	}{
+		{name: "symlink", setup: func(path string) error {
+			target := filepath.Join(filepath.Dir(path), "real-home")
+			if err := os.Mkdir(target, 0o700); err != nil {
+				return err
+			}
+			return os.Symlink(target, path)
+		}},
+		{name: "regular file", setup: func(path string) error { return os.WriteFile(path, []byte("occupied"), 0o600) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parent := canonicalTestTempDir(t)
+			home := filepath.Join(parent, "home")
+			if err := test.setup(home); err != nil {
+				t.Fatal(err)
+			}
+			if err := EnsureDirs(Config{Home: home}); err == nil {
+				t.Fatal("EnsureDirs accepted unsafe ENGRAM_HOME")
+			}
+		})
+	}
+}
+
 func TestLoadValidatesAndDefaults(t *testing.T) {
 	dir := t.TempDir()
 	env := filepath.Join(dir, ".env")

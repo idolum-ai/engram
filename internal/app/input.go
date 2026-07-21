@@ -40,6 +40,9 @@ func (a *App) sendInput(ctx context.Context, id int, text, mode string, enter bo
 }
 
 func (a *App) sendInputExpected(ctx context.Context, id int, text, mode string, enter bool, expectedBinding *state.TerminalSession) actionResult {
+	if !enter && strings.ContainsAny(text, "\r\n") {
+		return actionResult{Outcome: actionUserError, Message: "/text accepts one line so it cannot submit input implicitly; use /send for multiline input"}
+	}
 	lock := a.sessionMutex(id)
 	lock.Lock()
 	completion := a.sendInputExpectedLocked(ctx, id, text, mode, enter, expectedBinding)

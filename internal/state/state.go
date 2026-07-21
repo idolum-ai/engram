@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +15,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/idolum-ai/engram/internal/atomicfile"
 )
 
 type TerminalState string
@@ -510,73 +511,13 @@ func (s *Store) saveLocked() error {
 }
 
 func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return &atomicWriteError{Err: fmt.Errorf("create state temp: %w", err)}
-	}
-	tmpPath := tmp.Name()
-	renamed := false
-	defer func() {
-		if !renamed {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-
-	if err := tmp.Chmod(0o600); err != nil {
-		closeErr := tmp.Close()
-		return &atomicWriteError{Err: fmt.Errorf("set state temp permissions: %w", errors.Join(err, closeErr))}
-	}
-	if _, err := tmp.Write(data); err != nil {
-		closeErr := tmp.Close()
-		return &atomicWriteError{Err: fmt.Errorf("write state temp: %w", errors.Join(err, closeErr))}
-	}
-	if err := tmp.Sync(); err != nil {
-		closeErr := tmp.Close()
-		return &atomicWriteError{Err: fmt.Errorf("sync state temp: %w", errors.Join(err, closeErr))}
-	}
-	if err := tmp.Close(); err != nil {
-		return &atomicWriteError{Err: fmt.Errorf("close state temp: %w", err)}
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return &atomicWriteError{Err: fmt.Errorf("replace state: %w", err)}
-	}
-	renamed = true
-	if err := syncParentDir(path); err != nil {
-		return &atomicWriteError{Err: err, Replaced: true}
-	}
-	return nil
+	return atomicfile.Write(path, data)
 }
 
-type atomicWriteError struct {
-	Err      error
-	Replaced bool
-}
-
-func (e *atomicWriteError) Error() string { return e.Err.Error() }
-func (e *atomicWriteError) Unwrap() error { return e.Err }
+type atomicWriteError = atomicfile.WriteError
 
 func PersistenceReachedReplacement(err error) bool {
-	var writeErr *atomicWriteError
-	return errors.As(err, &writeErr) && writeErr.Replaced
-}
-
-func syncParentDir(path string) error {
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return fmt.Errorf("open state directory for sync: %w", err)
-	}
-	syncErr := dir.Sync()
-	closeErr := dir.Close()
-	// Darwin filesystems may reject Sync on a directory descriptor even though
-	// the regular state file was fully synced before rename.
-	if runtime.GOOS == "darwin" && (errors.Is(syncErr, syscall.EINVAL) || errors.Is(syncErr, syscall.ENOTSUP)) {
-		syncErr = nil
-	}
-	if err := errors.Join(syncErr, closeErr); err != nil {
-		return fmt.Errorf("sync state directory: %w", err)
-	}
-	return nil
+	return atomicfile.ReachedReplacement(err)
 }
 
 func (s *Store) Audit(eventType, status string, payload any) error {

@@ -71,6 +71,12 @@ delivery is delayed or failing. Replying to an anchor and using `/send`,
 `/text`, `/key`, or key buttons should route directly and predictably to the
 intended pane. Presentation work must not block input.
 
+Remembered input should remain explicit text, not inferred automation. A user
+may give exact prose a short name and invoke it with a typed placeholder.
+Engram expands that placeholder once immediately before the ordinary guarded
+input path; it does not learn triggers, recurse through template bodies, or run
+anything merely because terminal output resembles a past situation.
+
 ### Many sessions, low dwell
 
 Engram is for multitasking. The user should be able to scan several sessions,

@@ -93,10 +93,13 @@ The response also contains your DM text, so do not paste it into an issue.
 Create the protected runtime config:
 
 ```sh
-mkdir -p "$HOME/.engram"
+install -d -m 0700 "$HOME/.engram"
 install -m 0600 .env.example "$HOME/.engram/.env"
 ${EDITOR:-vi} "$HOME/.engram/.env"
 ```
+
+Upgrades safely tighten an existing owner-controlled `ENGRAM_HOME` to mode
+`0700`. Engram still rejects a foreign-owned, non-directory, or symlinked home.
 
 Set the two base values and choose one anchor mode:
 
@@ -160,8 +163,9 @@ make install PREFIX="$HOME/.local"
 "$HOME/.local/bin/engram" run --env "$HOME/.engram/.env"
 ```
 
-Only one Engram process may poll a configured bot/user/chat tuple. Do not run a
-foreground copy while the systemd service is active.
+Only one Engram process may poll a configured bot/user/chat tuple, and only one
+process may own an `ENGRAM_HOME`. Do not run a foreground copy while the systemd
+service is active.
 
 ### 6. Verify the first session
 
@@ -196,7 +200,7 @@ privacy boundaries below before running commands that may print secrets.
 | `OPENAI_MODEL` | `gpt-5.6-luna` | no | Luna model ID. Other OpenAI models are not admitted by this release. |
 | `VOICE_INPUT_MODE` | `path` | no | Replied voice-note handling: retain locally and send its absolute `path`, or `transcribe` through OpenAI. Changing it requires a restart. |
 | `OPENAI_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | no | Assessed one-shot speech-to-text model used only by `VOICE_INPUT_MODE=transcribe`. Other transcription models are not admitted by this release. |
-| `ENGRAM_HOME` | `~/.engram` | no | State, audit log, and process-lock directory. |
+| `ENGRAM_HOME` | `~/.engram` | no | State, remembered input templates, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
 | `ENGRAM_SNAPSHOT_BROWSER` | auto-detected headless shell, with Linux browser fallbacks | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. macOS auto-detection accepts dedicated headless executables only; an explicit value may opt into a desktop browser. |
@@ -252,11 +256,12 @@ the bot channel and must be revoked immediately.
 
 - **Telegram:** Engram long-polls the Bot API for messages and attachments, then
   sends messages, rotates and pins live anchors, edits retired anchors, and
-  sends requested files and terminal snapshot photos back to the configured DM.
+  sends requested files, remembered-template exports, and terminal snapshot
+  photos back to the configured DM.
   Telegram receives command text, summaries, terminal image snapshots, `/raw`,
-  `/dump`, `/logs`, and `/download` results sent through the bot. In Chromium
-  mode, every changed anchor frame is an exact, unredacted terminal image sent
-  automatically to Telegram at most once every ten seconds.
+  `/dump`, `/logs`, `/templates export`, and `/download` results sent through the bot.
+  In Chromium mode, every changed anchor frame is an exact, unredacted terminal
+  image sent automatically to Telegram at most once every ten seconds.
 - **tmux and local processes:** Authorized messages can create windows and send
   literal shell input or key presses. Engram-created windows use tmux's global
   `default-size`, matching detached tmux operation even when the selected session
@@ -314,9 +319,10 @@ the bot channel and must be revoked immediately.
   complete current semantic evidence;
   aligned requests may also carry prior prose and deterministic changed,
   removed, and neighboring lines as attention hints. There is no model history,
-  no second request, and no remembered Telegram input. A private evidence
-  trailer is removed before delivery and can only select a uniquely matched compact
-  Chromium crop; it is never accepted as terminal truth.
+  no second request, and no prior Telegram input supplied as model context. A
+  private evidence trailer is removed before delivery and can only select a
+  uniquely matched compact Chromium crop; it is never accepted as terminal
+  truth.
   Completed model prose is deterministically bounded to 180 words before
   delivery.
   `LLM_PROVIDER` selects Anthropic Haiku 4.5 or OpenAI Luna; both receive the
@@ -336,8 +342,10 @@ the bot channel and must be revoked immediately.
   transcription to path delivery after an error. After successful delivery,
   Engram replies with the normalized transcript so the user can verify what
   reached the pane.
-- **Local state and logs:** `ENGRAM_HOME` contains `state.json`, `audit.jsonl`,
-  one rotated `audit.jsonl.1`, and lock files. Each audit file is capped at
+- **Local state and logs:** `ENGRAM_HOME` contains `state.json`,
+  `templates.json`, `audit.jsonl`, one rotated `audit.jsonl.1`, and lock files.
+  `templates.json` stores exact user-authored input bodies in plaintext with
+  mode `0600`. Each audit file is capped at
   4 MiB and individual records are capped at 64 KiB. State includes Telegram
   identifiers, session metadata, capture hashes, bounded upstream record IDs,
   retry deadlines, latest
@@ -547,6 +555,9 @@ locally for machine-readable metadata. Common commands are:
 - `/sessions`
 - `/attach <tmux-target>`
 - `/new <text>`
+- `/remember [<name> [text]]`
+- `/forget <name>`
+- `/templates export`
 - `/send <id> <text>`
 - `/text <id> <text>`
 - `/key <id> <keys...>`
@@ -561,6 +572,29 @@ locally for machine-readable metadata. Common commands are:
 Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
+
+Remember exact input with `/remember <name> <text>`, then type
+`{engram:name}` in an ordinary reply, a new-session message, or `/new`, `/send`,
+or `/text`. Engram substitutes the body once before using its normal guarded
+tmux input path. For example:
+
+```text
+/remember review-panel Imagine the ideal panel to review this pull request...
+Please {engram:review-panel}
+```
+
+Use `/remember` to list names, `/remember <name>` to inspect a body, and
+`/forget <name>` to remove it. `/templates export` downloads one consistent
+snapshot of the private store as `templates.json`. Other brace syntax remains
+literal, including `{name}`, `${engram:name}`, and `{{engram:name}}`.
+Templates do not expand recursively or from voice messages, and Engram never
+learns or triggers them from terminal output. Keep sensitive bodies out of
+templates when possible: `templates.json` retains exact plaintext, while
+prepared-expansion audit events record only the names and destination route.
+`/text` accepts only one line, including after expansion, so a remembered body
+cannot submit input while staging text without Enter. Expanded
+shell input may still appear in tmux history and Engram's existing bounded,
+best-effort-redacted recovery previews.
 
 Each watched session has exactly one live anchor, and Engram silently pins those
 anchors for navigation. Controls belong only to the canonical anchor. Replies

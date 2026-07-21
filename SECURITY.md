@@ -36,23 +36,27 @@ failure are in scope.
   the supported deployment.
 - Authorized Telegram input can execute shell commands and key presses in tmux.
 - `/download` can upload a chosen local regular file to Telegram. `/raw` and
-  `/dump` upload terminal content.
+  `/dump` upload terminal content. `/templates export` uploads the exact remembered
+  input bodies.
 - Bounded visible pane captures may be sent to the selected conversational
   provider, Anthropic Haiku or OpenAI Luna. Replied Telegram voice notes default
   to retained local attachments whose paths are delivered as literal tmux
   input. Only explicit `VOICE_INPUT_MODE=transcribe` sends them to OpenAI
   `gpt-4o-transcribe` and delivers a bounded transcript instead.
-- State, logs, generated captures, and attachments remain on the local host and
-  may contain sensitive transcript data.
+- State, logs, generated captures, attachments, and exact user-authored input
+  templates remain on the local host and may contain sensitive data.
 
 ## Operational Guidance
 
-- Keep `~/.engram/.env` mode `0600` and its parent directory private.
+- Keep `~/.engram/.env` and `~/.engram/templates.json` mode `0600` and their
+  parent directory mode `0700`. On upgrade, Engram safely tightens an existing
+  owner-controlled `ENGRAM_HOME` to `0700`; it rejects a foreign-owned,
+  non-directory, or symlinked home.
 - Use a dedicated Telegram bot in a direct message. Do not add it to groups.
 - Revoke and replace the bot token, Anthropic key, or OpenAI key immediately if
   exposed.
-- Do not track `.env` files, state, logs, PEM files, generated captures, or
-  downloaded attachments.
+- Do not track `.env` files, state, input templates, logs, PEM files, generated
+  captures, or downloaded attachments.
 - Treat Engram's private runtime root as sensitive. Engram prefers a valid
   private `XDG_RUNTIME_DIR` and otherwise uses a UID-specific directory under
   the system temporary directory.
