@@ -2,6 +2,7 @@ package terminalshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"image"
@@ -9,10 +10,14 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRenderHTMLEscapesTerminalContentAndPreservesANSIStyle(t *testing.T) {
@@ -483,6 +488,123 @@ func TestRendererUsesPrivateEphemeralBrowserFiles(t *testing.T) {
 	}
 }
 
+func TestExecRunnerCancellationKillsBrowserDescendantsHoldingOutputPipes(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "descendant.pid")
+	browser := filepath.Join(dir, "browser")
+	writeExecutableContents(t, browser, fmt.Sprintf(`#!/bin/sh
+sleep 30 &
+printf '%%s\n' "$!" > %q
+wait
+`, pidPath))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- (ExecRunner{}).Run(ctx, browser) }()
+	descendantPID := waitForTestPID(t, pidPath)
+	defer syscall.Kill(descendantPID, syscall.SIGKILL)
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled browser error = %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = syscall.Kill(descendantPID, syscall.SIGKILL)
+		<-done
+		t.Fatal("browser runner remained blocked on a descendant's inherited output pipe")
+	}
+	if !waitForTestProcessExit(descendantPID, time.Second) {
+		t.Fatalf("browser descendant %d survived cancellation", descendantPID)
+	}
+}
+
+func TestRendererCancellationCleansBrowserDescendantsAndArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(t.TempDir(), "descendant.pid")
+	browser := filepath.Join(t.TempDir(), "browser")
+	writeExecutableContents(t, browser, fmt.Sprintf(`#!/bin/sh
+sleep 30 &
+printf '%%s\n' "$!" > %q
+wait
+`, pidPath))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&Renderer{Browser: browser, Theme: "terminal"}).Render(ctx, Input{
+			ANSI: "blocked browser\n", Columns: 80, VisibleRows: 24, BufferRows: 1,
+		}, dir)
+		done <- err
+	}()
+	descendantPID := waitForTestPID(t, pidPath)
+	defer syscall.Kill(descendantPID, syscall.SIGKILL)
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled render error = %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = syscall.Kill(descendantPID, syscall.SIGKILL)
+		<-done
+		t.Fatal("renderer remained blocked on a descendant's inherited output pipe")
+	}
+	if !waitForTestProcessExit(descendantPID, time.Second) {
+		t.Fatalf("browser descendant %d survived render cancellation", descendantPID)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("canceled render left artifacts: %v", entries)
+	}
+}
+
+func TestExecRunnerCleansDescendantsAfterBrowserLeaderExit(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "descendant.pid")
+	browser := filepath.Join(dir, "browser")
+	writeExecutableContents(t, browser, fmt.Sprintf(`#!/bin/sh
+sleep 30 &
+printf '%%s\n' "$!" > %q
+exit 0
+`, pidPath))
+
+	done := make(chan error, 1)
+	go func() { done <- (ExecRunner{}).Run(context.Background(), browser) }()
+	descendantPID := waitForTestPID(t, pidPath)
+	defer syscall.Kill(descendantPID, syscall.SIGKILL)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("successful browser leader with a surviving descendant error = %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = syscall.Kill(descendantPID, syscall.SIGKILL)
+		<-done
+		t.Fatal("browser runner remained blocked after its process leader exited")
+	}
+	if !waitForTestProcessExit(descendantPID, time.Second) {
+		t.Fatalf("browser descendant %d survived leader exit", descendantPID)
+	}
+}
+
+func TestExecRunnerPreservesBoundedBrowserDiagnostics(t *testing.T) {
+	browser := filepath.Join(t.TempDir(), "browser")
+	writeExecutableContents(t, browser, "#!/bin/sh\nprintf 'browser diagnostic\\n' >&2\nexit 7\n")
+
+	err := (ExecRunner{}).Run(context.Background(), browser)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 7 || !strings.Contains(err.Error(), "browser diagnostic") {
+		t.Fatalf("browser failure = %v", err)
+	}
+}
+
 func TestRendererRejectsMissingConfiguredBrowser(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "missing-browser")
@@ -911,7 +1033,41 @@ func (noOutputBrowserRunner) Run(context.Context, string, ...string) error { ret
 
 func writeExecutable(t *testing.T, path string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	writeExecutableContents(t, path, "#!/bin/sh\nexit 0\n")
+}
+
+func writeExecutableContents(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func waitForTestPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
+			if parseErr == nil && pid > 1 {
+				return pid
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("browser descendant did not publish its PID at %s", path)
+	return 0
+}
+
+func waitForTestProcessExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		err := syscall.Kill(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
