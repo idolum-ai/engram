@@ -16,7 +16,7 @@ import (
 type socketRunner struct{ socket string }
 
 func (r socketRunner) Run(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "tmux", append([]string{"-L", r.socket}, args...)...)
+	cmd := exec.CommandContext(ctx, "tmux", integrationTmuxArgs(r.socket, args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -27,7 +27,7 @@ func (r socketRunner) Run(ctx context.Context, args ...string) (string, error) {
 }
 
 func (r socketRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string) error {
-	cmd := exec.CommandContext(ctx, "tmux", append([]string{"-L", r.socket}, args...)...)
+	cmd := exec.CommandContext(ctx, "tmux", integrationTmuxArgs(r.socket, args...)...)
 	var stderr bytes.Buffer
 	cmd.Stdout = dst
 	cmd.Stderr = &stderr
@@ -37,6 +37,11 @@ func (r socketRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...st
 	return nil
 }
 
+func integrationTmuxArgs(socket string, args ...string) []string {
+	out := []string{"-f", os.DevNull, "-L", socket}
+	return append(out, args...)
+}
+
 func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
 		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
@@ -44,7 +49,7 @@ func TestTmuxIntegrationCaptureStyledJoinsMarkerInNarrowRealPane(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	setIntegrationTmuxTmpDir(t)
+	setIntegrationTmuxEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-test-%d", os.Getpid())}
@@ -141,7 +146,7 @@ func TestTmuxIntegrationTallWrappedCaptureKeepsPresentationsAligned(t *testing.T
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	setIntegrationTmuxTmpDir(t)
+	setIntegrationTmuxEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-frame-test-%d", os.Getpid())}
@@ -193,15 +198,15 @@ func TestTmuxIntegrationExecRunnerForcesUTF8WithoutChangingLocale(t *testing.T) 
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	setIntegrationTmuxTmpDir(t)
+	setIntegrationTmuxEnvironment(t)
 	t.Setenv("LC_ALL", "C")
 	t.Setenv("LANG", "C")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := ExecRunner{}
 	socket := fmt.Sprintf("engram-utf8-test-%d", os.Getpid())
-	_, _ = runner.Run(context.Background(), "-L", socket, "kill-server")
-	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "-L", socket, "kill-server") })
+	_, _ = runner.Run(context.Background(), integrationTmuxArgs(socket, "kill-server")...)
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), integrationTmuxArgs(socket, "kill-server")...) })
 
 	localePath := filepath.Join(t.TempDir(), "locale.txt")
 	scriptPath := filepath.Join(t.TempDir(), "utf8.sh")
@@ -209,17 +214,17 @@ func TestTmuxIntegrationExecRunnerForcesUTF8WithoutChangingLocale(t *testing.T) 
 	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.Run(ctx, "-L", socket, "new-session", "-d", "-x", "40", "-y", "10", "-s", "utf8", scriptPath); err != nil {
+	if _, err := runner.Run(ctx, integrationTmuxArgs(socket, "new-session", "-d", "-x", "40", "-y", "10", "-s", "utf8", scriptPath)...); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.Run(ctx, "-L", socket, "send-keys", "-l", "-t", "utf8:", "unicode-雪"); err != nil {
+	if _, err := runner.Run(ctx, integrationTmuxArgs(socket, "send-keys", "-l", "-t", "utf8:", "unicode-雪")...); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.Run(ctx, "-L", socket, "send-keys", "-t", "utf8:", "Enter"); err != nil {
+	if _, err := runner.Run(ctx, integrationTmuxArgs(socket, "send-keys", "-t", "utf8:", "Enter")...); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
-	capture, err := runner.Run(ctx, "-L", socket, "capture-pane", "-p", "-t", "utf8:")
+	capture, err := runner.Run(ctx, integrationTmuxArgs(socket, "capture-pane", "-p", "-t", "utf8:")...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +254,7 @@ func TestTmuxIntegrationBracketedPasteSubmitsOneMultilineInput(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	setIntegrationTmuxTmpDir(t)
+	setIntegrationTmuxEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-paste-test-%d", os.Getpid())}
@@ -300,7 +305,7 @@ func TestTmuxIntegrationMetadataFramingPreservesComplexValues(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	setIntegrationTmuxTmpDir(t)
+	setIntegrationTmuxEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-metadata-test-%d", os.Getpid())}
@@ -308,6 +313,10 @@ func TestTmuxIntegrationMetadataFramingPreservesComplexValues(t *testing.T) {
 	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
 	workdir := t.TempDir() + "/path_under_score_雪\nline"
 	if err := os.Mkdir(workdir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canonicalWorkdir, err := filepath.EvalSymlinks(workdir)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runner.Run(ctx, "new-session", "-d", "-s", "meta_under_score", "-c", workdir, "cat"); err != nil {
@@ -322,7 +331,7 @@ func TestTmuxIntegrationMetadataFramingPreservesComplexValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if window.SessionName != "meta_under_score" || window.Name != windowName || window.CurrentPath != workdir || !validImmutableID(window.SessionID, '$') || !validImmutableID(window.ID, '@') || !validImmutableID(window.PaneID, '%') {
+	if window.SessionName != "meta_under_score" || window.Name != windowName || window.CurrentPath != canonicalWorkdir || !validImmutableID(window.SessionID, '$') || !validImmutableID(window.ID, '@') || !validImmutableID(window.PaneID, '%') {
 		t.Fatalf("complex metadata = %#v", window)
 	}
 }
@@ -334,7 +343,7 @@ func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) 
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	setIntegrationTmuxTmpDir(t)
+	setIntegrationTmuxEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-numeric-test-%d", os.Getpid())}
@@ -389,7 +398,7 @@ func TestTmuxIntegrationCapabilityOptionsConvergeAsOneGuardedTransaction(t *test
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	setIntegrationTmuxTmpDir(t)
+	setIntegrationTmuxEnvironment(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runner := socketRunner{socket: fmt.Sprintf("engram-capability-test-%d", os.Getpid())}
@@ -434,7 +443,7 @@ func TestTmuxIntegrationCapabilityOptionsConvergeAsOneGuardedTransaction(t *test
 	}
 }
 
-func setIntegrationTmuxTmpDir(t *testing.T) {
+func setIntegrationTmuxEnvironment(t *testing.T) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "et-")
 	if err != nil {
@@ -442,4 +451,10 @@ func setIntegrationTmuxTmpDir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	t.Setenv("TMUX_TMPDIR", dir)
+	home := t.TempDir()
+	config := "set-option -g base-index 1\nset-window-option -g pane-base-index 1\n"
+	if err := os.WriteFile(filepath.Join(home, ".tmux.conf"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
 }

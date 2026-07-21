@@ -26,6 +26,9 @@ required_candidate_phrases=(
   './scripts/prepare-release-notes.sh'
   'make release-dist'
   'ENGRAM_TMUX_INTEGRATION=1'
+  'runs-on: macos-latest'
+  'brew install tmux'
+  'Real tmux integration on Darwin'
   'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
 )
 for phrase in "${required_candidate_phrases[@]}"; do

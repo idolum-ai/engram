@@ -40,6 +40,12 @@ Notable user-visible and operational changes are recorded here.
   preserve recursive creation for nested custom paths, and accept canonical
   macOS parent aliases while continuing to reject an unsafe home leaf.
 
+### Verification
+
+- Make real-tmux integration independent of operator tmux configuration and
+  canonical Darwin temporary paths, and require the release candidate to run
+  that suite natively on both Linux and macOS.
+
 ## [v0.5.0] - 2026-07-18
 
 ### Configuration
