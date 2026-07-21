@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.6.0] - 2026-07-21
+
 ### Recovery
 
 - Persist a bounded, redacted per-window recovery ledger, accept exact Codex
@@ -12,6 +14,31 @@ Notable user-visible and operational changes are recorded here.
 - Add deterministic `/recovery` plans and compact Telegram controls that resume
   exact provider sessions while keeping observed shell launches advisory and
   never replaying arbitrary commands automatically.
+
+### Input
+
+- Add explicit one-pass `{engram:name}` input templates with `/remember`,
+  `/forget`, and `/templates export`. Expansion uses the existing guarded tmux
+  routes, never recurses, never learns from history, and never triggers from
+  terminal output.
+- Persist exact user-authored template bodies in a private `templates.json`,
+  guard the complete Engram home with one process lock, and expose the full
+  template set only through an explicit authorized export.
+
+### Terminal images
+
+- Preserve fitting physical terminal rows in compact guide evidence through a
+  96-column mobile readability limit, with disclosed wrapping only for wider
+  rows and context bounded by terminal block boundaries.
+- Supervise snapshot browser process groups and bound inherited output pipes so
+  a timed-out or completed wrapper cannot leave descendants monopolizing the
+  global render slots.
+
+### Configuration
+
+- Safely tighten an existing owner-controlled `ENGRAM_HOME` to mode `0700`,
+  preserve recursive creation for nested custom paths, and accept canonical
+  macOS parent aliases while continuing to reject an unsafe home leaf.
 
 ## [v0.5.0] - 2026-07-18
 
