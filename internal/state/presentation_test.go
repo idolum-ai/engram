@@ -22,6 +22,7 @@ func TestCodexPresentationStateSurvivesRestartWithoutSchemaBump(t *testing.T) {
 		current.PresentationVersion = "0.144.6"
 		current.PresentationModel = "gpt-5.6-sol"
 		current.PresentationEffort = "high"
+		current.PresentationMode = "fast"
 		current.PresentationActivity = "working"
 		current.PresentationNotice = "model switch available"
 	}); err != nil {
@@ -32,7 +33,7 @@ func TestCodexPresentationStateSurvivesRestartWithoutSchemaBump(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, ok := reopened.FindSession(session.ID)
-	if !ok || reopened.Snapshot().Version != currentStateVersion || got.PresentationProgram != "codex" || got.PresentationVersion != "0.144.6" || got.PresentationModel != "gpt-5.6-sol" || got.PresentationEffort != "high" || got.PresentationActivity != "working" || got.PresentationNotice != "model switch available" {
+	if !ok || reopened.Snapshot().Version != currentStateVersion || got.PresentationProgram != "codex" || got.PresentationVersion != "0.144.6" || got.PresentationModel != "gpt-5.6-sol" || got.PresentationEffort != "high" || got.PresentationMode != "fast" || got.PresentationActivity != "working" || got.PresentationNotice != "model switch available" {
 		t.Fatalf("reopened presentation = %#v ok=%v version=%d", got, ok, reopened.Snapshot().Version)
 	}
 }

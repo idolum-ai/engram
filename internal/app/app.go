@@ -838,7 +838,12 @@ func terminalPresentationText(ts state.TerminalSession) string {
 	if ts.State != state.TerminalRunning || ts.PresentationProgram != "codex" || ts.PresentationModel == "" || ts.PresentationEffort == "" || ts.PresentationActivity == "" {
 		return ""
 	}
-	line := strings.Join([]string{"Codex", ts.PresentationModel, ts.PresentationEffort, ts.PresentationActivity}, " · ")
+	parts := []string{"Codex", ts.PresentationModel, ts.PresentationEffort}
+	if ts.PresentationMode != "" {
+		parts = append(parts, ts.PresentationMode)
+	}
+	parts = append(parts, ts.PresentationActivity)
+	line := strings.Join(parts, " · ")
 	if ts.PresentationNotice != "" {
 		line += "\nnotice: " + ts.PresentationNotice
 	}

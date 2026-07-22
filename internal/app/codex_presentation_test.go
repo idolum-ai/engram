@@ -41,7 +41,7 @@ func TestProcessCapturedFrameCleansCodexGuideInputAndRecordsCardState(t *testing
 		"",
 		"› Write tests for @filename",
 		"",
-		"gpt-5.6-sol high · /work · Main [default]",
+		"gpt-5.6-sol high fast · /work · Main [default]",
 	}, "\n")
 	got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{
 		JoinedText: input, PanePID: 4242, CurrentCmd: "node",
@@ -57,11 +57,11 @@ func TestProcessCapturedFrameCleansCodexGuideInputAndRecordsCardState(t *testing
 		t.Fatalf("reference boundary refs=%#v guide=%q", refs, got)
 	}
 	current, ok := app.Store.FindSession(id)
-	if !ok || current.PresentationProgram != "codex" || current.PresentationVersion != codexui.SupportedVersion || current.PresentationModel != "gpt-5.6-sol" || current.PresentationEffort != "high" || current.PresentationActivity != "working" {
+	if !ok || current.PresentationProgram != "codex" || current.PresentationVersion != codexui.SupportedVersion || current.PresentationModel != "gpt-5.6-sol" || current.PresentationEffort != "high" || current.PresentationMode != "fast" || current.PresentationActivity != "working" {
 		t.Fatalf("session presentation = %#v ok=%v", current, ok)
 	}
 	card := app.renderLocal(current, "Tests are passing.")
-	if !strings.Contains(card, "Codex · gpt-5.6-sol · high · working\n\nTests are passing.") {
+	if !strings.Contains(card, "Codex · gpt-5.6-sol · high · fast · working\n\nTests are passing.") {
 		t.Fatalf("card = %q", card)
 	}
 }
@@ -73,6 +73,7 @@ func TestProcessCapturedFrameFallsBackAndClearsStaleCodexState(t *testing.T) {
 		session.PresentationVersion = codexui.SupportedVersion
 		session.PresentationModel = "gpt-5.6-sol"
 		session.PresentationEffort = "high"
+		session.PresentationMode = "fast"
 		session.PresentationActivity = "working"
 	}); err != nil {
 		t.Fatal(err)
@@ -84,7 +85,7 @@ func TestProcessCapturedFrameFallsBackAndClearsStaleCodexState(t *testing.T) {
 		t.Fatalf("fallback changed input: %q", got)
 	}
 	current, _ := app.Store.FindSession(id)
-	if current.PresentationProgram != "" || current.PresentationModel != "" || strings.Contains(app.renderLocal(current, "answer"), "Codex ·") {
+	if current.PresentationProgram != "" || current.PresentationModel != "" || current.PresentationMode != "" || strings.Contains(app.renderLocal(current, "answer"), "Codex ·") {
 		t.Fatalf("stale presentation survived fallback: %#v", current)
 	}
 }
@@ -117,10 +118,10 @@ func TestCodexPresentationAppearsOnTextGuideAndSnapshotCards(t *testing.T) {
 	session := state.TerminalSession{
 		ID: 4, State: state.TerminalRunning, Title: "review", LastKnownCWD: "/work",
 		PresentationProgram: "codex", PresentationVersion: codexui.SupportedVersion,
-		PresentationModel: "gpt-5.6-sol", PresentationEffort: "high", PresentationActivity: "reviewing approval",
+		PresentationModel: "gpt-5.6-sol", PresentationEffort: "high", PresentationMode: "fast", PresentationActivity: "reviewing approval",
 		PresentationNotice: "⚠ Switch to the fast model for additional security review.",
 	}
-	want := "Codex · gpt-5.6-sol · high · reviewing approval\nnotice: ⚠ Switch to the fast model for additional security review."
+	want := "Codex · gpt-5.6-sol · high · fast · reviewing approval\nnotice: ⚠ Switch to the fast model for additional security review."
 	textCard := renderLocal(session, "A command is awaiting review.")
 	guideCard, _ := app.guidedEvidenceCaption(session, "A command is awaiting review.", visibleReferences{})
 	snapshotCard, _ := app.snapshotAnchorCaption(session, tmux.StyledCapture{Columns: 71, VisibleRows: 37, BufferRows: 64}, visibleReferences{})
