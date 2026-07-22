@@ -94,18 +94,19 @@ targeting and capped at 64 rows. Presentation changes; observation does not.
 This shared boundary keeps comparisons honest and prevents either mode from
 quietly seeing more of the machine.
 
-Guide mode sends every frame's joined logical text to the selected model after removing
-recognized upstream records, the trailing model-status footer, and a small
-allowlist of paired Codex placeholder prompts. For a process-confirmed,
-specifically supported Codex CLI version, a conservative presentation adapter
-also removes observed interface separators, elapsed and working animation,
-collapsed-transcript hints, and completed automatic-review boilerplate. It
-extracts model, effort, the tested fast-mode marker, activity, and a narrow model-switch notice for
-deterministic card presentation. Unknown processes, versions, or layouts keep
-the ordinary terminal path byte-for-byte. The raw frame remains intact for
-screenshots, local inspection, and references. Generic guide hashes retain the
-styled frame; supported Codex guide hashes use cleaned conversation so UI
-animation or extracted state alone cannot spend another guide request. Card
+Guide mode sends every frame's joined logical text to the selected model after
+removing recognized upstream records. A bounded semantic analyzer uses visible
+position, glyph, style, model, and temporal signals to separate conversation
+evidence from high-confidence agent-interface chrome. It extracts normalized
+model, effort, mode, and activity without gating on a particular agent CLI or
+version. Unknown or weak layouts keep the ordinary terminal path byte-for-byte;
+a process-confirmed, versioned Codex adapter remains as a compatibility fallback
+for its already-proven layouts. The raw frame remains intact for screenshots,
+local inspection, and references. See
+[`agent-screen-semantics.md`](agent-screen-semantics.md) for the role,
+confidence, retention, and hermetic-test contract. Guide hashes for recognized
+agent presentations use cleaned conversation so UI animation or extracted
+state alone cannot spend another guide request. Card
 render hashes still include the extracted state. When
 two frames remain strongly aligned within
 the same tmux server, window, pane, foreground command, dimensions, alternate

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentui"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
@@ -18,6 +19,13 @@ const upstreamSignalInterval = 10 * time.Second
 
 type codexRuntimeDetector interface {
 	Detect(context.Context, int, string) (codexui.Runtime, error)
+}
+
+type agentFrameState struct {
+	serverID string
+	windowID string
+	paneID   string
+	frame    agentui.Frame
 }
 
 func observeUpstreamSignal(capture tmux.StyledCapture) upstream.Observation {
@@ -33,6 +41,11 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 		a.deliverUpstreamSignalWithArtifacts(ctx, observed, observation.Latest, a.intentionalArtifactPaths(observation.PresentationText, capture.Hyperlinks))
 	}
 	presentationText := observation.PresentationText
+	analysis := a.analyzeAgentFrame(observed, capture, presentationText)
+	if analysis.Applied {
+		a.recordAgentPresentation(observed, analysis)
+		return analysis.Conversation
+	}
 	if a.CodexDetector == nil {
 		return presentationText
 	}
@@ -45,11 +58,58 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 	return presentation.Text
 }
 
+func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.StyledCapture, text string) agentui.Analysis {
+	current := agentui.Frame{
+		Text:            text,
+		CurrentCommand:  strings.TrimSpace(capture.CurrentCmd),
+		Columns:         capture.Columns,
+		VisibleRows:     capture.VisibleRows,
+		AlternateScreen: capture.AlternateOn,
+		CopyMode:        capture.PaneInMode,
+	}
+	state := agentFrameState{
+		serverID: firstNonEmpty(capture.ServerID, observed.TmuxServerID),
+		windowID: firstNonEmpty(capture.WindowID, observed.TmuxWindowID),
+		paneID:   firstNonEmpty(capture.PaneID, observed.TmuxPaneID),
+		frame:    current,
+	}
+	a.agentFrameMu.Lock()
+	if a.agentFrames == nil {
+		a.agentFrames = make(map[int]agentFrameState)
+	}
+	previousState, found := a.agentFrames[observed.ID]
+	a.agentFrames[observed.ID] = state
+	a.agentFrameMu.Unlock()
+
+	var previous *agentui.Frame
+	if found && sameAgentFrameBinding(previousState, state) {
+		copy := previousState.frame
+		previous = &copy
+	}
+	return agentui.Analyze(agentui.Observation{Current: current, Previous: previous})
+}
+
+func sameAgentFrameBinding(left, right agentFrameState) bool {
+	return left.serverID == right.serverID && left.windowID == right.windowID && left.paneID == right.paneID
+}
+
+func (a *App) recordAgentPresentation(observed state.TerminalSession, analysis agentui.Analysis) {
+	presentation := codexui.Presentation{
+		Text: analysis.Conversation, Applied: analysis.Applied, Model: analysis.Model,
+		Effort: analysis.Effort, Mode: analysis.Mode, Activity: string(analysis.Activity),
+	}
+	a.recordPresentation(observed, "agent", presentation)
+}
+
 func (a *App) recordCodexPresentation(observed state.TerminalSession, presentation codexui.Presentation) {
 	program := ""
 	if presentation.Applied {
 		program = "codex"
 	}
+	a.recordPresentation(observed, program, presentation)
+}
+
+func (a *App) recordPresentation(observed state.TerminalSession, program string, presentation codexui.Presentation) {
 	notice := a.redactText(presentation.Notice)
 	current, ok := a.Store.FindSession(observed.ID)
 	if !ok || !sameTerminalBinding(current, observed) || current.PresentationProgram == program &&

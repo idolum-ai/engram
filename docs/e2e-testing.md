@@ -1,9 +1,10 @@
 # End-to-End Testing
 
-Engram has one manually dispatched, hermetic golden path. It answers a narrow
-question: can the real Engram process coordinate a Telegram-shaped exchange,
-an isolated real tmux server, and a real local Chromium renderer as one usable
-system?
+Engram has two manually dispatched hermetic suites. The `hermetic` suite asks
+whether the real Engram process can coordinate a Telegram-shaped exchange, an
+isolated real tmux server, and a real local Chromium renderer as one usable
+system. The `agent-ui` suite asks whether real agent CLIs produce equivalent
+semantic state when their provider traffic is replaced by local fixtures.
 
 ## What It Exercises
 
@@ -60,10 +61,49 @@ ENGRAM_E2E=1 \
 Use `google-chrome` or another supported executable when `chromium` is not
 installed. The test is skipped during ordinary `go test ./...` and `make check`.
 
+## Agent UI semantics
+
+Choose the `agent-ui` suite to run the real Codex, Claude Code, and OpenCode
+clients. The trusted workflow installs explicit harness versions, gives each
+client a private home, config, cache, work directory, and tmux server, and
+routes the Responses, Messages, or OpenAI-compatible chat stream to a stdlib
+loopback server. A loopback proxy rejects and records optional update,
+telemetry, and discovery requests. The fixture uses only visibly fake keys and
+does not read repository or runner credentials.
+
+The equivalent local command is:
+
+```sh
+mkdir -p /tmp/engram-agent-ui-e2e
+ENGRAM_AGENT_UI_E2E=1 \
+  ENGRAM_AGENT_UI_REQUIRE_ALL=1 \
+  ENGRAM_AGENT_UI_E2E_ARTIFACT_DIR=/tmp/engram-agent-ui-e2e \
+  ENGRAM_AGENT_UI_CODEX="$(command -v codex)" \
+  ENGRAM_AGENT_UI_CLAUDE="$(command -v claude)" \
+  ENGRAM_AGENT_UI_OPENCODE="$(command -v opencode)" \
+  ENGRAM_SNAPSHOT_BROWSER="$(command -v chromium)" \
+  go test ./internal/e2e -run '^TestHermeticAgentUISemantics$' -count=1 -timeout=5m -v
+```
+
+Without `ENGRAM_AGENT_UI_REQUIRE_ALL=1`, unavailable clients are reported as
+skipped so a developer can validate the clients installed on that host. No
+client is downloaded by the Go test itself. The checked-in replay corpus under
+`internal/agentui/testdata` remains part of ordinary `make check` and is the
+fast regression gate.
+
+The suite retains, per client, active and idle plain-text captures, semantic
+analysis JSON, observed client version, loopback request paths, denied external
+request destinations, and a Chromium-rendered idle PNG. Its `manifest.json`
+lists clients that passed or were unavailable. These artifacts contain fixture
+content and private temporary paths, never request bodies, headers, tokens, or
+the private temporary trees. See
+[`agent-screen-semantics.md`](agent-screen-semantics.md) for the production
+contract.
+
 ## Evidence
 
-Every completed workflow test uploads a 30-day artifact containing the files
-below. A local test writes the same evidence bundle to
+Every completed hermetic workflow test uploads a 30-day artifact containing
+the files below. A local hermetic test writes the same evidence bundle to
 `ENGRAM_E2E_ARTIFACT_DIR` without applying a retention policy.
 
 - `snapshot.png`, the exact canonical terminal image uploaded to the simulator;

@@ -18,6 +18,7 @@ on:
         type: choice
         options:
           - hermetic
+          - agent-ui
 
 permissions:
   contents: read
@@ -29,6 +30,7 @@ concurrency:
 jobs:
   hermetic:
     name: Hermetic golden path
+    if: inputs.suite == 'hermetic'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -111,6 +113,99 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: engram-hermetic-e2e-${{ github.run_id }}
+          path: e2e-artifacts
+          if-no-files-found: error
+          retention-days: 30
+
+  agent-ui:
+    name: Hermetic agent UI semantics
+    if: inputs.suite == 'agent-ui'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Validate trusted dispatch
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          git check-ref-format "refs/heads/${TARGET_REF}"
+          [[ "${TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]]
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          ref: main
+
+      - name: Resolve same-repository target
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "refs/heads/${TARGET_REF}:refs/remotes/origin/e2e-target"
+          test "$(git rev-parse refs/remotes/origin/e2e-target)" = "${TARGET_SHA}"
+          git checkout --detach "${TARGET_SHA}"
+
+      - name: Verify target checkout
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: test "$(git rev-parse HEAD)" = "${TARGET_SHA}"
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: 1.22.12
+          cache: false
+
+      - name: Install runtime tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y tmux
+
+      - name: Install pinned agent CLI fixtures
+        run: |
+          set -euo pipefail
+          npm install --prefix "${RUNNER_TEMP}/agent-clis" \
+            @openai/codex@0.144.5 \
+            @anthropic-ai/claude-code@2.1.206 \
+            opencode-ai@1.18.4
+
+      - name: Run hermetic agent UI semantics
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-artifacts
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -n "${browser}"
+          cli_bin="${RUNNER_TEMP}/agent-clis/node_modules/.bin"
+          set +e
+          ENGRAM_AGENT_UI_E2E=1 \
+            ENGRAM_AGENT_UI_REQUIRE_ALL=1 \
+            ENGRAM_AGENT_UI_E2E_ARTIFACT_DIR="${PWD}/e2e-artifacts" \
+            ENGRAM_AGENT_UI_CODEX="${cli_bin}/codex" \
+            ENGRAM_AGENT_UI_CLAUDE="${cli_bin}/claude" \
+            ENGRAM_AGENT_UI_OPENCODE="${cli_bin}/opencode" \
+            ENGRAM_SNAPSHOT_BROWSER="${browser}" \
+            go test ./internal/e2e -run '^TestHermeticAgentUISemantics$' -count=1 -timeout=5m -v 2>&1 | tee e2e-artifacts/test.log
+          test_status=${PIPESTATUS[0]}
+          set -e
+          test -f e2e-artifacts/manifest.json
+          if (( test_status != 0 )); then
+            exit "${test_status}"
+          fi
+          {
+            echo "## Hermetic agent UI semantics"
+            echo
+            echo "Real Codex, Claude Code, and OpenCode TUIs reached loopback-only model fixtures and produced equivalent active and idle semantic state."
+            echo "No model credentials or external application services were used."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: engram-agent-ui-e2e-${{ github.run_id }}
           path: e2e-artifacts
           if-no-files-found: error
           retention-days: 30

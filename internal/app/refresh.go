@@ -179,7 +179,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 
 func guideCaptureHash(text string, session state.TerminalSession, capture tmux.StyledCapture) string {
 	ansi := capture.ANSI
-	if session.PresentationProgram == "codex" {
+	if session.PresentationProgram != "" {
 		ansi = ""
 	}
 	return sha(strings.Join([]string{

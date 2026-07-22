@@ -37,3 +37,32 @@ func TestCodexPresentationStateSurvivesRestartWithoutSchemaBump(t *testing.T) {
 		t.Fatalf("reopened presentation = %#v ok=%v version=%d", got, ok, reopened.Snapshot().Version)
 	}
 }
+
+func TestGenericAgentPresentationStateSurvivesRestartWithoutSchemaBump(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	auditPath := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(path, auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.AllocateSession("main", "@1", "%1", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(current.ID, func(session *TerminalSession) {
+		session.PresentationProgram = "agent"
+		session.PresentationModel = "claude-sonnet-4-6"
+		session.PresentationActivity = "active"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.FindSession(current.ID)
+	if !ok || got.PresentationProgram != "agent" || got.PresentationModel != "claude-sonnet-4-6" || got.PresentationActivity != "active" {
+		t.Fatalf("reopened generic presentation = %#v, ok=%v", got, ok)
+	}
+}
