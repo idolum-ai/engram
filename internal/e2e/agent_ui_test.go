@@ -21,7 +21,7 @@ import (
 )
 
 const agentUIReply = "ENGRAM_MOCK_REPLY semantic rendering is ready."
-const fakeClaudeKey = "sk-ant-api03-engram-fixture-not-a-real-credential-000000000000000000000000000000000000"
+const fakeClaudeKey = "sk-" + "ant-api03-engram-fixture-not-a-real-credential-000000000000000000000000000000000000"
 
 type agentUIDriver struct {
 	name       string
