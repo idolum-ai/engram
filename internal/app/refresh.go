@@ -78,8 +78,12 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, ts, capture)
-	refs := a.visibleReferencesForStyledCapture(presentationText, capture.Hyperlinks)
-	hash := guideCaptureHash(presentationText, ts.Title, capture)
+	referenceText := observeUpstreamSignal(capture).PresentationText
+	if latest, found := a.Store.FindSession(id); found && sameTerminalBinding(latest, ts) {
+		ts = latest
+	}
+	refs := a.visibleReferencesForStyledCapture(referenceText, capture.Hyperlinks)
+	hash := guideCaptureHash(presentationText, ts, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
 			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotReady {
@@ -131,7 +135,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	if _, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
-		s.LastRawCapture = tailUTF8(presentationText, maxStoredVisibleCaptureBytes)
+		s.LastRawCapture = tailUTF8(referenceText, maxStoredVisibleCaptureBytes)
 	}); err != nil || !found || !applied {
 		lock.Unlock()
 		if err != nil {
@@ -173,11 +177,15 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 }
 
-func guideCaptureHash(text, sessionTitle string, capture tmux.StyledCapture) string {
+func guideCaptureHash(text string, session state.TerminalSession, capture tmux.StyledCapture) string {
+	ansi := capture.ANSI
+	if session.PresentationProgram == "codex" {
+		ansi = ""
+	}
 	return sha(strings.Join([]string{
 		text,
-		sessionTitle,
-		capture.ANSI,
+		session.Title,
+		ansi,
 		capture.Title,
 		capture.CurrentPath,
 		strings.TrimSpace(capture.CurrentCmd),

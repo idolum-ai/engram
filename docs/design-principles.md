@@ -96,8 +96,17 @@ quietly seeing more of the machine.
 
 Guide mode sends every frame's joined logical text to the selected model after removing
 recognized upstream records, the trailing model-status footer, and a small
-allowlist of paired Codex placeholder prompts. The raw frame
-remains intact for screenshots, local inspection, references, and hashes. When
+allowlist of paired Codex placeholder prompts. For a process-confirmed,
+specifically supported Codex CLI version, a conservative presentation adapter
+also removes observed interface separators, elapsed and working animation,
+collapsed-transcript hints, and completed automatic-review boilerplate. It
+extracts model, effort, activity, and a narrow model-switch notice for
+deterministic card presentation. Unknown processes, versions, or layouts keep
+the ordinary terminal path byte-for-byte. The raw frame remains intact for
+screenshots, local inspection, and references. Generic guide hashes retain the
+styled frame; supported Codex guide hashes use cleaned conversation so UI
+animation or extracted state alone cannot spend another guide request. Card
+render hashes still include the extracted state. When
 two frames remain strongly aligned within
 the same tmux server, window, pane, foreground command, dimensions, alternate
 screen, and copy-mode boundary, Engram also supplies deterministic added and

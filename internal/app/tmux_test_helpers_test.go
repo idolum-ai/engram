@@ -18,5 +18,5 @@ func framedTmuxBindingRecord(values ...string) string {
 }
 
 func framedStyledCaptureMetadata(command string) string {
-	return framedTmuxRecord(appTestServerID, "@1", "%1", "71", "37", "build pane", "/tmp", command, "1", "0")
+	return framedTmuxRecord(appTestServerID, "@1", "%1", "4242", "71", "37", "build pane", "/tmp", command, "1", "0")
 }

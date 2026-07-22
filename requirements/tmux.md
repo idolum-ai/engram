@@ -123,8 +123,17 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - Guide mode sends every frame's complete joined logical text, with upstream
   records, the trailing model-status footer, and a small allowlist of paired
   Codex placeholder prompts removed, to the selected guide provider in one
-  non-streaming request. The guide-only footer and placeholder cleanup does not
-  alter raw captures, screenshots, references, or hashes; upstream-record
+  non-streaming request. When the tmux pane process tree contains Codex and its
+  read-only `@openai/codex` package metadata reports the specifically supported
+  `0.144.6` version, a versioned adapter may additionally remove only tested
+  Codex UI structures and extract model, effort, activity, and a narrow
+  model-switch notice. Process arguments are inspected only in memory and are
+  never persisted or logged. Unsupported versions, missing metadata, and
+  unmatched footer layouts retain the ordinary guide input unchanged. The
+  cleanup does not alter raw captures, screenshots, or references. A supported
+  Codex guide hash excludes raw ANSI animation and extracted state; the card's
+  render hash includes that state so it can change without another model call.
+  All generic guide hashes retain the styled frame. Upstream-record
   removal happens earlier and intentionally excludes those records from every
   presentation view. Within a stable and
   strongly aligned capture boundary, Engram also supplies the previous

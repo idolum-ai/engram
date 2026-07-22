@@ -42,6 +42,12 @@ privacy model must stay small and explicit.
   recognized model-status footer text, and a small allowlist of paired Codex
   placeholder prompts are removed. Guide anchors call it automatically;
   `🗣️` invokes it on demand from snapshot mode.
+- Codex-specific presentation is informational, never authorization. Engram
+  requires both a descendant process named exactly `codex` (or its Node
+  launcher), read-only package metadata for the specifically supported version,
+  and a recognized footer layout. It executes no discovered process path.
+  Process arguments are not logged or persisted. Any failed check keeps the
+  ordinary terminal evidence path; screenshots and raw views remain literal.
 - Bounded terminal text sent to the selected provider is not credential-redacted. Every
   request contains the complete current semantic evidence described above. A
   strongly aligned later request may additionally contain process-local

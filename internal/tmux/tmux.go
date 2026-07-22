@@ -110,6 +110,7 @@ type StyledCapture struct {
 	ServerID    string
 	WindowID    string
 	PaneID      string
+	PanePID     int
 	CurrentCmd  string
 	AlternateOn string
 	PaneInMode  string
@@ -688,7 +689,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 	if targetRows <= 0 || targetRows > 400 {
 		return StyledCapture{}, fmt.Errorf("target rows must be between 1 and 400")
 	}
-	metaFormat := recordFormat(serverIDOption, "window_id", "pane_id", "pane_width", "pane_height", "pane_title", "pane_current_path", "pane_current_command", "alternate_on", "pane_in_mode")
+	metaFormat := recordFormat(serverIDOption, "window_id", "pane_id", "pane_pid", "pane_width", "pane_height", "pane_title", "pane_current_path", "pane_current_command", "alternate_on", "pane_in_mode")
 	meta, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, metaFormat)
 	if err != nil {
 		return StyledCapture{}, err
@@ -748,6 +749,7 @@ func (m Manager) CaptureStyled(ctx context.Context, paneID string, targetRows in
 		ServerID:    after.ServerID,
 		WindowID:    after.WindowID,
 		PaneID:      after.PaneID,
+		PanePID:     after.PanePID,
 		CurrentCmd:  after.CurrentCmd,
 		AlternateOn: after.AlternateOn,
 		PaneInMode:  after.PaneInMode,
@@ -821,6 +823,7 @@ type captureMetadata struct {
 	ServerID    string
 	WindowID    string
 	PaneID      string
+	PanePID     int
 	Columns     int
 	VisibleRows int
 	Title       string
@@ -831,7 +834,7 @@ type captureMetadata struct {
 }
 
 func parseCaptureMetadata(out string) (captureMetadata, error) {
-	records, err := parseRecords(out, 10)
+	records, err := parseRecords(out, 11)
 	if err != nil || len(records) != 1 {
 		return captureMetadata{}, fmt.Errorf("unexpected tmux snapshot metadata")
 	}
@@ -839,25 +842,29 @@ func parseCaptureMetadata(out string) (captureMetadata, error) {
 	if !validServerID(parts[0]) || !validImmutableID(parts[1], '@') || !validImmutableID(parts[2], '%') {
 		return captureMetadata{}, fmt.Errorf("invalid tmux snapshot identity")
 	}
-	columns, err := strconv.Atoi(parts[3])
+	panePID, err := strconv.Atoi(parts[3])
+	if err != nil || panePID <= 0 {
+		return captureMetadata{}, fmt.Errorf("invalid tmux pane PID %q", parts[3])
+	}
+	columns, err := strconv.Atoi(parts[4])
 	if err != nil || columns <= 0 || columns > 400 {
-		return captureMetadata{}, fmt.Errorf("invalid tmux pane width %q", parts[3])
+		return captureMetadata{}, fmt.Errorf("invalid tmux pane width %q", parts[4])
 	}
-	visibleRows, err := strconv.Atoi(parts[4])
+	visibleRows, err := strconv.Atoi(parts[5])
 	if err != nil || visibleRows <= 0 || visibleRows > 400 {
-		return captureMetadata{}, fmt.Errorf("invalid tmux pane height %q", parts[4])
+		return captureMetadata{}, fmt.Errorf("invalid tmux pane height %q", parts[5])
 	}
-	if !validTmuxFlag(parts[8]) || !validTmuxFlag(parts[9]) {
+	if !validTmuxFlag(parts[9]) || !validTmuxFlag(parts[10]) {
 		return captureMetadata{}, fmt.Errorf("invalid tmux pane mode metadata")
 	}
 	return captureMetadata{
-		ServerID: parts[0], WindowID: parts[1], PaneID: parts[2], Columns: columns, VisibleRows: visibleRows,
-		Title: parts[5], CurrentPath: parts[6], CurrentCmd: parts[7], AlternateOn: parts[8], PaneInMode: parts[9],
+		ServerID: parts[0], WindowID: parts[1], PaneID: parts[2], PanePID: panePID, Columns: columns, VisibleRows: visibleRows,
+		Title: parts[6], CurrentPath: parts[7], CurrentCmd: parts[8], AlternateOn: parts[9], PaneInMode: parts[10],
 	}, nil
 }
 
 func sameCaptureBoundary(before, after captureMetadata) bool {
-	return sameCaptureIdentity(before, after) && before.Columns == after.Columns && before.VisibleRows == after.VisibleRows && before.CurrentCmd == after.CurrentCmd &&
+	return sameCaptureIdentity(before, after) && before.PanePID == after.PanePID && before.Columns == after.Columns && before.VisibleRows == after.VisibleRows && before.CurrentCmd == after.CurrentCmd &&
 		before.AlternateOn == after.AlternateOn && before.PaneInMode == after.PaneInMode
 }
 
