@@ -360,6 +360,9 @@ func renderAgentUIEvidence(t *testing.T, artifactDir, name, text string) {
 		t.Log("ENGRAM_SNAPSHOT_BROWSER is unset; semantic assertions ran without PNG evidence")
 		return
 	}
+	if err := validateAgentUIEvidenceBrowser(runtime.GOOS, browser, os.Getenv("ENGRAM_AGENT_UI_E2E_ALLOW_SHARED_BROWSER")); err != nil {
+		t.Fatal(err)
+	}
 	renderer := terminalshot.New(browser, "contrast-dark")
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -370,6 +373,39 @@ func renderAgentUIEvidence(t *testing.T, artifactDir, name, text string) {
 	target := filepath.Join(artifactDir, name+"-idle.png")
 	if err := os.Rename(path, target); err != nil {
 		t.Fatalf("retain %s render evidence: %v", name, err)
+	}
+}
+
+func validateAgentUIEvidenceBrowser(goos, browser, allowShared string) error {
+	if goos != "darwin" || browser == "" || allowShared == "1" {
+		return nil
+	}
+	switch strings.ToLower(filepath.Base(browser)) {
+	case "chrome-headless-shell", "chromium-headless-shell", "headless_shell":
+		return nil
+	default:
+		return fmt.Errorf("macOS agent UI evidence requires a dedicated headless-shell browser; unset ENGRAM_SNAPSHOT_BROWSER to run semantic assertions without PNG evidence, or set ENGRAM_AGENT_UI_E2E_ALLOW_SHARED_BROWSER=1 only after stopping the live Engram service")
+	}
+}
+
+func TestValidateAgentUIEvidenceBrowser(t *testing.T) {
+	for _, test := range []struct {
+		name, goos, browser, allow string
+		wantErr                    bool
+	}{
+		{name: "linux full browser", goos: "linux", browser: "/usr/bin/google-chrome"},
+		{name: "mac dedicated shell", goos: "darwin", browser: "/opt/bin/chrome-headless-shell"},
+		{name: "mac semantic only", goos: "darwin"},
+		{name: "mac explicit isolated override", goos: "darwin", browser: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", allow: "1"},
+		{name: "mac wrapper rejected", goos: "darwin", browser: "/Users/test/.local/bin/engram-chrome-headless", wantErr: true},
+		{name: "mac full browser rejected", goos: "darwin", browser: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateAgentUIEvidenceBrowser(test.goos, test.browser, test.allow)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("validateAgentUIEvidenceBrowser() error = %v, want error %v", err, test.wantErr)
+			}
+		})
 	}
 }
 

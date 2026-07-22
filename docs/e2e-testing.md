@@ -91,6 +91,14 @@ client is downloaded by the Go test itself. The checked-in replay corpus under
 `internal/agentui/testdata` remains part of ordinary `make check` and is the
 fast regression gate.
 
+On macOS, PNG evidence requires a dedicated `chrome-headless-shell`,
+`chromium-headless-shell`, or `headless_shell` executable. Unset
+`ENGRAM_SNAPSHOT_BROWSER` to run only the semantic assertions. The harness
+refuses a full Chrome/Chromium app or wrapper because launching it can contend
+with a live Engram service for renderer processes. The escape hatch
+`ENGRAM_AGENT_UI_E2E_ALLOW_SHARED_BROWSER=1` is intended only for an isolated
+host or after stopping the live service.
+
 The suite retains, per client, active and idle plain-text captures, semantic
 analysis JSON, observed client version, loopback request paths, denied external
 request destinations, and a Chromium-rendered idle PNG. Its `manifest.json`
