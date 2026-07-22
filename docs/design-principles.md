@@ -100,7 +100,7 @@ allowlist of paired Codex placeholder prompts. For a process-confirmed,
 specifically supported Codex CLI version, a conservative presentation adapter
 also removes observed interface separators, elapsed and working animation,
 collapsed-transcript hints, and completed automatic-review boilerplate. It
-extracts model, effort, activity, and a narrow model-switch notice for
+extracts model, effort, the tested fast-mode marker, activity, and a narrow model-switch notice for
 deterministic card presentation. Unknown processes, versions, or layouts keep
 the ordinary terminal path byte-for-byte. The raw frame remains intact for
 screenshots, local inspection, and references. Generic guide hashes retain the

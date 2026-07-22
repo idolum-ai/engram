@@ -54,7 +54,8 @@ func (a *App) recordCodexPresentation(observed state.TerminalSession, presentati
 	current, ok := a.Store.FindSession(observed.ID)
 	if !ok || !sameTerminalBinding(current, observed) || current.PresentationProgram == program &&
 		current.PresentationVersion == presentation.Version && current.PresentationModel == presentation.Model &&
-		current.PresentationEffort == presentation.Effort && current.PresentationActivity == presentation.Activity &&
+		current.PresentationEffort == presentation.Effort && current.PresentationMode == presentation.Mode &&
+		current.PresentationActivity == presentation.Activity &&
 		current.PresentationNotice == notice {
 		return
 	}
@@ -63,6 +64,7 @@ func (a *App) recordCodexPresentation(observed state.TerminalSession, presentati
 		session.PresentationVersion = presentation.Version
 		session.PresentationModel = presentation.Model
 		session.PresentationEffort = presentation.Effort
+		session.PresentationMode = presentation.Mode
 		session.PresentationActivity = presentation.Activity
 		session.PresentationNotice = notice
 	})

@@ -102,6 +102,7 @@ type TerminalSession struct {
 	PresentationVersion      string          `json:"presentation_version,omitempty"`
 	PresentationModel        string          `json:"presentation_model,omitempty"`
 	PresentationEffort       string          `json:"presentation_effort,omitempty"`
+	PresentationMode         string          `json:"presentation_mode,omitempty"`
 	PresentationActivity     string          `json:"presentation_activity,omitempty"`
 	PresentationNotice       string          `json:"presentation_notice,omitempty"`
 	SummaryMessageID         int             `json:"summary_message_id,omitempty"`
@@ -1137,12 +1138,14 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.PresentationVersion = ""
 			session.PresentationModel = ""
 			session.PresentationEffort = ""
+			session.PresentationMode = ""
 			session.PresentationActivity = ""
 			session.PresentationNotice = ""
 		} else {
 			session.PresentationVersion = truncateUTF8(session.PresentationVersion, 32)
 			session.PresentationModel = truncateUTF8(session.PresentationModel, 64)
 			session.PresentationEffort = truncateUTF8(session.PresentationEffort, 16)
+			session.PresentationMode = truncateUTF8(session.PresentationMode, 16)
 			session.PresentationActivity = truncateUTF8(session.PresentationActivity, 32)
 			session.PresentationNotice = truncateUTF8(session.PresentationNotice, 256)
 		}

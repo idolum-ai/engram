@@ -32,6 +32,24 @@ func (f *fakeVersionResolver) Resolve(executable string) (string, error) {
 	return f.version, nil
 }
 
+type selectiveVersionResolver struct {
+	versions map[string]string
+	errors   map[string]error
+	calls    []string
+}
+
+func (f *selectiveVersionResolver) Resolve(executable string) (string, error) {
+	f.calls = append(f.calls, executable)
+	if err := f.errors[executable]; err != nil {
+		return "", err
+	}
+	version, ok := f.versions[executable]
+	if !ok {
+		return "", fmt.Errorf("unexpected executable %s", executable)
+	}
+	return version, nil
+}
+
 func TestDetectorFindsCodexBelowTmuxPaneAndRevalidatesVersion(t *testing.T) {
 	runner := &fakeCommandRunner{
 		ps: stringsJoinLines(
@@ -58,6 +76,100 @@ func TestDetectorFindsCodexBelowTmuxPaneAndRevalidatesVersion(t *testing.T) {
 	}
 }
 
+func TestDetectorPrefersNearestPackageLauncherOverNativeDescendantRegardlessOfProcessOrder(t *testing.T) {
+	const (
+		launcher = "/opt/homebrew/bin/codex"
+		native   = "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex"
+	)
+	runner := &fakeCommandRunner{ps: stringsJoinLines(
+		"100 1 node node",
+		"120 110 codex "+native,
+		"110 100 node node "+launcher,
+	)}
+	versions := &selectiveVersionResolver{
+		versions: map[string]string{launcher: SupportedVersion},
+		errors:   map[string]error{native: fmt.Errorf("@openai/codex package metadata not found")},
+	}
+	detector := &Detector{Runner: runner, Versions: versions}
+	got, err := detector.Detect(context.Background(), 100, "node")
+	if err != nil || !got.Detected || !got.Supported || got.Version != SupportedVersion {
+		t.Fatalf("runtime = %#v, err=%v", got, err)
+	}
+	if !reflect.DeepEqual(versions.calls, []string{launcher}) {
+		t.Fatalf("version resolver calls = %#v", versions.calls)
+	}
+}
+
+func TestDetectorFailsClosedForAmbiguousNearestLaunchersRegardlessOfPathOrder(t *testing.T) {
+	tests := []struct {
+		name        string
+		supported   string
+		unsupported string
+		processes   []string
+	}{
+		{
+			name:        "supported path sorts first",
+			supported:   "/opt/a-supported/codex",
+			unsupported: "/opt/z-unsupported/codex",
+			processes: []string{
+				"100 1 node node",
+				"110 100 node node /opt/a-supported/codex",
+				"120 100 node node /opt/z-unsupported/codex",
+			},
+		},
+		{
+			name:        "unsupported path sorts first and enumeration is reversed",
+			supported:   "/opt/z-supported/codex",
+			unsupported: "/opt/a-unsupported/codex",
+			processes: []string{
+				"120 100 node node /opt/a-unsupported/codex",
+				"110 100 node node /opt/z-supported/codex",
+				"100 1 node node",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &fakeCommandRunner{ps: stringsJoinLines(test.processes...)}
+			versions := &selectiveVersionResolver{versions: map[string]string{
+				test.supported: SupportedVersion, test.unsupported: "0.145.0",
+			}}
+			detector := &Detector{Runner: runner, Versions: versions}
+			got, err := detector.Detect(context.Background(), 100, "node")
+			if err != nil || !got.Detected || got.Supported || got.Version != "" {
+				t.Fatalf("runtime = %#v, err=%v", got, err)
+			}
+			if len(versions.calls) != 0 {
+				t.Fatalf("ambiguous candidates reached version resolver: %#v", versions.calls)
+			}
+		})
+	}
+}
+
+func TestDetectorFailsClosedWhenNearestCandidateHasNoPackageMetadata(t *testing.T) {
+	const (
+		unresolved = "/opt/custom/bin/codex"
+		resolved   = "/opt/custom/libexec/codex"
+	)
+	runner := &fakeCommandRunner{ps: stringsJoinLines(
+		"100 1 node node",
+		"110 100 node node "+unresolved,
+		"120 110 codex "+resolved,
+	)}
+	versions := &selectiveVersionResolver{
+		versions: map[string]string{resolved: SupportedVersion},
+		errors:   map[string]error{unresolved: fmt.Errorf("@openai/codex package metadata not found")},
+	}
+	detector := &Detector{Runner: runner, Versions: versions}
+	got, err := detector.Detect(context.Background(), 100, "node")
+	if err == nil || !got.Detected || got.Supported || got.Version != "" {
+		t.Fatalf("runtime = %#v, err=%v", got, err)
+	}
+	if !reflect.DeepEqual(versions.calls, []string{unresolved}) {
+		t.Fatalf("version resolver calls = %#v", versions.calls)
+	}
+}
+
 func TestDetectorFallsBackForUnsupportedVersionAndUnrelatedProcess(t *testing.T) {
 	runner := &fakeCommandRunner{
 		ps: stringsJoinLines(
@@ -65,9 +177,9 @@ func TestDetectorFallsBackForUnsupportedVersionAndUnrelatedProcess(t *testing.T)
 			"110 100 node node /opt/codex/bin/codex",
 			"200 1 node node server.js"),
 	}
-	detector := &Detector{Runner: runner, Versions: &fakeVersionResolver{version: "0.145.0"}}
+	detector := &Detector{Runner: runner, Versions: &fakeVersionResolver{version: "0.144.4"}}
 	got, err := detector.Detect(context.Background(), 100, "node")
-	if err != nil || !got.Detected || got.Supported || got.Version != "0.145.0" {
+	if err != nil || !got.Detected || got.Supported || got.Version != "0.144.4" {
 		t.Fatalf("unsupported runtime = %#v, err=%v", got, err)
 	}
 	got, err = detector.Detect(context.Background(), 200, "node")
@@ -78,6 +190,18 @@ func TestDetectorFallsBackForUnsupportedVersionAndUnrelatedProcess(t *testing.T)
 	got, err = detector.Detect(context.Background(), 100, "bash")
 	if err != nil || got.Detected || len(runner.calls) != before {
 		t.Fatalf("shell foreground runtime = %#v, err=%v calls=%#v", got, err, runner.calls)
+	}
+}
+
+func TestDetectorSupportsPreviousExplicitlyTestedVersion(t *testing.T) {
+	runner := &fakeCommandRunner{ps: stringsJoinLines(
+		"100 1 node node",
+		"110 100 node node /opt/codex/bin/codex",
+	)}
+	detector := &Detector{Runner: runner, Versions: &fakeVersionResolver{version: "0.144.5"}}
+	got, err := detector.Detect(context.Background(), 100, "node")
+	if err != nil || !got.Detected || !got.Supported || got.Version != "0.144.5" {
+		t.Fatalf("previous tested runtime = %#v, err=%v", got, err)
 	}
 }
 

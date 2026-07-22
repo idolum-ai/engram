@@ -57,6 +57,60 @@ func TestPresentExtractsSupportedModelSwitchNotice(t *testing.T) {
 	}
 }
 
+func TestPresentRecognizesObservedFastFooter(t *testing.T) {
+	input := strings.Join([]string{
+		"• The requested audit is complete.",
+		"",
+		"› Find and fix a bug in @filename",
+		"",
+		"gpt-5.6-sol high fast · ~",
+	}, "\n")
+	got := Present(Runtime{Detected: true, Supported: true, Version: SupportedVersion}, input)
+	if !got.Applied || got.Model != "gpt-5.6-sol" || got.Effort != "high" || got.Mode != "fast" || strings.Contains(got.Text, "gpt-5.6-sol high fast") {
+		t.Fatalf("presentation = %#v", got)
+	}
+	if !strings.Contains(got.Text, "The requested audit is complete.") {
+		t.Fatalf("cleaned text dropped conversation evidence: %q", got.Text)
+	}
+}
+
+func TestPresentRecognizesObservedPreviousVersionChrome(t *testing.T) {
+	input := strings.Join([]string{
+		"• Ran make install PREFIX=\"$HOME/.local\"",
+		"  └ install -m 0755 bin/engram /Users/example/.local/bin/engram",
+		"",
+		"────────────────────────────────────────────────────────",
+		"",
+		"• The service is healthy.",
+		"",
+		"─ Worked for 3m 54s ────────────────────────────────────",
+		"",
+		"› Explain this codebase",
+		"",
+		"gpt-5.6-sol high · ~ · Main [default]",
+	}, "\n")
+	got := Present(Runtime{Detected: true, Supported: true, Version: "0.144.5"}, input)
+	if !got.Applied || got.Version != "0.144.5" || got.Model != "gpt-5.6-sol" || got.Effort != "high" || got.Activity != "idle" {
+		t.Fatalf("presentation = %#v", got)
+	}
+	for _, noise := range []string{"Worked for", "Explain this codebase", "gpt-5.6-sol high", "────"} {
+		if strings.Contains(got.Text, noise) {
+			t.Fatalf("cleaned text retained %q: %q", noise, got.Text)
+		}
+	}
+	if !strings.Contains(got.Text, "The service is healthy.") {
+		t.Fatalf("cleaned text dropped conversation evidence: %q", got.Text)
+	}
+}
+
+func TestPresentPreservesUnknownFooterModeExactly(t *testing.T) {
+	input := "answer\ngpt-5.6-sol high turbo · /work"
+	got := Present(Runtime{Detected: true, Supported: true, Version: SupportedVersion}, input)
+	if got.Applied || got.Text != input {
+		t.Fatalf("fallback = %#v, want exact %q", got, input)
+	}
+}
+
 func TestPresentDoesNotPromoteStaleModelSwitchNotice(t *testing.T) {
 	lines := []string{"⚠ Switch to the fast model while this request receives additional security review.", ""}
 	for i := 0; i < 20; i++ {

@@ -9,12 +9,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const SupportedVersion = "0.144.6"
+const supportedPreviousVersion = "0.144.5"
 const maxProcessOutputBytes = 2 << 20
 
 type Runtime struct {
@@ -74,19 +76,26 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 	if err != nil {
 		return Runtime{}, err
 	}
-	executable := descendantCodexExecutable(parseProcesses(out), panePID)
-	if executable == "" {
+	executables := nearestDescendantCodexExecutables(parseProcesses(out), panePID)
+	if len(executables) == 0 {
 		return Runtime{}, nil
+	}
+	if len(executables) != 1 {
+		return Runtime{Detected: true}, nil
 	}
 	if d.Versions == nil {
 		return Runtime{Detected: true}, fmt.Errorf("Codex version resolver is unavailable")
 	}
-	version, err := d.Versions.Resolve(executable)
+	version, err := d.Versions.Resolve(executables[0])
 	if err != nil {
 		return Runtime{Detected: true}, err
 	}
-	runtime := Runtime{Detected: true, Version: version, Supported: version == SupportedVersion}
+	runtime := Runtime{Detected: true, Version: version, Supported: supportedVersion(version)}
 	return runtime, nil
+}
+
+func supportedVersion(version string) bool {
+	return version == SupportedVersion || version == supportedPreviousVersion
 }
 
 func possibleCodexForeground(command string) bool {
@@ -123,26 +132,60 @@ func parseProcesses(out string) []process {
 	return processes
 }
 
-func descendantCodexExecutable(processes []process, root int) string {
-	descendants := map[int]bool{root: true}
+func nearestDescendantCodexExecutables(processes []process, root int) []string {
+	depths := map[int]int{root: 0}
 	for changed := true; changed; {
 		changed = false
 		for _, process := range processes {
-			if !descendants[process.pid] && descendants[process.ppid] {
-				descendants[process.pid] = true
+			parentDepth, parentKnown := depths[process.ppid]
+			depth, known := depths[process.pid]
+			if parentKnown && (!known || parentDepth+1 < depth) {
+				depths[process.pid] = parentDepth + 1
 				changed = true
 			}
 		}
 	}
+	type candidate struct {
+		path  string
+		depth int
+	}
+	byPath := make(map[string]int)
 	for _, process := range processes {
-		if !descendants[process.pid] {
+		depth, descendant := depths[process.pid]
+		if !descendant {
 			continue
 		}
-		if executable := codexExecutable(process); executable != "" {
-			return executable
+		executable := codexExecutable(process)
+		if executable == "" {
+			continue
+		}
+		if previous, exists := byPath[executable]; !exists || depth < previous {
+			byPath[executable] = depth
 		}
 	}
-	return ""
+	candidates := make([]candidate, 0, len(byPath))
+	for path, depth := range byPath {
+		candidates = append(candidates, candidate{path: path, depth: depth})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].depth != candidates[j].depth {
+			return candidates[i].depth < candidates[j].depth
+		}
+		return candidates[i].path < candidates[j].path
+	})
+	nearest := len(candidates)
+	if nearest > 0 {
+		minimumDepth := candidates[0].depth
+		nearest = 0
+		for nearest < len(candidates) && candidates[nearest].depth == minimumDepth {
+			nearest++
+		}
+	}
+	executables := make([]string, nearest)
+	for index, candidate := range candidates[:nearest] {
+		executables[index] = candidate.path
+	}
+	return executables
 }
 
 func codexExecutable(process process) string {

@@ -14,17 +14,18 @@ type Presentation struct {
 	Version  string
 	Model    string
 	Effort   string
+	Mode     string
 	Activity string
 	Notice   string
 }
 
 func Present(runtime Runtime, text string) Presentation {
 	fallback := Presentation{Text: text}
-	if !runtime.Detected || !runtime.Supported || runtime.Version != SupportedVersion || strings.TrimSpace(text) == "" {
+	if !runtime.Detected || !runtime.Supported || !supportedVersion(runtime.Version) || strings.TrimSpace(text) == "" {
 		return fallback
 	}
 	lines := strings.Split(text, "\n")
-	footer, model, effort, ok := findFooter(lines)
+	footer, model, effort, mode, ok := findFooter(lines)
 	if !ok {
 		return fallback
 	}
@@ -76,23 +77,29 @@ func Present(runtime Runtime, text string) Presentation {
 	}
 	return Presentation{
 		Text: cleaned, Applied: true, Version: runtime.Version, Model: model,
-		Effort: effort, Activity: activity, Notice: notice,
+		Effort: effort, Mode: mode, Activity: activity, Notice: notice,
 	}
 }
 
-func findFooter(lines []string) (index int, model, effort string, ok bool) {
+func findFooter(lines []string) (index int, model, effort, mode string, ok bool) {
 	for i := len(lines) - 1; i >= 0 && i >= len(lines)-10; i-- {
 		parts := strings.Split(strings.TrimSpace(lines[i]), " · ")
 		if len(parts) < 2 {
 			continue
 		}
 		identity := strings.Fields(parts[0])
-		if len(identity) != 2 || !validModel(identity[0]) || !validEffort(identity[1]) || strings.TrimSpace(parts[1]) == "" {
+		if len(identity) < 2 || len(identity) > 3 || !validModel(identity[0]) || !validEffort(identity[1]) || strings.TrimSpace(parts[1]) == "" {
 			continue
 		}
-		return i, identity[0], identity[1], true
+		if len(identity) == 3 {
+			if identity[2] != "fast" {
+				continue
+			}
+			mode = identity[2]
+		}
+		return i, identity[0], identity[1], mode, true
 	}
-	return 0, "", "", false
+	return 0, "", "", "", false
 }
 
 func validModel(model string) bool {
@@ -147,7 +154,7 @@ func removeKnownPlaceholder(lines []string, remove []bool, footer int) {
 	parts[0] = strings.TrimSpace(strings.TrimPrefix(first, "›"))
 	prompt := strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
 	switch prompt {
-	case "Write tests for @filename", "Run /review on my current changes", "Find and fix a bug in @filename", "Summarize recent commits", "Implement {feature}":
+	case "Write tests for @filename", "Run /review on my current changes", "Find and fix a bug in @filename", "Summarize recent commits", "Implement {feature}", "Explain this codebase":
 		for i := start; i <= end; i++ {
 			remove[i] = true
 		}
