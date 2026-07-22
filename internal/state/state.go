@@ -98,6 +98,12 @@ type TerminalSession struct {
 	LastSnapshotAttemptAt    time.Time       `json:"last_snapshot_attempt_at,omitempty"`
 	LastRenderHash           string          `json:"last_render_hash,omitempty"`
 	LastSummary              string          `json:"last_summary,omitempty"`
+	PresentationProgram      string          `json:"presentation_program,omitempty"`
+	PresentationVersion      string          `json:"presentation_version,omitempty"`
+	PresentationModel        string          `json:"presentation_model,omitempty"`
+	PresentationEffort       string          `json:"presentation_effort,omitempty"`
+	PresentationActivity     string          `json:"presentation_activity,omitempty"`
+	PresentationNotice       string          `json:"presentation_notice,omitempty"`
 	SummaryMessageID         int             `json:"summary_message_id,omitempty"`
 	SnapshotMessageID        int             `json:"snapshot_message_id,omitempty"`
 	UpstreamMessageID        int             `json:"upstream_message_id,omitempty"`
@@ -1125,6 +1131,20 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.ResumeSessionID = ""
 			session.PendingResume = nil
 			session.RecoveryEvents = nil
+		}
+		if session.PresentationProgram != "codex" {
+			session.PresentationProgram = ""
+			session.PresentationVersion = ""
+			session.PresentationModel = ""
+			session.PresentationEffort = ""
+			session.PresentationActivity = ""
+			session.PresentationNotice = ""
+		} else {
+			session.PresentationVersion = truncateUTF8(session.PresentationVersion, 32)
+			session.PresentationModel = truncateUTF8(session.PresentationModel, 64)
+			session.PresentationEffort = truncateUTF8(session.PresentationEffort, 16)
+			session.PresentationActivity = truncateUTF8(session.PresentationActivity, 32)
+			session.PresentationNotice = truncateUTF8(session.PresentationNotice, 256)
 		}
 		if len(session.StaleAlternateMessageIDs) > maxStaleAlternates {
 			session.StaleAlternateMessageIDs = append([]int(nil), session.StaleAlternateMessageIDs[len(session.StaleAlternateMessageIDs)-maxStaleAlternates:]...)

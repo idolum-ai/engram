@@ -131,7 +131,11 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	refs := a.visibleReferencesForStyledCapture(presentationText, capture.Hyperlinks)
+	referenceText := observeUpstreamSignal(capture).PresentationText
+	if latest, found := a.Store.FindSession(id); found && sameTerminalBinding(latest, current) {
+		current = latest
+	}
+	refs := a.visibleReferencesForStyledCapture(referenceText, capture.Hyperlinks)
 	caption, files := a.snapshotAnchorCaption(current, capture, refs)
 	captureHash := snapshotAnchorHash(current, capture, presentationText, caption, a.Config.SnapshotTheme)
 	if !a.snapshotAnchors() {
@@ -286,6 +290,9 @@ func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.Style
 	prefix := fmt.Sprintf("[%d] %s · ", ts.ID, ts.State)
 	suffix := "\n" + snapshotFrameDescription(capture, true)
 	details := title + "\n" + cwd
+	if presentation := terminalPresentationText(ts); presentation != "" {
+		details += "\n" + presentation
+	}
 	detailBytes := max(0, safeCaptionBytes-len(prefix)-len(suffix))
 	caption := prefix + headUTF8(details, detailBytes) + suffix
 	if references, files := renderSnapshotReferenceSetWithFiles(refs, safeCaptionBytes-len(caption)-2); references != "" {
@@ -296,7 +303,11 @@ func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.Style
 }
 
 func (a *App) updateMediaAnchorCaptionLocked(ctx context.Context, ts state.TerminalSession, summary string, final bool) {
-	caption := fmt.Sprintf("[%d] %s · %s\n%s", ts.ID, ts.State, a.redactText(firstNonEmpty(ts.Title, "terminal")), a.redactText(summary))
+	caption := fmt.Sprintf("[%d] %s · %s", ts.ID, ts.State, a.redactText(firstNonEmpty(ts.Title, "terminal")))
+	if presentation := terminalPresentationText(ts); presentation != "" {
+		caption += "\n" + a.redactText(presentation)
+	}
+	caption += "\n" + a.redactText(summary)
 	renderHash := sha(caption)
 	if renderHash == ts.LastRenderHash && !final {
 		return

@@ -177,7 +177,7 @@ func styledCaptureMetadata(command, alternateOn, paneInMode string) string {
 }
 
 func styledCaptureMetadataValues(serverID, windowID, paneID, columns, rows, command, alternateOn, paneInMode string) string {
-	return tmuxRecord(serverID, windowID, paneID, columns, rows, "build", "/home/me", command, alternateOn, paneInMode)
+	return tmuxRecord(serverID, windowID, paneID, "4242", columns, rows, "build", "/home/me", command, alternateOn, paneInMode)
 }
 
 func (f *fakeStreamRunner) Run(ctx context.Context, args ...string) (string, error) {
@@ -554,7 +554,7 @@ func TestCaptureStyledIncludesHistoryAndVisiblePane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ServerID != styledCaptureServerID || got.WindowID != "@2" || got.PaneID != "%7" || got.CurrentCmd != "bash" || got.AlternateOn != "1" || got.PaneInMode != "0" || got.Columns != 71 || got.VisibleRows != 37 || got.BufferRows != 64 || got.Title != "build" || got.CurrentPath != "/home/me" {
+	if got.ServerID != styledCaptureServerID || got.WindowID != "@2" || got.PaneID != "%7" || got.PanePID != 4242 || got.CurrentCmd != "bash" || got.AlternateOn != "1" || got.PaneInMode != "0" || got.Columns != 71 || got.VisibleRows != 37 || got.BufferRows != 64 || got.Title != "build" || got.CurrentPath != "/home/me" {
 		t.Fatalf("styled capture metadata = %#v", got)
 	}
 	if strings.Count(got.ANSI, "history and visible") != 64 {
@@ -612,6 +612,7 @@ func TestCaptureStyledRejectsBoundaryChange(t *testing.T) {
 		"server":     {styledCaptureMetadataValues("abcdef0123456789abcdef0123456789", "@2", "%7", "71", "37", "bash", "1", "0"), true},
 		"window":     {styledCaptureMetadataValues(styledCaptureServerID, "@9", "%7", "71", "37", "bash", "1", "0"), true},
 		"pane":       {styledCaptureMetadataValues(styledCaptureServerID, "@2", "%9", "71", "37", "bash", "1", "0"), true},
+		"pid":        {tmuxRecord(styledCaptureServerID, "@2", "%7", "9999", "71", "37", "build", "/home/me", "bash", "1", "0"), false},
 		"dimensions": {styledCaptureMetadataValues(styledCaptureServerID, "@2", "%7", "72", "37", "bash", "1", "0"), false},
 		"command":    {styledCaptureMetadata("vim", "1", "0"), false},
 		"alternate":  {styledCaptureMetadata("bash", "0", "0"), false},

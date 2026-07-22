@@ -233,6 +233,9 @@ func (a *App) guidedEvidenceCaption(session state.TerminalSession, summary strin
 	if session.LastKnownCWD != "" {
 		header += "\ncwd: " + strings.Join(strings.Fields(a.redactText(session.LastKnownCWD)), " ")
 	}
+	if presentation := terminalPresentationText(session); presentation != "" {
+		header += "\n" + a.redactText(presentation)
+	}
 	remaining := guidedCaptionBytes - len(header) - 2
 	if remaining <= 0 {
 		return headUTF8(header, guidedCaptionBytes), nil

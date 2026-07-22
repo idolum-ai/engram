@@ -180,6 +180,14 @@ anchor. In guide mode, bounded pane text is sent to the selected provider. In
 Chromium mode, an exact image of the pane is sent to Telegram. Review the
 privacy boundaries below before running commands that may print secrets.
 
+When a tracked pane is confidently identified as the specifically tested Codex
+CLI version, Engram removes recognized Codex interface chrome before guide
+rendering and adds a deterministic line such as
+`Codex · gpt-5.6-sol · high · working` to the card. The adapter currently
+supports `codex-cli 0.144.6`. Other versions and uncertain layouts use the
+ordinary terminal path unchanged; raw views and snapshots always remain
+literal.
+
 ## Configuration
 
 `.env.example` is the complete configuration surface. The env file is a simple

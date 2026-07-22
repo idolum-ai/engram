@@ -112,11 +112,16 @@ func TestRenderLocalRedactsDerivedSecretsWithoutMutatingSession(t *testing.T) {
 	const secret = "secret-value-123"
 	app := &App{Config: config.Config{OpenAIAPIKey: secret}}
 	session := state.TerminalSession{
-		ID:             1,
-		State:          state.TerminalRunning,
-		Title:          "token=" + secret,
-		LastKnownCWD:   "/tmp/" + secret,
-		LastRawCapture: "artifact https://example.test/report?token=" + secret,
+		ID:                   1,
+		State:                state.TerminalRunning,
+		Title:                "token=" + secret,
+		LastKnownCWD:         "/tmp/" + secret,
+		LastRawCapture:       "artifact https://example.test/report?token=" + secret,
+		PresentationProgram:  "codex",
+		PresentationModel:    "gpt-5.6-sol",
+		PresentationEffort:   "high",
+		PresentationActivity: "idle",
+		PresentationNotice:   "notice " + secret,
 	}
 	got := app.renderLocal(session, "summary "+secret)
 	if strings.Contains(got, secret) || !strings.Contains(got, "<redacted>") {
@@ -125,7 +130,7 @@ func TestRenderLocalRedactsDerivedSecretsWithoutMutatingSession(t *testing.T) {
 	if !strings.Contains(got, "https://example.test/report?token=REDACTED") {
 		t.Fatalf("rendered reference redaction broke URL token:\n%s", got)
 	}
-	if !strings.Contains(session.Title, secret) || !strings.Contains(session.LastKnownCWD, secret) {
+	if !strings.Contains(session.Title, secret) || !strings.Contains(session.LastKnownCWD, secret) || !strings.Contains(session.PresentationNotice, secret) {
 		t.Fatalf("render mutated source session: %#v", session)
 	}
 }

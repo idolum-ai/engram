@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/tmux"
@@ -15,18 +16,59 @@ import (
 
 const upstreamSignalInterval = 10 * time.Second
 
+type codexRuntimeDetector interface {
+	Detect(context.Context, int, string) (codexui.Runtime, error)
+}
+
 func observeUpstreamSignal(capture tmux.StyledCapture) upstream.Observation {
 	return upstream.Observe(capture.JoinedText)
 }
 
 // processCapturedFrame is the app boundary for styled captures: terminal
-// records are delivered and removed before semantic text reaches a caller.
+// records are delivered first, then a proven presentation adapter may remove
+// versioned UI chrome before semantic text reaches a caller.
 func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalSession, capture tmux.StyledCapture) string {
 	observation := observeUpstreamSignal(capture)
 	if observation.Found {
 		a.deliverUpstreamSignalWithArtifacts(ctx, observed, observation.Latest, a.intentionalArtifactPaths(observation.PresentationText, capture.Hyperlinks))
 	}
-	return observation.PresentationText
+	presentationText := observation.PresentationText
+	if a.CodexDetector == nil {
+		return presentationText
+	}
+	runtime, err := a.CodexDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
+	if err != nil {
+		return presentationText
+	}
+	presentation := codexui.Present(runtime, presentationText)
+	a.recordCodexPresentation(observed, presentation)
+	return presentation.Text
+}
+
+func (a *App) recordCodexPresentation(observed state.TerminalSession, presentation codexui.Presentation) {
+	program := ""
+	if presentation.Applied {
+		program = "codex"
+	}
+	notice := a.redactText(presentation.Notice)
+	current, ok := a.Store.FindSession(observed.ID)
+	if !ok || !sameTerminalBinding(current, observed) || current.PresentationProgram == program &&
+		current.PresentationVersion == presentation.Version && current.PresentationModel == presentation.Model &&
+		current.PresentationEffort == presentation.Effort && current.PresentationActivity == presentation.Activity &&
+		current.PresentationNotice == notice {
+		return
+	}
+	_, found, applied, err := a.updateSessionIfCurrent(observed, func(session *state.TerminalSession) {
+		session.PresentationProgram = program
+		session.PresentationVersion = presentation.Version
+		session.PresentationModel = presentation.Model
+		session.PresentationEffort = presentation.Effort
+		session.PresentationActivity = presentation.Activity
+		session.PresentationNotice = notice
+	})
+	if err != nil || !found || !applied {
+		_ = a.audit("state.presentation", "failed", map[string]any{"session_id": observed.ID, "error": firstNonEmpty(errorText(err), "superseded")})
+	}
 }
 
 func (a *App) deliverUpstreamSignal(ctx context.Context, observed state.TerminalSession, record upstream.Record) {

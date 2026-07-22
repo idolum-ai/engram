@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/anthropic"
+	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/guide"
@@ -36,6 +37,7 @@ type App struct {
 	Guide                         guide.Renderer
 	Transcriber                   voiceTranscriber
 	Tmux                          tmux.Manager
+	CodexDetector                 codexRuntimeDetector
 	Snapshots                     snapshotRenderer
 	footerStatusRunner            snapshotFooterStatusRunner
 	modeMu                        sync.RWMutex
@@ -182,6 +184,7 @@ func New(cfg config.Config) (*App, error) {
 		Guide:                         guideRenderer,
 		Transcriber:                   transcriber,
 		Tmux:                          tmux.New(tmux.ExecRunner{}),
+		CodexDetector:                 codexui.NewDetector(),
 		Snapshots:                     snapshotRenderer,
 		mode:                          mode,
 		guideAvailable:                guideRenderer != nil,
@@ -744,6 +747,7 @@ func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
 	ts.Title = a.redactText(ts.Title)
 	ts.LastSummary = a.redactText(ts.LastSummary)
 	ts.LastKnownCWD = a.redactText(ts.LastKnownCWD)
+	ts.PresentationNotice = a.redactText(ts.PresentationNotice)
 }
 
 func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
@@ -817,6 +821,10 @@ func renderLocalWithReferences(ts state.TerminalSession, summary, references str
 	if ts.LastKnownCWD != "" {
 		fmt.Fprintf(&b, "cwd: %s\n", ts.LastKnownCWD)
 	}
+	if presentation := terminalPresentationText(ts); presentation != "" {
+		b.WriteString(presentation)
+		b.WriteByte('\n')
+	}
 	b.WriteString("\n")
 	b.WriteString(summary)
 	if references != "" {
@@ -824,6 +832,17 @@ func renderLocalWithReferences(ts state.TerminalSession, summary, references str
 		b.WriteString(references)
 	}
 	return b.String()
+}
+
+func terminalPresentationText(ts state.TerminalSession) string {
+	if ts.State != state.TerminalRunning || ts.PresentationProgram != "codex" || ts.PresentationModel == "" || ts.PresentationEffort == "" || ts.PresentationActivity == "" {
+		return ""
+	}
+	line := strings.Join([]string{"Codex", ts.PresentationModel, ts.PresentationEffort, ts.PresentationActivity}, " · ")
+	if ts.PresentationNotice != "" {
+		line += "\nnotice: " + ts.PresentationNotice
+	}
+	return line
 }
 
 func parseID(arg string) (int, bool) {

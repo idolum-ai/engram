@@ -110,7 +110,11 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": current.ID})
 		return
 	}
-	caption := fmt.Sprintf("[%d] %s\n%s", latest.ID, a.redactText(firstNonEmpty(latest.Title, "terminal")), snapshotFrameDescription(capture, false))
+	caption := fmt.Sprintf("[%d] %s", latest.ID, a.redactText(firstNonEmpty(latest.Title, "terminal")))
+	if presentation := terminalPresentationText(latest); presentation != "" {
+		caption += "\n" + a.redactText(presentation)
+	}
+	caption += "\n" + snapshotFrameDescription(capture, false)
 	message, err := a.Telegram.SendPhoto(ctx, latest.AnchorChatID, pngPath, caption, latest.AnchorMessageID)
 	if err != nil {
 		_ = a.audit("telegram.snapshot", "failed", map[string]any{"session_id": latest.ID, "error": err.Error()})

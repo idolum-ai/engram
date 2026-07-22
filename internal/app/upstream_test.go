@@ -63,7 +63,7 @@ func TestRefreshHashesSignalStrippedPresentation(t *testing.T) {
 
 	a.refreshSession(context.Background(), id, true)
 	got, _ := a.Store.FindSession(id)
-	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	wantHash := guideCaptureHash("ordinary output", state.TerminalSession{Title: "shell"}, tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
 	if got.LastRawCapture != "ordinary output" || got.LastRawCaptureHash != wantHash {
 		t.Fatalf("capture=%q hash=%q want=%q", got.LastRawCapture, got.LastRawCaptureHash, wantHash)
 	}
@@ -73,7 +73,7 @@ func TestUnchangedGuideEvidenceRefreshPreservesCanonicalCard(t *testing.T) {
 	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	runner.capturePhysical = "ordinary output\n"
 	runner.captureJoined = runner.capturePhysical
-	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	wantHash := guideCaptureHash("ordinary output", state.TerminalSession{Title: "shell"}, tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		session.AnchorChatID = 100
 		session.AnchorMessageID = 77
@@ -116,7 +116,7 @@ func TestUnchangedGuideEvidenceRefreshRestoresCompanionAfterRestart(t *testing.T
 	a, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	runner.capturePhysical = "ordinary output\n"
 	runner.captureJoined = runner.capturePhysical
-	wantHash := guideCaptureHash("ordinary output", "shell", tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
+	wantHash := guideCaptureHash("ordinary output", state.TerminalSession{Title: "shell"}, tmux.StyledCapture{ANSI: runner.capturePhysical, Title: "build pane", CurrentPath: "/tmp", CurrentCmd: "bash", Columns: 71, VisibleRows: 37, AlternateOn: "1", PaneInMode: "0"})
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
 		session.AnchorChatID = 100
 		session.AnchorMessageID = 77
@@ -178,16 +178,34 @@ func TestGuideCaptureHashIncludesRenderGeometry(t *testing.T) {
 	first := tmux.StyledCapture{Columns: 71, VisibleRows: 37, CurrentPath: "/tmp", Title: "build"}
 	second := first
 	second.Columns = 120
-	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "build", second) {
+	if guideCaptureHash("same text", state.TerminalSession{Title: "build"}, first) == guideCaptureHash("same text", state.TerminalSession{Title: "build"}, second) {
 		t.Fatal("pane resize did not change the guide capture fingerprint")
 	}
 	styled := first
 	styled.ANSI = "\x1b[31msame text"
-	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "build", styled) {
+	if guideCaptureHash("same text", state.TerminalSession{Title: "build"}, first) == guideCaptureHash("same text", state.TerminalSession{Title: "build"}, styled) {
 		t.Fatal("ANSI-only change did not change the guide capture fingerprint")
 	}
-	if guideCaptureHash("same text", "build", first) == guideCaptureHash("same text", "renamed", first) {
+	if guideCaptureHash("same text", state.TerminalSession{Title: "build"}, first) == guideCaptureHash("same text", state.TerminalSession{Title: "renamed"}, first) {
 		t.Fatal("Engram title change did not change the guide capture fingerprint")
+	}
+}
+
+func TestGuideCaptureHashIgnoresCodexChromeAndPresentationState(t *testing.T) {
+	session := state.TerminalSession{
+		Title: "build", PresentationProgram: "codex", PresentationVersion: "0.144.6",
+		PresentationModel: "gpt-5.6-sol", PresentationEffort: "high", PresentationActivity: "working",
+	}
+	first := tmux.StyledCapture{ANSI: "spinner one", Columns: 71, VisibleRows: 37, CurrentCmd: "node"}
+	second := first
+	second.ANSI = "spinner two"
+	if guideCaptureHash("same text", session, first) != guideCaptureHash("same text", session, second) {
+		t.Fatal("Codex animation changed the guide capture fingerprint")
+	}
+	idle := session
+	idle.PresentationActivity = "idle"
+	if guideCaptureHash("same text", session, first) != guideCaptureHash("same text", idle, second) {
+		t.Fatal("Codex activity changed the guide capture fingerprint")
 	}
 }
 
