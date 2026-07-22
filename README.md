@@ -184,8 +184,8 @@ When a tracked pane is confidently identified as the specifically tested Codex
 CLI version, Engram removes recognized Codex interface chrome before guide
 rendering and adds a deterministic line such as
 `Codex · gpt-5.6-sol · high · working` to the card. The adapter currently
-supports `codex-cli 0.144.6`. Other versions and uncertain layouts use the
-ordinary terminal path unchanged; raw views and snapshots always remain
+supports `codex-cli 0.144.5` and `0.144.6`. Other versions and uncertain layouts
+use the ordinary terminal path unchanged; raw views and snapshots always remain
 literal. When Codex reports its tested fast mode, the deterministic line retains
 that state as `Codex · gpt-5.6-sol · high · fast · working`.
 

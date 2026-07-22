@@ -21,7 +21,7 @@ type Presentation struct {
 
 func Present(runtime Runtime, text string) Presentation {
 	fallback := Presentation{Text: text}
-	if !runtime.Detected || !runtime.Supported || runtime.Version != SupportedVersion || strings.TrimSpace(text) == "" {
+	if !runtime.Detected || !runtime.Supported || !supportedVersion(runtime.Version) || strings.TrimSpace(text) == "" {
 		return fallback
 	}
 	lines := strings.Split(text, "\n")
@@ -154,7 +154,7 @@ func removeKnownPlaceholder(lines []string, remove []bool, footer int) {
 	parts[0] = strings.TrimSpace(strings.TrimPrefix(first, "›"))
 	prompt := strings.Join(strings.Fields(strings.Join(parts, " ")), " ")
 	switch prompt {
-	case "Write tests for @filename", "Run /review on my current changes", "Find and fix a bug in @filename", "Summarize recent commits", "Implement {feature}":
+	case "Write tests for @filename", "Run /review on my current changes", "Find and fix a bug in @filename", "Summarize recent commits", "Implement {feature}", "Explain this codebase":
 		for i := start; i <= end; i++ {
 			remove[i] = true
 		}
