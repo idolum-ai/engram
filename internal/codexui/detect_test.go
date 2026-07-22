@@ -32,7 +32,7 @@ func (f *fakeVersionResolver) Resolve(executable string) (string, error) {
 	return f.version, nil
 }
 
-func TestDetectorFindsCodexBelowTmuxPaneAndCachesVersion(t *testing.T) {
+func TestDetectorFindsCodexBelowTmuxPaneAndRevalidatesVersion(t *testing.T) {
 	runner := &fakeCommandRunner{
 		ps: stringsJoinLines(
 			"100 1 bash -bash",
@@ -42,7 +42,7 @@ func TestDetectorFindsCodexBelowTmuxPaneAndCachesVersion(t *testing.T) {
 			"900 1 codex /elsewhere/codex"),
 	}
 	versions := &fakeVersionResolver{version: SupportedVersion}
-	detector := &Detector{Runner: runner, Versions: versions, cache: make(map[string]Runtime)}
+	detector := &Detector{Runner: runner, Versions: versions}
 	got, err := detector.Detect(context.Background(), 100, "node")
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestDetectorFindsCodexBelowTmuxPaneAndCachesVersion(t *testing.T) {
 	if _, err := detector.Detect(context.Background(), 100, "node"); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(versions.calls, []string{"/opt/codex/bin/codex"}) {
+	if !reflect.DeepEqual(versions.calls, []string{"/opt/codex/bin/codex", "/opt/codex/bin/codex"}) {
 		t.Fatalf("version resolver calls = %#v", versions.calls)
 	}
 }
@@ -65,7 +65,7 @@ func TestDetectorFallsBackForUnsupportedVersionAndUnrelatedProcess(t *testing.T)
 			"110 100 node node /opt/codex/bin/codex",
 			"200 1 node node server.js"),
 	}
-	detector := &Detector{Runner: runner, Versions: &fakeVersionResolver{version: "0.145.0"}, cache: make(map[string]Runtime)}
+	detector := &Detector{Runner: runner, Versions: &fakeVersionResolver{version: "0.145.0"}}
 	got, err := detector.Detect(context.Background(), 100, "node")
 	if err != nil || !got.Detected || got.Supported || got.Version != "0.145.0" {
 		t.Fatalf("unsupported runtime = %#v, err=%v", got, err)
@@ -78,6 +78,31 @@ func TestDetectorFallsBackForUnsupportedVersionAndUnrelatedProcess(t *testing.T)
 	got, err = detector.Detect(context.Background(), 100, "bash")
 	if err != nil || got.Detected || len(runner.calls) != before {
 		t.Fatalf("shell foreground runtime = %#v, err=%v calls=%#v", got, err, runner.calls)
+	}
+}
+
+func TestDetectorRejectsUnsupportedRelaunchAtSameExecutable(t *testing.T) {
+	runner := &fakeCommandRunner{ps: stringsJoinLines(
+		"100 1 bash -bash",
+		"110 100 node node /opt/codex/bin/codex resume old-session",
+	)}
+	versions := &fakeVersionResolver{version: SupportedVersion}
+	detector := &Detector{Runner: runner, Versions: versions}
+	first, err := detector.Detect(context.Background(), 100, "node")
+	if err != nil || !first.Supported {
+		t.Fatalf("first runtime = %#v, err=%v", first, err)
+	}
+	runner.ps = stringsJoinLines(
+		"100 1 bash -bash",
+		"210 100 node node /opt/codex/bin/codex resume new-session",
+	)
+	versions.version = "0.145.0"
+	second, err := detector.Detect(context.Background(), 100, "node")
+	if err != nil || !second.Detected || second.Supported || second.Version != "0.145.0" {
+		t.Fatalf("replacement runtime = %#v, err=%v", second, err)
+	}
+	if len(versions.calls) != 2 {
+		t.Fatalf("version resolver calls = %#v", versions.calls)
 	}
 }
 

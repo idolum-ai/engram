@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -59,12 +58,10 @@ func (b *boundedOutput) String() string { return string(b.data) }
 type Detector struct {
 	Runner   CommandRunner
 	Versions VersionResolver
-	mu       sync.Mutex
-	cache    map[string]Runtime
 }
 
 func NewDetector() *Detector {
-	return &Detector{Runner: ExecRunner{}, Versions: PackageVersionResolver{}, cache: make(map[string]Runtime)}
+	return &Detector{Runner: ExecRunner{}, Versions: PackageVersionResolver{}}
 }
 
 func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (Runtime, error) {
@@ -81,12 +78,6 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 	if executable == "" {
 		return Runtime{}, nil
 	}
-	d.mu.Lock()
-	cached, ok := d.cache[executable]
-	d.mu.Unlock()
-	if ok {
-		return cached, nil
-	}
 	if d.Versions == nil {
 		return Runtime{Detected: true}, fmt.Errorf("Codex version resolver is unavailable")
 	}
@@ -95,12 +86,6 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 		return Runtime{Detected: true}, err
 	}
 	runtime := Runtime{Detected: true, Version: version, Supported: version == SupportedVersion}
-	d.mu.Lock()
-	if d.cache == nil {
-		d.cache = make(map[string]Runtime)
-	}
-	d.cache[executable] = runtime
-	d.mu.Unlock()
 	return runtime, nil
 }
 

@@ -1,9 +1,12 @@
 package codexui
 
 import (
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
+
+var elapsedDecoration = regexp.MustCompile(`^[─━═]+ Worked for (?:[0-9]+h )?(?:[0-9]+m )?[0-9]+s [─━═]+$`)
 
 type Presentation struct {
 	Text     string
@@ -164,7 +167,7 @@ func separatorLine(line string) bool {
 }
 
 func elapsedLine(line string) bool {
-	return strings.Contains(line, "Worked for ") && strings.ContainsAny(line, "─━═")
+	return elapsedDecoration.MatchString(line)
 }
 
 func collapsedTranscriptLine(line string) bool {

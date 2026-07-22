@@ -70,6 +70,20 @@ func TestPresentDoesNotPromoteStaleModelSwitchNotice(t *testing.T) {
 	}
 }
 
+func TestPresentPreservesSemanticWorkedForCollision(t *testing.T) {
+	input := strings.Join([]string{
+		"Worked for Acme ─ keep this evidence",
+		"",
+		"─ Worked for 1m 08s ─────────────────────",
+		"",
+		"gpt-5.6-sol high · /work",
+	}, "\n")
+	got := Present(Runtime{Detected: true, Supported: true, Version: SupportedVersion}, input)
+	if !got.Applied || !strings.Contains(got.Text, "Worked for Acme ─ keep this evidence") || strings.Contains(got.Text, "Worked for 1m 08s") {
+		t.Fatalf("presentation = %#v", got)
+	}
+}
+
 func TestPresentPreservesUnknownInputAndUnsupportedVersionsExactly(t *testing.T) {
 	tests := []struct {
 		name    string
