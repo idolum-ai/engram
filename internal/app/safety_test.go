@@ -34,8 +34,40 @@ func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 		}
 	}
 	app.processCapturedFrame(context.Background(), session, frame("2"))
-
-	result := app.closeSession(context.Background(), id)
+	validated := make(chan struct{})
+	releaseOldFrame := make(chan struct{})
+	app.agentFrameValidatedHook = func(observed state.TerminalSession) {
+		if observed.CreatedAt.Equal(session.CreatedAt) {
+			select {
+			case <-validated:
+			default:
+				close(validated)
+			}
+			<-releaseOldFrame
+		}
+	}
+	lateFrameDone := make(chan struct{})
+	go func() {
+		app.processCapturedFrame(context.Background(), session, frame("2"))
+		close(lateFrameDone)
+	}()
+	<-validated
+	closeDone := make(chan actionResult, 1)
+	go func() { closeDone <- app.closeSession(context.Background(), id) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		current, _ := app.Store.FindSession(id)
+		if current.State == state.TerminalClosed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("untrack did not commit while the validated old frame was paused")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseOldFrame)
+	<-lateFrameDone
+	result := <-closeDone
 	if !result.OK() || result.Message != "untracked; tmux remains open" {
 		t.Fatalf("close result = %#v", result)
 	}

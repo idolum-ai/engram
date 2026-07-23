@@ -45,6 +45,7 @@ type App struct {
 	presentationMu                sync.RWMutex
 	agentFrameMu                  sync.Mutex
 	agentFrames                   map[int]agentFrameState
+	agentFrameValidatedHook       func(state.TerminalSession)
 	guideAvailable                bool
 	snapshotReady                 bool
 	locks                         []*lockfile.Lock

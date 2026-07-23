@@ -68,10 +68,18 @@ func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.Sty
 		AlternateScreen: capture.AlternateOn,
 		CopyMode:        capture.PaneInMode,
 	}
+	// Keep lifecycle validation and cache mutation atomic with clearAgentFrame.
+	// A close may commit while this lock is held, but its lifecycle reset then
+	// waits and removes anything this already-validated observation writes.
+	a.agentFrameMu.Lock()
 	latest, tracked := a.Store.FindSession(observed.ID)
 	if !tracked || latest.State != state.TerminalRunning || !latest.WatchEnabled ||
 		!latest.CreatedAt.Equal(observed.CreatedAt) || !sameTerminalBinding(latest, observed) {
+		a.agentFrameMu.Unlock()
 		return agentui.Analyze(agentui.Observation{Current: current})
+	}
+	if hook := a.agentFrameValidatedHook; hook != nil {
+		hook(observed)
 	}
 	state := agentFrameState{
 		serverID:  firstNonEmpty(capture.ServerID, observed.TmuxServerID),
@@ -80,7 +88,6 @@ func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.Sty
 		createdAt: observed.CreatedAt,
 		frame:     current,
 	}
-	a.agentFrameMu.Lock()
 	if a.agentFrames == nil {
 		a.agentFrames = make(map[int]agentFrameState)
 	}
