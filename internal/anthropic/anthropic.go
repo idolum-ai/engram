@@ -45,12 +45,12 @@ func (c *Client) Converse(ctx context.Context, in ConversationInput) (string, er
 }
 
 func (c *Client) ConverseWithEvidence(ctx context.Context, in ConversationInput) (guide.Result, error) {
-	text, err := c.completeWithTemperature(ctx, guide.SystemPrompt, guide.BuildPrompt(in), guide.TokenLimit(in), float64Pointer(guide.Temperature))
+	text, err := c.completeWithTemperature(ctx, guide.SystemPrompt, guide.BuildPrompt(in), guide.MaxTokens, float64Pointer(guide.Temperature))
 	if err != nil {
 		return guide.Result{}, err
 	}
 	result := guide.ParseResult(text)
-	result.Text = guide.LimitWords(result.Text, guide.WordLimit(in))
+	result.Text = guide.LimitWords(result.Text, guide.MaxWords)
 	if result.Text == "" {
 		return guide.Result{}, fmt.Errorf("anthropic returned no text")
 	}

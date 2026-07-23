@@ -84,6 +84,7 @@ type App struct {
 	conversationGates             map[int]*conversationGate
 	closeConfirmMu                sync.Mutex
 	closeConfirms                 map[string]closeConfirmation
+	collapsedShelfMu              sync.Mutex
 	sessionLocks                  keyedMutexSet
 	anchorLocks                   keyedMutexSet
 	disclosureLocks               keyedMutexSet
@@ -414,6 +415,10 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 				a.reply(ctx, msg, staleAlternateReply(ts.ID))
 				return "anchor_reply_stale"
 			}
+			if a.isCollapsedShelfMessage(msg.Chat.ID, msg.ReplyToMessage.MessageID) {
+				a.reply(ctx, msg, "The collapsed shelf represents multiple sessions. Tap + to restore their individual reply routes.")
+				return "anchor_reply_user_error"
+			}
 		}
 		a.reply(ctx, msg, "reply to a session anchor to send slash input; for example, //clear sends /clear")
 		return "handled_unroutable_slash_input"
@@ -436,6 +441,10 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		} else if found && targetState == state.ReplyTargetStale {
 			a.reply(ctx, msg, staleAlternateReply(ts.ID))
 			return "anchor_reply_stale"
+		}
+		if a.isCollapsedShelfMessage(msg.Chat.ID, msg.ReplyToMessage.MessageID) {
+			a.reply(ctx, msg, "The collapsed shelf represents multiple sessions. Tap + to restore their individual reply routes.")
+			return "anchor_reply_user_error"
 		}
 		a.reply(ctx, msg, "session not found for this reply; use /sessions to find an active anchor")
 		return "anchor_reply_user_error"

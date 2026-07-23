@@ -49,9 +49,6 @@ When work is in progress inside a named application, preserve the application, w
 VOICE
 Every factual sentence must be traceable to terminal_text. Never say "the terminal shows" or "the screen shows." Never attribute completed work with "you" or "you've"; use direct prose or "we" when shared interactive work is visible. Use "you" only for an action explicitly left to the reader. Write one to three short phone-readable paragraphs. A 180-word limit is a ceiling, not a target. Return prose only, without headings, labels, lists, a fixed opening, troubleshooting, or a closing question.
 
-COMPACT PRESENTATION
-When presentation is "compact", return exactly one factual sentence of at most 28 words. Lead with the current outcome, activity, blocker, or decision. Omit paths, interface chrome, repository state, and recommendations unless one is the decisive fact. Do not use headings or labels. The ordinary truth, selection, noise, and credential rules still apply.
-
 PRIVATE EVIDENCE TRAILER
 When evidence_requested is true, silently choose one or two short excerpts copied exactly and contiguously from terminal_text that most directly support the prose. Prefer the smallest excerpts that preserve the decisive fact. Never paraphrase, repair, combine, or invent excerpt text. Do not select credentials or secrets. When no excerpt can directly support the prose, return an empty list.
 
@@ -65,8 +62,6 @@ Draft first, then edit before returning. When substantive work exists, delete re
 
 const MaxTokens = 768
 const MaxWords = 180
-const CompactMaxTokens = 128
-const CompactMaxWords = 28
 const Temperature = 0.2
 
 const evidenceOpen = "<engram-evidence>"
@@ -100,7 +95,6 @@ type Input struct {
 	RemovedText       string
 	StableContext     string
 	EvidenceRequested bool
-	Compact           bool
 }
 
 func BuildPrompt(in Input) string {
@@ -113,7 +107,6 @@ func BuildPrompt(in Input) string {
 		RemovedText       string `json:"removed_terminal_text,omitempty"`
 		StableContext     string `json:"stable_terminal_context,omitempty"`
 		EvidenceRequested bool   `json:"evidence_requested"`
-		Presentation      string `json:"presentation"`
 	}
 	request := prompt{
 		SessionID:         in.SessionID,
@@ -124,10 +117,6 @@ func BuildPrompt(in Input) string {
 		RemovedText:       in.RemovedText,
 		StableContext:     in.StableContext,
 		EvidenceRequested: in.EvidenceRequested,
-		Presentation:      "full",
-	}
-	if in.Compact {
-		request.Presentation = "compact"
 	}
 	if in.PreviousRendering != "" && (in.ChangedText != "" || in.RemovedText != "") {
 		request.Observation = "incremental"
@@ -137,20 +126,6 @@ func BuildPrompt(in Input) string {
 		panic(err)
 	}
 	return "TERMINAL_OBSERVATION_JSON\n" + string(b)
-}
-
-func TokenLimit(in Input) int {
-	if in.Compact {
-		return CompactMaxTokens
-	}
-	return MaxTokens
-}
-
-func WordLimit(in Input) int {
-	if in.Compact {
-		return CompactMaxWords
-	}
-	return MaxWords
 }
 
 // ParseResult separates private evidence metadata from user-facing prose.

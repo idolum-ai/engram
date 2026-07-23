@@ -120,11 +120,13 @@ exports a bounded recent tail, not an unbounded full audit file.
   spam while a failed delivery remains eligible for retry.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
-  pin state, plus each running anchor's collapsed preference. Restart resets pin
-  knowledge and reconciles presentation without discarding canonical ownership.
-- Startup queues one immediate render for each active watched anchor. This
-  restores process-local conversational continuity and exact numbered file
+  pin state. It separately persists one collapsed-shelf identity and the
+  sessions belonging to it. Restart resets pin knowledge and reconciles both
+  active anchors and the shelf without discarding terminal ownership.
+- Startup queues one immediate render for each expanded active watched anchor.
+  This restores process-local conversational continuity and exact numbered file
   bindings even when the tmux frame itself has not changed across restart.
+  Collapsed sessions remain capture-quiet while the shelf is reconciled.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
@@ -132,8 +134,9 @@ exports a bounded recent tail, not an unbounded full audit file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
 - State schema v16 persists `anchor_mode`, the canonical anchor presentation
-  format, boot-incarnation and bounded recovery-ledger metadata, the latest
-  conversational, snapshot, and upstream-signal reply IDs,
+  format, collapsed membership and the bounded shared-shelf identity, pin,
+  render, and retry state, boot-incarnation and bounded recovery-ledger
+  metadata, the latest conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,
   and a bounded stale-alias set used only to reject confusing replies. It binds each watch to
   a random tmux server incarnation so reused pane/window IDs after a server
@@ -157,9 +160,7 @@ exports a bounded recent tail, not an unbounded full audit file.
 ## Degradation
 
 - If the model provider fails, retain the canonical anchor and report the
-  failure without inventing a conversational rendering. A collapsed anchor
-  instead keeps a deterministic observed-state line while diagnostics retain
-  the provider failure.
+  failure without inventing a conversational rendering.
 - A guide refresh stages the current capture for deterministic reference
   rendering, but advances its capture hash, persisted summary, and in-memory
   conversational continuity only after Telegram accepts the canonical edit and
@@ -167,12 +168,13 @@ exports a bounded recent tail, not an unbounded full audit file.
   remains eligible for polling retry.
 - A failed mode-migration send leaves the old anchor canonical. A failed
   predecessor retirement or pin transition remains eligible for retry.
-- Collapsing a text card persists the preference and edits its existing message
-  in place. A media card publishes an inert, silent text replacement, commits
-  its canonical message ID, activates its controls, pins it, and retires the
-  predecessor. A failed send leaves the media anchor canonical; a lost state
-  race deactivates the prospective replacement. Expansion persists the
-  preference before queuing the selected mode's immediate render.
+- Collapsing first publishes or updates the shared shelf, atomically records
+  membership, pins the shelf, then retires and unpins the individual anchor.
+  Retired replies are stale. If retirement is interrupted, restart retries it
+  while the shelf remains recoverable. Expansion publishes each prospective
+  text anchor inertly, commits its canonical identity, activates and pins it,
+  and leaves the shelf available until every member is restored. Only then is
+  the shelf removed. Normal rendering is queued after cached anchors exist.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.

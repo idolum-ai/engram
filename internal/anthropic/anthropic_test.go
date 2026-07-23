@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/idolum-ai/engram/internal/guide"
 )
 
 func TestConverseUsesOneNonStreamingRequest(t *testing.T) {
@@ -52,24 +50,6 @@ func TestConverseUsesOneNonStreamingRequest(t *testing.T) {
 	}
 	if payload["system"] != SystemPrompt {
 		t.Fatal("request did not use SystemPrompt")
-	}
-}
-
-func TestConverseUsesCompactOutputBudget(t *testing.T) {
-	var payload map[string]any
-	client := New("key", "claude-haiku-4-5-20251001")
-	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		return textResponse("Tests passed."), nil
-	})}
-
-	if _, err := client.Converse(context.Background(), ConversationInput{Compact: true}); err != nil {
-		t.Fatal(err)
-	}
-	if payload["max_tokens"] != float64(guide.CompactMaxTokens) {
-		t.Fatalf("max_tokens = %#v, want %d", payload["max_tokens"], guide.CompactMaxTokens)
 	}
 }
 

@@ -27,14 +27,13 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 	defer lock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
+	if !ok || ts.Collapsed || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return
 	}
 	snapshotReady := a.snapshotAvailable()
-	formatMismatch := ts.Collapsed && ts.AnchorFormat != anchorFormatText ||
-		!ts.Collapsed && (a.snapshotAnchors() && ts.AnchorFormat != anchorFormatSnapshot ||
-			!a.snapshotAnchors() && snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
-			!a.snapshotAnchors() && !snapshotReady && mediaAnchorFormat(ts.AnchorFormat))
+	formatMismatch := a.snapshotAnchors() && ts.AnchorFormat != anchorFormatSnapshot ||
+		!a.snapshotAnchors() && snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
+		!a.snapshotAnchors() && !snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
 	if formatMismatch && ts.State == state.TerminalRunning && ts.WatchEnabled {
 		a.queueRefreshIfIdle(id, true, 0)
 	}
@@ -241,7 +240,7 @@ func neutralAnchorImage(dir string) (string, error) {
 }
 
 func anchorShouldBePinned(ts state.TerminalSession) bool {
-	return ts.State == state.TerminalRunning && ts.WatchEnabled && ts.AnchorMessageID != 0
+	return !ts.Collapsed && ts.State == state.TerminalRunning && ts.WatchEnabled && ts.AnchorMessageID != 0
 }
 
 func (a *App) retiredAnchorText(ts state.TerminalSession) string {

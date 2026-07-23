@@ -536,7 +536,6 @@ func (m Message) FileAttachment() (Document, bool) {
 }
 
 type AnchorMarkupOptions struct {
-	Collapsed bool
 	Image     bool
 	Voice     bool
 	Raw       bool
@@ -546,11 +545,6 @@ type AnchorMarkupOptions struct {
 }
 
 func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
-	if options.Collapsed {
-		return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
-			Button("➕", fmt.Sprintf("expand:%d", sessionID)),
-		}}}
-	}
 	actions := []InlineKeyboardButton{Button("🔄", fmt.Sprintf("refresh:%d", sessionID))}
 	if options.Image {
 		actions = append(actions, Button("🖼️ View", fmt.Sprintf("snapshot:%d", sessionID)))
@@ -586,6 +580,12 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 		})
 	}
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func CollapsedShelfMarkup() *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("➕", "expand-all:0"),
+	}}}
 }
 
 func ClearMarkup() *InlineKeyboardMarkup {

@@ -352,13 +352,7 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 	oldFormat := ts.AnchorFormat
 	presented := ts
 	presented.AnchorFormat = "text"
-	var msg telegram.Message
-	var err error
-	if ts.Collapsed {
-		msg, err = a.sendSilentAnchor(ctx, ts.AnchorChatID, rendered, 0, nil)
-	} else {
-		msg, err = a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(presented))
-	}
+	msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(presented))
 	if err != nil {
 		_ = a.audit("telegram.anchor_mode", "guide_send_failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return
@@ -369,7 +363,7 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 	}
 	rotated := false
 	updated, _, stateErr := a.Store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == oldID && mediaAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 && session.Collapsed == ts.Collapsed && (session.Collapsed || !a.snapshotAnchors()) {
+		if session.AnchorMessageID == oldID && mediaAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 && !a.snapshotAnchors() {
 			session.AnchorMessageID = msg.MessageID
 			session.AnchorFormat = "text"
 			session.RetiringAnchorMessageID = oldID
@@ -390,11 +384,6 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 	}
 	if stateErr != nil {
 		_ = a.audit("state.anchor_mode", "durability_uncertain", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
-	}
-	if ts.Collapsed {
-		if _, markupErr := a.Telegram.EditReplyMarkup(ctx, updated.AnchorChatID, updated.AnchorMessageID, a.anchorMarkup(updated)); markupErr != nil && !telegram.IsMessageNotModified(markupErr) {
-			_ = a.audit("telegram.anchor_mode", "controls_failed", map[string]any{"session_id": ts.ID, "error": markupErr.Error()})
-		}
 	}
 	if anchorShouldBePinned(updated) {
 		a.ensureCurrentAnchorPinnedLocked(ctx, updated)

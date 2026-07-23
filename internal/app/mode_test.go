@@ -111,9 +111,4 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	if len(withoutGuide.InlineKeyboard) != 3 {
 		t.Fatalf("snapshot arrows depend on guide availability: %#v", withoutGuide.InlineKeyboard)
 	}
-	ts.Collapsed = true
-	collapsed := app.anchorMarkup(ts)
-	if len(collapsed.InlineKeyboard) != 1 || len(collapsed.InlineKeyboard[0]) != 1 || collapsed.InlineKeyboard[0][0].CallbackData != "expand:7" {
-		t.Fatalf("collapsed controls = %#v", collapsed)
-	}
 }

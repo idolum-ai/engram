@@ -33,6 +33,10 @@ func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) action
 		a.reply(ctx, msg, staleAlternateReply(ts.ID))
 		return actionResult{Outcome: actionUserError, Message: "stale voice reply"}
 	}
+	if !found && a.isCollapsedShelfMessage(msg.Chat.ID, msg.ReplyToMessage.MessageID) {
+		a.reply(ctx, msg, "The collapsed shelf represents multiple sessions. Tap + to restore their individual reply routes.")
+		return actionResult{Outcome: actionUserError, Message: "collapsed shelf has no voice route"}
+	}
 	if !found || targetState != state.ReplyTargetCurrent {
 		a.reply(ctx, msg, "Session not found for this voice reply. Reply to a session's latest view or live anchor.")
 		return actionResult{Outcome: actionUserError, Message: "voice reply target unavailable"}

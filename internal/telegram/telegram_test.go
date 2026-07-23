@@ -170,12 +170,12 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	}
 }
 
-func TestCollapsedAnchorMarkupOffersOnlyExpand(t *testing.T) {
+func TestCollapsedShelfMarkupOffersOnlyExpandAll(t *testing.T) {
 	t.Parallel()
-	got := AnchorMarkup(7, AnchorMarkupOptions{Collapsed: true, Image: true, Voice: true, Raw: true, Arrows: true, FileToken: "0123456789abcdef", FileCount: 2})
-	want := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "➕", CallbackData: "expand:7"}}}}
+	got := CollapsedShelfMarkup()
+	want := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "➕", CallbackData: "expand-all:0"}}}}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("collapsed markup = %#v, want %#v", got, want)
+		t.Fatalf("collapsed shelf markup = %#v, want %#v", got, want)
 	}
 }
 
@@ -229,9 +229,9 @@ func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
 			Image: true, Voice: true, Raw: true, Arrows: true,
 			FileToken: "0123456789abcdef", FileCount: 4,
 		}),
-		"collapsed anchor": AnchorMarkup(123456789, AnchorMarkupOptions{Collapsed: true}),
-		"recover":          RecoverMarkup(123456789, true),
-		"recovery plan":    RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
+		"collapsed shelf": CollapsedShelfMarkup(),
+		"recover":         RecoverMarkup(123456789, true),
+		"recovery plan":   RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
 		"sessions": SessionListMarkup(
 			[]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}},
 			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},

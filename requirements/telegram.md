@@ -75,17 +75,18 @@ Telegram is Engram's only user interface.
   `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
   is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
   `🗣️ Talk` only when a guide is configured.
-- Every running canonical anchor exposes `➖`. It reduces the anchor to one
-  pinned, routable text line with exactly one `➕` control. Text anchors edit in
-  place; media anchors rotate silently through an initially inert replacement.
-  `➕` restores the currently selected guide or snapshot presentation. Retired
-  controls remain inert, and replies to the collapsed canonical message retain
-  the ordinary tmux route.
-- Collapse is a persisted per-session presentation preference, not a third
-  anchor mode. Collapsed cards omit images, references, file actions, alternate
-  views, and key controls. A configured guide may refresh the line with one
-  reduced-budget request; otherwise Engram uses a deterministic observed-state
-  fallback. Expansion clears presentation hashes and queues an immediate render.
+- Every running canonical anchor exposes `➖`. It moves that session into one
+  shared pinned `Collapsed sessions` shelf, retires and unpins the individual
+  anchor, and records the old reply route as stale. The shelf contains bounded
+  cached one-line summaries and exactly one `➕` control; replying to it does
+  not route input because it represents more than one pane.
+- `➕` restores all shelf members. Engram publishes each individual anchor from
+  persisted state before queuing ordinary guide or snapshot refreshes. Partial
+  restoration leaves the shelf active for the remaining members. After every
+  member has a canonical anchor, Engram removes the shelf.
+- Collapse is persisted attention state, not a third anchor mode. Collapsed
+  sessions perform no model, Chromium, or terminal capture work and expose no
+  files, alternate views, or key controls until expanded.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
 - `📄 Raw` uploads the process-local plain-text companion for the most recent

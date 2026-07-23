@@ -355,6 +355,9 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 	if ts.PendingResume != nil {
 		return actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}
 	}
+	if ts.Collapsed {
+		return actionResult{Outcome: actionUserError, Message: "session is on the collapsed shelf; use + on that shelf to restore all sessions"}
+	}
 	if ts.State == state.TerminalLost {
 		tctx, cancel := tmux.TimeoutContext(ctx)
 		defer cancel()
@@ -592,7 +595,8 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 	})
 	labels := map[int]string{
 		0: "lost",
-		1: "active",
+		1: "collapsed",
+		2: "active",
 	}
 	lastRank := -1
 	actions := make([]telegram.SessionAction, 0, len(active))
@@ -604,7 +608,9 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 		}
 		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
 		b.WriteString("\n")
-		actions = append(actions, telegram.SessionAction{ID: session.ID, Token: sessionActionToken(session)})
+		if !session.Collapsed {
+			actions = append(actions, telegram.SessionAction{ID: session.ID, Token: sessionActionToken(session)})
+		}
 	}
 	return actions
 }
@@ -617,7 +623,10 @@ func sessionPresentationRank(session state.TerminalSession) int {
 	if session.State == state.TerminalLost {
 		return 0
 	}
-	return 1
+	if session.Collapsed {
+		return 1
+	}
+	return 2
 }
 
 func sessionPresentationTime(session state.TerminalSession) time.Time {

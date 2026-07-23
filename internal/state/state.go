@@ -36,6 +36,7 @@ const (
 type State struct {
 	Version                     int                `json:"version"`
 	AnchorMode                  string             `json:"anchor_mode,omitempty"`
+	CollapsedShelf              *CollapsedShelf    `json:"collapsed_shelf,omitempty"`
 	NextSessionID               int                `json:"next_session_id"`
 	LastUpdateID                int                `json:"last_update_id"`
 	LastPollAt                  time.Time          `json:"last_poll_at,omitempty"`
@@ -52,6 +53,15 @@ type State struct {
 	RecoveryPlanMessageIDs      []int              `json:"recovery_plan_message_ids,omitempty"`
 	PendingRecoveryPlanHash     string             `json:"pending_recovery_plan_hash,omitempty"`
 	PendingRecoveryPlanNextPage int                `json:"pending_recovery_plan_next_page,omitempty"`
+}
+
+type CollapsedShelf struct {
+	ChatID         int64     `json:"chat_id"`
+	MessageID      int       `json:"message_id"`
+	LastRenderHash string    `json:"last_render_hash,omitempty"`
+	Pinned         bool      `json:"pinned,omitempty"`
+	PinKnown       bool      `json:"pin_known,omitempty"`
+	RetryAt        time.Time `json:"retry_at,omitempty"`
 }
 
 type RecoveryEvent struct {
@@ -267,6 +277,7 @@ func ReadSnapshot(path string) (State, error) {
 	if snapshot.Version > currentStateVersion {
 		return State{}, fmt.Errorf("state schema version %d is newer than supported version %d", snapshot.Version, currentStateVersion)
 	}
+	normalizeCollapsedShelf(&snapshot)
 	normalizeTerminalSessions(snapshot.TerminalSessions)
 	for index := range snapshot.TerminalSessions {
 		if snapshot.TerminalSessions[index].Origin != TerminalOriginCreated {
@@ -319,6 +330,7 @@ func Open(path, auditPath string) (*Store, error) {
 	if s.state.AnchorMode != "guide" && s.state.AnchorMode != "snapshot" {
 		s.state.AnchorMode = ""
 	}
+	normalizeCollapsedShelf(&s.state)
 	normalizeTerminalSessions(s.state.TerminalSessions)
 	s.state.NextSessionID = nextSessionID(s.state.TerminalSessions)
 	if s.state.ProcessedMessages == nil {
@@ -733,6 +745,198 @@ func (s *Store) UpdateSession(id int, fn func(*TerminalSession)) (TerminalSessio
 	return TerminalSession{}, false, nil
 }
 
+func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf CollapsedShelf, renderHash string) (TerminalSession, bool, error) {
+	if shelf.ChatID == 0 || shelf.MessageID <= 0 {
+		return TerminalSession{}, false, fmt.Errorf("invalid collapsed shelf")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if session.Collapsed || session.AnchorChatID != expected.AnchorChatID || session.AnchorMessageID != expected.AnchorMessageID ||
+			session.TmuxServerID != expected.TmuxServerID || session.TmuxWindowID != expected.TmuxWindowID || session.TmuxPaneID != expected.TmuxPaneID {
+			return cloneTerminalSession(*session), false, nil
+		}
+		if current := s.state.CollapsedShelf; current != nil && (current.ChatID != shelf.ChatID || current.MessageID != shelf.MessageID) {
+			return cloneTerminalSession(*session), false, nil
+		}
+		if s.state.CollapsedShelf == nil {
+			copy := shelf
+			s.state.CollapsedShelf = &copy
+		}
+		s.state.CollapsedShelf.LastRenderHash = renderHash
+		s.state.CollapsedShelf.RetryAt = time.Time{}
+		session.Collapsed = true
+		session.LastRawCaptureHash = ""
+		session.LastSnapshotCaptureHash = ""
+		session.LastSnapshotAttemptAt = time.Time{}
+		session.LastRenderHash = ""
+		session.LastAnchorEditAt = time.Time{}
+		session.AnchorFiles = nil
+		session.AnchorFileToken = ""
+		session.UpdatedAt = time.Now().UTC()
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return cloneTerminalSession(expected), false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
+func (s *Store) FinishCollapsedAnchorRetirement(id int, chatID int64, messageID int) (TerminalSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if !session.Collapsed || session.AnchorChatID != chatID || session.AnchorMessageID != messageID {
+			return cloneTerminalSession(*session), false, nil
+		}
+		before := cloneTerminalSession(*session)
+		recordStaleMessageID(session, messageID)
+		session.AnchorMessageID = 0
+		session.AnchorFormat = ""
+		session.RetiringAnchorMessageID = 0
+		session.RetiringAnchorFormat = ""
+		session.RetiringAnchorRetryAt = time.Time{}
+		session.AnchorPinned = false
+		session.AnchorPinKnown = false
+		session.UpdatedAt = time.Now().UTC()
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return before, false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
+func (s *Store) ExpandSessionFromShelf(id, shelfMessageID int, chatID int64, anchorMessageID int) (TerminalSession, bool, error) {
+	if anchorMessageID <= 0 {
+		return TerminalSession{}, false, fmt.Errorf("invalid expanded anchor")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	if s.state.CollapsedShelf == nil || s.state.CollapsedShelf.MessageID != shelfMessageID || s.state.CollapsedShelf.ChatID != chatID {
+		return TerminalSession{}, false, nil
+	}
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if !session.Collapsed {
+			return cloneTerminalSession(*session), false, nil
+		}
+		before := cloneTerminalSession(*session)
+		if session.AnchorMessageID != 0 {
+			recordStaleMessageID(session, session.AnchorMessageID)
+		}
+		session.Collapsed = false
+		session.AnchorChatID = chatID
+		session.AnchorMessageID = anchorMessageID
+		session.AnchorFormat = "text"
+		session.RetiringAnchorMessageID = 0
+		session.RetiringAnchorFormat = ""
+		session.RetiringAnchorRetryAt = time.Time{}
+		session.AnchorPinned = false
+		session.AnchorPinKnown = false
+		session.LastRawCaptureHash = ""
+		session.LastSnapshotCaptureHash = ""
+		session.LastSnapshotAttemptAt = time.Time{}
+		session.LastRenderHash = ""
+		session.LastAnchorEditAt = time.Time{}
+		session.AnchorFiles = nil
+		session.AnchorFileToken = ""
+		session.UpdatedAt = time.Now().UTC()
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return before, false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
+func (s *Store) SetCollapsedShelfIfEmpty(shelf CollapsedShelf) (CollapsedShelf, bool, error) {
+	if shelf.ChatID == 0 || shelf.MessageID <= 0 {
+		return CollapsedShelf{}, false, fmt.Errorf("invalid collapsed shelf")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.CollapsedShelf != nil {
+		return *s.state.CollapsedShelf, false, nil
+	}
+	copy := shelf
+	s.state.CollapsedShelf = &copy
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.CollapsedShelf = nil
+			return CollapsedShelf{}, false, err
+		}
+		return copy, true, err
+	}
+	return copy, true, nil
+}
+
+func (s *Store) UpdateCollapsedShelf(messageID int, fn func(*CollapsedShelf)) (CollapsedShelf, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.CollapsedShelf == nil || s.state.CollapsedShelf.MessageID != messageID {
+		return CollapsedShelf{}, false, nil
+	}
+	previous := *s.state.CollapsedShelf
+	fn(s.state.CollapsedShelf)
+	updated := *s.state.CollapsedShelf
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			copy := previous
+			s.state.CollapsedShelf = &copy
+			return previous, true, err
+		}
+		return updated, true, err
+	}
+	return updated, true, nil
+}
+
+func (s *Store) ClearCollapsedShelf(messageID int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.CollapsedShelf == nil || s.state.CollapsedShelf.MessageID != messageID {
+		return false, nil
+	}
+	previous := *s.state.CollapsedShelf
+	s.state.CollapsedShelf = nil
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.CollapsedShelf = &previous
+		}
+		return true, err
+	}
+	return true, nil
+}
+
 func (s *Store) FindSession(id int) (TerminalSession, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -770,6 +974,9 @@ func (s *Store) FindReplyTarget(chatID int64, messageID int) (TerminalSession, R
 			continue
 		}
 		if ts.AnchorMessageID == messageID || ts.SummaryMessageID == messageID || ts.SnapshotMessageID == messageID || ts.UpstreamMessageID == messageID {
+			if ts.Collapsed {
+				return cloneTerminalSession(ts), ReplyTargetStale, true
+			}
 			return cloneTerminalSession(ts), ReplyTargetCurrent, true
 		}
 		if ts.RetiringAnchorMessageID == messageID {
@@ -1174,6 +1381,33 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 	}
 }
 
+func normalizeCollapsedShelf(state *State) {
+	if state.CollapsedShelf == nil {
+		return
+	}
+	if state.CollapsedShelf.ChatID == 0 || state.CollapsedShelf.MessageID <= 0 {
+		state.CollapsedShelf = nil
+		return
+	}
+	state.CollapsedShelf.PinKnown = false
+	state.CollapsedShelf.LastRenderHash = truncateUTF8(state.CollapsedShelf.LastRenderHash, 128)
+}
+
+func recordStaleMessageID(session *TerminalSession, messageID int) {
+	if messageID <= 0 {
+		return
+	}
+	for _, staleID := range session.StaleAlternateMessageIDs {
+		if staleID == messageID {
+			return
+		}
+	}
+	session.StaleAlternateMessageIDs = append(session.StaleAlternateMessageIDs, messageID)
+	if len(session.StaleAlternateMessageIDs) > maxStaleAlternates {
+		session.StaleAlternateMessageIDs = append([]int(nil), session.StaleAlternateMessageIDs[len(session.StaleAlternateMessageIDs)-maxStaleAlternates:]...)
+	}
+}
+
 func normalizeRecoveryEvent(event *RecoveryEvent) {
 	event.Kind = truncateUTF8(event.Kind, 64)
 	event.Command = truncateUTF8(event.Command, maxRecoveryCommandBytes)
@@ -1220,6 +1454,10 @@ func maxAttachmentID(attachments []Attachment) int {
 
 func cloneState(in State) State {
 	out := in
+	if in.CollapsedShelf != nil {
+		shelf := *in.CollapsedShelf
+		out.CollapsedShelf = &shelf
+	}
 	out.RecoveryPlanMessageIDs = append([]int(nil), in.RecoveryPlanMessageIDs...)
 	out.TerminalSessions = append([]TerminalSession(nil), in.TerminalSessions...)
 	for i := range out.TerminalSessions {

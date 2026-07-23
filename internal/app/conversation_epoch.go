@@ -111,7 +111,6 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 		input: guide.Input{
 			SessionID:   session.ID,
 			VisibleText: text,
-			Compact:     session.Collapsed,
 		},
 	}
 	changed, removed, stable, ok := alignedConversationDelta(epoch.frame, frame)

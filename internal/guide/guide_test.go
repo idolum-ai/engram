@@ -89,18 +89,3 @@ func TestSystemPromptDefinesProviderNeutralBoundary(t *testing.T) {
 		}
 	}
 }
-
-func TestCompactPromptRequestsOneLineAndUsesSmallerBudgets(t *testing.T) {
-	t.Parallel()
-	in := Input{SessionID: 3, VisibleText: "tests passed", Compact: true}
-	prompt := BuildPrompt(in)
-	if !strings.Contains(prompt, `"presentation":"compact"`) {
-		t.Fatalf("compact prompt = %q", prompt)
-	}
-	if TokenLimit(in) != CompactMaxTokens || WordLimit(in) != CompactMaxWords {
-		t.Fatalf("compact budgets = %d tokens, %d words", TokenLimit(in), WordLimit(in))
-	}
-	if TokenLimit(Input{}) != MaxTokens || WordLimit(Input{}) != MaxWords {
-		t.Fatal("full rendering budgets changed")
-	}
-}

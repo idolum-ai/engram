@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -8,7 +9,7 @@ import (
 	"github.com/idolum-ai/engram/internal/state"
 )
 
-func TestWriteTrackedSessionsOrdersLostThenRecentActive(t *testing.T) {
+func TestWriteTrackedSessionsOrdersLostCollapsedThenRecentActive(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 10, 2, 0, 0, 0, time.UTC)
 	sessions := []state.TerminalSession{
@@ -16,15 +17,30 @@ func TestWriteTrackedSessionsOrdersLostThenRecentActive(t *testing.T) {
 		{ID: 2, State: state.TerminalRunning, Title: "recent", LastActivityAt: now},
 		{ID: 3, State: state.TerminalLost, Title: "detached", UpdatedAt: now},
 		{ID: 4, State: state.TerminalClosed, Title: "closed"},
+		{ID: 5, State: state.TerminalRunning, Title: "quiet", Collapsed: true, LastActivityAt: now},
 	}
 	var b strings.Builder
 	actions := writeTrackedSessions(&b, sessions)
-	want := "\nlost\n[3] detached\n\nactive\n[2] recent\n[1] older\n"
+	want := "\nlost\n[3] detached\n\ncollapsed\n[5] quiet\n\nactive\n[2] recent\n[1] older\n"
 	if b.String() != want {
 		t.Fatalf("tracked sessions:\n%s\nwant:\n%s", b.String(), want)
 	}
 	if len(actions) != 3 || actions[0].ID != 3 || actions[1].ID != 2 || actions[2].ID != 1 {
 		t.Fatalf("actions = %#v", actions)
+	}
+}
+
+func TestWatchSessionDoesNotBypassCollapsedShelf(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.Collapsed = true
+		session.AnchorMessageID = 0
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := app.watchSession(context.Background(), id, 0)
+	if result.OK() || !strings.Contains(result.Message, "collapsed shelf") {
+		t.Fatalf("watch result = %#v", result)
 	}
 }
 

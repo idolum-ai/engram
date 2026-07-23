@@ -54,8 +54,10 @@ hosts. Engram does not resize windows that the user explicitly attaches.
 
 The editable Telegram anchor is the core product surface. It should identify
 the session, show what the pane is doing, and make the next useful action easy.
-Each session has exactly one canonical, pinned anchor. Older anchors become
-inert; two actionable representations of one pane are a product error.
+Each expanded session has exactly one canonical, pinned anchor. A collapsed
+session instead has one inert shelf entry and no individual route. Older
+anchors become inert; two actionable representations of one pane are a product
+error.
 
 A guide anchor uses compact conversational prose. A snapshot anchor uses a
 bounded, ANSI-preserving terminal image. Both retain deterministic references
@@ -64,11 +66,11 @@ already visible in the pane.
 Snapshot anchors keep the exact delivered frame's literal text one tap away
 through a `📄 Raw` attachment; the image is primary, not exclusive.
 
-A running anchor may collapse into one model-guided or deterministic status
-line when the user needs less visual weight. Collapse is not another mode and
-does not create another route: the same watched pane still has exactly one
-pinned canonical anchor. Its only control is `➕`; expanding restores the
-selected guide or snapshot presentation and its available controls.
+Running anchors may move into one shared pinned shelf when the user needs less
+visual weight. Each collapsed session contributes one cached status line, but
+the shelf is deliberately not a terminal input route. Its only control is
+`➕`, which restores every member as an individual canonical anchor in the
+selected guide or snapshot mode.
 
 ### Fast input path
 
@@ -92,13 +94,12 @@ itself a reason to create a notification.
 
 Automatic anchor edits should be intentionally slow and only occur for changed
 captures. Manual refresh should be immediate. `/sessions` is a concise map:
-lost work first, then active work by recency.
+lost work first, then collapsed and active work by recency.
 
-Collapsed cards should spend less attention and less machinery. They omit
-images, references, evidence selection, and terminal-key controls. If the
-configured guide is available, it receives the ordinary bounded frame but has
-a smaller one-sentence output budget. Otherwise the line degrades to observed
-terminal state without making the anchor disappear.
+Collapsed sessions should spend less attention and no presentation machinery.
+They omit captures, model calls, images, references, evidence selection, reply
+routes, and terminal-key controls. Expansion first restores cached summaries as
+ordinary anchors, then lets bounded background rendering make them current.
 
 ### One frame, two presentations
 
@@ -230,8 +231,8 @@ may redraw an unchanged frame because the user explicitly asked to look now.
 
 ### Recoverable local service
 
-State under `~/.engram` should recover sessions, canonical anchors, selected
-mode, each anchor's collapsed preference, attachments, poll position, and recent errors after restart. Diagnostics
+State under `~/.engram` should recover sessions, canonical anchors, the shared
+collapsed shelf and its members, selected mode, attachments, poll position, and recent errors after restart. Diagnostics
 must be available locally and through Telegram without exposing configured
 credentials.
 
