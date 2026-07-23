@@ -185,8 +185,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   while the shelf remains recoverable. Closing during a pending restoration
   retains cleanup ownership and any rate-limit deadline until the inert
   prospective message is retired. Expansion publishes each prospective
-  text anchor inertly, activates and pins it, commits its canonical identity,
-  and leaves the shelf available until every member is restored. Only then is
+  text anchor inertly, persists and pins that inert identity, commits its
+  canonical reply route, and only then exposes controls. It leaves the shelf
+  available until every member is restored. Only then is
   the shelf removed. Normal rendering is queued after cached anchors exist.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. A missing prospective restored anchor is abandoned durably so

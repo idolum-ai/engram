@@ -751,7 +751,8 @@ work and expose no reply or terminal-control route. Their persisted summaries an
 survive restart. Expansion first reconstructs ordinary anchors from that cached
 state with an explicit refreshing label, then queues each normal bounded
 refresh as soon as that anchor is durable. Prospective anchors are persisted
-while inert before they gain controls or a pin; the shelf remains recoverable
+and pinned while inert, promoted to the reply route, and only then given
+controls; the shelf remains recoverable
 until every individual anchor has been restored. Collapse and expansion
 callbacks acknowledge without waiting for Telegram delivery. Rate-limited
 retirement work, including cleanup after a session is closed mid-restoration,

@@ -856,6 +856,38 @@ func (s *Store) FinishCollapseSessionIntoShelf(id int, shelfMessageID int) (Term
 	return TerminalSession{}, false, nil
 }
 
+func (s *Store) CancelPendingCollapse(id int, shelfMessageID int) (TerminalSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	if s.state.CollapsedShelf == nil || s.state.CollapsedShelf.MessageID != shelfMessageID {
+		return TerminalSession{}, false, nil
+	}
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if !session.PendingCollapse || session.Collapsed {
+			return cloneTerminalSession(*session), false, nil
+		}
+		before := cloneTerminalSession(*session)
+		session.PendingCollapse = false
+		session.UpdatedAt = time.Now().UTC()
+		s.state.CollapsedShelf.LastRenderHash = ""
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return before, false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
 func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf CollapsedShelf) (TerminalSession, bool, error) {
 	pending, begun, beginErr := s.BeginCollapseSessionIntoShelf(id, expected, shelf)
 	if !begun {
@@ -1451,7 +1483,7 @@ func sessionAllocationSlot(sessions []TerminalSession) (int, int, error) {
 	used := make(map[int]int)
 	reusableIndex := -1
 	for index, session := range sessions {
-		reusable := session.State == TerminalClosed && session.ResumeProgram == "" && session.ResumeSessionID == ""
+		reusable := session.State == TerminalClosed && session.ResumeProgram == "" && session.ResumeSessionID == "" && session.PendingRestore == nil
 		if reusable && reusableIndex < 0 {
 			reusableIndex = index
 		}

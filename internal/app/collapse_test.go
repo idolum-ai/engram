@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -620,6 +621,39 @@ func TestReplacementShelfRetainsPredecessorUntilRetirementSucceeds(t *testing.T)
 	}
 }
 
+func TestRetiringShelfShowCallbackUsesCurrentShelfIdentity(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	session, _ := app.Store.FindSession(id)
+	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
+		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
+	}); err != nil || !committed {
+		t.Fatalf("collapse committed=%v err=%v", committed, err)
+	}
+	if _, replaced, err := app.Store.ReplaceCollapsedShelf(88, state.CollapsedShelf{ChatID: 100, MessageID: 89}); err != nil || !replaced {
+		t.Fatalf("replacement committed=%v err=%v", replaced, err)
+	}
+	app.Telegram = telegram.New("TOKEN")
+	app.Telegram.BaseURL = "https://api.telegram.org/botTOKEN"
+	app.Telegram.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/answerCallbackQuery" {
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+	})}
+
+	shelf, status := app.validateCollapsedShelfCallback(context.Background(), telegram.CallbackQuery{
+		ID: "show-predecessor",
+		Message: &telegram.Message{
+			MessageID: 88,
+			Chat:      telegram.Chat{ID: 100},
+		},
+	})
+
+	if status != "" || shelf.MessageID != 89 || shelf.RetiringMessageID != 88 {
+		t.Fatalf("shelf=%#v status=%q", shelf, status)
+	}
+}
+
 func TestUnavailableReplacementShelfRetiresPredecessorBeforeReplacingAgain(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	session, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
@@ -893,10 +927,19 @@ func TestPendingRestoreReconcilesAfterRestartBoundary(t *testing.T) {
 		}
 		switch req.URL.Path {
 		case "/botTOKEN/editMessageReplyMarkup":
+			if _, target, found := app.Store.FindReplyTarget(100, 89); !found || target != state.ReplyTargetCurrent {
+				t.Fatalf("controls became visible before restore identity was current: target=%q found=%v", target, found)
+			}
 			return telegramTestResponse(t, http.StatusOK, map[string]any{
 				"ok": true, "result": map[string]any{"message_id": body["message_id"], "chat": map[string]any{"id": 100}},
 			}), nil
-		case "/botTOKEN/pinChatMessage", "/botTOKEN/deleteMessage":
+		case "/botTOKEN/pinChatMessage":
+			pending, _ := app.Store.FindSession(id)
+			if pending.PendingRestore == nil || !pending.Collapsed {
+				t.Fatalf("restore identity promoted before inert pin: %#v", pending)
+			}
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		case "/botTOKEN/deleteMessage":
 			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
 		default:
 			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
@@ -917,6 +960,9 @@ func TestPendingRestoreReconcilesAfterRestartBoundary(t *testing.T) {
 		if !containsCollapsePath(paths, want) {
 			t.Fatalf("requests=%#v missing %s", paths, want)
 		}
+	}
+	if slices.Index(paths, "/botTOKEN/pinChatMessage") > slices.Index(paths, "/botTOKEN/editMessageReplyMarkup") {
+		t.Fatalf("restore controls preceded inert pin and durable promotion: %#v", paths)
 	}
 }
 
@@ -987,7 +1033,7 @@ func TestPendingRestoreRetrySurvivesPreReplacementStateFailureInMemory(t *testin
 		t.Fatal("pending restore ignored process-local retry deadline")
 	}
 	current, _ := store.FindSession(session.ID)
-	if calls != 2 || current.PendingRestore == nil || !current.PendingRestore.RetryAt.IsZero() ||
+	if calls != 1 || current.PendingRestore == nil || !current.PendingRestore.RetryAt.IsZero() ||
 		time.Until(app.pendingRestoreRetryDeadline(session.ID, *current.PendingRestore)) < 29*time.Second {
 		t.Fatalf("calls=%d pending=%#v", calls, current.PendingRestore)
 	}
@@ -1284,6 +1330,13 @@ func TestCollapsedShelfQueueSaturationDoesNotSendInlineReply(t *testing.T) {
 		if req.URL.Path != "/botTOKEN/answerCallbackQuery" {
 			return nil, errors.New("queue saturation must not send an inline reply")
 		}
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		if body["text"] != "Engram is busy; try Hide again" {
+			return nil, fmt.Errorf("queue saturation callback text = %q", body["text"])
+		}
 		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
 	})}
 
@@ -1383,6 +1436,17 @@ func TestCollapseWaitsForInFlightConversationWork(t *testing.T) {
 		t.Fatal("collapse crossed in-flight conversation work")
 	case <-time.After(100 * time.Millisecond):
 	}
+	writer := make(chan struct{})
+	go func() {
+		app.presentationMu.Lock()
+		close(writer)
+		app.presentationMu.Unlock()
+	}()
+	select {
+	case <-writer:
+	case <-time.After(time.Second):
+		t.Fatal("collapse held presentation lock while waiting for conversation work")
+	}
 	cancel()
 	release()
 	select {
@@ -1396,6 +1460,81 @@ func TestCollapseWaitsForInFlightConversationWork(t *testing.T) {
 	current, _ := app.Store.FindSession(id)
 	if current.Collapsed || current.PendingCollapse {
 		t.Fatalf("canceled collapse changed membership: %#v", current)
+	}
+}
+
+func TestPendingCollapseReconciliationWaitsForConversationWork(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	session, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = anchorFormatText
+		session.LastSummary = "Cached status."
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, committed, err := app.Store.BeginCollapseSessionIntoShelf(id, session, state.CollapsedShelf{
+		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
+	}); err != nil || !committed {
+		t.Fatalf("begin collapse committed=%v err=%v", committed, err)
+	}
+	rendered := app.renderCollapsedShelf(app.Store.Snapshot().TerminalSessions)
+	if _, found, err := app.Store.UpdateCollapsedShelf(88, func(shelf *state.CollapsedShelf) {
+		shelf.LastRenderHash = sha(rendered)
+	}); err != nil || !found {
+		t.Fatalf("prepare shelf found=%v err=%v", found, err)
+	}
+	release, acquired := app.acquireConversation(context.Background(), id)
+	if !acquired {
+		t.Fatal("could not hold conversation gate")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		app.reconcileCollapsedShelf(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("pending collapse crossed in-flight conversation work")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled pending reconciliation did not return")
+	}
+	release()
+	current, _ := app.Store.FindSession(id)
+	if current.Collapsed || !current.PendingCollapse || current.AnchorMessageID != 77 {
+		t.Fatalf("canceled pending reconciliation changed route: %#v", current)
+	}
+
+	disclosure := app.disclosureMutex(id)
+	disclosure.Lock()
+	ctx, cancel = context.WithCancel(context.Background())
+	done = make(chan struct{})
+	go func() {
+		app.reconcileCollapsedShelf(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("pending collapse crossed in-flight disclosure work")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	disclosure.Unlock()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("canceled disclosure reconciliation did not return")
+	}
+	current, _ = app.Store.FindSession(id)
+	if current.Collapsed || !current.PendingCollapse || current.AnchorMessageID != 77 {
+		t.Fatalf("disclosure-canceled reconciliation changed route: %#v", current)
 	}
 }
 

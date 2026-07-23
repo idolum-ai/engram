@@ -71,8 +71,8 @@ visual weight. Each collapsed session contributes one cached status line, but
 the shelf is deliberately not a terminal input route. Its only control is
 `➕ Show`, which restores every member as an individual canonical anchor in the
 selected guide or snapshot mode. Restoration acknowledges immediately, makes
-each prospective anchor durable while inert, and only then grants controls and
-a pin. Collapse follows the reciprocal rule: the individual anchor remains
+each prospective anchor durable and pinned while inert, promotes its reply
+identity, and only then grants controls. Collapse follows the reciprocal rule: the individual anchor remains
 canonical until the shared shelf is rendered and pinned. The shelf identifies
 its summaries as cached because hiding a session also stops observation.
 

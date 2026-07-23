@@ -243,6 +243,35 @@ func TestStoreDoesNotReuseClosedResumableSessionID(t *testing.T) {
 	}
 }
 
+func TestStoreDoesNotReuseClosedSessionWithPendingMessageCleanup(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupOwner, err := store.AllocateSession("main", "@1", "%1", "cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(cleanupOwner.ID, func(session *TerminalSession) {
+		session.State = TerminalClosed
+		session.PendingRestore = &PendingRestore{ChatID: 100, MessageID: 99, RetryAt: time.Now().UTC().Add(time.Minute)}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	allocated, err := store.AllocateSession("main", "@2", "%2", "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allocated.ID == cleanupOwner.ID {
+		t.Fatalf("cleanup owner session ID %d was recycled", cleanupOwner.ID)
+	}
+	got, ok := store.FindSession(cleanupOwner.ID)
+	if !ok || got.PendingRestore == nil || got.PendingRestore.MessageID != 99 {
+		t.Fatalf("cleanup ownership was not preserved: %#v ok=%v", got, ok)
+	}
+}
+
 func TestStoreRefusesAllocationBeforePruningProtectedSessions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "state.json")

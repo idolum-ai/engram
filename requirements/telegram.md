@@ -89,12 +89,18 @@ Telegram is Engram's only user interface.
   rendered and pinned; a delayed or failed handoff therefore does not remove
   the current terminal route.
 - `➕ Show` acknowledges immediately and restores all shelf members outside the
-  Telegram update loop. Engram first persists each inert prospective anchor,
-  then activates and pins it, then promotes it to the canonical reply route.
+  Telegram update loop. Engram first persists and pins each inert prospective
+  anchor, then promotes it to the canonical reply route before exposing its
+  controls.
   Each restored anchor is visibly identified as cached while its ordinary
   guide or snapshot refresh is queued. Partial restoration leaves the shelf
   active for the remaining members. After every member has a canonical anchor,
   Engram removes the shelf.
+- Hide and Show reserve bounded worker capacity before their success
+  acknowledgement. A full queue answers the callback with an explicit retry
+  instruction and performs no synchronous chat send. During shelf replacement,
+  the still-visible predecessor's Show callback resolves to the current shelf
+  until predecessor retirement succeeds.
 - Collapse is persisted attention state, not a third anchor mode. Collapsed
   sessions perform no model, Chromium, terminal capture, raw/dump, or alternate
   view work and expose no files or key controls until expanded.

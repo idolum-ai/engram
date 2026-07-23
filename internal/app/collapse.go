@@ -23,13 +23,23 @@ const (
 func (a *App) collapseAnchor(ctx context.Context, expected state.TerminalSession) actionResult {
 	a.collapsedShelfMu.Lock()
 	defer a.collapsedShelfMu.Unlock()
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	releaseConversation, acquired := a.acquireConversation(ctx, expected.ID)
 	if !acquired {
 		return actionResult{Outcome: actionStateFailed, Message: "collapse canceled before in-flight presentation work finished"}
 	}
-	defer releaseConversation()
+	conversationHeld := true
+	defer func() {
+		if conversationHeld {
+			releaseConversation()
+		}
+	}()
+	a.presentationMu.RLock()
+	presentationHeld := true
+	defer func() {
+		if presentationHeld {
+			a.presentationMu.RUnlock()
+		}
+	}()
 	disclosureLock := a.disclosureMutex(expected.ID)
 	disclosureLock.Lock()
 	sessionLock := a.sessionMutex(expected.ID)
@@ -91,6 +101,10 @@ func (a *App) collapseAnchor(ctx context.Context, expected state.TerminalSession
 	sessionLock.Unlock()
 	disclosureLock.Unlock()
 	sessionGuardsHeld = false
+	a.presentationMu.RUnlock()
+	presentationHeld = false
+	releaseConversation()
+	conversationHeld = false
 	a.reconcileCollapsedShelfLocked(ctx)
 	current, _ = a.Store.FindSession(expected.ID)
 	if !current.Collapsed {
@@ -129,16 +143,19 @@ func (a *App) expandCollapsedShelf(ctx context.Context, expected state.Collapsed
 		lock := a.anchorMutex(member.ID)
 		lock.Lock()
 		if member.PendingCollapse {
-			updated, committed, stateErr := a.Store.FinishCollapseSessionIntoShelf(member.ID, expected.MessageID)
+			_, committed, stateErr := a.Store.CancelPendingCollapse(member.ID, expected.MessageID)
 			if !committed {
 				if stateErr != nil {
-					_ = a.audit("state.collapsed_expand", "finish_pending_collapse_failed", map[string]any{"session_id": member.ID, "error": stateErr.Error()})
+					_ = a.audit("state.collapsed_expand", "cancel_pending_collapse_failed", map[string]any{"session_id": member.ID, "error": stateErr.Error()})
 				}
 				lock.Unlock()
 				sessionLock.Unlock()
 				continue
 			}
-			member = updated
+			restored = append(restored, member.ID)
+			lock.Unlock()
+			sessionLock.Unlock()
+			continue
 		}
 		if member.AnchorMessageID != 0 && !a.retireCollapsedSessionAnchorLocked(ctx, member) {
 			lock.Unlock()
@@ -216,19 +233,6 @@ func (a *App) finishPendingRestoreLocked(ctx context.Context, session state.Term
 	if deadline := a.pendingRestoreRetryDeadline(session.ID, *pending); !deadline.IsZero() && time.Now().Before(deadline) {
 		return false
 	}
-	presented := session
-	presented.Collapsed = false
-	presented.AnchorChatID = pending.ChatID
-	presented.AnchorMessageID = pending.MessageID
-	presented.AnchorFormat = anchorFormatText
-	if _, err := a.Telegram.EditReplyMarkup(ctx, pending.ChatID, pending.MessageID, a.anchorMarkup(presented)); err != nil && !telegram.IsMessageNotModified(err) {
-		if isTelegramAnchorUnavailable(err) {
-			a.abandonPendingRestore(session, *pending, err)
-			return false
-		}
-		a.deferPendingRestoreRetry(session.ID, pending.MessageID, err)
-		return false
-	}
 	if err := a.Telegram.PinChatMessage(ctx, pending.ChatID, pending.MessageID); err != nil && !telegram.IsMessageAlreadyPinned(err) {
 		if isTelegramAnchorUnavailable(err) {
 			a.abandonPendingRestore(session, *pending, err)
@@ -237,7 +241,7 @@ func (a *App) finishPendingRestoreLocked(ctx context.Context, session state.Term
 		a.deferPendingRestoreRetry(session.ID, pending.MessageID, err)
 		return false
 	}
-	_, committed, stateErr := a.Store.FinishExpandSessionFromShelf(session.ID, pending.ChatID, pending.MessageID)
+	restored, committed, stateErr := a.Store.FinishExpandSessionFromShelf(session.ID, pending.ChatID, pending.MessageID)
 	if !committed {
 		if stateErr != nil {
 			_ = a.audit("state.collapsed_expand", "finish_failed", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
@@ -249,6 +253,10 @@ func (a *App) finishPendingRestoreLocked(ctx context.Context, session state.Term
 		_ = a.audit("state.collapsed_expand", "finish_durability_uncertain", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
 	}
 	a.pendingRestoreRetries.Delete(session.ID)
+	if _, err := a.Telegram.EditReplyMarkup(ctx, restored.AnchorChatID, restored.AnchorMessageID, a.anchorMarkup(restored)); err != nil && !telegram.IsMessageNotModified(err) {
+		_ = a.audit("telegram.collapsed_expand", "controls_failed", map[string]any{"session_id": session.ID, "message_id": restored.AnchorMessageID, "error": err.Error()})
+		a.deferCollapsedShelfFloodWait(err)
+	}
 	return true
 }
 
@@ -327,8 +335,6 @@ func (a *App) pendingRestoreRetryDeadline(id int, pending state.PendingRestore) 
 func (a *App) reconcileCollapsedShelf(ctx context.Context) {
 	a.collapsedShelfMu.Lock()
 	defer a.collapsedShelfMu.Unlock()
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	a.reconcileCollapsedShelfLocked(ctx)
 }
 
@@ -454,6 +460,17 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 		if !member.PendingCollapse {
 			continue
 		}
+		releaseConversation, acquired := a.acquireConversation(ctx, member.ID)
+		if !acquired {
+			return
+		}
+		disclosureLock := a.disclosureMutex(member.ID)
+		disclosureLock.Lock()
+		if ctx.Err() != nil {
+			disclosureLock.Unlock()
+			releaseConversation()
+			return
+		}
 		sessionLock := a.sessionMutex(member.ID)
 		sessionLock.Lock()
 		anchorLock := a.anchorMutex(member.ID)
@@ -467,6 +484,8 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 		}
 		anchorLock.Unlock()
 		sessionLock.Unlock()
+		disclosureLock.Unlock()
+		releaseConversation()
 	}
 	snapshot = a.Store.Snapshot()
 	members = collapsedShelfSessions(snapshot.TerminalSessions)

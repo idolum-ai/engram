@@ -286,6 +286,14 @@ func TestPendingCollapseKeepsAnchorLiveUntilShelfIsReady(t *testing.T) {
 	if pending.Collapsed || !pending.PendingCollapse || pending.AnchorMessageID != 77 {
 		t.Fatalf("reopened pending collapse = %#v", pending)
 	}
+	canceled, committed, err := reopened.CancelPendingCollapse(session.ID, 88)
+	if err != nil || !committed || canceled.Collapsed || canceled.PendingCollapse || canceled.AnchorMessageID != 77 {
+		t.Fatalf("canceled=%#v committed=%v err=%v", canceled, committed, err)
+	}
+	pending, committed, err = reopened.BeginCollapseSessionIntoShelf(session.ID, canceled, CollapsedShelf{ChatID: 100, MessageID: 88})
+	if err != nil || !committed || !pending.PendingCollapse {
+		t.Fatalf("restarted pending=%#v committed=%v err=%v", pending, committed, err)
+	}
 	collapsed, committed, err := reopened.FinishCollapseSessionIntoShelf(session.ID, 88)
 	if err != nil || !committed || !collapsed.Collapsed || collapsed.PendingCollapse || collapsed.SummaryMessageID != 0 {
 		t.Fatalf("collapsed=%#v committed=%v err=%v", collapsed, committed, err)

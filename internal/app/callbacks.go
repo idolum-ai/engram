@@ -48,39 +48,27 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if status != "" {
 			return status
 		}
-		if !a.answerCallback(ctx, cb.ID, "moving to collapsed sessions") {
-			return "callback_telegram_failed"
-		}
 		msg := *cb.Message
 		msg.From = &cb.From
-		if !a.queueTransfer(func(workerCtx context.Context) {
+		return a.queueCallbackTransfer(ctx, cb.ID, "moving to collapsed sessions", "Engram is busy; try Hide again", func(workerCtx context.Context) {
 			result := a.collapseAnchor(workerCtx, ts)
 			if !result.OK() {
 				a.reply(workerCtx, msg, result.Message)
 			}
-		}) {
-			return "callback_state_failed"
-		}
-		return "callback_ok"
+		})
 	case "expand-all":
 		shelf, status := a.validateCollapsedShelfCallback(ctx, cb)
 		if status != "" {
 			return status
 		}
-		if !a.answerCallback(ctx, cb.ID, "restoring sessions") {
-			return "callback_telegram_failed"
-		}
 		msg := *cb.Message
 		msg.From = &cb.From
-		if !a.queueTransfer(func(workerCtx context.Context) {
+		return a.queueCallbackTransfer(ctx, cb.ID, "restoring sessions", "Engram is busy; try Show again", func(workerCtx context.Context) {
 			result := a.expandCollapsedShelf(workerCtx, shelf)
 			if !result.OK() {
 				a.reply(workerCtx, msg, result.Message)
 			}
-		}) {
-			return "callback_state_failed"
-		}
-		return "callback_ok"
+		})
 	case "refresh":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -432,6 +420,23 @@ func resolveAnchorFile(ts state.TerminalSession, token string, index int) (strin
 	return ts.AnchorFiles[index-1], true
 }
 
+func (a *App) queueCallbackTransfer(ctx context.Context, callbackID, acceptedText, busyText string, work func(context.Context)) string {
+	proceed := make(chan bool, 1)
+	if !a.queueTransfer(func(workerCtx context.Context) {
+		if <-proceed {
+			work(workerCtx)
+		}
+	}) {
+		return callbackAnswerStatus(a.answerCallback(ctx, callbackID, busyText), "callback_state_failed")
+	}
+	answered := a.answerCallback(ctx, callbackID, acceptedText)
+	proceed <- answered
+	if !answered {
+		return "callback_telegram_failed"
+	}
+	return "callback_ok"
+}
+
 func (a *App) callbackAuthorized(cb telegram.CallbackQuery) bool {
 	return cb.From.ID == a.Config.TelegramAllowedUserID && cb.Message != nil && cb.Message.Chat.ID == a.Config.TelegramChatID
 }
@@ -461,7 +466,9 @@ func (a *App) validateAnchorCallback(ctx context.Context, cb telegram.CallbackQu
 
 func (a *App) validateCollapsedShelfCallback(ctx context.Context, cb telegram.CallbackQuery) (state.CollapsedShelf, string) {
 	shelf := a.Store.Snapshot().CollapsedShelf
-	if shelf == nil || cb.Message == nil || shelf.ChatID != cb.Message.Chat.ID || shelf.MessageID != cb.Message.MessageID {
+	current := shelf != nil && cb.Message != nil && shelf.ChatID == cb.Message.Chat.ID && shelf.MessageID == cb.Message.MessageID
+	retiring := shelf != nil && cb.Message != nil && shelf.RetiringChatID == cb.Message.Chat.ID && shelf.RetiringMessageID == cb.Message.MessageID
+	if !current && !retiring {
 		if !a.answerCallback(ctx, cb.ID, "collapsed shelf moved; use the newer message") {
 			return state.CollapsedShelf{}, "callback_telegram_failed"
 		}
