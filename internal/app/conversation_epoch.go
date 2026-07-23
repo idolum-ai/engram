@@ -111,6 +111,7 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 		input: guide.Input{
 			SessionID:   session.ID,
 			VisibleText: text,
+			Compact:     session.Collapsed,
 		},
 	}
 	changed, removed, stable, ok := alignedConversationDelta(epoch.frame, frame)
@@ -136,7 +137,7 @@ func (a *App) conversationTurnCurrent(session state.TerminalSession, turn conver
 	}
 	latest, ok := a.Store.FindSession(session.ID)
 	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.TmuxServerID != session.TmuxServerID ||
-		latest.TmuxWindowID != session.TmuxWindowID || latest.TmuxPaneID != session.TmuxPaneID {
+		latest.TmuxWindowID != session.TmuxWindowID || latest.TmuxPaneID != session.TmuxPaneID || latest.Collapsed != session.Collapsed {
 		return false
 	}
 	a.conversationMu.Lock()

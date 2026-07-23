@@ -120,8 +120,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   spam while a failed delivery remains eligible for retry.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
-  pin state. Restart resets pin knowledge and reconciles presentation without
-  discarding canonical ownership.
+  pin state, plus each running anchor's collapsed preference. Restart resets pin
+  knowledge and reconciles presentation without discarding canonical ownership.
 - Startup queues one immediate render for each active watched anchor. This
   restores process-local conversational continuity and exact numbered file
   bindings even when the tmux frame itself has not changed across restart.
@@ -131,7 +131,7 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v15 persists `anchor_mode`, the canonical anchor presentation
+- State schema v16 persists `anchor_mode`, the canonical anchor presentation
   format, boot-incarnation and bounded recovery-ledger metadata, the latest
   conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,
@@ -156,8 +156,10 @@ exports a bounded recent tail, not an unbounded full audit file.
 
 ## Degradation
 
-- If the model provider fails, retain the canonical anchor and report the failure without
-  inventing a conversational rendering.
+- If the model provider fails, retain the canonical anchor and report the
+  failure without inventing a conversational rendering. A collapsed anchor
+  instead keeps a deterministic observed-state line while diagnostics retain
+  the provider failure.
 - A guide refresh stages the current capture for deterministic reference
   rendering, but advances its capture hash, persisted summary, and in-memory
   conversational continuity only after Telegram accepts the canonical edit and
@@ -165,6 +167,12 @@ exports a bounded recent tail, not an unbounded full audit file.
   remains eligible for polling retry.
 - A failed mode-migration send leaves the old anchor canonical. A failed
   predecessor retirement or pin transition remains eligible for retry.
+- Collapsing a text card persists the preference and edits its existing message
+  in place. A media card publishes an inert, silent text replacement, commits
+  its canonical message ID, activates its controls, pins it, and retires the
+  predecessor. A failed send leaves the media anchor canonical; a lost state
+  race deactivates the prospective replacement. Expansion persists the
+  preference before queuing the selected mode's immediate render.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. Rate limits do not trigger replacement amplification, and
   unchanged edits count as success.

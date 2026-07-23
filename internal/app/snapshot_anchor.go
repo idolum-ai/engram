@@ -80,7 +80,7 @@ func (a *App) snapshotTextFrame(ts state.TerminalSession) (snapshotTextFrame, bo
 func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	manual := a.consumeManualRefresh(id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.TmuxPaneID == "" || ts.State != state.TerminalRunning || !ts.WatchEnabled || ts.AnchorMessageID == 0 {
+	if !ok || ts.TmuxPaneID == "" || ts.State != state.TerminalRunning || !ts.WatchEnabled || ts.AnchorMessageID == 0 || ts.Collapsed {
 		return
 	}
 	ready, _ := a.snapshotRenderHealth()
@@ -183,7 +183,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	latest, ok := a.Store.FindSession(id)
-	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, current) {
+	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.Collapsed || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, current) {
 		return
 	}
 	// The image was rendered with current.Title. A concurrent rename must retry
@@ -214,7 +214,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		oldFormat := firstNonEmpty(latest.AnchorFormat, "text")
 		replaced := false
 		updated, _, stateErr := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-			if a.snapshotAnchors() && session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
+			if a.snapshotAnchors() && !session.Collapsed && session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
 				session.AnchorChatID = msg.Chat.ID
 				session.AnchorMessageID = msg.MessageID
 				session.AnchorFormat = "snapshot"
@@ -255,7 +255,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 
 	updated := false
 	stored, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		if a.snapshotAnchors() && session.AnchorMessageID == latest.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
+		if a.snapshotAnchors() && !session.Collapsed && session.AnchorMessageID == latest.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
 			session.AnchorFormat = "snapshot"
 			session.LastSnapshotCaptureHash = captureHash
 			session.LastRenderHash = sha(captureHash + "\x00" + caption)
@@ -352,7 +352,13 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 	oldFormat := ts.AnchorFormat
 	presented := ts
 	presented.AnchorFormat = "text"
-	msg, err := a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(presented))
+	var msg telegram.Message
+	var err error
+	if ts.Collapsed {
+		msg, err = a.sendSilentAnchor(ctx, ts.AnchorChatID, rendered, 0, nil)
+	} else {
+		msg, err = a.sendAnchor(ctx, ts.AnchorChatID, rendered, oldID, a.anchorMarkup(presented))
+	}
 	if err != nil {
 		_ = a.audit("telegram.anchor_mode", "guide_send_failed", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return
@@ -363,7 +369,7 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 	}
 	rotated := false
 	updated, _, stateErr := a.Store.UpdateSession(ts.ID, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == oldID && mediaAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 && !a.snapshotAnchors() {
+		if session.AnchorMessageID == oldID && mediaAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 && session.Collapsed == ts.Collapsed && (session.Collapsed || !a.snapshotAnchors()) {
 			session.AnchorMessageID = msg.MessageID
 			session.AnchorFormat = "text"
 			session.RetiringAnchorMessageID = oldID
@@ -384,6 +390,11 @@ func (a *App) rotateMediaAnchorToTextLocked(ctx context.Context, ts state.Termin
 	}
 	if stateErr != nil {
 		_ = a.audit("state.anchor_mode", "durability_uncertain", map[string]any{"session_id": ts.ID, "error": stateErr.Error()})
+	}
+	if ts.Collapsed {
+		if _, markupErr := a.Telegram.EditReplyMarkup(ctx, updated.AnchorChatID, updated.AnchorMessageID, a.anchorMarkup(updated)); markupErr != nil && !telegram.IsMessageNotModified(markupErr) {
+			_ = a.audit("telegram.anchor_mode", "controls_failed", map[string]any{"session_id": ts.ID, "error": markupErr.Error()})
+		}
 	}
 	if anchorShouldBePinned(updated) {
 		a.ensureCurrentAnchorPinnedLocked(ctx, updated)

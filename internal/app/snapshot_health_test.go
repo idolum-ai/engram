@@ -171,6 +171,28 @@ func TestSnapshotHealthAllowsOnlyOneConcurrentProbe(t *testing.T) {
 	}
 }
 
+func TestSnapshotRecoveryRefreshesOnlyExpandedWatchedSessions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		session state.TerminalSession
+		want    bool
+	}{
+		{name: "expanded", session: state.TerminalSession{State: state.TerminalRunning, WatchEnabled: true}, want: true},
+		{name: "collapsed", session: state.TerminalSession{State: state.TerminalRunning, WatchEnabled: true, Collapsed: true}},
+		{name: "unwatched", session: state.TerminalSession{State: state.TerminalRunning}},
+		{name: "lost", session: state.TerminalSession{State: state.TerminalLost, WatchEnabled: true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := snapshotRecoveryEligible(test.session); got != test.want {
+				t.Fatalf("snapshotRecoveryEligible() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSnapshotRuntimeFailureIsBrowserSpecificAndGenerationSafe(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 1, 2, 3, 0, time.UTC)

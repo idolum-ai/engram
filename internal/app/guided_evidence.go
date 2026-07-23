@@ -116,7 +116,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, expected.ID)
 	latest, ok := a.Store.FindSession(expected.ID)
-	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, expected) || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || guard != nil && !guard() {
+	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.Collapsed || !sameTerminalBinding(latest, expected) || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || guard != nil && !guard() {
 		_ = a.audit("terminal.guided_evidence", "superseded", map[string]any{"session_id": expected.ID})
 		return false
 	}
@@ -166,7 +166,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 		oldFormat := firstNonEmpty(latest.AnchorFormat, anchorFormatText)
 		replaced := false
 		updated, found, stateErr := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-			if !a.snapshotAnchors() && session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && sameTerminalBinding(*session, latest) {
+			if !a.snapshotAnchors() && !session.Collapsed && session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && sameTerminalBinding(*session, latest) {
 				session.AnchorChatID = message.Chat.ID
 				session.AnchorMessageID = message.MessageID
 				session.AnchorFormat = anchorFormatGuideEvidence
@@ -208,7 +208,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	}
 	updated := false
 	_, _, stateErr := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if !a.snapshotAnchors() && session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == latest.AnchorMessageID && session.RetiringAnchorMessageID == 0 && sameTerminalBinding(*session, latest) {
+		if !a.snapshotAnchors() && !session.Collapsed && session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == latest.AnchorMessageID && session.RetiringAnchorMessageID == 0 && sameTerminalBinding(*session, latest) {
 			session.AnchorFormat = anchorFormatGuideEvidence
 			session.LastRenderHash = renderHash
 			session.LastAnchorEditAt = time.Now().UTC()

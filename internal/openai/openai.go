@@ -142,7 +142,7 @@ func (c *Client) ConverseWithEvidence(ctx context.Context, in guide.Input) (guid
 			{"role": "system", "content": guide.SystemPrompt},
 			{"role": "user", "content": guide.BuildPrompt(in)},
 		},
-		"max_completion_tokens": guide.MaxTokens,
+		"max_completion_tokens": guide.TokenLimit(in),
 		"reasoning_effort":      "none",
 		"temperature":           guide.Temperature,
 	}
@@ -194,7 +194,7 @@ func (c *Client) ConverseWithEvidence(ctx context.Context, in guide.Input) (guid
 		return guide.Result{}, fmt.Errorf("openai response ended with unexpected finish_reason %q", result.Choices[0].FinishReason)
 	}
 	parsed := guide.ParseResult(result.Choices[0].Message.Content)
-	parsed.Text = guide.LimitWords(parsed.Text, guide.MaxWords)
+	parsed.Text = guide.LimitWords(parsed.Text, guide.WordLimit(in))
 	if parsed.Text == "" {
 		return guide.Result{}, fmt.Errorf("openai returned no text")
 	}

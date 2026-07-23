@@ -99,7 +99,7 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	t.Parallel()
 
 	got := AnchorMarkup(7, AnchorMarkupOptions{Image: true, Arrows: true})
-	if got == nil || len(got.InlineKeyboard) != 3 || len(got.InlineKeyboard[0]) != 2 {
+	if got == nil || len(got.InlineKeyboard) != 3 || len(got.InlineKeyboard[0]) != 3 {
 		t.Fatalf("AnchorMarkup rows = %#v, want action, key, and arrow rows", got)
 	}
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
@@ -107,6 +107,9 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	}
 	if got.InlineKeyboard[0][1].Text != "🖼️ View" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
+	}
+	if got.InlineKeyboard[0][2].Text != "➖" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
+		t.Fatalf("collapse callback = %#v", got.InlineKeyboard[0][2])
 	}
 	want := []InlineKeyboardButton{
 		{Text: "Esc", CallbackData: "key:7:esc"},
@@ -152,7 +155,7 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	t.Parallel()
 
 	got := AnchorMarkup(7, AnchorMarkupOptions{Voice: true, Raw: true, Arrows: true})
-	if got == nil || len(got.InlineKeyboard[0]) != 3 {
+	if got == nil || len(got.InlineKeyboard[0]) != 4 {
 		t.Fatalf("AnchorMarkup actions = %#v", got)
 	}
 	if want := (InlineKeyboardButton{Text: "🗣️ Talk", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
@@ -161,6 +164,18 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
 	if got.InlineKeyboard[0][2] != want {
 		t.Fatalf("raw action = %#v, want %#v", got.InlineKeyboard[0][2], want)
+	}
+	if got.InlineKeyboard[0][3].CallbackData != "collapse:7" {
+		t.Fatalf("collapse action = %#v", got.InlineKeyboard[0][3])
+	}
+}
+
+func TestCollapsedAnchorMarkupOffersOnlyExpand(t *testing.T) {
+	t.Parallel()
+	got := AnchorMarkup(7, AnchorMarkupOptions{Collapsed: true, Image: true, Voice: true, Raw: true, Arrows: true, FileToken: "0123456789abcdef", FileCount: 2})
+	want := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "➕", CallbackData: "expand:7"}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("collapsed markup = %#v, want %#v", got, want)
 	}
 }
 
@@ -214,8 +229,9 @@ func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
 			Image: true, Voice: true, Raw: true, Arrows: true,
 			FileToken: "0123456789abcdef", FileCount: 4,
 		}),
-		"recover":       RecoverMarkup(123456789, true),
-		"recovery plan": RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
+		"collapsed anchor": AnchorMarkup(123456789, AnchorMarkupOptions{Collapsed: true}),
+		"recover":          RecoverMarkup(123456789, true),
+		"recovery plan":    RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
 		"sessions": SessionListMarkup(
 			[]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}},
 			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},
@@ -416,6 +432,26 @@ func TestPinAndUnpinChatMessagePayloads(t *testing.T) {
 	}
 	if requests[1]["chat_id"] != float64(5) || requests[1]["message_id"] != float64(10) {
 		t.Fatalf("unpin payload = %#v", requests[1])
+	}
+}
+
+func TestSilentMessagePayloadsDisableNotifications(t *testing.T) {
+	t.Parallel()
+	var requests []map[string]any
+	client := New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, decodeRequestMap(t, req))
+		return jsonResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 8, "chat": map[string]any{"id": 5}}}), nil
+	})}
+	if _, err := client.SendSilentMessage(context.Background(), 5, "plain", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SendSilentHTMLMessage(context.Background(), 5, "<b>html</b>", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0]["disable_notification"] != true || requests[1]["disable_notification"] != true || requests[1]["parse_mode"] != "HTML" {
+		t.Fatalf("silent payloads = %#v", requests)
 	}
 }
 

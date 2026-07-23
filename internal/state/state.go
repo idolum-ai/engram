@@ -121,6 +121,7 @@ type TerminalSession struct {
 	AnchorPinned             bool            `json:"anchor_pinned,omitempty"`
 	AnchorPinKnown           bool            `json:"anchor_pin_known,omitempty"`
 	WatchEnabled             bool            `json:"watch_enabled"`
+	Collapsed                bool            `json:"collapsed,omitempty"`
 	ResumeProgram            string          `json:"resume_program,omitempty"`
 	ResumeSessionID          string          `json:"resume_session_id,omitempty"`
 	PendingResume            *PendingResume  `json:"pending_resume,omitempty"`
@@ -211,7 +212,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion     = 15
+	currentStateVersion     = 16
 	maxTerminalSessions     = 200
 	maxAttachments          = 200
 	maxAttachmentBypasses   = 100

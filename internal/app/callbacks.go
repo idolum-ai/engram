@@ -38,6 +38,40 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		return "skipped_unknown_callback"
 	}
 	switch parts[0] {
+	case "collapse", "expand":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		verb := parts[0]
+		callbackText := "collapsing"
+		if verb == "expand" {
+			callbackText = "expanding"
+		}
+		if !a.answerCallback(ctx, cb.ID, callbackText) {
+			return "callback_telegram_failed"
+		}
+		var result actionResult
+		if verb == "collapse" {
+			result = a.collapseAnchor(ctx, ts)
+		} else {
+			result = a.expandAnchor(ctx, ts)
+		}
+		if !result.OK() {
+			msg := *cb.Message
+			msg.From = &cb.From
+			a.reply(ctx, msg, result.Message)
+			return result.status("callback")
+		}
+		if verb == "expand" {
+			a.queueManualRefresh(id)
+		}
+		return "callback_ok"
 	case "refresh":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {

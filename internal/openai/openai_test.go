@@ -63,6 +63,24 @@ func TestConverseUsesOneBoundedNonStreamingRequest(t *testing.T) {
 	}
 }
 
+func TestConverseUsesCompactOutputBudget(t *testing.T) {
+	var payload map[string]any
+	client := New("openai-key", testModel)
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return completionResponse("Tests passed.", "stop"), nil
+	})}
+
+	if _, err := client.Converse(context.Background(), guide.Input{Compact: true}); err != nil {
+		t.Fatal(err)
+	}
+	if payload["max_completion_tokens"] != float64(guide.CompactMaxTokens) {
+		t.Fatalf("max_completion_tokens = %#v, want %d", payload["max_completion_tokens"], guide.CompactMaxTokens)
+	}
+}
+
 func TestConverseWithEvidenceKeepsMetadataPrivate(t *testing.T) {
 	client := New("openai-key", testModel)
 	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {

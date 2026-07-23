@@ -614,7 +614,10 @@ its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
 Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
 `Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
-directional row.
+directional row. Tap `➖` to reduce any running anchor to one quiet status line
+and a single `➕` control. The collapsed preference survives restart; `➕`
+restores the currently selected guide or snapshot presentation. Replies still
+route through the collapsed canonical anchor.
 
 ### Nested environments
 
@@ -732,6 +735,13 @@ appear or disappear without changing terminal text. The refresh button renders
 immediately, including an unchanged capture. If a guide is configured, `🗣️` replies with a one-off
 conversational rendering without replacing the canonical image. `/sessions`
 lists lost sessions first, then active sessions by recency in either mode.
+
+Collapsed anchors are a presentation preference within either mode, not a
+third mode. When a guide provider is available, changed captures use one
+smaller model request to keep the status line current. Without a guide, Engram
+uses the observed command, directory, Codex state, or terminal state. Collapsed
+cards omit screenshots, references, key controls, and file actions until they
+are expanded, while retaining one pinned canonical reply route.
 
 `/mode guide` and `/mode snapshot` begin changing the canonical presentation
 when the target capability is available. Existing anchors migrate in the

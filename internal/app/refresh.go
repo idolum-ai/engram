@@ -20,12 +20,12 @@ const maxStoredVisibleCaptureBytes = 16 * 1024
 var errConversationTurnSuperseded = errors.New("conversation turn superseded")
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
-	if a.snapshotAnchors() {
-		a.refreshSnapshotAnchor(ctx, id, force)
-		return
-	}
 	ts, ok := a.Store.FindSession(id)
 	if !ok || ts.TmuxPaneID == "" || ts.State == state.TerminalClosed || ts.State == state.TerminalLost || (!force && !ts.WatchEnabled) {
+		return
+	}
+	if a.snapshotAnchors() && !ts.Collapsed {
+		a.refreshSnapshotAnchor(ctx, id, force)
 		return
 	}
 	if !force && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
@@ -84,7 +84,10 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if latest, found := a.Store.FindSession(id); found && sameTerminalBinding(latest, ts) {
 		ts = latest
 	}
-	refs := a.visibleReferencesForStyledCapture(referenceText, capture.Hyperlinks)
+	refs := visibleReferences{}
+	if !ts.Collapsed {
+		refs = a.visibleReferencesForStyledCapture(referenceText, capture.Hyperlinks)
+	}
 	hash := guideCaptureHash(presentationText, ts, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
@@ -98,18 +101,27 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			} else {
 				guard := func() bool {
 					current, ok := a.Store.FindSession(id)
-					return !a.snapshotAnchors() && ok && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
+					return (ts.Collapsed || !a.snapshotAnchors()) && ok && current.Collapsed == ts.Collapsed && current.State == state.TerminalRunning && current.WatchEnabled && sameTerminalBinding(current, ts)
 				}
 				a.updateAnchorLocalGuardedWithReferences(ctx, id, ts.LastSummary, false, guard, nil, &refs)
 				return
 			}
 		}
 	}
-	summary, evidence, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
+	var summary string
+	var evidence []string
+	var turn conversationTurn
+	var guideErr error
+	if ts.Collapsed && a.Guide == nil {
+		turn = a.prepareConversationTurn(ts, capture, conversationEvidence(presentationText))
+		summary = compactFallbackSummary(ts, capture)
+	} else {
+		summary, evidence, turn, guideErr = a.conversationalSummary(ctx, ts, capture, presentationText)
+	}
 	if errors.Is(guideErr, errConversationTurnSuperseded) {
 		return
 	}
-	if a.snapshotAnchors() {
+	if a.snapshotAnchors() && !ts.Collapsed {
 		return
 	}
 	if !a.conversationTurnCurrent(ts, turn) {
@@ -119,7 +131,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		if stateErr := a.Store.NoteGuide(guideErr.Error()); stateErr != nil {
 			_ = a.audit("state.guide", "failed", map[string]any{"session_id": id, "error": stateErr.Error()})
 		}
-		if ts.LastSummary != "" {
+		if ts.Collapsed {
+			summary = compactFallbackSummary(ts, capture)
+		} else if ts.LastSummary != "" {
 			summary = ts.LastSummary + "\n\n[summary stale: " + guideErr.Error() + "]"
 		} else {
 			summary = "summary unavailable: " + guideErr.Error()
@@ -147,11 +161,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	lock.Unlock()
-	guard := func() bool { return !a.snapshotAnchors() && a.conversationTurnCurrent(ts, turn) }
+	guard := func() bool { return (ts.Collapsed || !a.snapshotAnchors()) && a.conversationTurnCurrent(ts, turn) }
 	accepted := func() bool {
 		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 			s.LastRawCaptureHash = hash
-			if guideErr == nil {
+			if guideErr == nil || ts.Collapsed {
 				s.LastSummary = summary
 			}
 		})
@@ -169,7 +183,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
 	}
 	updated := false
-	if a.snapshotAvailable() {
+	if ts.Collapsed {
+		updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &visibleReferences{})
+	} else if a.snapshotAvailable() {
 		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, force, guard, accepted)
 		if !updated && !a.snapshotAvailable() {
 			updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
@@ -196,6 +212,7 @@ func guideCaptureHash(text string, session state.TerminalSession, capture tmux.S
 		strings.TrimSpace(capture.CurrentCmd),
 		capture.AlternateOn,
 		capture.PaneInMode,
+		strconv.FormatBool(session.Collapsed),
 		strconv.Itoa(capture.Columns),
 		strconv.Itoa(capture.VisibleRows),
 	}, "\x00"))
@@ -231,7 +248,7 @@ func headUTF8(text string, maxBytes int) string {
 
 func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, []string, conversationTurn, error) {
 	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText))
-	turn.input.EvidenceRequested = a.snapshotAvailable()
+	turn.input.EvidenceRequested = !session.Collapsed && a.snapshotAvailable()
 	if !acquireSlot(ctx, a.guideSlots) {
 		return "", nil, turn, ctx.Err()
 	}
@@ -242,12 +259,12 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
 	latest, ok := a.Store.FindSession(session.ID)
-	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
+	if (!session.Collapsed && a.snapshotAnchors()) || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.Collapsed != session.Collapsed || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
 		return "", nil, turn, errConversationTurnSuperseded
 	}
 	var result guide.Result
 	var err error
-	if renderer, ok := a.Guide.(guide.EvidenceRenderer); ok && a.snapshotAvailable() {
+	if renderer, ok := a.Guide.(guide.EvidenceRenderer); ok && !session.Collapsed && a.snapshotAvailable() {
 		result, err = renderer.ConverseWithEvidence(ctx, turn.input)
 	} else {
 		result.Text, err = a.Guide.Converse(ctx, turn.input)
@@ -256,6 +273,9 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 		return "", nil, turn, err
 	}
 	result.Text = a.redactText(result.Text)
+	if session.Collapsed {
+		result.Text = compactSummaryText(result.Text)
+	}
 	return result.Text, result.Evidence, turn, nil
 }
 
@@ -309,19 +329,26 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 		return false
 	}
 	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
-		if !a.snapshotAnchors() || ts.AnchorFormat != "snapshot" {
+		if !ts.Collapsed && (!a.snapshotAnchors() || ts.AnchorFormat != "snapshot") {
 			summary = firstNonEmpty(ts.LastSummary, summary)
 		}
 		final = true
 	}
-	refs := a.visibleReferences(ts.LastRawCapture)
+	refs := visibleReferences{}
+	if !ts.Collapsed {
+		refs = a.visibleReferences(ts.LastRawCapture)
+	}
 	if referenceOverride != nil {
 		refs = *referenceOverride
 	}
 	references, files := renderReferencesWithFiles(refs, true, maxGuideReferenceBytes)
 	rendered := renderLocalWithReferences(ts, a.redactText(summary), references)
+	if ts.Collapsed {
+		files = nil
+		rendered = a.renderCollapsedAnchor(ts, summary)
+	}
 	renderHash := sha(rendered)
-	if !a.snapshotAnchors() && (ts.AnchorFormat == anchorFormatSnapshot || ts.AnchorFormat == anchorFormatGuideEvidence && !a.snapshotAvailable()) {
+	if ts.Collapsed && mediaAnchorFormat(ts.AnchorFormat) || !ts.Collapsed && !a.snapshotAnchors() && (ts.AnchorFormat == anchorFormatSnapshot || ts.AnchorFormat == anchorFormatGuideEvidence && !a.snapshotAvailable()) {
 		a.rotateMediaAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
 		updated, found := a.Store.FindSession(id)
 		return found && updated.AnchorFormat == "text" && updated.LastRenderHash == renderHash && finish()
@@ -348,7 +375,13 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 			_ = a.audit("telegram.anchor_edit", "failed", map[string]any{"session_id": id, "error": err.Error()})
 			return false
 		}
-		msg, sendErr := a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, markup)
+		var msg telegram.Message
+		var sendErr error
+		if ts.Collapsed {
+			msg, sendErr = a.sendSilentAnchor(ctx, a.Config.TelegramChatID, rendered, 0, markup)
+		} else {
+			msg, sendErr = a.sendAnchor(ctx, a.Config.TelegramChatID, rendered, 0, markup)
+		}
 		if sendErr == nil {
 			if guard != nil && !guard() {
 				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -422,23 +455,35 @@ func (a *App) refreshSoon(id int) {
 }
 
 func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
+	a.queueRefreshWithPolicy(id, force, delay, true)
+}
+
+func (a *App) queueRefreshIfIdle(id int, force bool, delay time.Duration) bool {
+	return a.queueRefreshWithPolicy(id, force, delay, false)
+}
+
+func (a *App) queueRefreshWithPolicy(id int, force bool, delay time.Duration, coalesce bool) bool {
 	ctx := a.workerContext()
 	select {
 	case <-ctx.Done():
-		return
+		return false
 	default:
 	}
 	a.summaryMu.Lock()
 	a.ensureSummaryQueuesLocked()
 	due := time.Now().Add(delay)
 	if a.summaryRunning[id] || a.summaryQueued[id] {
+		if !coalesce {
+			a.summaryMu.Unlock()
+			return false
+		}
 		a.summaryQueued[id] = true
 		a.summaryForce[id] = a.summaryForce[id] || force
 		if force && delay == 0 || delay > 0 && due.After(a.summaryDue[id]) {
 			a.summaryDue[id] = due
 		}
 		a.summaryMu.Unlock()
-		return
+		return true
 	}
 	a.summaryQueued[id] = true
 	a.summaryForce[id] = force
@@ -449,6 +494,7 @@ func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
 		defer a.refreshWG.Done()
 		a.refreshWorker(ctx, id)
 	}()
+	return true
 }
 
 func (a *App) queueManualRefresh(id int) {
@@ -602,14 +648,31 @@ func (a *App) ensureSummaryQueuesLocked() {
 }
 
 func (a *App) sendAnchor(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return a.sendAnchorWithNotification(ctx, chatID, text, replyTo, markup, false)
+}
+
+func (a *App) sendSilentAnchor(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return a.sendAnchorWithNotification(ctx, chatID, text, replyTo, markup, true)
+}
+
+func (a *App) sendAnchorWithNotification(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup, silent bool) (telegram.Message, error) {
 	html := telegram.MarkdownToHTML(text)
-	msg, err := a.Telegram.SendHTMLMessage(ctx, chatID, html, replyTo, markup)
+	var msg telegram.Message
+	var err error
+	if silent {
+		msg, err = a.Telegram.SendSilentHTMLMessage(ctx, chatID, html, replyTo, markup)
+	} else {
+		msg, err = a.Telegram.SendHTMLMessage(ctx, chatID, html, replyTo, markup)
+	}
 	if err == nil {
 		return msg, nil
 	}
 	_ = a.audit("telegram.anchor_html", "failed", err.Error())
 	if telegram.IsRateLimited(err) || !isTelegramFormattingError(err) {
 		return telegram.Message{}, err
+	}
+	if silent {
+		return a.Telegram.SendSilentMessage(ctx, chatID, text, replyTo, markup)
 	}
 	return a.Telegram.SendMessage(ctx, chatID, text, replyTo, markup)
 }
@@ -671,6 +734,7 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalRunning {
 		return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{
+			Collapsed: ts.Collapsed,
 			Image:     ts.AnchorFormat != anchorFormatSnapshot && a.snapshotAvailable(),
 			Voice:     ts.AnchorFormat == anchorFormatSnapshot && a.guideAvailable,
 			Raw:       mediaAnchorFormat(ts.AnchorFormat),

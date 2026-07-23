@@ -31,11 +31,12 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 		return
 	}
 	snapshotReady := a.snapshotAvailable()
-	formatMismatch := a.snapshotAnchors() && ts.AnchorFormat != anchorFormatSnapshot ||
-		!a.snapshotAnchors() && snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
-		!a.snapshotAnchors() && !snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
+	formatMismatch := ts.Collapsed && ts.AnchorFormat != anchorFormatText ||
+		!ts.Collapsed && (a.snapshotAnchors() && ts.AnchorFormat != anchorFormatSnapshot ||
+			!a.snapshotAnchors() && snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
+			!a.snapshotAnchors() && !snapshotReady && mediaAnchorFormat(ts.AnchorFormat))
 	if formatMismatch && ts.State == state.TerminalRunning && ts.WatchEnabled {
-		a.queueRefresh(id, true, 0)
+		a.queueRefreshIfIdle(id, true, 0)
 	}
 	if anchorShouldBePinned(ts) {
 		a.ensureCurrentAnchorPinnedLocked(ctx, ts)

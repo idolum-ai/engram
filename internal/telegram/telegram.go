@@ -277,11 +277,19 @@ func (c *Client) GetUpdates(ctx context.Context, offset int, timeout int) ([]Upd
 }
 
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
-	return c.sendMessage(ctx, chatID, text, replyTo, markup, "")
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "", false)
 }
 
 func (c *Client) SendHTMLMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
-	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML")
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML", false)
+}
+
+func (c *Client) SendSilentMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "", true)
+}
+
+func (c *Client) SendSilentHTMLMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML", true)
 }
 
 func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int) error {
@@ -290,7 +298,7 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int)
 	return c.postJSON(ctx, "deleteMessage", body, &out)
 }
 
-func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
+func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string, silent bool) (Message, error) {
 	body := map[string]any{
 		"chat_id":              chatID,
 		"text":                 clampText(text),
@@ -304,6 +312,9 @@ func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, rep
 	}
 	if parseMode != "" {
 		body["parse_mode"] = parseMode
+	}
+	if silent {
+		body["disable_notification"] = true
 	}
 	var out Message
 	return out, c.postJSON(ctx, "sendMessage", body, &out)
@@ -525,6 +536,7 @@ func (m Message) FileAttachment() (Document, bool) {
 }
 
 type AnchorMarkupOptions struct {
+	Collapsed bool
 	Image     bool
 	Voice     bool
 	Raw       bool
@@ -534,6 +546,11 @@ type AnchorMarkupOptions struct {
 }
 
 func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
+	if options.Collapsed {
+		return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+			Button("➕", fmt.Sprintf("expand:%d", sessionID)),
+		}}}
+	}
 	actions := []InlineKeyboardButton{Button("🔄", fmt.Sprintf("refresh:%d", sessionID))}
 	if options.Image {
 		actions = append(actions, Button("🖼️ View", fmt.Sprintf("snapshot:%d", sessionID)))
@@ -544,6 +561,7 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 	if options.Raw {
 		actions = append(actions, Button("📄 Raw", fmt.Sprintf("raw:%d", sessionID)))
 	}
+	actions = append(actions, Button("➖", fmt.Sprintf("collapse:%d", sessionID)))
 	rows := [][]InlineKeyboardButton{actions}
 	if options.FileToken != "" && options.FileCount > 0 {
 		files := make([]InlineKeyboardButton, 0, options.FileCount)

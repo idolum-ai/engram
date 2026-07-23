@@ -68,6 +68,8 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 - Live anchors include `Esc`, `Escx2`, `^C`, `^D`, and `Enter`. Snapshot anchors
   additionally include the four arrow keys in a distinct `← ↑ ↓ →` row.
   `Escx2` waits 500 ms between Escape keys.
+- Collapsed anchors keep the same reply-to-pane behavior but expose no terminal
+  key controls until expanded.
 
 ## Capture And Presentation
 

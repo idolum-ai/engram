@@ -64,6 +64,12 @@ already visible in the pane.
 Snapshot anchors keep the exact delivered frame's literal text one tap away
 through a `📄 Raw` attachment; the image is primary, not exclusive.
 
+A running anchor may collapse into one model-guided or deterministic status
+line when the user needs less visual weight. Collapse is not another mode and
+does not create another route: the same watched pane still has exactly one
+pinned canonical anchor. Its only control is `➕`; expanding restores the
+selected guide or snapshot presentation and its available controls.
+
 ### Fast input path
 
 Sending input to tmux must remain fast when a model provider, Chromium, or Telegram
@@ -87,6 +93,12 @@ itself a reason to create a notification.
 Automatic anchor edits should be intentionally slow and only occur for changed
 captures. Manual refresh should be immediate. `/sessions` is a concise map:
 lost work first, then active work by recency.
+
+Collapsed cards should spend less attention and less machinery. They omit
+images, references, evidence selection, and terminal-key controls. If the
+configured guide is available, it receives the ordinary bounded frame but has
+a smaller one-sentence output budget. Otherwise the line degrades to observed
+terminal state without making the anchor disappear.
 
 ### One frame, two presentations
 
@@ -219,7 +231,7 @@ may redraw an unchanged frame because the user explicitly asked to look now.
 ### Recoverable local service
 
 State under `~/.engram` should recover sessions, canonical anchors, selected
-mode, attachments, poll position, and recent errors after restart. Diagnostics
+mode, each anchor's collapsed preference, attachments, poll position, and recent errors after restart. Diagnostics
 must be available locally and through Telegram without exposing configured
 credentials.
 
