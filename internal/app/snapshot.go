@@ -21,12 +21,20 @@ type snapshotRenderer interface {
 }
 
 func (a *App) snapshotStatus() string {
-	if a.Snapshots == nil || !a.snapshotReady {
-		return "unavailable"
+	ready, path, probeError, _, retryAt := a.snapshotHealth()
+	if !ready {
+		return snapshotUnavailableStatus(a.redactText(probeError), retryAt)
 	}
-	path, err := a.Snapshots.Available()
-	if err != nil {
-		return "unavailable"
+	if path == "" && a.Snapshots != nil {
+		availablePath, err := a.Snapshots.Available()
+		if err != nil {
+			a.markSnapshotsUnavailable(err, time.Now())
+			return snapshotUnavailableStatus(a.redactText(err.Error()), time.Now().Add(snapshotProbeInitialDelay))
+		}
+		path = availablePath
+	}
+	if path == "" {
+		return "ready (Chromium, " + a.Config.SnapshotTheme + ")"
 	}
 	return "ready (" + filepath.Base(path) + ", " + a.Config.SnapshotTheme + ")"
 }
@@ -36,6 +44,7 @@ func (a *App) queueSnapshot(ts state.TerminalSession) actionResult {
 		return actionResult{Outcome: actionStateFailed, Message: "image renderer unavailable"}
 	}
 	if _, err := a.Snapshots.Available(); err != nil {
+		a.markSnapshotsUnavailable(err, time.Now())
 		_ = a.audit("terminal.snapshot", "unavailable", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "image renderer unavailable; check /status"}
 	}
@@ -93,6 +102,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	renderCancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {
+		a.markSnapshotsUnavailable(renderErr, time.Now())
 		_ = a.audit("terminal.snapshot", "render_failed", map[string]any{"session_id": current.ID, "error": renderErr.Error()})
 		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image; check /status and /logs.")
 		return

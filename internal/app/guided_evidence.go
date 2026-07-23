@@ -81,7 +81,7 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 }
 
 func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, refs visibleReferences, excerpts []string, force bool, guard, accepted func() bool) bool {
-	if !a.snapshotReady || a.Snapshots == nil || a.snapshotAnchors() {
+	if !a.snapshotAvailable() || a.Snapshots == nil || a.snapshotAnchors() {
 		return false
 	}
 	crop := a.selectGuidedEvidenceCrop(expected, capture, previous, semanticText, summary, excerpts)
@@ -94,6 +94,7 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	cancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {
+		a.markSnapshotsUnavailable(renderErr, time.Now())
 		_ = a.audit("terminal.guided_evidence", "render_failed", map[string]any{"session_id": expected.ID, "error": renderErr.Error()})
 		return false
 	}

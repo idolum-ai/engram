@@ -25,7 +25,7 @@ func (a *App) modeText() string {
 	if a.guideAvailable {
 		available = append(available, "guide ("+a.Config.EffectiveLLMProvider()+"/"+a.Config.GuideModel()+" configured, not probed)")
 	}
-	if a.snapshotReady {
+	if a.snapshotAvailable() {
 		available = append(available, "snapshot (Chromium probed and ready)")
 	}
 	return fmt.Sprintf("anchor mode: %s\navailable: %s", a.anchorMode(), strings.Join(available, ", "))
@@ -36,7 +36,7 @@ func (a *App) switchAnchorMode(ctx context.Context, raw string) actionResult {
 	if mode == "" {
 		return actionResult{Outcome: actionUserError, Message: "usage: /mode [guide|snapshot]"}
 	}
-	if !modeAvailable(mode, a.guideAvailable, a.snapshotReady) {
+	if !modeAvailable(mode, a.guideAvailable, a.snapshotAvailable()) {
 		return actionResult{Outcome: actionUserError, Message: mode + " mode is unavailable; check /status"}
 	}
 	if mode == a.anchorMode() {

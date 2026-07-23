@@ -60,7 +60,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	capture, err := a.captureStyled(tctx, ts, terminalshot.TargetRows)
 	releaseSlot(a.captureSlots)
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			_ = a.audit("tmux.capture", "canceled", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID})
 			return
 		}
@@ -86,7 +86,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	hash := guideCaptureHash(presentationText, ts, capture)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
-			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotReady {
+			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotAvailable() {
 				if _, hasCompanion := a.snapshotTextFrame(ts); hasCompanion {
 					a.updateGuidedAnchorReferences(ctx, ts, refs)
 					return
@@ -167,8 +167,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
 	}
 	updated := false
-	if a.snapshotReady {
+	if a.snapshotAvailable() {
 		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, force, guard, accepted)
+		if !updated && !a.snapshotAvailable() {
+			updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
+		}
 	} else {
 		updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
 	}
@@ -226,7 +229,7 @@ func headUTF8(text string, maxBytes int) string {
 
 func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, []string, conversationTurn, error) {
 	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText))
-	turn.input.EvidenceRequested = a.snapshotReady
+	turn.input.EvidenceRequested = a.snapshotAvailable()
 	if !acquireSlot(ctx, a.guideSlots) {
 		return "", nil, turn, ctx.Err()
 	}
@@ -242,7 +245,7 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	}
 	var result guide.Result
 	var err error
-	if renderer, ok := a.Guide.(guide.EvidenceRenderer); ok && a.snapshotReady {
+	if renderer, ok := a.Guide.(guide.EvidenceRenderer); ok && a.snapshotAvailable() {
 		result, err = renderer.ConverseWithEvidence(ctx, turn.input)
 	} else {
 		result.Text, err = a.Guide.Converse(ctx, turn.input)
@@ -316,7 +319,7 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 	references, files := renderReferencesWithFiles(refs, true, maxGuideReferenceBytes)
 	rendered := renderLocalWithReferences(ts, a.redactText(summary), references)
 	renderHash := sha(rendered)
-	if !a.snapshotAnchors() && (ts.AnchorFormat == anchorFormatSnapshot || ts.AnchorFormat == anchorFormatGuideEvidence && !a.snapshotReady) {
+	if !a.snapshotAnchors() && (ts.AnchorFormat == anchorFormatSnapshot || ts.AnchorFormat == anchorFormatGuideEvidence && !a.snapshotAvailable()) {
 		a.rotateMediaAnchorToTextLocked(ctx, bindAnchorFiles(ts, files), rendered, renderHash, guard)
 		updated, found := a.Store.FindSession(id)
 		return found && updated.AnchorFormat == "text" && updated.LastRenderHash == renderHash && finish()
@@ -666,7 +669,7 @@ func anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMarkup {
 	if ts.State == state.TerminalRunning {
 		return telegram.AnchorMarkup(ts.ID, telegram.AnchorMarkupOptions{
-			Image:     ts.AnchorFormat != anchorFormatSnapshot && a.snapshotReady,
+			Image:     ts.AnchorFormat != anchorFormatSnapshot && a.snapshotAvailable(),
 			Voice:     ts.AnchorFormat == anchorFormatSnapshot && a.guideAvailable,
 			Raw:       mediaAnchorFormat(ts.AnchorFormat),
 			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,

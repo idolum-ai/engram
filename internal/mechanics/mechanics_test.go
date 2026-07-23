@@ -22,6 +22,20 @@ type captureRunner struct {
 	captureCmd    string
 }
 
+type stagedFailureRunner struct {
+	failCommand string
+}
+
+func (r stagedFailureRunner) Run(_ context.Context, args ...string) (string, error) {
+	if args[0] == r.failCommand {
+		return "", context.DeadlineExceeded
+	}
+	if args[0] == "display-message" {
+		return framedRecord(testServerID, "$1", "@2", "%3", "work", "0", "0", "1", "/tmp/project", "bash"), nil
+	}
+	return "", nil
+}
+
 func framedRecord(values ...string) string {
 	var out strings.Builder
 	for _, value := range values {
@@ -111,6 +125,26 @@ func TestSendTextValidatesImmutableIdentityBeforeEffect(t *testing.T) {
 	}
 	if len(runner.calls) != 3 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "set-buffer" || runner.calls[1][4] != "echo ok" || runner.calls[2][0] != "if-shell" || !strings.Contains(runner.calls[2][5], "paste-buffer -p -r -d") {
 		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestSendTextReportsIdentityAndInputFailureStages(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name        string
+		failCommand string
+		wantStage   string
+	}{
+		{name: "identity", failCommand: "display-message", wantStage: StageIdentity},
+		{name: "input", failCommand: "set-buffer", wantStage: StageInput},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := New(tmux.New(stagedFailureRunner{failCommand: test.failCommand}))
+			_, err := controller.SendText(context.Background(), Binding{PaneID: "%3", WindowID: "@2", ServerID: testServerID}, "hello")
+			if got := FailureStage(err); got != test.wantStage {
+				t.Fatalf("failure stage = %q, want %q (error: %v)", got, test.wantStage, err)
+			}
+		})
 	}
 }
 

@@ -69,7 +69,8 @@ through a `📄 Raw` attachment; the image is primary, not exclusive.
 Sending input to tmux must remain fast when a model provider, Chromium, or Telegram
 delivery is delayed or failing. Replying to an anchor and using `/send`,
 `/text`, `/key`, or key buttons should route directly and predictably to the
-intended pane. Presentation work must not block input.
+intended pane. Presentation work must not block input; an interactive tmux
+operation may preempt Engram's own background observation and recovery work.
 
 Remembered input should remain explicit text, not inferred automation. A user
 may give exact prose a short name and invoke it with a typed placeholder.

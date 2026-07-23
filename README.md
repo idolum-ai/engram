@@ -719,9 +719,11 @@ neighbors, and the previous prose to continue naturally without sharing context
 between windows. Those hints never override the current frame. A capture
 boundary, weak alignment, manual refresh, mode switch, reattachment, service
 restart, or failed canonical delivery discards or withholds continuity. This
-memory-only path still uses one non-streaming model request per rendering. If
-Chromium passed startup readiness, `🖼️ View` replies with an iPhone-sized image of
-that frame.
+memory-only path still uses one non-streaming model request per rendering. When
+Chromium is available, `🖼️ View` replies with an iPhone-sized image of that
+frame. A failed browser probe is reported with its retry time in `/status`;
+Engram retries it with bounded backoff and restores image controls and anchors
+without requiring a service restart.
 
 In Chromium mode, the canonical anchor itself is that image. Engram edits its
 media in place when the styled capture or its derived caption changes,

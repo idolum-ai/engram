@@ -39,12 +39,21 @@ type App struct {
 	Tmux                          tmux.Manager
 	CodexDetector                 codexRuntimeDetector
 	Snapshots                     snapshotRenderer
+	SnapshotProber                snapshotProber
 	footerStatusRunner            snapshotFooterStatusRunner
 	modeMu                        sync.RWMutex
 	mode                          string
 	presentationMu                sync.RWMutex
 	guideAvailable                bool
+	snapshotHealthMu              sync.RWMutex
 	snapshotReady                 bool
+	snapshotBrowserPath           string
+	snapshotProbeError            string
+	snapshotProbeAt               time.Time
+	snapshotNextProbe             time.Time
+	snapshotProbeFailures         int
+	snapshotProbeRunning          bool
+	snapshotNow                   func() time.Time
 	locks                         []*lockfile.Lock
 	startedAt                     time.Time
 	quitCode                      int
@@ -106,8 +115,17 @@ func New(cfg config.Config) (*App, error) {
 		return nil, fmt.Errorf("configure Telegram client: %w", err)
 	}
 	snapshotRenderer := terminalshot.New(cfg.SnapshotBrowser, cfg.SnapshotTheme)
-	_, snapshotErr := snapshotRenderer.Probe(context.Background())
+	snapshotBrowserPath, snapshotErr := snapshotRenderer.Probe(context.Background())
 	snapshotReady := snapshotErr == nil
+	snapshotProbeAt := time.Now().UTC()
+	snapshotProbeError := ""
+	snapshotNextProbe := time.Time{}
+	snapshotProbeFailures := 0
+	if snapshotErr != nil {
+		snapshotProbeError = snapshotErr.Error()
+		snapshotProbeFailures = 1
+		snapshotNextProbe = snapshotProbeAt.Add(snapshotProbeInitialDelay)
+	}
 	key := lockfile.Key(cfg.TelegramBotToken, strconv.FormatInt(cfg.TelegramAllowedUserID, 10), strconv.FormatInt(cfg.TelegramChatID, 10))
 	l, err := lockfile.Acquire(cfg.LockDir(), key, lockfile.Metadata{Details: map[string]string{
 		"telegram_user_id": strconv.FormatInt(cfg.TelegramAllowedUserID, 10),
@@ -183,12 +201,18 @@ func New(cfg config.Config) (*App, error) {
 		Telegram:                      telegramClient,
 		Guide:                         guideRenderer,
 		Transcriber:                   transcriber,
-		Tmux:                          tmux.New(tmux.ExecRunner{}),
+		Tmux:                          tmux.New(tmux.NewPriorityRunner(tmux.ExecRunner{})),
 		CodexDetector:                 codexui.NewDetector(),
 		Snapshots:                     snapshotRenderer,
+		SnapshotProber:                snapshotRenderer,
 		mode:                          mode,
 		guideAvailable:                guideRenderer != nil,
 		snapshotReady:                 snapshotReady,
+		snapshotBrowserPath:           snapshotBrowserPath,
+		snapshotProbeError:            snapshotProbeError,
+		snapshotProbeAt:               snapshotProbeAt,
+		snapshotNextProbe:             snapshotNextProbe,
+		snapshotProbeFailures:         snapshotProbeFailures,
 		locks:                         []*lockfile.Lock{homeLock, l},
 		startedAt:                     time.Now().UTC(),
 		stopCh:                        make(chan struct{}),
@@ -280,6 +304,11 @@ func (a *App) Run(ctx context.Context) int {
 	go func() {
 		defer a.schedulerWG.Done()
 		a.scheduler(runCtx)
+	}()
+	a.schedulerWG.Add(1)
+	go func() {
+		defer a.schedulerWG.Done()
+		a.snapshotRecoveryLoop(runCtx)
 	}()
 	a.schedulerWG.Add(1)
 	go func() {

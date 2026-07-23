@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/mechanics"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
@@ -95,6 +96,7 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	tctx = tmux.InteractiveContext(tctx)
 	var pane tmux.Pane
 	var err error
 	if enter {
@@ -103,7 +105,8 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 		pane, err = a.terminalMechanics().SendText(tctx, terminalBinding(ts), text)
 	}
 	if err != nil {
-		_ = a.audit("tmux.send", "failed", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter, "error": err.Error()})
+		stage := mechanics.FailureStage(err)
+		_ = a.audit("tmux.send", "failed", map[string]any{"session_id": id, "pane_id": ts.TmuxPaneID, "mode": mode, "enter": enter, "stage": stage, "error": err.Error()})
 		if tmux.IsIdentityLoss(err) {
 			return inputCompletion{
 				result:         actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"},
@@ -114,7 +117,7 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 			}
 		}
 		return inputCompletion{
-			result:        actionResult{Outcome: actionTmuxFailed, Message: "tmux send failed: " + err.Error()},
+			result:        actionResult{Outcome: actionTmuxFailed, Message: tmuxSendFailureMessage(stage, err)},
 			anchorNotice:  "tmux send error: " + err.Error(),
 			noticeBinding: ts,
 		}
@@ -209,6 +212,7 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	tctx = tmux.InteractiveContext(tctx)
 	var pane tmux.Pane
 	for i, keys := range groups {
 		validated, err := a.terminalMechanics().SendKeys(tctx, terminalBinding(ts), keys)
@@ -247,6 +251,17 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	}
 	a.refreshSoon(id)
 	return actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))}
+}
+
+func tmuxSendFailureMessage(stage string, err error) string {
+	label := "tmux operation"
+	switch stage {
+	case mechanics.StageIdentity:
+		label = "identity check"
+	case mechanics.StageInput:
+		label = "input delivery"
+	}
+	return "tmux send failed during " + label + ": " + err.Error()
 }
 
 func (a *App) invalidatePresentationHashes(expected state.TerminalSession) {

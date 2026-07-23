@@ -30,9 +30,10 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return
 	}
+	snapshotReady := a.snapshotAvailable()
 	formatMismatch := a.snapshotAnchors() && ts.AnchorFormat != anchorFormatSnapshot ||
-		!a.snapshotAnchors() && a.snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
-		!a.snapshotAnchors() && !a.snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
+		!a.snapshotAnchors() && snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
+		!a.snapshotAnchors() && !snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
 	if formatMismatch && ts.State == state.TerminalRunning && ts.WatchEnabled {
 		a.queueRefresh(id, true, 0)
 	}
