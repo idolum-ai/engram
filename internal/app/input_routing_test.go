@@ -100,7 +100,7 @@ func TestReplyToRetiredCollapsedAnchorNamesTheShelfRestoreAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{ChatID: 100, MessageID: 88}, ""); err != nil || !committed {
+	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{ChatID: 100, MessageID: 88}); err != nil || !committed {
 		t.Fatalf("collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(id, 100, 77); err != nil || !retired {

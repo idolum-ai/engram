@@ -241,7 +241,7 @@ func TestCollapsedShelfRestartReconcilesPinAndPendingAnchorRetirement(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{ChatID: 100, MessageID: 88}, "old"); err != nil || !committed {
+	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{ChatID: 100, MessageID: 88}); err != nil || !committed {
 		t.Fatalf("prepare collapse committed=%v err=%v", committed, err)
 	}
 
@@ -386,7 +386,7 @@ func TestExpandPinFailureKeepsMemberOnShelf(t *testing.T) {
 	}
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
-	}, "old"); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("prepare collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(id, 100, 77); err != nil || !retired {
@@ -431,7 +431,7 @@ func TestCollapsedShelfBackoffDefersAllTelegramReconciliation(t *testing.T) {
 	}
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88,
-	}, "old"); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("prepare collapse committed=%v err=%v", committed, err)
 	}
 	if _, _, err := app.Store.UpdateCollapsedShelf(88, func(shelf *state.CollapsedShelf) {
@@ -465,7 +465,7 @@ func TestCollapsedShelfHonorsTelegramRetryAfter(t *testing.T) {
 	}
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
-	}, "stale"); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("prepare collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(id, 100, 77); err != nil || !retired {
@@ -505,7 +505,7 @@ func TestReplacementShelfRetainsPredecessorUntilRetirementSucceeds(t *testing.T)
 	}
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
-	}, ""); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(id, 100, 77); err != nil || !retired {
@@ -630,7 +630,7 @@ func TestPendingRestoreReconcilesAfterRestartBoundary(t *testing.T) {
 	}
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
-	}, ""); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(id, 100, 77); err != nil || !retired {
@@ -702,7 +702,7 @@ func TestPendingRestoreRetrySurvivesPreReplacementStateFailureInMemory(t *testin
 	}
 	if _, committed, err := store.CollapseSessionIntoShelf(session.ID, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
-	}, ""); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := store.FinishCollapsedAnchorRetirement(session.ID, 100, 77); err != nil || !retired {
@@ -762,7 +762,7 @@ func TestClosingCollapsedSessionRetiresPendingRestoreAndShelf(t *testing.T) {
 	}
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
-	}, ""); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(id, 100, 77); err != nil || !retired {
@@ -815,7 +815,7 @@ func TestExpandCallbackDoesNotBlockTelegramUpdateLoop(t *testing.T) {
 	}
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
 		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
-	}, ""); err != nil || !committed {
+	}); err != nil || !committed {
 		t.Fatalf("collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(id, 100, 77); err != nil || !retired {
@@ -980,16 +980,9 @@ func TestExistingShelfDoesNotEditBeforeStateCommit(t *testing.T) {
 	}
 	app := &App{Config: config.Config{TelegramChatID: 100}, Store: store, Tmux: tmux.New(&safetyRunner{identityWindow: "@1"})}
 	first, _ = store.FindSession(first.ID)
-	prospective := store.Snapshot().TerminalSessions
-	for index := range prospective {
-		if prospective[index].ID == first.ID {
-			prospective[index].Collapsed = true
-		}
-	}
-	firstRender := app.renderCollapsedShelf(prospective)
 	if _, committed, err := store.CollapseSessionIntoShelf(first.ID, first, state.CollapsedShelf{
-		ChatID: 100, MessageID: 88, LastRenderHash: sha(firstRender), Pinned: true, PinKnown: true,
-	}, sha(firstRender)); err != nil || !committed {
+		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
+	}); err != nil || !committed {
 		t.Fatalf("prepare first collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := store.FinishCollapsedAnchorRetirement(first.ID, 100, 77); err != nil || !retired {
@@ -1062,7 +1055,7 @@ func TestPartialExpandKeepsShelfForRemainingSessions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, committed, err := app.Store.CollapseSessionIntoShelf(target.id, session, state.CollapsedShelf{ChatID: 100, MessageID: 88}, "old"); err != nil || !committed {
+		if _, committed, err := app.Store.CollapseSessionIntoShelf(target.id, session, state.CollapsedShelf{ChatID: 100, MessageID: 88}); err != nil || !committed {
 			t.Fatalf("prepare collapse [%d] committed=%v err=%v", target.id, committed, err)
 		}
 		if _, retired, err := app.Store.FinishCollapsedAnchorRetirement(target.id, 100, target.messageID); err != nil || !retired {

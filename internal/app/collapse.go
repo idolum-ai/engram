@@ -69,7 +69,7 @@ func (a *App) collapseAnchor(ctx context.Context, expected state.TerminalSession
 		created = true
 	}
 
-	_, committed, stateErr := a.Store.CollapseSessionIntoShelf(current.ID, current, *shelf, "")
+	_, committed, stateErr := a.Store.CollapseSessionIntoShelf(current.ID, current, *shelf)
 	if !committed {
 		if created {
 			a.retireProspectiveMessage(ctx, shelf.ChatID, shelf.MessageID)

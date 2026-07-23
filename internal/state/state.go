@@ -755,7 +755,7 @@ func (s *Store) UpdateSession(id int, fn func(*TerminalSession)) (TerminalSessio
 	return TerminalSession{}, false, nil
 }
 
-func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf CollapsedShelf, _ string) (TerminalSession, bool, error) {
+func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf CollapsedShelf) (TerminalSession, bool, error) {
 	if shelf.ChatID == 0 || shelf.MessageID <= 0 {
 		return TerminalSession{}, false, fmt.Errorf("invalid collapsed shelf")
 	}

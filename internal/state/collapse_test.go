@@ -33,7 +33,7 @@ func TestCollapsedShelfLifecyclePersistsAndPreservesReplySafety(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	collapsed, committed, err := store.CollapseSessionIntoShelf(session.ID, session, CollapsedShelf{ChatID: 100, MessageID: 88}, "hash")
+	collapsed, committed, err := store.CollapseSessionIntoShelf(session.ID, session, CollapsedShelf{ChatID: 100, MessageID: 88})
 	if err != nil || !committed || !collapsed.Collapsed {
 		t.Fatalf("collapse = %#v committed=%v err=%v", collapsed, committed, err)
 	}
@@ -138,7 +138,7 @@ func TestPendingRestoreRetryPersistsAndBeginRollsBackOnSaveFailure(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, committed, err := store.CollapseSessionIntoShelf(session.ID, session, CollapsedShelf{ChatID: 100, MessageID: 88}, "prospective"); err != nil || !committed {
+	if _, committed, err := store.CollapseSessionIntoShelf(session.ID, session, CollapsedShelf{ChatID: 100, MessageID: 88}); err != nil || !committed {
 		t.Fatalf("collapse committed=%v err=%v", committed, err)
 	}
 	if _, retired, err := store.FinishCollapsedAnchorRetirement(session.ID, 100, 77); err != nil || !retired {
