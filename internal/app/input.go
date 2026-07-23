@@ -20,7 +20,7 @@ const (
 	actionStateFailed    actionOutcome = "state_failed"
 )
 
-const collapsedSessionActionMessage = "session is on the collapsed shelf; tap + to restore all sessions first"
+const collapsedSessionActionMessage = "session is on the Collapsed sessions shelf; tap ➕ Show to restore all sessions first"
 
 type actionResult struct {
 	Outcome actionOutcome
@@ -62,7 +62,7 @@ func (a *App) sendReplyInput(ctx context.Context, expected state.TerminalSession
 	if !found || targetState != state.ReplyTargetCurrent || !sameTerminalBinding(current, expected) {
 		anchorLock.Unlock()
 		sessionLock.Unlock()
-		return actionResult{Outcome: actionUserError, Message: staleAlternateReply(expected.ID)}
+		return actionResult{Outcome: actionUserError, Message: a.staleReply(expected)}
 	}
 	completion := a.sendInputExpectedLocked(ctx, expected.ID, text, "command", true, &expected)
 	anchorLock.Unlock()

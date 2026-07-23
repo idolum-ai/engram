@@ -610,8 +610,9 @@ func RecoveryPlanMarkup(actions []SessionAction) *InlineKeyboardMarkup {
 }
 
 type SessionAction struct {
-	ID    int
-	Token string
+	ID        int
+	Token     string
+	CloseOnly bool
 }
 
 func CloseConfirmationMarkup(token string) *InlineKeyboardMarkup {
@@ -627,10 +628,12 @@ func SessionListMarkup(actions []SessionAction, attachTargets []AttachTarget) *I
 	}
 	rows := make([][]InlineKeyboardButton, 0, len(actions)+len(attachTargets))
 	for _, action := range actions {
-		rows = append(rows, []InlineKeyboardButton{
-			Button(fmt.Sprintf("▶ %d", action.ID), fmt.Sprintf("session-watch:%d:%s", action.ID, action.Token)),
-			Button(fmt.Sprintf("✕ %d", action.ID), fmt.Sprintf("session-close:%d:%s", action.ID, action.Token)),
-		})
+		row := make([]InlineKeyboardButton, 0, 2)
+		if !action.CloseOnly {
+			row = append(row, Button(fmt.Sprintf("▶ %d", action.ID), fmt.Sprintf("session-watch:%d:%s", action.ID, action.Token)))
+		}
+		row = append(row, Button(fmt.Sprintf("✕ %d", action.ID), fmt.Sprintf("session-close:%d:%s", action.ID, action.Token)))
+		rows = append(rows, row)
 	}
 	for _, target := range attachTargets {
 		rows = append(rows, []InlineKeyboardButton{Button("↪ "+target.Label, "attach:"+target.Target)})

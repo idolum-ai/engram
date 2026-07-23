@@ -70,7 +70,9 @@ Running anchors may move into one shared pinned shelf when the user needs less
 visual weight. Each collapsed session contributes one cached status line, but
 the shelf is deliberately not a terminal input route. Its only control is
 `➕ Show`, which restores every member as an individual canonical anchor in the
-selected guide or snapshot mode.
+selected guide or snapshot mode. Restoration acknowledges immediately, makes
+each prospective anchor durable while inert, and only then grants controls and
+a pin.
 
 ### Fast input path
 
@@ -99,7 +101,8 @@ lost work first, then collapsed and active work by recency.
 Collapsed sessions should spend less attention and no presentation machinery.
 They omit captures, model calls, images, references, evidence selection, reply
 routes, raw/dump disclosure, and terminal-key controls. Expansion first restores cached summaries as
-ordinary anchors, then lets bounded background rendering make them current.
+ordinary anchors with their cached state labeled, then lets bounded background
+rendering make each one current without waiting for the rest of the shelf.
 
 ### One frame, two presentations
 

@@ -86,6 +86,19 @@ func TestSessionListMarkupWithSessions(t *testing.T) {
 	}
 }
 
+func TestSessionListMarkupOffersOnlyCloseForCollapsedSession(t *testing.T) {
+	t.Parallel()
+
+	got := SessionListMarkup([]SessionAction{{ID: 5, Token: "quiet", CloseOnly: true}}, nil)
+	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 1 {
+		t.Fatalf("SessionListMarkup(collapsed) = %#v", got)
+	}
+	button := got.InlineKeyboard[0][0]
+	if button.Text != "✕ 5" || button.CallbackData != "session-close:5:quiet" {
+		t.Fatalf("collapsed session action = %#v", button)
+	}
+}
+
 func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	t.Parallel()
 

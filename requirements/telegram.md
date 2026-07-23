@@ -38,8 +38,10 @@ Telegram is Engram's only user interface.
 
 ## Delivery
 
-- `/sessions` always replies and groups tracked work as lost, then active by
-  recency. Presentation mode and model output do not alter this ordering.
+- `/sessions` always replies and groups tracked work as lost, collapsed, then
+  active by recency. Presentation mode and model output do not alter this
+  ordering. Collapsed rows retain only their explicit close action; watching is
+  restored through the shared shelf.
 - Telegram send/edit failures are audited. Empty keyboards are not attached to
   new messages; explicit empty keyboards may retire controls.
 - Anchor HTML falls back to plain text only for formatting errors. Rate limits
@@ -81,10 +83,13 @@ Telegram is Engram's only user interface.
   recent-first, phone-bounded cached one-line summaries and exactly one
   `➕ Show` control; replying to it does
   not route input because it represents more than one pane.
-- `➕ Show` restores all shelf members. Engram publishes each individual anchor from
-  persisted state before queuing ordinary guide or snapshot refreshes. Partial
-  restoration leaves the shelf active for the remaining members. After every
-  member has a canonical anchor, Engram removes the shelf.
+- `➕ Show` acknowledges immediately and restores all shelf members outside the
+  Telegram update loop. Engram first persists each inert prospective anchor,
+  then activates and pins it, then promotes it to the canonical reply route.
+  Each restored anchor is visibly identified as cached while its ordinary
+  guide or snapshot refresh is queued. Partial restoration leaves the shelf
+  active for the remaining members. After every member has a canonical anchor,
+  Engram removes the shelf.
 - Collapse is persisted attention state, not a third anchor mode. Collapsed
   sessions perform no model, Chromium, terminal capture, raw/dump, or alternate
   view work and expose no files or key controls until expanded.

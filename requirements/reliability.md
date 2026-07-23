@@ -121,8 +121,11 @@ exports a bounded recent tail, not an unbounded full audit file.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
   pin state. It separately persists one collapsed-shelf identity and the
-  sessions belonging to it. Restart resets pin knowledge and reconciles both
-  active anchors and the shelf without discarding terminal ownership.
+  sessions belonging to it, any inert prospective anchor awaiting activation,
+  and any replaced shelf awaiting retirement. No shelf or restored anchor
+  becomes actionable before its identity is durable. Restart resets pin
+  knowledge and reconciles active anchors, pending restores, shelf replacements,
+  and predecessor cleanup without discarding terminal ownership.
 - Startup queues one immediate render for each expanded active watched anchor.
   This restores process-local conversational continuity and exact numbered file
   bindings even when the tmux frame itself has not changed across restart.
@@ -133,10 +136,11 @@ exports a bounded recent tail, not an unbounded full audit file.
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v16 persists `anchor_mode`, the canonical anchor presentation
+- State schema v17 persists `anchor_mode`, the canonical anchor presentation
   format, collapsed membership and the bounded shared-shelf identity, pin,
-  render, and retry state, boot-incarnation and bounded recovery-ledger
-  metadata, the latest conversational, snapshot, and upstream-signal reply IDs,
+  render, retry, pending-restore, and predecessor-retirement state,
+  boot-incarnation and bounded recovery-ledger metadata, the latest
+  conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,
   and a bounded stale-alias set used only to reject confusing replies. It binds each watch to
   a random tmux server incarnation so reused pane/window IDs after a server

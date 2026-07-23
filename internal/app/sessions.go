@@ -406,6 +406,18 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 }
 
 func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *closeConfirmation) actionResult {
+	a.collapsedShelfMu.Lock()
+	before, _ := a.Store.FindSession(id)
+	reconcileShelf := before.Collapsed || before.PendingRestore != nil
+	result := a.closeSessionExpectedLocked(ctx, id, confirmation)
+	a.collapsedShelfMu.Unlock()
+	if result.OK() && reconcileShelf {
+		a.reconcileCollapsedShelf(ctx)
+	}
+	return result
+}
+
+func (a *App) closeSessionExpectedLocked(ctx context.Context, id int, confirmation *closeConfirmation) actionResult {
 	disclosureLock := a.disclosureMutex(id)
 	disclosureLock.Lock()
 	defer disclosureLock.Unlock()
@@ -426,6 +438,8 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 			s.State = state.TerminalClosed
 			s.WatchEnabled = false
+			s.Collapsed = false
+			s.PendingRestore = nil
 			clearRecoveryMetadata(s)
 			s.LastSummary = "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed."
 		})
@@ -441,6 +455,9 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 			anchorLock.Unlock()
 			lock.Unlock()
 			return actionResult{Outcome: actionStateFailed, Message: "session changed while untracking"}
+		}
+		if ts.PendingRestore != nil {
+			a.retireProspectiveMessage(ctx, ts.PendingRestore.ChatID, ts.PendingRestore.MessageID)
 		}
 		a.resetConversationEpochLocked(id)
 		anchorLock.Unlock()
@@ -468,6 +485,8 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
+		s.Collapsed = false
+		s.PendingRestore = nil
 		clearRecoveryMetadata(s)
 		s.LastSummary = "status:\nThe Engram-created tmux window was closed."
 	})
@@ -483,6 +502,9 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 		anchorLock.Unlock()
 		lock.Unlock()
 		return actionResult{Outcome: actionStateFailed, Message: "session no longer tracked after close"}
+	}
+	if ts.PendingRestore != nil {
+		a.retireProspectiveMessage(ctx, ts.PendingRestore.ChatID, ts.PendingRestore.MessageID)
 	}
 	a.resetConversationEpochLocked(id)
 	anchorLock.Unlock()
@@ -617,9 +639,11 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 		}
 		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
 		b.WriteString("\n")
-		if !session.Collapsed {
-			actions = append(actions, telegram.SessionAction{ID: session.ID, Token: sessionActionToken(session)})
-		}
+		actions = append(actions, telegram.SessionAction{
+			ID:        session.ID,
+			Token:     sessionActionToken(session),
+			CloseOnly: session.Collapsed,
+		})
 	}
 	return actions
 }

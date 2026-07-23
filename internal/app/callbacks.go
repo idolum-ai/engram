@@ -67,12 +67,16 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if !a.answerCallback(ctx, cb.ID, "restoring sessions") {
 			return "callback_telegram_failed"
 		}
-		result := a.expandCollapsedShelf(ctx, shelf)
-		if !result.OK() {
-			msg := *cb.Message
-			msg.From = &cb.From
-			a.reply(ctx, msg, result.Message)
-			return result.status("callback")
+		msg := *cb.Message
+		msg.From = &cb.From
+		if !a.queueTransfer(func(workerCtx context.Context) {
+			result := a.expandCollapsedShelf(workerCtx, shelf)
+			if !result.OK() {
+				a.reply(workerCtx, msg, result.Message)
+			}
+		}) {
+			a.reply(ctx, msg, "Restore is temporarily unavailable because Engram is stopping or its work queue is full.")
+			return "callback_state_failed"
 		}
 		return "callback_ok"
 	case "refresh":
@@ -296,7 +300,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		}
 		msg := *cb.Message
 		msg.From = &cb.From
-		return a.download(ctx, msg, path).status("callback")
+		return a.downloadAnchorFile(ctx, msg, validated, token, index, path).status("callback")
 	case "session-watch":
 		id, _, status := a.validateSessionListCallback(ctx, cb, parts[1])
 		if status != "" {

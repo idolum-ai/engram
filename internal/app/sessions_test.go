@@ -25,7 +25,7 @@ func TestWriteTrackedSessionsOrdersLostCollapsedThenRecentActive(t *testing.T) {
 	if b.String() != want {
 		t.Fatalf("tracked sessions:\n%s\nwant:\n%s", b.String(), want)
 	}
-	if len(actions) != 3 || actions[0].ID != 3 || actions[1].ID != 2 || actions[2].ID != 1 {
+	if len(actions) != 4 || actions[0].ID != 3 || actions[1].ID != 5 || !actions[1].CloseOnly || actions[2].ID != 2 || actions[3].ID != 1 {
 		t.Fatalf("actions = %#v", actions)
 	}
 }

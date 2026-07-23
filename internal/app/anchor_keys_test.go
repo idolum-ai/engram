@@ -208,6 +208,69 @@ func TestCurrentAnchorFileCallbackQueuesExactDownload(t *testing.T) {
 	}
 }
 
+func TestQueuedAnchorFileCallbackCannotUploadAfterCollapse(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.txt")
+	if err := os.WriteFile(path, []byte("report body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app.Config.Home = dir
+	app.Config.TelegramChatID = 100
+	app.transferSlots = make(chan struct{}, 1)
+	app.transferSlots <- struct{}{}
+	app.transferQueue = make(chan struct{}, 1)
+	token := anchorFileToken([]string{path})
+	session, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
+		setAnchorFiles(s, []string{path})
+		s.LastSummary = "Cached status."
+		s.State = state.TerminalRunning
+		s.WatchEnabled = true
+		s.AnchorFormat = anchorFormatText
+		s.AnchorPinned = true
+		s.AnchorPinKnown = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendMessages := 0
+	documentCalls := 0
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery", "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/sendMessage":
+			sendMessages++
+			messageID := 88 + sendMessages - 1
+			return anchorKeyJSONResponse(fmt.Sprintf(`{"message_id":%d,"chat":{"id":100}}`, messageID)), nil
+		case "/botTOKEN/editMessageText":
+			return anchorKeyJSONResponse(`{"message_id":10,"chat":{"id":100}}`), nil
+		case "/botTOKEN/sendDocument":
+			documentCalls++
+			return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "file", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+		Data:    "file:1:" + token + ":1",
+	})
+	if status != "callback_ok" {
+		t.Fatalf("file callback status = %q", status)
+	}
+	if result := app.collapseAnchor(context.Background(), session); !result.OK() {
+		t.Fatalf("collapse = %#v", result)
+	}
+	<-app.transferSlots
+	app.transferWG.Wait()
+	if documentCalls != 0 {
+		t.Fatalf("queued file callback uploaded %d document(s) after collapse", documentCalls)
+	}
+}
+
 func anchorKeyJSONResponse(result string) *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,

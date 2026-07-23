@@ -362,6 +362,52 @@ func (a *App) download(ctx context.Context, msg telegram.Message, path string) a
 	return actionResult{Outcome: actionOK, Message: "file send queued"}
 }
 
+func (a *App) downloadAnchorFile(ctx context.Context, msg telegram.Message, expected state.TerminalSession, token string, index int, path string) actionResult {
+	if !a.queueTransfer(func(transferCtx context.Context) {
+		disclosureLock := a.disclosureMutex(expected.ID)
+		disclosureLock.Lock()
+		defer disclosureLock.Unlock()
+
+		sessionLock := a.sessionMutex(expected.ID)
+		sessionLock.Lock()
+		current, ok := a.Store.FindSession(expected.ID)
+		currentPath, pathOK := resolveAnchorFile(current, token, index)
+		deliverable := ok && !current.Collapsed && current.State == state.TerminalRunning &&
+			current.AnchorChatID == expected.AnchorChatID && current.AnchorMessageID == expected.AnchorMessageID &&
+			sameTerminalBinding(current, expected) && pathOK && currentPath == path
+		sessionLock.Unlock()
+		if !deliverable {
+			a.reply(transferCtx, msg, "File send canceled: the session card changed while this request was queued.")
+			return
+		}
+
+		source, info, err := openDownloadSource(path)
+		if err != nil {
+			a.reply(transferCtx, msg, err.Error())
+			return
+		}
+		defer source.Close()
+		if info.Size() > telegramCloudUploadMax {
+			a.reply(transferCtx, msg, fmt.Sprintf("send rejected: %d bytes exceeds Telegram's %d-byte cloud Bot API limit", info.Size(), telegramCloudUploadMax))
+			return
+		}
+		snapshot, err := a.snapshotDownloadSource(source)
+		if err != nil {
+			a.reply(transferCtx, msg, "send snapshot error: "+err.Error())
+			return
+		}
+		defer os.Remove(snapshot)
+		filename := filepath.Base(path)
+		if _, err := a.Telegram.SendDocumentNamed(transferCtx, a.Config.TelegramChatID, snapshot, filename, filename); err != nil {
+			a.reply(transferCtx, msg, "send error: "+err.Error())
+		}
+	}) {
+		a.reply(ctx, msg, "send unavailable: Engram is stopping or the transfer queue is full")
+		return actionResult{Outcome: actionStateFailed, Message: "upload transfer unavailable"}
+	}
+	return actionResult{Outcome: actionOK, Message: "file send queued"}
+}
+
 func openDownloadSource(path string) (*os.File, os.FileInfo, error) {
 	before, err := validateDownloadPath(path)
 	if err != nil {
