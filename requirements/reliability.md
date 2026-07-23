@@ -78,6 +78,12 @@ exports a bounded recent tail, not an unbounded full audit file.
   download and transcription run outside polling in the existing transfer
   queue; the current reply alias and immutable tmux binding are revalidated at
   delivery so delayed speech cannot cross a view rotation or reattachment.
+- Natural-language key-composer workflows are process-local, globally bounded,
+  single-use, and expire after two minutes. Only one workflow remains current
+  per session. Provider work shares the bounded guide concurrency ceiling and
+  the existing transfer queue, so interpretation cannot block polling or
+  ordinary tmux input. Restart intentionally invalidates every prompt and
+  confirmation rather than recovering latent input authority.
 - The update journal retains the newest 200 accepted and handled/skipped update
   states so recent polling behavior remains inspectable after restart.
 - Audit records are capped at 64 KiB. `audit.jsonl` rotates before exceeding

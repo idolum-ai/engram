@@ -707,6 +707,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 			Voice:     ts.AnchorFormat == anchorFormatSnapshot && a.guideAvailable,
 			Raw:       mediaAnchorFormat(ts.AnchorFormat),
 			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,
+			Keyboard:  a.KeyInterpreter != nil,
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),
 		})

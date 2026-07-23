@@ -65,9 +65,14 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   only the explicit token: surrounding whitespace is preserved across ordinary
   replies, new sessions, escaped slash replies, `/new`, `/send`, and `/text`.
   Voice input never expands templates.
-- Live anchors include `Esc`, `Escx2`, `^C`, `^D`, and `Enter`. Snapshot anchors
-  additionally include the four arrow keys in a distinct `← ↑ ↓ →` row.
-  `Escx2` waits 500 ms between Escape keys.
+- With no guide model configured, live anchors include `Esc`, `Escx2`, `^C`,
+  `^D`, and `Enter`; snapshot anchors additionally include the four arrow keys
+  in a distinct `← ↑ ↓ →` row. With a guide model configured, one `⌨️` control
+  replaces those rows in both modes. It interprets ordinary language as a
+  closed allowlist of physical keys and modifiers, never as text, shell input,
+  or application intent. The user must confirm the locally normalized sequence
+  before the guarded key path runs. `/key` remains the deterministic expert
+  path. Consecutive Escape events wait 500 ms between presses.
 - Sessions on the collapsed shelf expose no reply-to-pane or terminal-key route
   until `➕ Show` restores their individual anchors.
 

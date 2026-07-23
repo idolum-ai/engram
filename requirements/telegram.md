@@ -73,10 +73,12 @@ Telegram is Engram's only user interface.
   labeled as not replayed, and a dismiss control. Plans are paginated so every
   control remains on the same message as its visible session. Each control is
   bound to the exact watch generation that produced it; older plans are inert.
-- Guide anchors expose refresh, the compact non-directional key controls,
-  `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
-  is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
-  `🗣️ Talk` only when a guide is configured.
+- When a guide provider is configured, every running anchor exposes one `⌨️`
+  key-composer entry point instead of direct key rows. Without one, guide
+  anchors expose the compact non-directional key controls and snapshot anchors
+  additionally expose a distinct `← ↑ ↓ →` row. Guide anchors expose `📄 Raw`
+  for their exact displayed crop and `🖼️ View` only when Chromium is ready;
+  snapshot anchors expose `🗣️ Talk` only when a guide is configured.
 - Every running canonical anchor exposes `➖ Hide`. It moves that session into one
   shared pinned `Collapsed sessions` shelf, retires and unpins the individual
   anchor, and records the old reply route as stale. The shelf contains bounded
@@ -121,9 +123,24 @@ Telegram is Engram's only user interface.
   compact evidence crop, but Raw still contains the complete View text. It never
   performs a later tmux capture; when restart has cleared that companion, the
   control asks the user to wait for the startup refresh.
-- Key callbacks answer immediately before tmux work begins. A later tmux failure
-  is delivered as a normal reply rather than leaving Telegram's progress state
-  spinning until the terminal timeout.
+- `⌨️` opens a selective Telegram ForceReply addressed to the current user and
+  bound to the exact canonical anchor and immutable tmux identity. A reply
+  supplies natural-language key intent to one bounded non-streaming provider
+  request containing no terminal frame, guide history, session metadata, or
+  other chat messages. Engram accepts only its closed physical-key schema,
+  compiles at most 32 events locally, and presents the normalized target and
+  sequence behind `✅` and `❌`. Ambiguous intent receives deterministic
+  clarification instead of model prose.
+- Key-composer prompts and confirmations are memory-only, single-use, limited
+  to one current workflow per session, bounded globally, and expire after two
+  minutes. A decision must come from the configured user and chat on the exact
+  confirmation message. Approval revalidates the original canonical anchor and
+  immutable tmux binding under the ordinary delivery locks; cancel, expiry,
+  restart, reattachment, collapse, close, anchor rotation, duplicate callbacks,
+  and superseding `⌨️` use send no keys.
+- Direct key callbacks and confirmed plans answer immediately before tmux work
+  begins. A later tmux failure is delivered as a normal reply rather than
+  leaving Telegram's progress state spinning until the terminal timeout.
 - When a canonical anchor displays files, one `⬇️ n` button is shown for each
   numbered entry. The callback contains no path: it resolves through the
   current anchor's exact process-local file-list token and then uses the same

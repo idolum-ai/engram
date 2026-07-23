@@ -614,9 +614,17 @@ snapshot replies. The latest upstream-signal notification is another reply
 route to the same outer pane. Replacing any alternate of the same kind makes
 its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
-Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
-`Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
-directional row. Tap `➖ Hide` to move a running anchor into one shared, pinned
+When a guide model is configured, every anchor replaces its fixed key rows with
+one `⌨️` control. Tap it and describe ordinary physical key presses in natural
+language, such as `up three times, Enter, then Ctrl+C`. Engram shows the exact
+normalized sequence and target in a separate `✅`/`❌` confirmation; the model
+can propose keys but cannot send them. Ambiguous intent and requests to type
+text are instructed to produce clarification. Unsupported keys, malformed or
+oversized proposals, stale cards, and expired confirmations fail closed.
+Without a configured model, anchors retain the direct `Esc`,
+`Escx2`, `^C`, `^D`, and `Enter` controls, with `← ↑ ↓ →` additionally available
+in snapshot mode. `/key` remains the expert interface for exact tmux key names.
+Tap `➖ Hide` to move a running anchor into one shared, pinned
 `Collapsed sessions` shelf. The shelf gives each collapsed session one quiet
 status line, labels those lines as cached, and exposes a single `➕ Show`
 control. Engram keeps the individual anchor live until the shelf has been

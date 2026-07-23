@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/guide"
+	"github.com/idolum-ai/engram/internal/keyseq"
 )
 
 const SystemPrompt = guide.SystemPrompt
@@ -57,6 +58,14 @@ func (c *Client) ConverseWithEvidence(ctx context.Context, in ConversationInput)
 	return result, nil
 }
 
+func (c *Client) InterpretKeys(ctx context.Context, description string) (keyseq.Proposal, error) {
+	text, err := c.completeStructured(ctx, keyseq.SystemPrompt, keyseq.BuildPrompt(description), keyseq.MaxTokens, float64Pointer(0), keyseq.JSONSchema())
+	if err != nil {
+		return keyseq.Proposal{}, err
+	}
+	return keyseq.Parse(text)
+}
+
 func limitWords(text string, maximum int) string {
 	return guide.LimitWords(text, maximum)
 }
@@ -68,16 +77,26 @@ func (c *Client) complete(ctx context.Context, system, prompt string, tokenLimit
 }
 
 func (c *Client) completeWithTemperature(ctx context.Context, system, prompt string, tokenLimit int, temperature *float64) (string, error) {
+	return c.completeStructured(ctx, system, prompt, tokenLimit, temperature, nil)
+}
+
+func (c *Client) completeStructured(ctx context.Context, system, prompt string, tokenLimit int, temperature *float64, schema map[string]any) (string, error) {
+	messages := []map[string]string{
+		{"role": "user", "content": prompt},
+	}
 	payload := map[string]any{
 		"model":      c.Model,
 		"max_tokens": tokenLimit,
 		"system":     system,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
+		"messages":   messages,
 	}
 	if temperature != nil {
 		payload["temperature"] = *temperature
+	}
+	if schema != nil {
+		payload["output_config"] = map[string]any{
+			"format": map[string]any{"type": "json_schema", "schema": schema},
+		}
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {

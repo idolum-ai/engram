@@ -236,6 +236,12 @@ type InlineKeyboardButton struct {
 	CallbackData string `json:"callback_data"`
 }
 
+type ForceReply struct {
+	ForceReply            bool   `json:"force_reply"`
+	InputFieldPlaceholder string `json:"input_field_placeholder,omitempty"`
+	Selective             bool   `json:"selective,omitempty"`
+}
+
 // Button bounds every Telegram button label to the compact live-card budget.
 // Callback data remains exact even when a dynamic display label is shortened.
 func Button(text, callbackData string) InlineKeyboardButton {
@@ -280,6 +286,15 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, rep
 	return c.sendMessage(ctx, chatID, text, replyTo, markup, "", false)
 }
 
+func (c *Client) SendForceReply(ctx context.Context, chatID int64, text string, replyTo int, placeholder string) (Message, error) {
+	markup := &ForceReply{
+		ForceReply:            true,
+		InputFieldPlaceholder: placeholder,
+		Selective:             true,
+	}
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "", false)
+}
+
 func (c *Client) SendHTMLMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
 	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML", false)
 }
@@ -298,7 +313,7 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int)
 	return c.postJSON(ctx, "deleteMessage", body, &out)
 }
 
-func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string, silent bool) (Message, error) {
+func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup any, parseMode string, silent bool) (Message, error) {
 	body := map[string]any{
 		"chat_id":              chatID,
 		"text":                 clampText(text),
@@ -540,6 +555,7 @@ type AnchorMarkupOptions struct {
 	Voice     bool
 	Raw       bool
 	Arrows    bool
+	Keyboard  bool
 	FileToken string
 	FileCount int
 }
@@ -564,22 +580,35 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 		}
 		rows = append(rows, files)
 	}
-	rows = append(rows, []InlineKeyboardButton{
-		Button("Esc", fmt.Sprintf("key:%d:esc", sessionID)),
-		Button("Escx2", fmt.Sprintf("key:%d:esc2", sessionID)),
-		Button("^C", fmt.Sprintf("key:%d:ctrl-c", sessionID)),
-		Button("^D", fmt.Sprintf("key:%d:ctrl-d", sessionID)),
-		Button("Enter", fmt.Sprintf("key:%d:enter", sessionID)),
-	})
-	if options.Arrows {
+	if options.Keyboard {
 		rows = append(rows, []InlineKeyboardButton{
-			Button("←", fmt.Sprintf("key:%d:left", sessionID)),
-			Button("↑", fmt.Sprintf("key:%d:up", sessionID)),
-			Button("↓", fmt.Sprintf("key:%d:down", sessionID)),
-			Button("→", fmt.Sprintf("key:%d:right", sessionID)),
+			Button("⌨️", fmt.Sprintf("keyboard:%d", sessionID)),
 		})
+	} else {
+		rows = append(rows, []InlineKeyboardButton{
+			Button("Esc", fmt.Sprintf("key:%d:esc", sessionID)),
+			Button("Escx2", fmt.Sprintf("key:%d:esc2", sessionID)),
+			Button("^C", fmt.Sprintf("key:%d:ctrl-c", sessionID)),
+			Button("^D", fmt.Sprintf("key:%d:ctrl-d", sessionID)),
+			Button("Enter", fmt.Sprintf("key:%d:enter", sessionID)),
+		})
+		if options.Arrows {
+			rows = append(rows, []InlineKeyboardButton{
+				Button("←", fmt.Sprintf("key:%d:left", sessionID)),
+				Button("↑", fmt.Sprintf("key:%d:up", sessionID)),
+				Button("↓", fmt.Sprintf("key:%d:down", sessionID)),
+				Button("→", fmt.Sprintf("key:%d:right", sessionID)),
+			})
+		}
 	}
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func KeyConfirmationMarkup(token string) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("✅", "keys-send:"+token),
+		Button("❌", "keys-cancel:"+token),
+	}}}
 }
 
 func CollapsedShelfMarkup() *InlineKeyboardMarkup {

@@ -448,10 +448,12 @@ func TestGuideRendererUsesOnlySelectedConfiguredProvider(t *testing.T) {
 	if guideRendererFor(config.Config{AnchorMode: config.AnchorModeSnapshot}) != nil {
 		t.Fatal("snapshot mode initialized a guide without a key")
 	}
-	if _, ok := guideRendererFor(config.Config{LLMProvider: config.LLMProviderAnthropic, AnthropicAPIKey: "key", AnthropicModel: config.DefaultAnthropicModel}).(*anthropic.Client); !ok {
+	anthropicGuide, anthropicKeys := modelCapabilitiesFor(config.Config{LLMProvider: config.LLMProviderAnthropic, AnthropicAPIKey: "key", AnthropicModel: config.DefaultAnthropicModel})
+	if client, ok := anthropicGuide.(*anthropic.Client); !ok || anthropicKeys != client {
 		t.Fatal("Anthropic selection did not initialize Haiku")
 	}
-	if _, ok := guideRendererFor(config.Config{LLMProvider: config.LLMProviderOpenAI, OpenAIAPIKey: "key", OpenAIModel: config.DefaultOpenAIModel}).(*openai.Client); !ok {
+	openAIGuide, openAIKeys := modelCapabilitiesFor(config.Config{LLMProvider: config.LLMProviderOpenAI, OpenAIAPIKey: "key", OpenAIModel: config.DefaultOpenAIModel})
+	if client, ok := openAIGuide.(*openai.Client); !ok || openAIKeys != client {
 		t.Fatal("OpenAI selection did not initialize Luna")
 	}
 }

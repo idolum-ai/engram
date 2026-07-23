@@ -201,22 +201,61 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	}
 	lock := a.sessionMutex(id)
 	lock.Lock()
-	defer lock.Unlock()
+	completion := a.sendKeyGroupsExpectedLocked(ctx, id, groups, preview, delay, expectedBinding)
+	lock.Unlock()
+	return a.finishInput(ctx, id, completion)
+}
+
+func (a *App) sendKeyGroupsForAnchorExpected(ctx context.Context, expected state.TerminalSession, groups [][]string, preview string, delays []time.Duration) actionResult {
+	if len(groups) == 0 || len(groups) != len(delays) {
+		return actionResult{Outcome: actionUserError, Message: "invalid key sequence"}
+	}
+	for _, keys := range groups {
+		if err := tmux.ValidKeys(keys); err != nil {
+			return actionResult{Outcome: actionUserError, Message: err.Error()}
+		}
+	}
+	sessionLock := a.sessionMutex(expected.ID)
+	sessionLock.Lock()
+	anchorLock := a.anchorMutex(expected.ID)
+	anchorLock.Lock()
+	current, ok := a.Store.FindSession(expected.ID)
+	if !ok || current.AnchorChatID != expected.AnchorChatID || current.AnchorMessageID != expected.AnchorMessageID ||
+		!sameTerminalBinding(current, expected) {
+		anchorLock.Unlock()
+		sessionLock.Unlock()
+		return actionResult{Outcome: actionUserError, Message: "anchor moved; use the newer live message"}
+	}
+	completion := a.sendKeyGroupsWithDelaysExpectedLocked(ctx, expected.ID, groups, preview, delays, &expected)
+	anchorLock.Unlock()
+	sessionLock.Unlock()
+	return a.finishInput(ctx, expected.ID, completion)
+}
+
+func (a *App) sendKeyGroupsExpectedLocked(ctx context.Context, id int, groups [][]string, preview string, delay time.Duration, expectedBinding *state.TerminalSession) inputCompletion {
+	delays := make([]time.Duration, len(groups))
+	for index := 0; index+1 < len(groups); index++ {
+		delays[index] = delay
+	}
+	return a.sendKeyGroupsWithDelaysExpectedLocked(ctx, id, groups, preview, delays, expectedBinding)
+}
+
+func (a *App) sendKeyGroupsWithDelaysExpectedLocked(ctx context.Context, id int, groups [][]string, preview string, delays []time.Duration, expectedBinding *state.TerminalSession) inputCompletion {
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
-		return actionResult{Outcome: actionUserError, Message: "session not found"}
+		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "session not found"}}
 	}
 	if ts.State == state.TerminalClosed {
-		return actionResult{Outcome: actionUserError, Message: "session is closed"}
+		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "session is closed"}}
 	}
 	if ts.Collapsed {
-		return actionResult{Outcome: actionUserError, Message: collapsedSessionActionMessage}
+		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: collapsedSessionActionMessage}}
 	}
 	if ts.PendingResume != nil {
-		return actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}
+		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}}
 	}
 	if expectedBinding != nil && !sameTerminalBinding(ts, *expectedBinding) {
-		return actionResult{Outcome: actionUserError, Message: "session changed before keys could be sent"}
+		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "session changed before keys could be sent"}}
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
@@ -225,23 +264,28 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	for i, keys := range groups {
 		validated, err := a.terminalMechanics().SendKeys(tctx, terminalBinding(ts), keys)
 		if err != nil {
-			a.recordIdentityLoss(ctx, ts, err)
-			if !tmux.IsIdentityLoss(err) {
-				a.invalidatePresentationHashes(ts)
-			}
-			a.updateAnchorLocal(ctx, id, "tmux key error: "+err.Error(), true)
 			if tmux.IsIdentityLoss(err) {
-				return actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"}
+				return inputCompletion{
+					result:         actionResult{Outcome: actionTmuxFailed, Message: "session lost; use /sessions to attach the intended pane again"},
+					anchorNotice:   "tmux key error: " + err.Error(),
+					noticeBinding:  ts,
+					identitySource: ts,
+					identityError:  err,
+				}
 			}
-			return actionResult{Outcome: actionTmuxFailed, Message: "tmux key failed: " + err.Error()}
+			return inputCompletion{
+				result:        actionResult{Outcome: actionTmuxFailed, Message: "tmux key failed: " + err.Error()},
+				anchorNotice:  "tmux key error: " + err.Error(),
+				noticeBinding: ts,
+			}
 		}
 		pane = validated
-		if delay > 0 && i < len(groups)-1 && !a.sleepContext(ctx, delay) {
-			return actionResult{Outcome: actionTmuxFailed, Message: "key sequence canceled"}
+		if i < len(delays) && delays[i] > 0 && i < len(groups)-1 && !a.sleepContext(ctx, delays[i]) {
+			return inputCompletion{result: actionResult{Outcome: actionTmuxFailed, Message: "key sequence canceled"}}
 		}
 	}
 	if err := a.recordValidatedPane(ts, pane); err != nil {
-		return actionResult{Outcome: actionStateFailed, Message: err.Error()}
+		return inputCompletion{result: actionResult{Outcome: actionStateFailed, Message: err.Error()}}
 	}
 	expected := ts
 	expected.State = state.TerminalRunning
@@ -250,15 +294,19 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	})
 	if err != nil {
 		_ = a.audit("state.session", "failed", map[string]any{"session_id": id, "mode": "keys", "error": err.Error()})
-		a.invalidatePresentationHashes(ts)
-		a.updateAnchorLocal(ctx, id, "state update error after tmux keys: "+err.Error(), true)
-		return actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux keys: " + err.Error()}
+		return inputCompletion{
+			result:        actionResult{Outcome: actionStateFailed, Message: "state update failed after tmux keys: " + err.Error()},
+			anchorNotice:  "state update error after tmux keys: " + err.Error(),
+			noticeBinding: ts,
+		}
 	}
 	if !found || !applied {
-		return actionResult{Outcome: actionStateFailed, Message: "session no longer current after tmux keys"}
+		return inputCompletion{result: actionResult{Outcome: actionStateFailed, Message: "session no longer current after tmux keys"}}
 	}
-	a.refreshSoon(id)
-	return actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))}
+	return inputCompletion{
+		result:  actionResult{Outcome: actionOK, Message: "sent " + firstNonEmpty(strings.TrimSpace(preview), flattenKeyPreview(groups))},
+		refresh: true,
+	}
 }
 
 func tmuxSendFailureMessage(stage string, err error) string {

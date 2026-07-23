@@ -65,6 +65,18 @@ func TestPackageImportBoundaries(t *testing.T) {
 			},
 		},
 		{
+			dir: "internal/keyseq",
+			forbidden: []string{
+				"github.com/idolum-ai/engram/internal/anthropic",
+				"github.com/idolum-ai/engram/internal/app",
+				"github.com/idolum-ai/engram/internal/guide",
+				"github.com/idolum-ai/engram/internal/openai",
+				"github.com/idolum-ai/engram/internal/state",
+				"github.com/idolum-ai/engram/internal/telegram",
+				"github.com/idolum-ai/engram/internal/tmux",
+			},
+		},
+		{
 			dir: "internal/commands",
 			forbidden: []string{
 				"github.com/idolum-ai/engram/internal/app",

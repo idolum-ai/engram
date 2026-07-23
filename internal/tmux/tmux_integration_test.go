@@ -11,9 +11,64 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/engram/internal/keyseq"
 )
 
 type socketRunner struct{ socket string }
+
+func TestTmuxIntegrationCompiledKeyPlanPreservesOrderAndRepetition(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxEnvironment(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-keys-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+
+	outputPath := filepath.Join(t.TempDir(), "keys.bin")
+	if _, err := runner.Run(ctx, "new-session", "-d", "-x", "40", "-y", "10", "-s", "keys", "cat > "+ShellQuote(outputPath)); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	serverID, err := manager.EnsureServerID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, err := manager.ResolveTarget(ctx, "keys:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := keyseq.Proposal{Kind: keyseq.KindSequence, Events: []keyseq.Event{
+		{Key: keyseq.KeyUp, Count: 3},
+		{Key: keyseq.KeyEnter, Count: 1},
+	}}
+	plan, err := keyseq.Compile(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range plan.Groups {
+		if err := manager.SendKeysIfBindingMatches(ctx, window.PaneID, window.ID, serverID, group.Keys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, readErr := os.ReadFile(outputPath)
+		if readErr == nil && bytes.Equal(got, []byte("\x1b[A\x1b[A\x1b[A\n")) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("compiled key bytes = %x error=%v", got, readErr)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
 
 func (r socketRunner) Run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "tmux", integrationTmuxArgs(r.socket, args...)...)
