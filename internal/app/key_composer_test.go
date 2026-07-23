@@ -479,6 +479,26 @@ func TestNewKeyPromptSupersedesPriorWorkflow(t *testing.T) {
 	}
 }
 
+func TestConsumedKeyPromptLeavesReusableBoundedTombstone(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	session, _ := app.Store.FindSession(1)
+	ref := keyPromptRef{ChatID: 100, MessageID: 71}
+	if _, err := app.issueKeyPrompt(ref.ChatID, ref.MessageID, 42, session); err != nil {
+		t.Fatal(err)
+	}
+	if _, current, recognized := app.consumeKeyPrompt(ref); !recognized || !current {
+		t.Fatalf("first consumption: current=%v recognized=%v", current, recognized)
+	}
+	for range 2 {
+		if _, current, recognized := app.consumeKeyPrompt(ref); !recognized || current {
+			t.Fatalf("late consumption: current=%v recognized=%v", current, recognized)
+		}
+	}
+	if len(app.keyPromptTombstones) != 1 || len(app.keyPromptTombstones) > maxKeyComposerWorkflows {
+		t.Fatalf("prompt tombstones = %#v", app.keyPromptTombstones)
+	}
+}
+
 func TestSupersededKeyPromptReplyDoesNotFallThroughToTerminalRouting(t *testing.T) {
 	app, runner, _ := newAnchorKeyTestApp(t)
 	session, _ := app.Store.FindSession(1)

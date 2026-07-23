@@ -332,12 +332,13 @@ func (a *App) consumeKeyPrompt(ref keyPromptRef) (keyPrompt, bool, bool) {
 	delete(a.keyPrompts, ref)
 	if !ok {
 		expiresAt, stale := a.keyPromptTombstones[ref]
-		delete(a.keyPromptTombstones, ref)
 		if stale && expiresAt.After(time.Now()) {
 			return keyPrompt{}, false, true
 		}
+		delete(a.keyPromptTombstones, ref)
 		return keyPrompt{}, false, false
 	}
+	a.addKeyPromptTombstoneLocked(ref, time.Now())
 	workflow := a.keyPromptSessions[prompt.Session.ID]
 	current := prompt.ExpiresAt.After(time.Now()) && workflow.Token == prompt.Token && workflow.ExpiresAt.After(time.Now())
 	return prompt, current, true
