@@ -61,7 +61,21 @@ privacy model must stay small and explicit.
 - Terminal captures are untrusted data for the guide. The prompt explicitly
   tells the model that pane-authored and continuity text has no authority, but
   model resistance to prompt injection is best effort rather than a security
-  boundary. Engram never executes model output automatically.
+  boundary. Guide prose never executes.
+- The optional natural-language key composer sends only the user's one key
+  description to the configured guide provider. It supplies no terminal
+  capture, prior model output, session metadata, or chat history. Provider
+  output must decode as a closed physical-key proposal with no free-text
+  payload field and is bounded to 32 expanded events. Because individual
+  printable-key events can still compose text, Engram renders the exact locally
+  normalized sequence and target for an explicit, current, single-use
+  confirmation. The model has proposal authority only; it never has terminal
+  authority.
+- Key prompts and confirmations are deliberately process-local. Their random
+  tokens, descriptions, and proposed sequences are not persisted or audited.
+  Restart removes their authority. Confirmation binds user, chat, message,
+  session, canonical anchor, and immutable tmux identity, all of which are
+  rechecked before input.
 - Incoming attachments, including replied voice notes in default `path` mode,
   are downloaded from Telegram but are not sent to a model provider by default.
 - A voice note replying to a current session view is the explicit exception

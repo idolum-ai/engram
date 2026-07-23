@@ -18,6 +18,7 @@ import (
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/guide"
+	"github.com/idolum-ai/engram/internal/keyseq"
 	"github.com/idolum-ai/engram/internal/lockfile"
 	"github.com/idolum-ai/engram/internal/openai"
 	"github.com/idolum-ai/engram/internal/redact"
@@ -35,6 +36,7 @@ type App struct {
 	Templates                     *templates.Store
 	Telegram                      *telegram.Client
 	Guide                         guide.Renderer
+	KeyInterpreter                keyseq.Interpreter
 	Transcriber                   voiceTranscriber
 	Tmux                          tmux.Manager
 	CodexDetector                 codexRuntimeDetector
@@ -84,6 +86,11 @@ type App struct {
 	conversationGates             map[int]*conversationGate
 	closeConfirmMu                sync.Mutex
 	closeConfirms                 map[string]closeConfirmation
+	keyComposerMu                 sync.Mutex
+	keyPrompts                    map[keyPromptRef]keyPrompt
+	keyPromptTombstones           map[keyPromptRef]time.Time
+	keyPromptSessions             map[int]keyWorkflow
+	keyConfirmations              map[string]keyConfirmation
 	collapsedShelfMu              sync.Mutex
 	collapsedShelfRetryMessageID  int
 	collapsedShelfRetryAt         time.Time
@@ -183,7 +190,7 @@ func New(cfg config.Config) (*App, error) {
 			return nil, fmt.Errorf("record host boot: %w", err)
 		}
 	}
-	guideRenderer := guideRendererFor(cfg)
+	guideRenderer, keyInterpreter := modelCapabilitiesFor(cfg)
 	var transcriber voiceTranscriber
 	if cfg.VoiceTranscriptionConfigured() {
 		transcriber = openai.NewTranscriber(cfg.OpenAIAPIKey, cfg.OpenAITranscriptionModel)
@@ -210,6 +217,7 @@ func New(cfg config.Config) (*App, error) {
 		Templates:                     templateStore,
 		Telegram:                      telegramClient,
 		Guide:                         guideRenderer,
+		KeyInterpreter:                keyInterpreter,
 		Transcriber:                   transcriber,
 		Tmux:                          tmux.New(tmux.NewPriorityRunner(tmux.ExecRunner{})),
 		CodexDetector:                 codexui.NewDetector(),
@@ -241,6 +249,10 @@ func New(cfg config.Config) (*App, error) {
 		conversationEpochs:            map[int]conversationEpoch{},
 		conversationGates:             map[int]*conversationGate{},
 		closeConfirms:                 map[string]closeConfirmation{},
+		keyPrompts:                    map[keyPromptRef]keyPrompt{},
+		keyPromptTombstones:           map[keyPromptRef]time.Time{},
+		keyPromptSessions:             map[int]keyWorkflow{},
+		keyConfirmations:              map[string]keyConfirmation{},
 		pendingRecoveryBootID:         pendingRecoveryBootID,
 		pendingRecoveryPlanMessageIDs: append([]int(nil), stateSnapshot.RecoveryPlanMessageIDs...),
 		pendingRecoveryPlanHash:       stateSnapshot.PendingRecoveryPlanHash,
@@ -249,16 +261,23 @@ func New(cfg config.Config) (*App, error) {
 }
 
 func guideRendererFor(cfg config.Config) guide.Renderer {
+	renderer, _ := modelCapabilitiesFor(cfg)
+	return renderer
+}
+
+func modelCapabilitiesFor(cfg config.Config) (guide.Renderer, keyseq.Interpreter) {
 	if !cfg.GuideConfigured() {
-		return nil
+		return nil, nil
 	}
 	switch cfg.EffectiveLLMProvider() {
 	case config.LLMProviderAnthropic:
-		return anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+		client := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+		return client, client
 	case config.LLMProviderOpenAI:
-		return openai.New(cfg.OpenAIAPIKey, cfg.OpenAIModel)
+		client := openai.New(cfg.OpenAIAPIKey, cfg.OpenAIModel)
+		return client, client
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -391,6 +410,9 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if err := a.Store.MarkMessage(key); err != nil {
 		_ = a.audit("state.message", "failed", map[string]any{"message_id": msg.MessageID, "error": err.Error()})
 		return "failed_state_mark_message"
+	}
+	if status, handled := a.handleKeyPromptReply(ctx, msg); handled {
+		return status
 	}
 	if msg.Voice != nil && msg.ReplyToMessage != nil {
 		return a.handleVoiceReply(ctx, msg).status("voice_reply")

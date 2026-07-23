@@ -58,6 +58,11 @@ if contains_pattern 'github.com/idolum-ai/engram/internal/telegram' internal/tmu
   exit 1
 fi
 
+if contains_pattern 'github.com/idolum-ai/engram/internal/(anthropic|app|guide|openai|state|telegram|tmux)' internal/keyseq >/dev/null; then
+  echo "key sequence contracts must remain provider- and authority-neutral" >&2
+  exit 1
+fi
+
 if contains_pattern 'github.com/idolum-ai/engram/internal/(app|anthropic|inspect|state|telegram|terminalshot)' internal/mechanics >/dev/null; then
   echo "terminal mechanics may depend only on tmux and the standard library" >&2
   exit 1

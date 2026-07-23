@@ -118,10 +118,10 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
 	}
-	if got.InlineKeyboard[0][1].Text != "🖼️ View" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+	if got.InlineKeyboard[0][1].Text != "🖼️" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
-	if got.InlineKeyboard[0][2].Text != "➖ Hide" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
+	if got.InlineKeyboard[0][2].Text != "➖" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
 		t.Fatalf("collapse callback = %#v", got.InlineKeyboard[0][2])
 	}
 	want := []InlineKeyboardButton{
@@ -164,6 +164,55 @@ func TestGuideAnchorMarkupOmitsArrowButtons(t *testing.T) {
 	}
 }
 
+func TestModelCapableAnchorMarkupUsesOneKeyboardEntryPoint(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{Image: true, Arrows: true, Keyboard: true})
+	if got == nil || len(got.InlineKeyboard) != 1 {
+		t.Fatalf("AnchorMarkup rows = %#v, want one primary action row", got)
+	}
+	want := []InlineKeyboardButton{
+		{Text: "🔄", CallbackData: "refresh:7"},
+		{Text: "🖼️", CallbackData: "snapshot:7"},
+		{Text: "⌨️", CallbackData: "keyboard:7"},
+		{Text: "➖", CallbackData: "collapse:7"},
+	}
+	if !reflect.DeepEqual(got.InlineKeyboard[0], want) {
+		t.Fatalf("primary action row = %#v, want %#v", got.InlineKeyboard[0], want)
+	}
+}
+
+func TestModelCapableAnchorMarkupKeepsKeyboardAheadOfDownloads(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{
+		Keyboard: true, FileToken: "0123456789abcdef", FileCount: 2,
+	})
+	if got == nil || len(got.InlineKeyboard) != 2 {
+		t.Fatalf("AnchorMarkup rows = %#v, want actions then downloads", got)
+	}
+	if got.InlineKeyboard[0][1].CallbackData != "keyboard:7" ||
+		got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
+		t.Fatalf("primary action ordering = %#v", got.InlineKeyboard[0])
+	}
+	if got.InlineKeyboard[1][0].CallbackData != "file:7:0123456789abcdef:1" {
+		t.Fatalf("download row = %#v", got.InlineKeyboard[1])
+	}
+}
+
+func TestKeyConfirmationMarkupHasOnlyExplicitDecisionButtons(t *testing.T) {
+	t.Parallel()
+
+	got := KeyConfirmationMarkup("0123456789abcdef")
+	want := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		{Text: "✅", CallbackData: "keys-send:0123456789abcdef"},
+		{Text: "❌", CallbackData: "keys-cancel:0123456789abcdef"},
+	}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("KeyConfirmationMarkup() = %#v, want %#v", got, want)
+	}
+}
+
 func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	t.Parallel()
 
@@ -171,10 +220,10 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	if got == nil || len(got.InlineKeyboard[0]) != 4 {
 		t.Fatalf("AnchorMarkup actions = %#v", got)
 	}
-	if want := (InlineKeyboardButton{Text: "🗣️ Talk", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
+	if want := (InlineKeyboardButton{Text: "🗣️", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
 		t.Fatalf("explain action = %#v, want %#v", got.InlineKeyboard[0][1], want)
 	}
-	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
+	want := InlineKeyboardButton{Text: "📄", CallbackData: "raw:7"}
 	if got.InlineKeyboard[0][2] != want {
 		t.Fatalf("raw action = %#v, want %#v", got.InlineKeyboard[0][2], want)
 	}
@@ -250,6 +299,7 @@ func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
 			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},
 		),
 		"close confirmation": CloseConfirmationMarkup("0123456789abcdef"),
+		"key confirmation":   KeyConfirmationMarkup("0123456789abcdef"),
 	}
 	for name, markup := range markups {
 		for rowIndex, row := range markup.InlineKeyboard {
@@ -542,6 +592,47 @@ func TestRequestErrorsRedactToken(t *testing.T) {
 				t.Fatalf("error contains request secret or URL: %q", got)
 			}
 		})
+	}
+}
+
+func TestSendForceReplyUsesPrivateChatReplyMarkup(t *testing.T) {
+	t.Parallel()
+
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body struct {
+			ChatID          int64  `json:"chat_id"`
+			Text            string `json:"text"`
+			ReplyParameters struct {
+				MessageID int `json:"message_id"`
+			} `json:"reply_parameters"`
+			ReplyMarkup ForceReply `json:"reply_markup"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.ChatID != 5 || body.Text != "Describe keys for [7]" || body.ReplyParameters.MessageID != 70 {
+			t.Fatalf("request body = %#v", body)
+		}
+		if !body.ReplyMarkup.ForceReply || body.ReplyMarkup.Selective || body.ReplyMarkup.InputFieldPlaceholder != "up 3 times, Enter, Ctrl+C" {
+			t.Fatalf("force reply markup = %#v", body.ReplyMarkup)
+		}
+		return jsonResponse(t, map[string]any{
+			"ok": true,
+			"result": map[string]any{
+				"message_id": 71,
+				"chat":       map[string]any{"id": 5},
+			},
+		}), nil
+	})}
+
+	msg, err := client.SendForceReply(context.Background(), 5, "Describe keys for [7]", 70, "up 3 times, Enter, Ctrl+C")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.MessageID != 71 {
+		t.Fatalf("message = %#v", msg)
 	}
 }
 

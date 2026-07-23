@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/guide"
+	"github.com/idolum-ai/engram/internal/keyseq"
 )
 
 type Client struct {
@@ -136,29 +137,58 @@ func (c *Client) Converse(ctx context.Context, in guide.Input) (string, error) {
 }
 
 func (c *Client) ConverseWithEvidence(ctx context.Context, in guide.Input) (guide.Result, error) {
+	text, err := c.complete(ctx, guide.SystemPrompt, guide.BuildPrompt(in), guide.MaxTokens, guide.Temperature, nil)
+	if err != nil {
+		return guide.Result{}, err
+	}
+	parsed := guide.ParseResult(text)
+	parsed.Text = guide.LimitWords(parsed.Text, guide.MaxWords)
+	if parsed.Text == "" {
+		return guide.Result{}, fmt.Errorf("openai returned no text")
+	}
+	return parsed, nil
+}
+
+func (c *Client) InterpretKeys(ctx context.Context, description string) (keyseq.Proposal, error) {
+	text, err := c.complete(ctx, keyseq.SystemPrompt, keyseq.BuildPrompt(description), keyseq.MaxTokens, 0, keyseq.JSONSchema())
+	if err != nil {
+		return keyseq.Proposal{}, err
+	}
+	return keyseq.Parse(text)
+}
+
+func (c *Client) complete(ctx context.Context, system, prompt string, maxTokens int, temperature float64, schema map[string]any) (string, error) {
 	payload := map[string]any{
 		"model": c.Model,
 		"messages": []map[string]string{
-			{"role": "system", "content": guide.SystemPrompt},
-			{"role": "user", "content": guide.BuildPrompt(in)},
+			{"role": "system", "content": system},
+			{"role": "user", "content": prompt},
 		},
-		"max_completion_tokens": guide.MaxTokens,
+		"max_completion_tokens": maxTokens,
 		"reasoning_effort":      "none",
-		"temperature":           guide.Temperature,
+		"temperature":           temperature,
+	}
+	if schema != nil {
+		payload["response_format"] = map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name": "key_sequence", "strict": true, "schema": schema,
+			},
+		}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return guide.Result{}, err
+		return "", err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL, bytes.NewReader(body))
 	if err != nil {
-		return guide.Result{}, err
+		return "", err
 	}
 	request.Header.Set("Authorization", "Bearer "+c.APIKey)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.HTTPClient.Do(request)
 	if err != nil {
-		return guide.Result{}, err
+		return "", err
 	}
 	defer response.Body.Close()
 
@@ -175,28 +205,27 @@ func (c *Client) ConverseWithEvidence(ctx context.Context, in guide.Input) (guid
 		} `json:"error,omitempty"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return guide.Result{}, err
+		return "", err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		if result.Error != nil {
-			return guide.Result{}, fmt.Errorf("openai %s: %s", result.Error.Type, result.Error.Message)
+			return "", fmt.Errorf("openai %s: %s", result.Error.Type, result.Error.Message)
 		}
-		return guide.Result{}, fmt.Errorf("openai status %s", response.Status)
+		return "", fmt.Errorf("openai status %s", response.Status)
 	}
 	if len(result.Choices) != 1 {
-		return guide.Result{}, fmt.Errorf("openai returned %d choices", len(result.Choices))
+		return "", fmt.Errorf("openai returned %d choices", len(result.Choices))
 	}
 	switch result.Choices[0].FinishReason {
 	case "stop":
 	case "length":
-		return guide.Result{}, fmt.Errorf("openai response exceeded its output limit")
+		return "", fmt.Errorf("openai response exceeded its output limit")
 	default:
-		return guide.Result{}, fmt.Errorf("openai response ended with unexpected finish_reason %q", result.Choices[0].FinishReason)
+		return "", fmt.Errorf("openai response ended with unexpected finish_reason %q", result.Choices[0].FinishReason)
 	}
-	parsed := guide.ParseResult(result.Choices[0].Message.Content)
-	parsed.Text = guide.LimitWords(parsed.Text, guide.MaxWords)
-	if parsed.Text == "" {
-		return guide.Result{}, fmt.Errorf("openai returned no text")
+	text := strings.TrimSpace(result.Choices[0].Message.Content)
+	if text == "" {
+		return "", fmt.Errorf("openai returned no text")
 	}
-	return parsed, nil
+	return text, nil
 }

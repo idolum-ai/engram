@@ -272,6 +272,21 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 			a.reply(ctx, msg, result.Message)
 		}
 		return result.status("callback")
+	case "keyboard":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil || id <= 0 {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		validated, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		return a.openKeyComposer(ctx, cb, validated)
+	case "keys-send":
+		return a.confirmKeys(ctx, cb, parts[1])
+	case "keys-cancel":
+		return a.cancelKeys(ctx, cb, parts[1])
 	case "file":
 		id, token, index, ok := parseFileCallback(parts[1])
 		if !ok {

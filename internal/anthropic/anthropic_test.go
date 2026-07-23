@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/idolum-ai/engram/internal/keyseq"
 )
 
 func TestConverseUsesOneNonStreamingRequest(t *testing.T) {
@@ -50,6 +52,48 @@ func TestConverseUsesOneNonStreamingRequest(t *testing.T) {
 	}
 	if payload["system"] != SystemPrompt {
 		t.Fatal("request did not use SystemPrompt")
+	}
+}
+
+func TestInterpretKeysUsesIsolatedBoundedRequest(t *testing.T) {
+	var payload map[string]any
+	client := New("key", "claude-haiku-4-5-20251001")
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return textResponse(`{"kind":"sequence","events":[{"key":"up","modifiers":[],"count":3}]}`), nil
+	})}
+
+	got, err := client.InterpretKeys(context.Background(), "up three times")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != keyseq.KindSequence || len(got.Events) != 1 || got.Events[0].Key != keyseq.KeyUp || got.Events[0].Count != 3 {
+		t.Fatalf("proposal = %#v", got)
+	}
+	if payload["max_tokens"] != float64(keyseq.MaxTokens) || payload["temperature"] != float64(0) || payload["system"] != keyseq.SystemPrompt {
+		t.Fatalf("payload = %#v", payload)
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("messages = %#v", payload["messages"])
+	}
+	user, ok := messages[0].(map[string]any)
+	if !ok || user["role"] != "user" || user["content"] != keyseq.BuildPrompt("up three times") {
+		t.Fatalf("user message = %#v", messages[0])
+	}
+	content, _ := user["content"].(string)
+	if strings.Contains(content, "terminal_text") || strings.Contains(content, "session_id") {
+		t.Fatalf("key request crossed context boundary: %s", content)
+	}
+	outputConfig, ok := payload["output_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("output_config = %#v", payload["output_config"])
+	}
+	format, ok := outputConfig["format"].(map[string]any)
+	if !ok || format["type"] != "json_schema" || format["schema"] == nil {
+		t.Fatalf("structured output format = %#v", outputConfig)
 	}
 }
 

@@ -11,9 +11,122 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/engram/internal/keyseq"
 )
 
 type socketRunner struct{ socket string }
+
+func TestTmuxIntegrationCompiledKeyPlanPreservesOrderAndRepetition(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxEnvironment(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-keys-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+
+	outputPath := filepath.Join(t.TempDir(), "keys.bin")
+	if _, err := runner.Run(ctx, "new-session", "-d", "-x", "40", "-y", "10", "-s", "keys", "cat > "+ShellQuote(outputPath)); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	serverID, err := manager.EnsureServerID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, err := manager.ResolveTarget(ctx, "keys:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := keyseq.Proposal{Kind: keyseq.KindSequence, Events: []keyseq.Event{
+		{Key: keyseq.KeyUp, Count: 3},
+		{Key: keyseq.KeyEnter, Count: 1},
+	}}
+	plan, err := keyseq.Compile(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range plan.Groups {
+		if err := manager.SendKeysIfBindingMatches(ctx, window.PaneID, window.ID, serverID, group.Keys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, readErr := os.ReadFile(outputPath)
+		if readErr == nil && bytes.Equal(got, []byte("\x1b[A\x1b[A\x1b[A\n")) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("compiled key bytes = %x error=%v", got, readErr)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func TestTmuxIntegrationVerifiedChordSubsetEmitsExactBytes(t *testing.T) {
+	if os.Getenv("ENGRAM_TMUX_INTEGRATION") != "1" {
+		t.Skip("set ENGRAM_TMUX_INTEGRATION=1 to run isolated real-tmux coverage")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	setIntegrationTmuxEnvironment(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runner := socketRunner{socket: fmt.Sprintf("engram-chords-test-%d", os.Getpid())}
+	_, _ = runner.Run(context.Background(), "kill-server")
+	t.Cleanup(func() { _, _ = runner.Run(context.Background(), "kill-server") })
+
+	outputPath := filepath.Join(t.TempDir(), "chords.bin")
+	command := "stty raw -echo; cat > " + ShellQuote(outputPath)
+	if _, err := runner.Run(ctx, "new-session", "-d", "-x", "40", "-y", "10", "-s", "chords", command); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(runner)
+	serverID, err := manager.EnsureServerID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window, err := manager.ResolveTarget(ctx, "chords:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := keyseq.Proposal{Kind: keyseq.KindSequence, Events: []keyseq.Event{
+		{Key: "a", Modifiers: []keyseq.Modifier{keyseq.ModifierShift}, Count: 1},
+		{Key: "c", Modifiers: []keyseq.Modifier{keyseq.ModifierControl}, Count: 1},
+		{Key: "a", Modifiers: []keyseq.Modifier{keyseq.ModifierAlt}, Count: 1},
+		{Key: keyseq.KeyTab, Modifiers: []keyseq.Modifier{keyseq.ModifierShift}, Count: 1},
+		{Key: keyseq.KeyF4, Modifiers: []keyseq.Modifier{keyseq.ModifierAlt}, Count: 1},
+	}}
+	plan, err := keyseq.Compile(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range plan.Groups {
+		if err := manager.SendKeysIfBindingMatches(ctx, window.PaneID, window.ID, serverID, group.Keys); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []byte("A\x03\x1ba\x1b[Z\x1b[1;3S")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, readErr := os.ReadFile(outputPath)
+		if readErr == nil && bytes.Equal(got, want) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("verified chord bytes = %x, want %x, error=%v", got, want, readErr)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
 
 func (r socketRunner) Run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "tmux", integrationTmuxArgs(r.socket, args...)...)

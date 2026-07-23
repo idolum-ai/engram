@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/guide"
+	"github.com/idolum-ai/engram/internal/keyseq"
 )
 
 const testModel = "gpt-5.6-luna"
@@ -60,6 +61,52 @@ func TestConverseUsesOneBoundedNonStreamingRequest(t *testing.T) {
 	wantPrompt := guide.BuildPrompt(guide.Input{SessionID: 7, VisibleText: "$ go test ./...\nok example/internal/app"})
 	if user["role"] != "user" || user["content"] != wantPrompt {
 		t.Fatal("terminal evidence changed")
+	}
+}
+
+func TestInterpretKeysUsesIsolatedBoundedRequest(t *testing.T) {
+	var payload map[string]any
+	client := New("openai-key", testModel)
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return completionResponse(`{"kind":"sequence","events":[{"key":"f4","modifiers":["alt"],"count":1}]}`, "stop"), nil
+	})}
+
+	got, err := client.InterpretKeys(context.Background(), "alt f four")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != keyseq.KindSequence || len(got.Events) != 1 || got.Events[0].Key != keyseq.KeyF4 {
+		t.Fatalf("proposal = %#v", got)
+	}
+	if payload["max_completion_tokens"] != float64(keyseq.MaxTokens) || payload["temperature"] != float64(0) || payload["reasoning_effort"] != "none" {
+		t.Fatalf("payload = %#v", payload)
+	}
+	responseFormat, ok := payload["response_format"].(map[string]any)
+	if !ok || responseFormat["type"] != "json_schema" {
+		t.Fatalf("response_format = %#v", payload["response_format"])
+	}
+	jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
+	if !ok || jsonSchema["name"] != "key_sequence" || jsonSchema["strict"] != true || jsonSchema["schema"] == nil {
+		t.Fatalf("json_schema = %#v", responseFormat["json_schema"])
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) != 2 {
+		t.Fatalf("messages = %#v", payload["messages"])
+	}
+	system, systemOK := messages[0].(map[string]any)
+	user, userOK := messages[1].(map[string]any)
+	if !systemOK || system["role"] != "system" || system["content"] != keyseq.SystemPrompt {
+		t.Fatalf("system message = %#v", messages[0])
+	}
+	if !userOK || user["role"] != "user" || user["content"] != keyseq.BuildPrompt("alt f four") {
+		t.Fatalf("user message = %#v", messages[1])
+	}
+	content, _ := user["content"].(string)
+	if strings.Contains(content, "terminal_text") || strings.Contains(content, "session_id") {
+		t.Fatalf("key request crossed context boundary: %s", content)
 	}
 }
 

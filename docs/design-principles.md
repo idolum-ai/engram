@@ -86,9 +86,13 @@ cannot be edited remain owned until their controls and pin are retired.
 
 Sending input to tmux must remain fast when a model provider, Chromium, or Telegram
 delivery is delayed or failing. Replying to an anchor and using `/send`,
-`/text`, `/key`, or key buttons should route directly and predictably to the
-intended pane. Presentation work must not block input; an interactive tmux
-operation may preempt Engram's own background observation and recovery work.
+`/text`, `/key`, or deterministic key buttons should route directly and
+predictably to the intended pane. A natural-language key description is a
+separate proposal path: the model receives only that description, its output is
+reduced to a closed physical-key representation, and the exact target and
+sequence require an explicit current confirmation. Presentation work and key
+interpretation must not block ordinary input; an interactive tmux operation may
+preempt Engram's own background observation and recovery work.
 
 Remembered input should remain explicit text, not inferred automation. A user
 may give exact prose a short name and invoke it with a typed placeholder.
@@ -278,6 +282,7 @@ quiet and structural rather than competing with the tool.
 - A plugin system.
 - Long model chat memory or cross-window model context.
 - Model-generated file/path inventories.
+- Model-generated text or commands sent to a terminal.
 - Broad notification routing across chat systems.
 - An Engram-to-Engram control plane or persistent deployment hierarchy.
 

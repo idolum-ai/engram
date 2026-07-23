@@ -349,7 +349,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 }
 
 func TestRetiredAnchorCallbacksAreInert(t *testing.T) {
-	for _, callbackData := range []string{"refresh:1", "snapshot:1", "raw:1", "collapse:1", "expand-all:0", "key:1:ctrl-c", "key:1:up", "recover:1"} {
+	for _, callbackData := range []string{"refresh:1", "snapshot:1", "raw:1", "collapse:1", "expand-all:0", "key:1:ctrl-c", "key:1:up", "keyboard:1", "recover:1"} {
 		t.Run(callbackData, func(t *testing.T) {
 			app, runner, refreshed := newAnchorKeyTestApp(t)
 			if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
@@ -397,6 +397,7 @@ func newAnchorKeyTestApp(t *testing.T) (*App, *anchorKeyRunner, <-chan struct{})
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 10
+		s.WatchEnabled = true
 	}); err != nil {
 		t.Fatal(err)
 	}

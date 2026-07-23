@@ -614,9 +614,17 @@ snapshot replies. The latest upstream-signal notification is another reply
 route to the same outer pane. Replacing any alternate of the same kind makes
 its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
-Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
-`Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
-directional row. Tap `➖ Hide` to move a running anchor into one shared, pinned
+When a guide model is configured, every anchor replaces its fixed key rows with
+one `⌨️` control. Tap it and describe ordinary physical key presses in natural
+language, such as `up three times, Enter, then Ctrl+C`. Engram shows the exact
+normalized sequence and target in a separate `✅`/`❌` confirmation; the model
+can propose keys but cannot send them. Ambiguous intent and requests to type
+text are instructed to produce clarification. Unsupported keys, malformed or
+oversized proposals, stale cards, and expired confirmations fail closed.
+Without a configured model, anchors retain the direct `Esc`,
+`Escx2`, `^C`, `^D`, and `Enter` controls, with `← ↑ ↓ →` additionally available
+in snapshot mode. `/key` remains the expert interface for exact tmux key names.
+Tap `➖ Hide` to move a running anchor into one shared, pinned
 `Collapsed sessions` shelf. The shelf gives each collapsed session one quiet
 status line, labels those lines as cached, and exposes a single `➕ Show`
 control. Engram keeps the individual anchor live until the shelf has been
@@ -861,6 +869,23 @@ With `ANTHROPIC_API_KEY` and optionally `ANTHROPIC_MODEL` exported, run:
 ```sh
 ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
   -run TestLiveHaikuConversationEvaluation -count=1
+```
+
+The key composer has a separate provider-neutral corpus for exact sequences,
+safe clarification, multilingual phrasing, transcription noise, negation,
+quoted and conditional instructions, retractions, and prompt injection. Its
+live gate requires every safety case to clarify or fail deterministic proposal
+validation, rejects every wrong executable sequence, and requires at least 80%
+useful outcomes. Exact matches are reported separately from conservative
+clarifications, inert clarification normalization, and safe local rejection.
+Malformed structured output, provider errors, and transport failures still fail
+the gate. It is intentionally manual because pull requests do not receive
+provider secrets:
+
+```sh
+ENGRAM_LIVE_KEYSEQ_EVAL=all \
+ENGRAM_LIVE_KEYSEQ_EVAL_TRIALS=3 \
+go test -v ./internal/keyseqeval -run TestLiveKeyInterpretation -count=1
 ```
 
 The four incremental fixtures exercise conversational continuation from

@@ -707,6 +707,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 			Voice:     ts.AnchorFormat == anchorFormatSnapshot && a.guideAvailable,
 			Raw:       mediaAnchorFormat(ts.AnchorFormat),
 			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,
+			Keyboard:  a.KeyInterpreter != nil,
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),
 		})
@@ -715,6 +716,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 }
 
 func (a *App) scheduler(ctx context.Context) {
+	a.expireKeyComposer(ctx)
 	a.reconcileCollapsedShelf(ctx)
 	for _, ts := range a.Store.Snapshot().TerminalSessions {
 		a.queueTerminalCapabilityReconcile(ts.ID)
@@ -737,6 +739,7 @@ func (a *App) scheduler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			a.expireKeyComposer(ctx)
 			st := a.Store.Snapshot()
 			now := time.Now()
 			a.reconcileDueTerminalCapabilities(ctx, now)
