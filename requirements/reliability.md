@@ -203,6 +203,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   concurrent request. Rate limits from callback answers also establish that
   outbound deadline without delaying otherwise healthy callback answers.
   Unchanged edits count as success.
+- If both the current shelf and its predecessor are unavailable, Engram retires
+  the failed replacement through the ordinary delete/unpin path before creating
+  one fresh shelf. An uneditable but still-existing message therefore retains
+  cleanup ownership until its stale controls and pin are removed.
 - Chromium readiness controls both snapshot startup and whether guide anchors
   expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session

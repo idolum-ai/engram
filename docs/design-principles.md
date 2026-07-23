@@ -79,7 +79,8 @@ Collapse follows the reciprocal rule: the individual anchor remains
 canonical until the shared shelf is rendered and pinned. The shelf identifies
 its summaries as cached because hiding a session also stops observation. If
 both a shelf and its predecessor disappear, Engram creates one fresh shelf
-instead of oscillating between dead identities.
+instead of oscillating between dead identities. Messages that still exist but
+cannot be edited remain owned until their controls and pin are retired.
 
 ### Fast input path
 

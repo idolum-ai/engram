@@ -768,7 +768,7 @@ func TestUnavailableReplacementShelfRecoversVisiblePredecessor(t *testing.T) {
 	}
 }
 
-func TestUnavailableShelfPairCreatesFreshRecoverableShelf(t *testing.T) {
+func TestUneditableShelfPairCreatesFreshRecoverableShelf(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	session, _ := app.Store.FindSession(id)
 	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
@@ -793,7 +793,7 @@ func TestUnavailableShelfPairCreatesFreshRecoverableShelf(t *testing.T) {
 		case "/botTOKEN/editMessageText":
 			if messageID == 88 || messageID == 89 {
 				return telegramTestResponse(t, http.StatusBadRequest, map[string]any{
-					"ok": false, "error_code": 400, "description": "Bad Request: message to edit not found",
+					"ok": false, "error_code": 400, "description": "Bad Request: message can't be edited",
 				}), nil
 			}
 			return telegramTestResponse(t, http.StatusOK, map[string]any{
@@ -820,6 +820,7 @@ func TestUnavailableShelfPairCreatesFreshRecoverableShelf(t *testing.T) {
 	want := []string{
 		"/botTOKEN/editMessageText:89",
 		"/botTOKEN/editMessageText:88",
+		"/botTOKEN/deleteMessage:89",
 		"/botTOKEN/sendMessage:0",
 		"/botTOKEN/editMessageText:90",
 		"/botTOKEN/pinChatMessage:90",
