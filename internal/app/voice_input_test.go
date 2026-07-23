@@ -353,11 +353,22 @@ func newVoiceInputTestApp(t *testing.T) (*App, *slashEscapeRunner, *fakeVoiceTra
 			telegramCalls = append(telegramCalls, "downloadFile")
 			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("ogg-voice-data")), Header: make(http.Header)}, nil
 		case strings.HasSuffix(request.URL.Path, "/sendMessage"):
-			telegramCalls = append(telegramCalls, "sendMessage")
 			var body map[string]any
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
+			if _, present := body["reply_markup"]; present {
+				telegramCalls = append(telegramCalls, "sendMessageInvalidMarkup")
+				return &http.Response{
+					StatusCode: http.StatusBadRequest,
+					Status:     "400 Bad Request",
+					Body: io.NopCloser(strings.NewReader(
+						`{"ok":false,"error_code":400,"description":"Bad Request: object expected as reply markup"}`,
+					)),
+					Header: make(http.Header),
+				}, nil
+			}
+			telegramCalls = append(telegramCalls, "sendMessage")
 			return snapshotJSONResponse(`{"message_id":200,"chat":{"id":100}}`), nil
 		case strings.HasSuffix(request.URL.Path, "/editMessageText"):
 			telegramCalls = append(telegramCalls, "editMessageText")

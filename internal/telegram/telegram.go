@@ -231,6 +231,10 @@ type InlineKeyboardMarkup struct {
 	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
 }
 
+func (m *InlineKeyboardMarkup) present() bool {
+	return m != nil
+}
+
 type InlineKeyboardButton struct {
 	Text         string `json:"text"`
 	CallbackData string `json:"callback_data"`
@@ -240,6 +244,14 @@ type ForceReply struct {
 	ForceReply            bool   `json:"force_reply"`
 	InputFieldPlaceholder string `json:"input_field_placeholder,omitempty"`
 	Selective             bool   `json:"selective,omitempty"`
+}
+
+func (m *ForceReply) present() bool {
+	return m != nil
+}
+
+type messageReplyMarkup interface {
+	present() bool
 }
 
 // Button bounds every Telegram button label to the compact live-card budget.
@@ -312,7 +324,7 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int)
 	return c.postJSON(ctx, "deleteMessage", body, &out)
 }
 
-func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup any, parseMode string, silent bool) (Message, error) {
+func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup messageReplyMarkup, parseMode string, silent bool) (Message, error) {
 	body := map[string]any{
 		"chat_id":              chatID,
 		"text":                 clampText(text),
@@ -321,7 +333,7 @@ func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, rep
 	if replyTo != 0 {
 		body["reply_parameters"] = map[string]any{"message_id": replyTo}
 	}
-	if markup != nil {
+	if markup != nil && markup.present() {
 		body["reply_markup"] = markup
 	}
 	if parseMode != "" {

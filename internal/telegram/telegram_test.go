@@ -433,6 +433,67 @@ func TestSendHTMLMessagePayload(t *testing.T) {
 	}
 }
 
+func TestMessagePayloadsOmitNilReplyMarkup(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		send func(*Client) error
+	}{
+		{
+			name: "plain",
+			send: func(client *Client) error {
+				_, err := client.SendMessage(context.Background(), 5, "plain", 7, nil)
+				return err
+			},
+		},
+		{
+			name: "HTML",
+			send: func(client *Client) error {
+				_, err := client.SendHTMLMessage(context.Background(), 5, "<b>HTML</b>", 7, nil)
+				return err
+			},
+		},
+		{
+			name: "silent plain",
+			send: func(client *Client) error {
+				_, err := client.SendSilentMessage(context.Background(), 5, "plain", 7, nil)
+				return err
+			},
+		},
+		{
+			name: "silent HTML",
+			send: func(client *Client) error {
+				_, err := client.SendSilentHTMLMessage(context.Background(), 5, "<b>HTML</b>", 7, nil)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got map[string]any
+			client := New("TOKEN")
+			client.BaseURL = "https://api.telegram.org/botTOKEN"
+			client.outboundInterval = 0
+			client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				got = decodeRequestMap(t, req)
+				return jsonResponse(t, map[string]any{
+					"ok":     true,
+					"result": map[string]any{"message_id": 10, "chat": map[string]any{"id": 5}},
+				}), nil
+			})}
+
+			if err := tt.send(client); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := got["reply_markup"]; ok {
+				t.Fatalf("reply_markup present = %#v, want omitted", got["reply_markup"])
+			}
+		})
+	}
+}
+
 func TestEditHTMLMessagePayload(t *testing.T) {
 	t.Parallel()
 
