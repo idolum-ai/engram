@@ -77,7 +77,9 @@ the member returns to the shelf instead of remaining as an inert canonical
 card. The handoff remains explicitly pending until those controls are durable.
 Collapse follows the reciprocal rule: the individual anchor remains
 canonical until the shared shelf is rendered and pinned. The shelf identifies
-its summaries as cached because hiding a session also stops observation.
+its summaries as cached because hiding a session also stops observation. If
+both a shelf and its predecessor disappear, Engram creates one fresh shelf
+instead of oscillating between dead identities.
 
 ### Fast input path
 

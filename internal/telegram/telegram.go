@@ -692,13 +692,16 @@ func (c *Client) do(ctx context.Context, method string, outbound bool, newReques
 		var telegramErr *Error
 		rateLimited := errors.As(err, &telegramErr) && telegramErr.IsRateLimited()
 		if !rateLimited || attempt >= maxRateLimitRetries {
-			if outbound && rateLimited && telegramErr.RetryAfter > 0 {
+			if rateLimited && telegramErr.RetryAfter > 0 {
 				_ = c.deferOutbound(telegramErr.RetryAfter)
 			}
 			return err
 		}
-		if outbound && telegramErr.RetryAfter > 0 {
-			satisfiedThrough = c.deferOutbound(telegramErr.RetryAfter)
+		if telegramErr.RetryAfter > 0 {
+			deadline := c.deferOutbound(telegramErr.RetryAfter)
+			if outbound {
+				satisfiedThrough = deadline
+			}
 		}
 		if telegramErr.RetryAfter <= 0 || telegramErr.RetryAfter > maxRetryAfter {
 			return err

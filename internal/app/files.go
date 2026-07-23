@@ -610,6 +610,10 @@ func minInt64(a, b int64) int64 {
 }
 
 func (a *App) queueTransfer(fn func(context.Context)) bool {
+	return a.queueTransferWithDrop(fn, nil)
+}
+
+func (a *App) queueTransferWithDrop(fn, dropped func(context.Context)) bool {
 	ctx := a.workerContext()
 	select {
 	case <-ctx.Done():
@@ -630,6 +634,9 @@ func (a *App) queueTransfer(fn func(context.Context)) bool {
 			defer func() { <-a.transferQueue }()
 		}
 		if !acquireSlot(ctx, a.transferSlots) {
+			if dropped != nil {
+				dropped(ctx)
+			}
 			return
 		}
 		defer releaseSlot(a.transferSlots)

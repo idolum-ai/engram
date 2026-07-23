@@ -1424,6 +1424,12 @@ func (s *Store) FindReplyTarget(chatID int64, messageID int) (TerminalSession, R
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, ts := range s.state.TerminalSessions {
+		if pending := ts.PendingRestore; pending != nil && pending.ChatID == chatID && pending.MessageID == messageID {
+			if ts.Collapsed {
+				return cloneTerminalSession(ts), ReplyTargetStale, true
+			}
+			return cloneTerminalSession(ts), ReplyTargetCurrent, true
+		}
 		if ts.AnchorChatID != chatID {
 			continue
 		}
@@ -1824,7 +1830,7 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 		if pending := session.PendingRestore; pending != nil {
 			sameAsAnchor := pending.ChatID == session.AnchorChatID && pending.MessageID == session.AnchorMessageID
 			if pending.ChatID == 0 || pending.MessageID <= 0 ||
-				((session.State == TerminalClosed || session.Collapsed) && sameAsAnchor) ||
+				(session.State != TerminalClosed && session.Collapsed && sameAsAnchor) ||
 				(session.State != TerminalClosed && !session.Collapsed && !sameAsAnchor) {
 				session.PendingRestore = nil
 			}

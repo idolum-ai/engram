@@ -638,6 +638,9 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 			lastRank = rank
 		}
 		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
+		if session.Collapsed {
+			b.WriteString(" · on Collapsed sessions shelf; tap ➕ Show there")
+		}
 		b.WriteString("\n")
 		actions = append(actions, telegram.SessionAction{
 			ID:        session.ID,

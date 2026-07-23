@@ -74,8 +74,8 @@ func TestCollapsedShelfLifecyclePersistsAndPreservesReplySafety(t *testing.T) {
 	if got.PendingRestore == nil || got.PendingRestore.MessageID != 99 {
 		t.Fatalf("begin result was not deeply cloned: %#v", got.PendingRestore)
 	}
-	if _, target, found := reopened.FindReplyTarget(100, 99); found {
-		t.Fatalf("inert pending restore became reply target %q", target)
+	if _, target, found := reopened.FindReplyTarget(100, 99); !found || target != ReplyTargetStale {
+		t.Fatalf("inert pending restore target=%q found=%v", target, found)
 	}
 	if repeated, repeatedCommit, repeatErr := reopened.BeginExpandSessionFromShelf(session.ID, 88, 100, 99); repeatErr != nil || !repeatedCommit ||
 		repeated.PendingRestore == nil || repeated.PendingRestore.MessageID != 99 {
@@ -433,6 +433,43 @@ func TestClosedPendingRestoreOwnershipPersistsUntilRetired(t *testing.T) {
 	retired, committed, err := reopened.FinishPendingRestoreRetirement(session.ID, 100, 99)
 	if err != nil || !committed || retired.PendingRestore != nil {
 		t.Fatalf("retired=%#v committed=%v err=%v", retired, committed, err)
+	}
+}
+
+func TestClosedPromotedRestoreKeepsCleanupOwnershipAcrossNormalization(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, committed, err := store.CollapseSessionIntoShelf(session.ID, session, CollapsedShelf{ChatID: 100, MessageID: 88}); err != nil || !committed {
+		t.Fatalf("collapse committed=%v err=%v", committed, err)
+	}
+	if _, committed, err := store.BeginExpandSessionFromShelf(session.ID, 88, 100, 99); err != nil || !committed {
+		t.Fatalf("begin committed=%v err=%v", committed, err)
+	}
+	if _, committed, err := store.FinishExpandSessionFromShelf(session.ID, 100, 99); err != nil || !committed {
+		t.Fatalf("promote committed=%v err=%v", committed, err)
+	}
+	if _, found, err := store.UpdateSession(session.ID, func(current *TerminalSession) {
+		current.State = TerminalClosed
+	}); err != nil || !found {
+		t.Fatalf("close found=%v err=%v", found, err)
+	}
+	reopened, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := reopened.FindSession(session.ID)
+	if got.PendingRestore == nil || got.PendingRestore.MessageID != 99 {
+		t.Fatalf("closed promoted cleanup ownership = %#v", got)
 	}
 }
 

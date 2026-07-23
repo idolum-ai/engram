@@ -41,7 +41,7 @@ Telegram is Engram's only user interface.
 - `/sessions` always replies and groups tracked work as lost, collapsed, then
   active by recency. Presentation mode and model output do not alter this
   ordering. Collapsed rows retain only their explicit close action; watching is
-  restored through the shared shelf.
+  restored through the shared shelf, and each row names `➕ Show` as that path.
 - Telegram send/edit failures are audited. Empty keyboards are not attached to
   new messages; explicit empty keyboards may retire controls.
 - Anchor HTML falls back to plain text only for formatting errors. Rate limits
@@ -94,7 +94,8 @@ Telegram is Engram's only user interface.
   controls. If the controls cannot be exposed, Engram returns that member to
   the still-actionable shelf instead of leaving an inert canonical anchor. A
   durable pending marker spans canonical promotion through controls
-  confirmation so restart can complete an interrupted handoff.
+  confirmation so restart can complete an interrupted handoff. Replies to an
+  inert prospective anchor are stale and direct the user back to `➕ Show`.
   Each restored anchor is visibly identified as cached while its ordinary
   guide or snapshot refresh is queued. A restored lost session instead names
   its recovery controls and does not promise a refresh. Partial restoration
@@ -107,7 +108,9 @@ Telegram is Engram's only user interface.
   until predecessor retirement succeeds. Replies to either visible shelf
   identity receive the same shelf-specific guidance. If the message that
   initiated asynchronous Hide or Show disappears before a failure can be
-  reported, Engram sends that failure unthreaded instead.
+  reported, Engram sends that failure unthreaded instead. If shutdown cancels
+  accepted work before a transfer slot opens, Engram uses the same bounded
+  cleanup window to report that the action stopped.
 - Collapse is persisted attention state, not a third anchor mode. Collapsed
   sessions perform no model, Chromium, terminal capture, raw/dump, or alternate
   view work and expose no files or key controls until expanded.

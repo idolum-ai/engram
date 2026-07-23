@@ -759,8 +759,71 @@ func TestUnavailableReplacementShelfRecoversVisiblePredecessor(t *testing.T) {
 	want := []string{
 		"/botTOKEN/editMessageText:89",
 		"/botTOKEN/editMessageText:88",
+		"/botTOKEN/editMessageText:88",
 		"/botTOKEN/pinChatMessage:88",
 		"/botTOKEN/deleteMessage:89",
+	}
+	if strings.Join(paths, "|") != strings.Join(want, "|") {
+		t.Fatalf("paths=%#v want=%#v", paths, want)
+	}
+}
+
+func TestUnavailableShelfPairCreatesFreshRecoverableShelf(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	session, _ := app.Store.FindSession(id)
+	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
+		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
+	}); err != nil || !committed {
+		t.Fatalf("collapse committed=%v err=%v", committed, err)
+	}
+	if _, replaced, err := app.Store.ReplaceCollapsedShelf(88, state.CollapsedShelf{ChatID: 100, MessageID: 89}); err != nil || !replaced {
+		t.Fatalf("replace committed=%v err=%v", replaced, err)
+	}
+	var paths []string
+	app.Telegram = telegram.New("TOKEN")
+	app.Telegram.BaseURL = "https://api.telegram.org/botTOKEN"
+	app.Telegram.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		messageID := intFromJSONNumber(body["message_id"])
+		paths = append(paths, fmt.Sprintf("%s:%d", req.URL.Path, messageID))
+		switch req.URL.Path {
+		case "/botTOKEN/editMessageText":
+			if messageID == 88 || messageID == 89 {
+				return telegramTestResponse(t, http.StatusBadRequest, map[string]any{
+					"ok": false, "error_code": 400, "description": "Bad Request: message to edit not found",
+				}), nil
+			}
+			return telegramTestResponse(t, http.StatusOK, map[string]any{
+				"ok": true, "result": map[string]any{"message_id": messageID, "chat": map[string]any{"id": 100}},
+			}), nil
+		case "/botTOKEN/sendMessage":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{
+				"ok": true, "result": map[string]any{"message_id": 90, "chat": map[string]any{"id": 100}},
+			}), nil
+		case "/botTOKEN/pinChatMessage", "/botTOKEN/deleteMessage":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		default:
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+	})}
+	app.Config.TelegramChatID = 100
+
+	app.reconcileCollapsedShelf(context.Background())
+
+	shelf := app.Store.Snapshot().CollapsedShelf
+	if shelf == nil || shelf.MessageID != 90 || shelf.RetiringMessageID != 0 || !shelf.Pinned {
+		t.Fatalf("fresh shelf=%#v paths=%#v", shelf, paths)
+	}
+	want := []string{
+		"/botTOKEN/editMessageText:89",
+		"/botTOKEN/editMessageText:88",
+		"/botTOKEN/sendMessage:0",
+		"/botTOKEN/editMessageText:90",
+		"/botTOKEN/pinChatMessage:90",
+		"/botTOKEN/deleteMessage:88",
 	}
 	if strings.Join(paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("paths=%#v want=%#v", paths, want)
@@ -1270,6 +1333,44 @@ func TestPromotedRestoreControlsReconcileAfterRestartBoundary(t *testing.T) {
 	}
 }
 
+func TestPersistedShelfFloodWaitPrecedesPendingRestoreReconciliation(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	session, _ := app.Store.FindSession(id)
+	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
+		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
+	}); err != nil || !committed {
+		t.Fatalf("collapse committed=%v err=%v", committed, err)
+	}
+	if _, committed, err := app.Store.BeginExpandSessionFromShelf(id, 88, 100, 89); err != nil || !committed {
+		t.Fatalf("begin committed=%v err=%v", committed, err)
+	}
+	if _, committed, err := app.Store.FinishExpandSessionFromShelf(id, 100, 89); err != nil || !committed {
+		t.Fatalf("promote committed=%v err=%v", committed, err)
+	}
+	if _, found, err := app.Store.UpdateCollapsedShelf(88, func(shelf *state.CollapsedShelf) {
+		shelf.RetryAt = time.Now().Add(time.Minute)
+	}); err != nil || !found {
+		t.Fatalf("set retry found=%v err=%v", found, err)
+	}
+	calls := 0
+	app.Telegram = telegram.New("TOKEN")
+	app.Telegram.BaseURL = "https://api.telegram.org/botTOKEN"
+	app.Telegram.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("pending controls must honor persisted shelf retry")
+	})}
+
+	app.reconcileCollapsedShelf(context.Background())
+
+	if calls != 0 {
+		t.Fatalf("Telegram calls=%d before persisted retry deadline", calls)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.PendingRestore == nil {
+		t.Fatal("pending controls ownership cleared before retry")
+	}
+}
+
 func TestPendingRestoreRetrySurvivesPreReplacementStateFailureInMemory(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
@@ -1461,6 +1562,13 @@ func TestClosingCollapsedSessionRetainsRateLimitedPendingRestoreForRestart(t *te
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if shelf := app.Store.Snapshot().CollapsedShelf; shelf != nil {
+		if _, found, err := app.Store.UpdateCollapsedShelf(shelf.MessageID, func(current *state.CollapsedShelf) {
+			current.RetryAt = time.Now().Add(-time.Second)
+		}); err != nil || !found {
+			t.Fatalf("expire shelf retry found=%v err=%v", found, err)
+		}
+	}
 	restarted.Telegram.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Path != "/botTOKEN/deleteMessage" {
 			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
@@ -1610,6 +1718,57 @@ func TestCollapseCallbackDoesNotBlockTelegramUpdateLoop(t *testing.T) {
 	}
 	disclosure.Unlock()
 	app.transferWG.Wait()
+}
+
+func TestAcceptedCollapseReportsWhenShutdownDropsQueuedWork(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.Config.TelegramAllowedUserID = 42
+	app.Config.TelegramChatID = 100
+	app.transferSlots = make(chan struct{}, 1)
+	app.transferSlots <- struct{}{}
+	runCtx, cancel := context.WithCancel(context.Background())
+	app.runCtx = runCtx
+	var notices []string
+	app.Telegram = telegram.New("TOKEN")
+	app.Telegram.BaseURL = "https://api.telegram.org/botTOKEN"
+	app.Telegram.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		case "/botTOKEN/sendMessage":
+			notices = append(notices, body["text"].(string))
+			return telegramTestResponse(t, http.StatusOK, map[string]any{
+				"ok": true, "result": map[string]any{"message_id": 90, "chat": map[string]any{"id": 100}},
+			}), nil
+		default:
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+	})}
+
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "collapse", From: telegram.User{ID: 42}, Data: "collapse:1",
+		Message: &telegram.Message{MessageID: 77, Chat: telegram.Chat{ID: 100}},
+	})
+	if status != "callback_ok" {
+		t.Fatalf("callback status=%q", status)
+	}
+	cancel()
+	app.transferWG.Wait()
+	<-app.transferSlots
+
+	if len(notices) != 1 || !strings.Contains(notices[0], "Hide stopped before it completed") {
+		t.Fatalf("shutdown notices=%#v", notices)
+	}
 }
 
 func TestCollapsedShelfQueueSaturationDoesNotSendInlineReply(t *testing.T) {

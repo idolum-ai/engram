@@ -21,12 +21,23 @@ func TestWriteTrackedSessionsOrdersLostCollapsedThenRecentActive(t *testing.T) {
 	}
 	var b strings.Builder
 	actions := writeTrackedSessions(&b, sessions)
-	want := "\nlost\n[3] detached\n\ncollapsed\n[5] quiet\n\nactive\n[2] recent\n[1] older\n"
+	want := "\nlost\n[3] detached\n\ncollapsed\n[5] quiet · on Collapsed sessions shelf; tap ➕ Show there\n\nactive\n[2] recent\n[1] older\n"
 	if b.String() != want {
 		t.Fatalf("tracked sessions:\n%s\nwant:\n%s", b.String(), want)
 	}
 	if len(actions) != 4 || actions[0].ID != 3 || actions[1].ID != 5 || !actions[1].CloseOnly || actions[2].ID != 2 || actions[3].ID != 1 {
 		t.Fatalf("actions = %#v", actions)
+	}
+}
+
+func TestLostCollapsedSessionNamesShelfRecoveryInSessions(t *testing.T) {
+	var b strings.Builder
+	actions := writeTrackedSessions(&b, []state.TerminalSession{{
+		ID: 7, State: state.TerminalLost, Title: "remote", Collapsed: true,
+	}})
+	if !strings.Contains(b.String(), "[7] remote · on Collapsed sessions shelf; tap ➕ Show there") ||
+		len(actions) != 1 || !actions[0].CloseOnly {
+		t.Fatalf("sessions=%q actions=%#v", b.String(), actions)
 	}
 }
 

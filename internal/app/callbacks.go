@@ -50,12 +50,13 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		}
 		msg := *cb.Message
 		msg.From = &cb.From
-		return a.queueCallbackTransfer(ctx, cb.ID, "moving to collapsed sessions", "Engram is busy; try Hide again", func(workerCtx context.Context) {
-			result := a.collapseAnchor(workerCtx, ts)
-			if !result.OK() {
-				a.replyTransferFailure(workerCtx, msg, result.Message)
-			}
-		})
+		return a.queueCallbackTransfer(ctx, cb.ID, "moving to collapsed sessions", "Engram is busy; try Hide again",
+			msg, "Hide stopped before it completed; try again after Engram restarts.", func(workerCtx context.Context) {
+				result := a.collapseAnchor(workerCtx, ts)
+				if !result.OK() {
+					a.replyTransferFailure(workerCtx, msg, result.Message)
+				}
+			})
 	case "expand-all":
 		shelf, status := a.validateCollapsedShelfCallback(ctx, cb)
 		if status != "" {
@@ -63,12 +64,13 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		}
 		msg := *cb.Message
 		msg.From = &cb.From
-		return a.queueCallbackTransfer(ctx, cb.ID, "restoring sessions", "Engram is busy; try Show again", func(workerCtx context.Context) {
-			result := a.expandCollapsedShelf(workerCtx, shelf)
-			if !result.OK() {
-				a.replyTransferFailure(workerCtx, msg, result.Message)
-			}
-		})
+		return a.queueCallbackTransfer(ctx, cb.ID, "restoring sessions", "Engram is busy; try Show again",
+			msg, "Show stopped before it completed; try again after Engram restarts.", func(workerCtx context.Context) {
+				result := a.expandCollapsedShelf(workerCtx, shelf)
+				if !result.OK() {
+					a.replyTransferFailure(workerCtx, msg, result.Message)
+				}
+			})
 	case "refresh":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -420,13 +422,26 @@ func resolveAnchorFile(ts state.TerminalSession, token string, index int) (strin
 	return ts.AnchorFiles[index-1], true
 }
 
-func (a *App) queueCallbackTransfer(ctx context.Context, callbackID, acceptedText, busyText string, work func(context.Context)) string {
+func (a *App) queueCallbackTransfer(
+	ctx context.Context,
+	callbackID, acceptedText, busyText string,
+	message telegram.Message,
+	droppedText string,
+	work func(context.Context),
+) string {
 	proceed := make(chan bool, 1)
-	if !a.queueTransfer(func(workerCtx context.Context) {
-		if <-proceed {
-			work(workerCtx)
-		}
-	}) {
+	if !a.queueTransferWithDrop(
+		func(workerCtx context.Context) {
+			if <-proceed {
+				work(workerCtx)
+			}
+		},
+		func(workerCtx context.Context) {
+			if <-proceed {
+				a.replyTransferFailure(workerCtx, message, droppedText)
+			}
+		},
+	) {
 		return callbackAnswerStatus(a.answerCallback(ctx, callbackID, busyText), "callback_state_failed")
 	}
 	answered := a.answerCallback(ctx, callbackID, acceptedText)

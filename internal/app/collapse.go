@@ -379,6 +379,11 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 		return
 	}
 	snapshot := a.Store.Snapshot()
+	if snapshot.CollapsedShelf != nil {
+		if deadline := a.collapsedShelfRetryDeadline(*snapshot.CollapsedShelf); !deadline.IsZero() && time.Now().Before(deadline) {
+			return
+		}
+	}
 	for _, session := range snapshot.TerminalSessions {
 		if session.State != state.TerminalClosed || session.PendingRestore == nil {
 			continue
@@ -464,9 +469,30 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 		if _, err := a.editAnchor(ctx, shelf.ChatID, shelf.MessageID, rendered, telegram.CollapsedShelfMarkup()); err != nil && !telegram.IsMessageNotModified(err) {
 			if isTelegramAnchorUnavailable(err) {
 				if shelf.RetiringMessageID != 0 {
-					if _, recovered, stateErr := a.Store.RecoverCollapsedShelfPredecessor(shelf.MessageID); stateErr != nil {
+					_, probeErr := a.editAnchor(ctx, shelf.RetiringChatID, shelf.RetiringMessageID, rendered, telegram.CollapsedShelfMarkup())
+					if probeErr != nil && !telegram.IsMessageNotModified(probeErr) && !isTelegramAnchorUnavailable(probeErr) {
+						a.deferCollapsedShelfPredecessorRetry(shelf.MessageID, shelf.RetiringMessageID, probeErr)
+						return
+					}
+					recovered, committed, stateErr := a.Store.RecoverCollapsedShelfPredecessor(shelf.MessageID)
+					if stateErr != nil {
 						_ = a.audit("state.collapsed_shelf", "predecessor_recovery_failed", map[string]any{"message_id": shelf.RetiringMessageID, "error": stateErr.Error()})
-					} else if recovered {
+					}
+					if !committed {
+						return
+					}
+					a.clearCollapsedShelfRetry(shelf.MessageID)
+					if isTelegramAnchorUnavailable(probeErr) {
+						cleared, retired, clearErr := a.Store.FinishCollapsedShelfRetirement(
+							recovered.MessageID, recovered.RetiringChatID, recovered.RetiringMessageID,
+						)
+						if clearErr != nil {
+							_ = a.audit("state.collapsed_shelf", "missing_pair_cleanup_failed", map[string]any{"error": clearErr.Error()})
+						}
+						if retired {
+							a.replaceCollapsedShelfLocked(ctx, cleared, rendered, renderHash)
+						}
+					} else {
 						a.clearCollapsedShelfRetry(shelf.MessageID)
 					}
 					return
@@ -648,7 +674,7 @@ func (a *App) retireCollapsedShelfPredecessorLocked(ctx context.Context, shelf s
 			a.deferCollapsedShelfPredecessorRetry(shelf.MessageID, shelf.RetiringMessageID, err)
 			return false
 		}
-		if _, editErr := a.editAnchor(ctx, shelf.RetiringChatID, shelf.RetiringMessageID, "Collapsed sessions moved.", telegram.ClearMarkup()); editErr != nil && !telegram.IsMessageNotModified(editErr) && !isTelegramAnchorUnavailable(editErr) {
+		if _, editErr := a.editAnchor(ctx, shelf.RetiringChatID, shelf.RetiringMessageID, "Collapsed sessions moved. Use the newer pinned shelf and tap ➕ Show.", telegram.ClearMarkup()); editErr != nil && !telegram.IsMessageNotModified(editErr) && !isTelegramAnchorUnavailable(editErr) {
 			a.deferCollapsedShelfPredecessorRetry(shelf.MessageID, shelf.RetiringMessageID, editErr)
 			return false
 		}

@@ -200,7 +200,9 @@ exports a bounded recent tail, not an unbounded full audit file.
   replacement or cleanup amplification. The Telegram client also applies a
   reported `retry_after` to newly starting outbound requests across concurrent
   work, and a sleeping retry cannot bypass a longer deadline established by a
-  concurrent request. Unchanged edits count as success.
+  concurrent request. Rate limits from callback answers also establish that
+  outbound deadline without delaying otherwise healthy callback answers.
+  Unchanged edits count as success.
 - Chromium readiness controls both snapshot startup and whether guide anchors
   expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session

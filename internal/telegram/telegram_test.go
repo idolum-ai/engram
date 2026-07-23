@@ -941,6 +941,34 @@ func TestRateLimitDefersNewOutboundMarkupEdits(t *testing.T) {
 	}
 }
 
+func TestCallbackRateLimitDefersNewOutboundWork(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return jsonResponseStatus(t, http.StatusTooManyRequests, map[string]any{
+			"ok":          false,
+			"error_code":  429,
+			"description": "Too Many Requests",
+			"parameters":  map[string]any{"retry_after": 31},
+		}), nil
+	})}
+	if err := client.AnswerCallback(context.Background(), "callback", "ok"); !IsRateLimited(err) {
+		t.Fatalf("callback error = %v, want rate limited", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := client.SendMessage(ctx, 5, "hello", 0, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send error = %v, want deadline behind callback flood wait", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want no outbound call during callback flood wait", calls.Load())
+	}
+}
+
 func TestSleepingRetryHonorsAConcurrentLongerFloodWait(t *testing.T) {
 	t.Parallel()
 
