@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
+	"github.com/idolum-ai/engram/internal/terminalshot"
 )
 
 const (
@@ -21,6 +23,19 @@ func (a *App) snapshotAvailable() bool {
 	a.snapshotHealthMu.RLock()
 	defer a.snapshotHealthMu.RUnlock()
 	return a.snapshotReady
+}
+
+func boolUint64(value bool) uint64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func (a *App) snapshotRenderHealth() (ready bool, generation uint64) {
+	a.snapshotHealthMu.RLock()
+	defer a.snapshotHealthMu.RUnlock()
+	return a.snapshotReady, a.snapshotGeneration
 }
 
 func (a *App) snapshotHealth() (ready bool, browserPath, probeError string, probedAt, retryAt time.Time) {
@@ -76,6 +91,7 @@ func (a *App) recoverSnapshots(ctx context.Context, now time.Time) bool {
 		return false
 	}
 	a.snapshotReady = true
+	a.snapshotGeneration++
 	a.snapshotBrowserPath = path
 	a.snapshotProbeError = ""
 	a.snapshotProbeFailures = 0
@@ -115,22 +131,26 @@ func (a *App) snapshotRecoveryLoop(ctx context.Context) {
 	}
 }
 
-func (a *App) markSnapshotsUnavailable(err error, now time.Time) {
-	if err == nil {
-		return
+func (a *App) markSnapshotsUnavailable(err error, now time.Time, observedGeneration uint64) bool {
+	if err == nil || errors.Is(err, context.Canceled) || !terminalshot.IsBrowserFailure(err) {
+		return false
 	}
 	a.snapshotHealthMu.Lock()
-	wasReady := a.snapshotReady
+	if !a.snapshotReady || a.snapshotGeneration != observedGeneration {
+		a.snapshotHealthMu.Unlock()
+		return false
+	}
 	a.snapshotReady = false
 	a.snapshotProbeError = err.Error()
 	a.snapshotProbeAt = now.UTC()
-	a.snapshotProbeFailures++
+	a.snapshotProbeFailures = 1
 	delay := snapshotProbeDelay(a.snapshotProbeFailures)
 	a.snapshotNextProbe = now.UTC().Add(delay)
 	a.snapshotHealthMu.Unlock()
-	if wasReady && a.Store != nil {
+	if a.Store != nil {
 		_ = a.audit("snapshot.health", "unavailable", map[string]any{"error": err.Error(), "retry_in": delay.String()})
 	}
+	return true
 }
 
 func snapshotUnavailableStatus(probeError string, retryAt time.Time) string {

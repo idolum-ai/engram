@@ -482,6 +482,11 @@ func TestResolveAnchorModePrefersPersistedThenEnvironmentFallback(t *testing.T) 
 	if _, err := cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{}); err == nil {
 		t.Fatal("resolution succeeded without an available mode")
 	}
+
+	mode, err = cfg.ResolveAnchorMode(AnchorModeSnapshot, ModeCapabilities{SnapshotConfigured: true})
+	if err != nil || mode != AnchorModeSnapshot {
+		t.Fatalf("degraded snapshot resolution mode=%q err=%v", mode, err)
+	}
 }
 
 func TestLoadRejectsUnknownAnchorMode(t *testing.T) {

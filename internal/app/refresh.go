@@ -38,6 +38,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	defer releaseConversation()
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	tctx = tmux.BackgroundContext(tctx)
 	identityLock := a.sessionMutex(id)
 	identityLock.Lock()
 	current, currentOK := a.Store.FindSession(id)
@@ -66,6 +67,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		}
 		validationCtx, cancelValidation := tmux.TimeoutContext(ctx)
 		defer cancelValidation()
+		validationCtx = tmux.BackgroundContext(validationCtx)
 		lock := a.sessionMutex(id)
 		lock.Lock()
 		latest, found := a.Store.FindSession(id)

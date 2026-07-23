@@ -8,6 +8,7 @@ import (
 )
 
 type interactiveContextKey struct{}
+type backgroundContextKey struct{}
 
 // InteractiveContext marks tmux work that originated from a user input. The
 // priority runner uses it to stop a background observation before it can hold
@@ -16,9 +17,21 @@ func InteractiveContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, interactiveContextKey{}, true)
 }
 
+// BackgroundContext explicitly marks read-only observation or reconciliation
+// work that may be canceled to make room for interactive input. Unmarked work
+// is protected because tmux commands may have already applied side effects.
+func BackgroundContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, backgroundContextKey{}, true)
+}
+
 func isInteractiveContext(ctx context.Context) bool {
 	interactive, _ := ctx.Value(interactiveContextKey{}).(bool)
 	return interactive
+}
+
+func isBackgroundContext(ctx context.Context) bool {
+	background, _ := ctx.Value(backgroundContextKey{}).(bool)
+	return background
 }
 
 // PriorityRunner serializes tmux client processes and lets interactive work
@@ -30,7 +43,7 @@ type PriorityRunner struct {
 
 	mu                     sync.Mutex
 	changed                chan struct{}
-	waitingInteractive     int
+	waitingProtected       int
 	activeBackgroundCancel context.CancelFunc
 	activeBackgroundID     uint64
 	nextBackgroundID       uint64
@@ -73,16 +86,16 @@ func (r *PriorityRunner) RunToWriter(ctx context.Context, dst io.Writer, args ..
 }
 
 func (r *PriorityRunner) acquire(ctx context.Context) (context.Context, func(), error) {
-	if isInteractiveContext(ctx) {
-		return r.acquireInteractive(ctx)
+	if isBackgroundContext(ctx) {
+		return r.acquireBackground(ctx)
 	}
-	return r.acquireBackground(ctx)
+	return r.acquireProtected(ctx, isInteractiveContext(ctx))
 }
 
-func (r *PriorityRunner) acquireInteractive(ctx context.Context) (context.Context, func(), error) {
+func (r *PriorityRunner) acquireProtected(ctx context.Context, preemptBackground bool) (context.Context, func(), error) {
 	r.mu.Lock()
-	r.waitingInteractive++
-	if r.activeBackgroundCancel != nil {
+	r.waitingProtected++
+	if preemptBackground && r.activeBackgroundCancel != nil {
 		r.activeBackgroundCancel()
 	}
 	r.signalLocked()
@@ -91,7 +104,7 @@ func (r *PriorityRunner) acquireInteractive(ctx context.Context) (context.Contex
 	select {
 	case <-ctx.Done():
 		r.mu.Lock()
-		r.waitingInteractive--
+		r.waitingProtected--
 		r.signalLocked()
 		r.mu.Unlock()
 		return nil, nil, ctx.Err()
@@ -99,7 +112,7 @@ func (r *PriorityRunner) acquireInteractive(ctx context.Context) (context.Contex
 	}
 
 	r.mu.Lock()
-	r.waitingInteractive--
+	r.waitingProtected--
 	r.signalLocked()
 	r.mu.Unlock()
 	return ctx, func() { r.token <- struct{}{} }, nil
@@ -108,7 +121,7 @@ func (r *PriorityRunner) acquireInteractive(ctx context.Context) (context.Contex
 func (r *PriorityRunner) acquireBackground(ctx context.Context) (context.Context, func(), error) {
 	for {
 		r.mu.Lock()
-		if r.waitingInteractive > 0 {
+		if r.waitingProtected > 0 {
 			changed := r.changed
 			r.mu.Unlock()
 			select {
@@ -127,7 +140,7 @@ func (r *PriorityRunner) acquireBackground(ctx context.Context) (context.Context
 		}
 
 		r.mu.Lock()
-		if r.waitingInteractive > 0 {
+		if r.waitingProtected > 0 {
 			changed := r.changed
 			r.mu.Unlock()
 			r.token <- struct{}{}

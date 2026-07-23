@@ -28,7 +28,8 @@ func (a *App) snapshotStatus() string {
 	if path == "" && a.Snapshots != nil {
 		availablePath, err := a.Snapshots.Available()
 		if err != nil {
-			a.markSnapshotsUnavailable(err, time.Now())
+			_, generation := a.snapshotRenderHealth()
+			a.markSnapshotsUnavailable(err, time.Now(), generation)
 			return snapshotUnavailableStatus(a.redactText(err.Error()), time.Now().Add(snapshotProbeInitialDelay))
 		}
 		path = availablePath
@@ -43,8 +44,12 @@ func (a *App) queueSnapshot(ts state.TerminalSession) actionResult {
 	if a.Snapshots == nil {
 		return actionResult{Outcome: actionStateFailed, Message: "image renderer unavailable"}
 	}
+	if !a.snapshotAvailable() {
+		return actionResult{Outcome: actionStateFailed, Message: "image renderer is recovering; check /status"}
+	}
 	if _, err := a.Snapshots.Available(); err != nil {
-		a.markSnapshotsUnavailable(err, time.Now())
+		_, generation := a.snapshotRenderHealth()
+		a.markSnapshotsUnavailable(err, time.Now(), generation)
 		_ = a.audit("terminal.snapshot", "unavailable", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "image renderer unavailable; check /status"}
 	}
@@ -67,6 +72,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		return
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
+	tctx = tmux.BackgroundContext(tctx)
 	if !acquireSlot(tctx, a.captureSlots) {
 		cancel()
 		lock.Unlock()
@@ -98,11 +104,18 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		VisibleRows: capture.VisibleRows,
 		BufferRows:  capture.BufferRows,
 	}, capture.CurrentPath)
+	ready, generation := a.snapshotRenderHealth()
+	if !ready {
+		renderCancel()
+		releaseSlot(a.renderSlots)
+		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image because Chromium is recovering; check /status.")
+		return
+	}
 	pngPath, renderErr := a.Snapshots.Render(renderCtx, input, a.Config.ArtifactDir())
 	renderCancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {
-		a.markSnapshotsUnavailable(renderErr, time.Now())
+		a.markSnapshotsUnavailable(renderErr, time.Now(), generation)
 		_ = a.audit("terminal.snapshot", "render_failed", map[string]any{"session_id": current.ID, "error": renderErr.Error()})
 		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image; check /status and /logs.")
 		return

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/idolum-ai/engram/internal/terminalshot"
 )
 
 type scriptedSnapshotProber struct {
@@ -115,6 +117,38 @@ func TestSnapshotHealthAllowsOnlyOneConcurrentProbe(t *testing.T) {
 	close(release)
 	if !<-done {
 		t.Fatal("single in-flight probe did not recover")
+	}
+}
+
+func TestSnapshotRuntimeFailureIsBrowserSpecificAndGenerationSafe(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 23, 1, 2, 3, 0, time.UTC)
+	app := &App{snapshotReady: true, snapshotGeneration: 7}
+	if app.markSnapshotsUnavailable(errors.New("artifact directory is read-only"), now, 7) {
+		t.Fatal("request-local render failure changed browser health")
+	}
+	if !app.snapshotAvailable() {
+		t.Fatal("request-local render failure disabled snapshots")
+	}
+	browserErr := &terminalshot.BrowserError{Err: errors.New("browser exited")}
+	if !app.markSnapshotsUnavailable(browserErr, now, 7) {
+		t.Fatal("browser failure did not change browser health")
+	}
+	_, _, _, _, retryAt := app.snapshotHealth()
+	if app.markSnapshotsUnavailable(browserErr, now.Add(time.Second), 7) {
+		t.Fatal("second failure compounded an unavailable epoch")
+	}
+	_, _, _, _, secondRetryAt := app.snapshotHealth()
+	if !secondRetryAt.Equal(retryAt) {
+		t.Fatalf("duplicate failure moved retry deadline: first=%s second=%s", retryAt, secondRetryAt)
+	}
+
+	app.snapshotHealthMu.Lock()
+	app.snapshotReady = true
+	app.snapshotGeneration = 8
+	app.snapshotHealthMu.Unlock()
+	if app.markSnapshotsUnavailable(browserErr, now.Add(2*time.Second), 7) {
+		t.Fatal("stale render failure superseded a newer successful probe")
 	}
 }
 

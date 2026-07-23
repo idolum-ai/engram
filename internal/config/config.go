@@ -52,8 +52,9 @@ type Config struct {
 }
 
 type ModeCapabilities struct {
-	GuideConfigured bool
-	SnapshotReady   bool
+	GuideConfigured    bool
+	SnapshotReady      bool
+	SnapshotConfigured bool
 }
 
 func DefaultEnvPath() string {
@@ -197,6 +198,13 @@ func (c Config) ResolveAnchorMode(persisted string, capabilities ModeCapabilitie
 			}
 		case AnchorModeSnapshot:
 			if capabilities.SnapshotReady {
+				return mode, nil
+			}
+		}
+	}
+	if capabilities.SnapshotConfigured {
+		for _, mode := range []string{strings.TrimSpace(persisted), c.EffectiveAnchorMode()} {
+			if mode == AnchorModeSnapshot {
 				return mode, nil
 			}
 		}

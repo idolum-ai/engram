@@ -54,6 +54,7 @@ type App struct {
 	snapshotProbeFailures         int
 	snapshotProbeRunning          bool
 	snapshotNow                   func() time.Time
+	snapshotGeneration            uint64
 	locks                         []*lockfile.Lock
 	startedAt                     time.Time
 	quitCode                      int
@@ -180,8 +181,9 @@ func New(cfg config.Config) (*App, error) {
 		transcriber = openai.NewTranscriber(cfg.OpenAIAPIKey, cfg.OpenAITranscriptionModel)
 	}
 	mode, err := cfg.ResolveAnchorMode(store.Snapshot().AnchorMode, config.ModeCapabilities{
-		GuideConfigured: guideRenderer != nil,
-		SnapshotReady:   snapshotReady,
+		GuideConfigured:    guideRenderer != nil,
+		SnapshotReady:      snapshotReady,
+		SnapshotConfigured: true,
 	})
 	if err != nil {
 		closeLocks()
@@ -213,6 +215,7 @@ func New(cfg config.Config) (*App, error) {
 		snapshotProbeAt:               snapshotProbeAt,
 		snapshotNextProbe:             snapshotNextProbe,
 		snapshotProbeFailures:         snapshotProbeFailures,
+		snapshotGeneration:            boolUint64(snapshotReady),
 		locks:                         []*lockfile.Lock{homeLock, l},
 		startedAt:                     time.Now().UTC(),
 		stopCh:                        make(chan struct{}),
