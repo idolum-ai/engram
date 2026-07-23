@@ -123,14 +123,16 @@ Telegram is Engram's only user interface.
   compact evidence crop, but Raw still contains the complete View text. It never
   performs a later tmux capture; when restart has cleared that companion, the
   control asks the user to wait for the startup refresh.
-- `⌨️` opens a selective Telegram ForceReply addressed to the current user and
+- `⌨️` opens a Telegram ForceReply in the configured private chat and is
   bound to the exact canonical anchor and immutable tmux identity. A reply
   supplies natural-language key intent to one bounded non-streaming provider
   request containing no terminal frame, guide history, session metadata, or
   other chat messages. Engram accepts only its closed physical-key schema,
   compiles at most 32 events locally, and presents the normalized target and
-  sequence behind `✅` and `❌`. Ambiguous intent receives deterministic
-  clarification instead of model prose.
+  sequence behind `✅` and `❌`. The prompt asks the model to classify ambiguous
+  intent as clarification; Engram renders that outcome with deterministic prose,
+  but semantic classification remains model judgment and explicit confirmation
+  remains the authority boundary.
 - Key-composer prompts and confirmations are memory-only, single-use, limited
   to one current workflow per session, bounded globally, and expire after two
   minutes. A decision must come from the configured user and chat on the exact
@@ -138,9 +140,10 @@ Telegram is Engram's only user interface.
   immutable tmux binding under the ordinary delivery locks; cancel, expiry,
   restart, reattachment, collapse, close, anchor rotation, duplicate callbacks,
   and superseding `⌨️` use send no keys.
-- Direct key callbacks and confirmed plans answer immediately before tmux work
-  begins. A later tmux failure is delivered as a normal reply rather than
-  leaving Telegram's progress state spinning until the terminal timeout.
+- Direct key callbacks answer immediately before tmux work begins. Confirmed
+  plans reserve bounded worker capacity, answer immediately, and execute outside
+  the polling loop. A later tmux failure is delivered as a normal reply rather
+  than leaving Telegram's progress state spinning until the terminal timeout.
 - When a canonical anchor displays files, one `⬇️ n` button is shown for each
   numbered entry. The callback contains no path: it resolves through the
   current anchor's exact process-local file-list token and then uses the same

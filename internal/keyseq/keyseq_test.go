@@ -1,6 +1,7 @@
 package keyseq
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -39,6 +40,17 @@ func TestParseAcceptsClarificationWithoutProviderProse(t *testing.T) {
 	}
 }
 
+func TestParseNormalizesStructuredEnumCasing(t *testing.T) {
+	got, err := Parse(`{"kind":"Sequence","events":[{"key":"ENTER","modifiers":[],"count":1}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Proposal{Kind: KindSequence, Events: []Event{{Key: KeyEnter, Count: 1}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("proposal = %#v, want %#v", got, want)
+	}
+}
+
 func TestParseRejectsUntrustedShapes(t *testing.T) {
 	tests := map[string]string{
 		"markdown":           "```json\n{\"kind\":\"clarification\",\"events\":[]}\n```",
@@ -46,20 +58,50 @@ func TestParseRejectsUntrustedShapes(t *testing.T) {
 		"unknown field":      `{"kind":"clarification","events":[],"message":"press enter"}`,
 		"missing kind":       `{"events":[]}`,
 		"sequence empty":     `{"kind":"sequence","events":[]}`,
-		"clarification keys": `{"kind":"clarification","events":[{"key":"enter","modifiers":[],"count":1}]}`,
 		"unknown key":        `{"kind":"sequence","events":[{"key":"launch","modifiers":[],"count":1}]}`,
 		"unknown modifier":   `{"kind":"sequence","events":[{"key":"c","modifiers":["command"],"count":1}]}`,
 		"duplicate modifier": `{"kind":"sequence","events":[{"key":"c","modifiers":["control","control"],"count":1}]}`,
 		"zero count":         `{"kind":"sequence","events":[{"key":"enter","modifiers":[],"count":0}]}`,
 		"large count":        `{"kind":"sequence","events":[{"key":"enter","modifiers":[],"count":33}]}`,
 		"shift digit":        `{"kind":"sequence","events":[{"key":"1","modifiers":["shift"],"count":1}]}`,
+		"combined modifiers": `{"kind":"sequence","events":[{"key":"c","modifiers":["control","shift"],"count":1}]}`,
+		"control enter":      `{"kind":"sequence","events":[{"key":"enter","modifiers":["control"],"count":1}]}`,
+		"alt arrow":          `{"kind":"sequence","events":[{"key":"up","modifiers":["alt"],"count":1}]}`,
+		"shift enter":        `{"kind":"sequence","events":[{"key":"enter","modifiers":["shift"],"count":1}]}`,
 	}
 	for name, input := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse(input); err == nil {
 				t.Fatalf("Parse(%q) succeeded", input)
+			} else if !errors.Is(err, ErrInvalidProposal) {
+				t.Fatalf("Parse(%q) error = %v, want ErrInvalidProposal", input, err)
 			}
 		})
+	}
+}
+
+func TestParseDiscardsInertEventsFromClarification(t *testing.T) {
+	got, err := Parse(`{"kind":"clarification","events":[{"key":"enter","modifiers":[],"count":0}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Proposal{Kind: KindClarification}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("proposal = %#v, want %#v", got, want)
+	}
+}
+
+func TestCompileBoundsTotalDelayedEscapeGesture(t *testing.T) {
+	accepted, err := Compile(Proposal{Kind: KindSequence, Events: []Event{{
+		Key: KeyEscape, Count: MaxDelayedEscapeTransitions + 1,
+	}}})
+	if err != nil || len(accepted.Groups) != MaxDelayedEscapeTransitions+1 {
+		t.Fatalf("maximum delayed gesture = %#v err=%v", accepted, err)
+	}
+	if _, err := Compile(Proposal{Kind: KindSequence, Events: []Event{{
+		Key: KeyEscape, Count: MaxDelayedEscapeTransitions + 2,
+	}}}); err == nil {
+		t.Fatal("plan exceeding delayed Escape budget compiled")
 	}
 }
 

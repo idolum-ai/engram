@@ -572,7 +572,7 @@ func TestRequestErrorsRedactToken(t *testing.T) {
 	}
 }
 
-func TestSendForceReplyUsesSelectiveReplyMarkup(t *testing.T) {
+func TestSendForceReplyUsesPrivateChatReplyMarkup(t *testing.T) {
 	t.Parallel()
 
 	client := New("TOKEN")
@@ -592,7 +592,7 @@ func TestSendForceReplyUsesSelectiveReplyMarkup(t *testing.T) {
 		if body.ChatID != 5 || body.Text != "Describe keys for [7]" || body.ReplyParameters.MessageID != 70 {
 			t.Fatalf("request body = %#v", body)
 		}
-		if !body.ReplyMarkup.ForceReply || !body.ReplyMarkup.Selective || body.ReplyMarkup.InputFieldPlaceholder != "up 3 times, Enter, Ctrl+C" {
+		if !body.ReplyMarkup.ForceReply || body.ReplyMarkup.Selective || body.ReplyMarkup.InputFieldPlaceholder != "up 3 times, Enter, Ctrl+C" {
 			t.Fatalf("force reply markup = %#v", body.ReplyMarkup)
 		}
 		return jsonResponse(t, map[string]any{

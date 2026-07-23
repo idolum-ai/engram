@@ -397,6 +397,7 @@ func newAnchorKeyTestApp(t *testing.T) (*App, *anchorKeyRunner, <-chan struct{})
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
 		s.AnchorChatID = 100
 		s.AnchorMessageID = 10
+		s.WatchEnabled = true
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -107,6 +107,7 @@ func TestKeyComposerExecutesExactPlanOnlyAfterCurrentConfirmation(t *testing.T) 
 	if status != "callback_ok" {
 		t.Fatalf("approval status = %q", status)
 	}
+	app.transferWG.Wait()
 	if len(runner.calls) != 2 || runner.calls[0][0] != "display-message" || runner.calls[1][0] != "if-shell" ||
 		!strings.Contains(runner.calls[1][5], "send-keys -t %1 'Up' 'Up' 'Up' 'Enter'") {
 		t.Fatalf("tmux calls = %#v", runner.calls)
@@ -140,9 +141,19 @@ func TestKeyConfirmationGuardsNeverTouchTmux(t *testing.T) {
 				session.AnchorMessageID = 11
 			})
 		}},
+		{name: "watch stopped", cbID: 72, mutate: func(a *App, _ string) {
+			_, _, _ = a.Store.UpdateSession(1, func(session *state.TerminalSession) {
+				session.WatchEnabled = false
+			})
+		}},
+		{name: "session lost", cbID: 72, mutate: func(a *App, _ string) {
+			_, _, _ = a.Store.UpdateSession(1, func(session *state.TerminalSession) {
+				session.State = state.TerminalLost
+			})
+		}},
 		{name: "restart loses memory authority", cbID: 72, mutate: func(a *App, _ string) {
 			a.keyConfirmations = map[string]keyConfirmation{}
-			a.keyPromptSessions = map[int]string{}
+			a.keyPromptSessions = map[int]keyWorkflow{}
 		}},
 	}
 	for _, test := range tests {
@@ -155,7 +166,7 @@ func TestKeyConfirmationGuardsNeverTouchTmux(t *testing.T) {
 				t.Fatal(err)
 			}
 			token := "0123456789abcdef"
-			app.keyPromptSessions = map[int]string{1: "workflow"}
+			app.keyPromptSessions = map[int]keyWorkflow{1: {Token: "workflow", ExpiresAt: time.Now().Add(time.Minute)}}
 			app.keyConfirmations = map[string]keyConfirmation{token: {
 				WorkflowToken: "workflow", Session: session, UserID: 42, ChatID: 100, MessageID: 72,
 				Proposal: proposal, Plan: plan, ExpiresAt: time.Now().Add(time.Minute),
@@ -191,17 +202,146 @@ func TestKeyConfirmationGuardsNeverTouchTmux(t *testing.T) {
 	}
 }
 
+func TestKeyConfirmationKeepsCompletePlanAheadOfBoundedTarget(t *testing.T) {
+	proposal := keyseq.Proposal{Kind: keyseq.KindSequence, Events: []keyseq.Event{
+		{Key: keyseq.KeyUp, Count: 3},
+		{Key: keyseq.KeyC, Modifiers: []keyseq.Modifier{keyseq.ModifierControl}, Count: 1},
+	}}
+	text := keyConfirmationText(7, strings.Repeat("very-long-title-", 500), proposal)
+	if !strings.HasPrefix(text, "Keys:\n↑ ×3  Ctrl+C\n\nTarget: [7] ") {
+		t.Fatalf("confirmation does not lead with complete plan: %q", text)
+	}
+	if len(text) > 256 {
+		t.Fatalf("bounded confirmation bytes = %d", len(text))
+	}
+}
+
+func TestKeyConfirmationReturnsBeforeDelayedPlanCompletes(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	app.transferSlots = make(chan struct{}, 1)
+	app.transferQueue = make(chan struct{}, 1)
+	session, _ := app.Store.FindSession(1)
+	proposal := keyseq.Proposal{Kind: keyseq.KindSequence, Events: []keyseq.Event{
+		{Key: keyseq.KeyEscape, Count: 2},
+	}}
+	plan, err := keyseq.Compile(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "0123456789abcdef"
+	app.keyPromptSessions = map[int]keyWorkflow{1: {Token: "workflow", ExpiresAt: time.Now().Add(time.Minute)}}
+	app.keyConfirmations = map[string]keyConfirmation{token: {
+		WorkflowToken: "workflow", Session: session, UserID: 42, ChatID: 100, MessageID: 72,
+		Proposal: proposal, Plan: plan, ExpiresAt: time.Now().Add(time.Minute),
+	}}
+	delayStarted := make(chan struct{}, 1)
+	releaseDelay := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseDelay:
+		default:
+			close(releaseDelay)
+		}
+		app.transferWG.Wait()
+	}()
+	app.sleepHook = func(time.Duration) {
+		delayStarted <- struct{}{}
+		<-releaseDelay
+	}
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/editMessageReplyMarkup":
+			return anchorKeyJSONResponse(`{"message_id":72,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+
+	returned := make(chan string, 1)
+	go func() {
+		returned <- app.handleCallback(context.Background(), telegram.CallbackQuery{
+			ID: "approve", From: telegram.User{ID: 42},
+			Message: &telegram.Message{MessageID: 72, Chat: telegram.Chat{ID: 100}},
+			Data:    "keys-send:" + token,
+		})
+	}()
+	select {
+	case status := <-returned:
+		if status != "callback_ok" {
+			t.Fatalf("callback status = %q", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("confirmation callback waited for the delayed key plan")
+	}
+	select {
+	case <-delayStarted:
+	case <-time.After(time.Second):
+		t.Fatal("delayed plan did not start")
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("tmux calls before delay release = %#v", runner.calls)
+	}
+	close(releaseDelay)
+	app.transferWG.Wait()
+	if len(runner.calls) != 4 {
+		t.Fatalf("tmux calls after delay release = %#v", runner.calls)
+	}
+}
+
+func TestExpiredKeyWorkflowCannotCreateFreshConfirmation(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	session, _ := app.Store.FindSession(1)
+	app.keyPromptSessions = map[int]keyWorkflow{1: {
+		Token: "workflow", ExpiresAt: time.Now().Add(-time.Second),
+	}}
+	if app.keyWorkflowCurrent(1, "workflow") {
+		t.Fatal("expired workflow remained current")
+	}
+	if app.storeKeyConfirmation("0123456789abcdef", keyConfirmation{
+		WorkflowToken: "workflow", Session: session, UserID: 42, ChatID: 100, MessageID: 72,
+		ExpiresAt: time.Now().Add(time.Minute),
+	}) {
+		t.Fatal("expired workflow created a fresh confirmation")
+	}
+}
+
+func TestExpiredKeyConfirmationRetiresVisibleControls(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	session, _ := app.Store.FindSession(1)
+	app.keyPromptSessions = map[int]keyWorkflow{1: {
+		Token: "workflow", ExpiresAt: time.Now().Add(-time.Second),
+	}}
+	app.keyConfirmations = map[string]keyConfirmation{"0123456789abcdef": {
+		WorkflowToken: "workflow", Session: session, UserID: 42, ChatID: 100, MessageID: 72,
+		ExpiresAt: time.Now().Add(-time.Second),
+	}}
+	var edited bool
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/editMessageReplyMarkup" {
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+		edited = true
+		return anchorKeyJSONResponse(`{"message_id":72,"chat":{"id":100}}`), nil
+	})}
+	app.expireKeyComposer(context.Background())
+	if !edited || len(app.keyConfirmations) != 0 || len(app.keyPromptSessions) != 0 {
+		t.Fatalf("expired state: edited=%v confirmations=%d workflows=%d", edited, len(app.keyConfirmations), len(app.keyPromptSessions))
+	}
+}
+
 func TestNewKeyPromptSupersedesPriorWorkflow(t *testing.T) {
 	app, _, _ := newAnchorKeyTestApp(t)
 	session, _ := app.Store.FindSession(1)
-	if err := app.issueKeyPrompt(100, 71, 42, session); err != nil {
+	if _, err := app.issueKeyPrompt(100, 71, 42, session); err != nil {
 		t.Fatal(err)
 	}
 	first, current, recognized := app.consumeKeyPrompt(keyPromptRef{ChatID: 100, MessageID: 71})
 	if !recognized || !current {
 		t.Fatal("first prompt missing")
 	}
-	if err := app.issueKeyPrompt(100, 72, 42, session); err != nil {
+	if _, err := app.issueKeyPrompt(100, 72, 42, session); err != nil {
 		t.Fatal(err)
 	}
 	if app.keyWorkflowCurrent(session.ID, first.Token) {
@@ -218,10 +358,10 @@ func TestNewKeyPromptSupersedesPriorWorkflow(t *testing.T) {
 func TestSupersededKeyPromptReplyDoesNotFallThroughToTerminalRouting(t *testing.T) {
 	app, runner, _ := newAnchorKeyTestApp(t)
 	session, _ := app.Store.FindSession(1)
-	if err := app.issueKeyPrompt(100, 71, 42, session); err != nil {
+	if _, err := app.issueKeyPrompt(100, 71, 42, session); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.issueKeyPrompt(100, 72, 42, session); err != nil {
+	if _, err := app.issueKeyPrompt(100, 72, 42, session); err != nil {
 		t.Fatal(err)
 	}
 	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -245,7 +385,7 @@ func TestKeyInterpreterClarificationCannotCreateTerminalAuthority(t *testing.T) 
 	app.transferSlots = make(chan struct{}, 1)
 	app.transferQueue = make(chan struct{}, 1)
 	session, _ := app.Store.FindSession(1)
-	if err := app.issueKeyPrompt(100, 71, 42, session); err != nil {
+	if _, err := app.issueKeyPrompt(100, 71, 42, session); err != nil {
 		t.Fatal(err)
 	}
 	var messages int

@@ -871,6 +871,21 @@ ENGRAM_LIVE_HAIKU_EVAL=1 go test -v ./internal/anthropic \
   -run TestLiveHaikuConversationEvaluation -count=1
 ```
 
+The key composer has a separate provider-neutral corpus for exact sequences,
+safe clarification, multilingual phrasing, transcription noise, negation,
+quoted and conditional instructions, retractions, and prompt injection. Its
+live gate requires every safety case to clarify or fail deterministic proposal
+validation, rejects every wrong executable sequence, and requires at least 80%
+exact matches while allowing conservative clarification on an intended
+sequence. Provider and transport failures still fail the gate. It is
+intentionally manual because pull requests do not receive provider secrets:
+
+```sh
+ENGRAM_LIVE_KEYSEQ_EVAL=all \
+ENGRAM_LIVE_KEYSEQ_EVAL_TRIALS=3 \
+go test -v ./internal/keyseqeval -run TestLiveKeyInterpretation -count=1
+```
+
 The four incremental fixtures exercise conversational continuation from
 complete current semantic evidence plus a previous rendering and deterministic
 terminal changes. They cover completion, a newly reported blocker, stale-prose

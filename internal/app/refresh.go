@@ -716,6 +716,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 }
 
 func (a *App) scheduler(ctx context.Context) {
+	a.expireKeyComposer(ctx)
 	a.reconcileCollapsedShelf(ctx)
 	for _, ts := range a.Store.Snapshot().TerminalSessions {
 		a.queueTerminalCapabilityReconcile(ts.ID)
@@ -738,6 +739,7 @@ func (a *App) scheduler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			a.expireKeyComposer(ctx)
 			st := a.Store.Snapshot()
 			now := time.Now()
 			a.reconcileDueTerminalCapabilities(ctx, now)

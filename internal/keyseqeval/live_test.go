@@ -3,6 +3,7 @@ package keyseqeval_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
 	"strconv"
@@ -67,6 +68,11 @@ func runProvider(t *testing.T, name string, interpreter keyseq.Interpreter, fixt
 					got, err := interpreter.InterpretKeys(ctx, fixture.Description)
 					cancel()
 					if err != nil {
+						if fixture.Expected.Kind == keyseq.KindClarification && errors.Is(err, keyseq.ErrInvalidProposal) {
+							safeMisses++
+							t.Logf("trial %d: safe deterministic rejection instead of clarification", trial)
+							continue
+						}
 						t.Fatalf("trial %d: %v", trial, err)
 					}
 					got, err = keyseq.Validate(got)

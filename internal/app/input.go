@@ -220,7 +220,8 @@ func (a *App) sendKeyGroupsForAnchorExpected(ctx context.Context, expected state
 	anchorLock := a.anchorMutex(expected.ID)
 	anchorLock.Lock()
 	current, ok := a.Store.FindSession(expected.ID)
-	if !ok || current.AnchorChatID != expected.AnchorChatID || current.AnchorMessageID != expected.AnchorMessageID ||
+	if !ok || current.State != state.TerminalRunning || !current.WatchEnabled || current.Collapsed ||
+		current.AnchorChatID != expected.AnchorChatID || current.AnchorMessageID != expected.AnchorMessageID ||
 		!sameTerminalBinding(current, expected) {
 		anchorLock.Unlock()
 		sessionLock.Unlock()

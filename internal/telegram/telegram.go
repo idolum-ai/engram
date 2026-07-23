@@ -290,7 +290,6 @@ func (c *Client) SendForceReply(ctx context.Context, chatID int64, text string, 
 	markup := &ForceReply{
 		ForceReply:            true,
 		InputFieldPlaceholder: placeholder,
-		Selective:             true,
 	}
 	return c.sendMessage(ctx, chatID, text, replyTo, markup, "", false)
 }
