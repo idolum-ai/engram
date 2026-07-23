@@ -570,6 +570,9 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 	if options.Raw {
 		actions = append(actions, Button("📄 Raw", fmt.Sprintf("raw:%d", sessionID)))
 	}
+	if options.Keyboard {
+		actions = append(actions, Button("⌨️", fmt.Sprintf("keyboard:%d", sessionID)))
+	}
 	actions = append(actions, Button("➖ Hide", fmt.Sprintf("collapse:%d", sessionID)))
 	rows := [][]InlineKeyboardButton{actions}
 	if options.FileToken != "" && options.FileCount > 0 {
@@ -579,11 +582,7 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 		}
 		rows = append(rows, files)
 	}
-	if options.Keyboard {
-		rows = append(rows, []InlineKeyboardButton{
-			Button("⌨️", fmt.Sprintf("keyboard:%d", sessionID)),
-		})
-	} else {
+	if !options.Keyboard {
 		rows = append(rows, []InlineKeyboardButton{
 			Button("Esc", fmt.Sprintf("key:%d:esc", sessionID)),
 			Button("Escx2", fmt.Sprintf("key:%d:esc2", sessionID)),

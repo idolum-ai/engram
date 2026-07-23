@@ -168,12 +168,35 @@ func TestModelCapableAnchorMarkupUsesOneKeyboardEntryPoint(t *testing.T) {
 	t.Parallel()
 
 	got := AnchorMarkup(7, AnchorMarkupOptions{Image: true, Arrows: true, Keyboard: true})
-	if got == nil || len(got.InlineKeyboard) != 2 {
-		t.Fatalf("AnchorMarkup rows = %#v, want actions and keyboard entry point", got)
+	if got == nil || len(got.InlineKeyboard) != 1 {
+		t.Fatalf("AnchorMarkup rows = %#v, want one primary action row", got)
 	}
-	want := []InlineKeyboardButton{{Text: "⌨️", CallbackData: "keyboard:7"}}
-	if !reflect.DeepEqual(got.InlineKeyboard[1], want) {
-		t.Fatalf("keyboard row = %#v, want %#v", got.InlineKeyboard[1], want)
+	want := []InlineKeyboardButton{
+		{Text: "🔄", CallbackData: "refresh:7"},
+		{Text: "🖼️ View", CallbackData: "snapshot:7"},
+		{Text: "⌨️", CallbackData: "keyboard:7"},
+		{Text: "➖ Hide", CallbackData: "collapse:7"},
+	}
+	if !reflect.DeepEqual(got.InlineKeyboard[0], want) {
+		t.Fatalf("primary action row = %#v, want %#v", got.InlineKeyboard[0], want)
+	}
+}
+
+func TestModelCapableAnchorMarkupKeepsKeyboardAheadOfDownloads(t *testing.T) {
+	t.Parallel()
+
+	got := AnchorMarkup(7, AnchorMarkupOptions{
+		Keyboard: true, FileToken: "0123456789abcdef", FileCount: 2,
+	})
+	if got == nil || len(got.InlineKeyboard) != 2 {
+		t.Fatalf("AnchorMarkup rows = %#v, want actions then downloads", got)
+	}
+	if got.InlineKeyboard[0][1].CallbackData != "keyboard:7" ||
+		got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
+		t.Fatalf("primary action ordering = %#v", got.InlineKeyboard[0])
+	}
+	if got.InlineKeyboard[1][0].CallbackData != "file:7:0123456789abcdef:1" {
+		t.Fatalf("download row = %#v", got.InlineKeyboard[1])
 	}
 }
 
