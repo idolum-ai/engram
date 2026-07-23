@@ -278,6 +278,48 @@ func TestCaptureFailureWithLiveIdentityDoesNotMarkSessionLost(t *testing.T) {
 	}
 }
 
+func TestInteractiveInputPreemptsAppRefreshCapture(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	inner := &appPreemptionRunner{captureStarted: make(chan struct{}), captureCanceled: make(chan struct{})}
+	app.Tmux = tmux.New(tmux.NewPriorityRunner(inner))
+	app.captureSlots = make(chan struct{}, 1)
+	refreshDone := make(chan struct{})
+	go func() {
+		app.refreshSession(context.Background(), id, true)
+		close(refreshDone)
+	}()
+	select {
+	case <-inner.captureStarted:
+	case <-time.After(time.Second):
+		t.Fatal("app refresh did not reach the background capture")
+	}
+
+	result := app.sendInput(context.Background(), id, "fixture input", "text", false)
+	if !result.OK() {
+		t.Fatalf("interactive input result = %#v", result)
+	}
+	select {
+	case <-inner.captureCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("interactive app input did not preempt the refresh capture")
+	}
+	select {
+	case <-refreshDone:
+	case <-time.After(time.Second):
+		t.Fatal("preempted app refresh did not finish")
+	}
+	inner.mu.Lock()
+	defer inner.mu.Unlock()
+	seenSetBuffer, seenGuardedPaste := false, false
+	for _, call := range inner.calls {
+		seenSetBuffer = seenSetBuffer || call[0] == "set-buffer"
+		seenGuardedPaste = seenGuardedPaste || call[0] == "if-shell"
+	}
+	if !seenSetBuffer || !seenGuardedPaste {
+		t.Fatalf("interactive input did not traverse production tmux mechanics: %#v", inner.calls)
+	}
+}
+
 func TestCapacityAllocationCannotPruneRefreshTarget(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	app.Guide = safetyGuide{}
@@ -735,6 +777,33 @@ type safetyRunner struct {
 	failKill        bool
 	capabilityErr   error
 	onIdentity      func()
+}
+
+type appPreemptionRunner struct {
+	mu              sync.Mutex
+	once            sync.Once
+	calls           [][]string
+	captureStarted  chan struct{}
+	captureCanceled chan struct{}
+}
+
+func (r *appPreemptionRunner) Run(ctx context.Context, args ...string) (string, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, append([]string(nil), args...))
+	r.mu.Unlock()
+	if len(args) > 0 && args[0] == "display-message" {
+		if strings.Contains(args[len(args)-1], "pane_width") {
+			return framedStyledCaptureMetadata("bash"), nil
+		}
+		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
+	}
+	if len(args) > 0 && args[0] == "capture-pane" {
+		r.once.Do(func() { close(r.captureStarted) })
+		<-ctx.Done()
+		close(r.captureCanceled)
+		return "", ctx.Err()
+	}
+	return "", nil
 }
 
 type safetyGuide struct{}

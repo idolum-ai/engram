@@ -90,8 +90,9 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	a.processCapturedFrame(ctx, current, capture)
 
-	if !acquireSlot(ctx, a.renderSlots) {
-		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image before the request timed out.")
+	generation, renderReady := a.acquireSnapshotRender(ctx)
+	if !renderReady {
+		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image because Chromium is recovering or the request timed out; check /status.")
 		return
 	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
@@ -104,13 +105,6 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		VisibleRows: capture.VisibleRows,
 		BufferRows:  capture.BufferRows,
 	}, capture.CurrentPath)
-	ready, generation := a.snapshotRenderHealth()
-	if !ready {
-		renderCancel()
-		releaseSlot(a.renderSlots)
-		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image because Chromium is recovering; check /status.")
-		return
-	}
 	pngPath, renderErr := a.Snapshots.Render(renderCtx, input, a.Config.ArtifactDir())
 	renderCancel()
 	releaseSlot(a.renderSlots)

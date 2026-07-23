@@ -13,6 +13,7 @@ import (
 const (
 	snapshotProbeInitialDelay = 5 * time.Second
 	snapshotProbeMaximumDelay = 5 * time.Minute
+	snapshotStatusErrorBytes  = 768
 )
 
 type snapshotProber interface {
@@ -36,6 +37,20 @@ func (a *App) snapshotRenderHealth() (ready bool, generation uint64) {
 	a.snapshotHealthMu.RLock()
 	defer a.snapshotHealthMu.RUnlock()
 	return a.snapshotReady, a.snapshotGeneration
+}
+
+// acquireSnapshotRender reserves the renderer and samples health only after
+// the wait, so a recovery or failure while queued cannot stale its generation.
+func (a *App) acquireSnapshotRender(ctx context.Context) (generation uint64, ok bool) {
+	if !acquireSlot(ctx, a.renderSlots) {
+		return 0, false
+	}
+	ready, generation := a.snapshotRenderHealth()
+	if !ready {
+		releaseSlot(a.renderSlots)
+		return 0, false
+	}
+	return generation, true
 }
 
 func (a *App) snapshotHealth() (ready bool, browserPath, probeError string, probedAt, retryAt time.Time) {
@@ -156,7 +171,11 @@ func (a *App) markSnapshotsUnavailable(err error, now time.Time, observedGenerat
 func snapshotUnavailableStatus(probeError string, retryAt time.Time) string {
 	status := "unavailable"
 	if probeError != "" {
-		status += ": " + probeError
+		diagnostic := headUTF8(probeError, snapshotStatusErrorBytes)
+		if diagnostic != probeError {
+			diagnostic += "..."
+		}
+		status += ": " + diagnostic
 	}
 	if !retryAt.IsZero() {
 		status += fmt.Sprintf("; retry after %s", retryAt.UTC().Format(time.RFC3339))

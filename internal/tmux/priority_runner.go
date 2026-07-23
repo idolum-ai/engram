@@ -1,14 +1,17 @@
 package tmux
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
 )
 
 type interactiveContextKey struct{}
 type backgroundContextKey struct{}
+type protectedContextKey struct{}
+
+var errStreamingUnsupported = errors.New("tmux runner does not support streaming")
 
 // InteractiveContext marks tmux work that originated from a user input. The
 // priority runner uses it to stop a background observation before it can hold
@@ -24,6 +27,12 @@ func BackgroundContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, backgroundContextKey{}, true)
 }
 
+// ProtectedContext marks cleanup or mutation work that must finish even when
+// it inherits a background observation context.
+func ProtectedContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, protectedContextKey{}, true)
+}
+
 func isInteractiveContext(ctx context.Context) bool {
 	interactive, _ := ctx.Value(interactiveContextKey{}).(bool)
 	return interactive
@@ -31,7 +40,8 @@ func isInteractiveContext(ctx context.Context) bool {
 
 func isBackgroundContext(ctx context.Context) bool {
 	background, _ := ctx.Value(backgroundContextKey{}).(bool)
-	return background
+	protected, _ := ctx.Value(protectedContextKey{}).(bool)
+	return background && !protected
 }
 
 // PriorityRunner serializes tmux client processes and lets interactive work
@@ -69,20 +79,16 @@ func (r *PriorityRunner) Run(ctx context.Context, args ...string) (string, error
 }
 
 func (r *PriorityRunner) RunToWriter(ctx context.Context, dst io.Writer, args ...string) error {
+	stream, ok := r.inner.(StreamRunner)
+	if !ok {
+		return errStreamingUnsupported
+	}
 	opCtx, release, err := r.acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
-	if stream, ok := r.inner.(StreamRunner); ok {
-		return stream.RunToWriter(opCtx, dst, args...)
-	}
-	out, err := r.inner.Run(opCtx, args...)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(dst, bytes.NewBufferString(out))
-	return err
+	return stream.RunToWriter(opCtx, dst, args...)
 }
 
 func (r *PriorityRunner) acquire(ctx context.Context) (context.Context, func(), error) {

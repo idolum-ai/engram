@@ -7,7 +7,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/terminalshot"
 )
 
@@ -94,6 +96,55 @@ func TestSnapshotHealthReportsFailureAndBacksOff(t *testing.T) {
 	}
 	if !app.recoverSnapshots(context.Background(), now.Add(snapshotProbeInitialDelay)) {
 		t.Fatal("snapshot recovery did not retry after backoff")
+	}
+}
+
+func TestSnapshotStatusBoundsOversizedBrowserDiagnostic(t *testing.T) {
+	app, _, _ := newSafetyApp(t, state.TerminalOriginCreated)
+	retryAt := time.Date(2026, 7, 23, 1, 2, 8, 0, time.UTC)
+	app.snapshotProbeError = "browser stderr prefix: " + strings.Repeat("π", 10_000)
+	app.snapshotNextProbe = retryAt
+	status := app.statusText()
+	if len(status) > 4096 || !utf8.ValidString(status) {
+		t.Fatalf("status is not Telegram-safe: bytes=%d valid_utf8=%v", len(status), utf8.ValidString(status))
+	}
+	for _, want := range []string{"browser stderr prefix:", "...; retry after " + retryAt.Format(time.RFC3339)} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("bounded status omitted %q: %q", want, status)
+		}
+	}
+}
+
+func TestSnapshotRenderSamplesGenerationAfterWaitingForSlot(t *testing.T) {
+	now := time.Date(2026, 7, 23, 1, 2, 3, 0, time.UTC)
+	app := &App{snapshotReady: true, snapshotGeneration: 7, renderSlots: make(chan struct{}, 1)}
+	app.renderSlots <- struct{}{}
+	renderer := &failingSnapshotRenderer{}
+	dir := t.TempDir()
+	result := make(chan bool, 1)
+	go func() {
+		generation, ok := app.acquireSnapshotRender(context.Background())
+		if !ok {
+			result <- false
+			return
+		}
+		_, err := renderer.Render(context.Background(), terminalshot.Input{}, dir)
+		changed := app.markSnapshotsUnavailable(err, now, generation)
+		releaseSlot(app.renderSlots)
+		result <- changed
+	}()
+	select {
+	case <-result:
+		t.Fatal("render reservation did not wait for the occupied slot")
+	case <-time.After(50 * time.Millisecond):
+	}
+	app.snapshotHealthMu.Lock()
+	app.snapshotReady = true
+	app.snapshotGeneration = 8
+	app.snapshotHealthMu.Unlock()
+	<-app.renderSlots
+	if changed := <-result; !changed || app.snapshotAvailable() {
+		t.Fatalf("current generation failure changed=%v available=%v", changed, app.snapshotAvailable())
 	}
 }
 

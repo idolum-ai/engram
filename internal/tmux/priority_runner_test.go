@@ -68,6 +68,26 @@ type protectedMutationRunner struct {
 	canceled chan struct{}
 }
 
+type protectedCleanupRunner struct {
+	started  chan struct{}
+	release  chan struct{}
+	canceled chan struct{}
+}
+
+func (r *protectedCleanupRunner) Run(ctx context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "delete-buffer" {
+		close(r.started)
+		select {
+		case <-ctx.Done():
+			close(r.canceled)
+			return "", ctx.Err()
+		case <-r.release:
+			return "", nil
+		}
+	}
+	return "interactive", nil
+}
+
 func (r *protectedMutationRunner) Run(ctx context.Context, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "new-window" {
 		close(r.started)
@@ -109,6 +129,37 @@ func TestPriorityRunnerDoesNotCancelUnmarkedMutation(t *testing.T) {
 	if err := <-mutationDone; err != nil {
 		t.Fatal(err)
 	}
+	if err := <-interactiveDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCaptureCleanupOverridesInheritedBackgroundPriority(t *testing.T) {
+	t.Parallel()
+	inner := &protectedCleanupRunner{started: make(chan struct{}), release: make(chan struct{}), canceled: make(chan struct{})}
+	runner := NewPriorityRunner(inner)
+	manager := New(runner)
+	cleanupDone := make(chan struct{})
+	go func() {
+		manager.cleanupCaptureBuffers(BackgroundContext(context.Background()), "engram-physical-fixture", "engram-joined-fixture")
+		close(cleanupDone)
+	}()
+	<-inner.started
+
+	interactiveDone := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(InteractiveContext(context.Background()), "display-message")
+		interactiveDone <- err
+	}()
+	select {
+	case <-inner.canceled:
+		t.Fatal("interactive work canceled protected capture cleanup")
+	case err := <-interactiveDone:
+		t.Fatalf("interactive work bypassed protected cleanup: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(inner.release)
+	<-cleanupDone
 	if err := <-interactiveDone; err != nil {
 		t.Fatal(err)
 	}

@@ -83,7 +83,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !ok || ts.TmuxPaneID == "" || ts.State != state.TerminalRunning || !ts.WatchEnabled || ts.AnchorMessageID == 0 {
 		return
 	}
-	ready, generation := a.snapshotRenderHealth()
+	ready, _ := a.snapshotRenderHealth()
 	if !ready || a.Snapshots == nil {
 		return
 	}
@@ -149,7 +149,8 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if captureHash == current.LastSnapshotCaptureHash && current.AnchorFormat == "snapshot" && !manual {
 		return
 	}
-	if !acquireSlot(ctx, a.renderSlots) {
+	generation, renderReady := a.acquireSnapshotRender(ctx)
+	if !renderReady {
 		return
 	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
