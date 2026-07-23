@@ -104,7 +104,7 @@ a process-confirmed, versioned Codex adapter remains as a compatibility fallback
 for its already-proven layouts. The raw frame remains intact for screenshots,
 local inspection, and references. See
 [`agent-screen-semantics.md`](agent-screen-semantics.md) for the role,
-confidence, retention, and hermetic-test contract. Guide hashes for recognized
+confidence, retention, and credential-isolated real-client test contract. Guide hashes for recognized
 agent presentations use cleaned conversation so UI animation or extracted
 state alone cannot spend another guide request. Card
 render hashes still include the extracted state. When

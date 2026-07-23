@@ -427,7 +427,7 @@ func (m *agentModelMock) ServeHTTP(w http.ResponseWriter, request *http.Request)
 	m.seen = append(m.seen, path)
 	m.mu.Unlock()
 	if request.Method == http.MethodConnect {
-		http.Error(w, "external network disabled by hermetic harness", http.StatusBadGateway)
+		http.Error(w, "proxy destination rejected by agent UI fixture", http.StatusBadGateway)
 		return
 	}
 	switch {

@@ -6,10 +6,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/engram/internal/agentui"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+func TestRecordAgentPresentationRedactsAllTerminalDerivedMetadata(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	const secret = "fixture-provider-secret"
+	app.Config.OpenAIAPIKey = secret
+	session, _ := app.Store.FindSession(id)
+	app.recordAgentPresentation(session, agentui.Analysis{
+		Applied: true, Conversation: "done", Model: secret + "/gpt-5.6-sol",
+		Effort: "high-" + secret, Mode: "fast-" + secret,
+		Activity: agentui.Activity("active-" + secret),
+	})
+	current, _ := app.Store.FindSession(id)
+	metadata := strings.Join([]string{current.PresentationModel, current.PresentationEffort, current.PresentationMode, current.PresentationActivity}, "\n")
+	if strings.Contains(metadata, secret) || !strings.Contains(metadata, "<redacted>") {
+		t.Fatalf("terminal-derived presentation metadata was not redacted: %q", metadata)
+	}
+}
 
 type fixedCodexDetector struct {
 	runtime codexui.Runtime

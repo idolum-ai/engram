@@ -73,11 +73,14 @@ func Analyze(observation Observation) Analysis {
 		}
 	}
 
-	markChrome(lines, remove, roles, confidence, evidence)
+	annotateConversation(lines, roles, confidence, evidence)
+	markChrome(lines, footer, model, remove, roles, confidence, evidence)
 	markTrailingPrompt(observation, lines, footer, remove, roles, confidence, evidence)
 	markModelCard(lines, modelLine, remove, roles, confidence, evidence)
-	markCompletedApproval(lines, remove, roles, confidence, evidence)
-	annotateConversation(lines, roles, confidence, evidence)
+	markCompletedApproval(lines, footer, remove, roles, confidence, evidence)
+	if hasRole(roles, RoleApproval) {
+		activity = ActivityAwaitingApproval
+	}
 
 	kept := make([]string, 0, len(lines))
 	for index, line := range lines {
@@ -176,30 +179,49 @@ func findEmbeddedStatus(lines []string) (index int, model, effort, mode string, 
 	}
 	for index = last; index >= 0 && index >= last-9; index-- {
 		parts := strings.Split(strings.TrimSpace(lines[index]), " · ")
-		if len(parts) < 2 {
+		if len(parts) != 2 {
 			continue
 		}
-		candidateModel := ""
+		identity := strings.Fields(parts[0])
+		if len(identity) != 2 || identity[0] != "▣" || !validEmbeddedLabel(identity[1]) {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) == 0 || !knownModel(fields[0]) {
+			continue
+		}
+		candidateModel := fields[0]
 		candidateEffort := ""
 		candidateMode := ""
-		for _, part := range parts {
-			for _, field := range strings.Fields(part) {
-				field = strings.Trim(field, "●○◉◌▣[]()")
-				switch {
-				case candidateModel == "" && knownModel(field):
-					candidateModel = field
-				case candidateEffort == "" && validEffort(field):
-					candidateEffort = strings.ToLower(field)
-				case candidateMode == "" && strings.EqualFold(field, "fast"):
-					candidateMode = "fast"
-				}
+		valid := true
+		for _, field := range fields[1:] {
+			switch {
+			case candidateEffort == "" && validEffort(field):
+				candidateEffort = strings.ToLower(field)
+			case candidateMode == "" && strings.EqualFold(field, "fast"):
+				candidateMode = "fast"
+			default:
+				valid = false
 			}
 		}
-		if candidateModel != "" {
+		if valid {
 			return index, candidateModel, candidateEffort, candidateMode, true
 		}
 	}
 	return 0, "", "", "", false
+}
+
+func validEmbeddedLabel(value string) bool {
+	if len(value) < 2 || len(value) > 24 {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func findCompositeStatus(lines []string) (index int, model, effort string, modelLine int, ok bool) {
@@ -231,7 +253,7 @@ func findCompositeStatus(lines []string) (index int, model, effort string, model
 func findDisplayModel(lines []string) (string, int) {
 	for index := len(lines) - 1; index >= 0; index-- {
 		match := displayModel.FindStringSubmatch(lines[index])
-		if len(match) == 0 {
+		if len(match) == 0 || !boxedModelLine(lines, index) {
 			continue
 		}
 		family := strings.ToLower(match[1])
@@ -259,6 +281,27 @@ func findDisplayModel(lines []string) (string, int) {
 	return "", -1
 }
 
+func boxedModelLine(lines []string, modelLine int) bool {
+	start := -1
+	for index := modelLine; index >= max(0, modelLine-12); index-- {
+		trimmed := strings.TrimSpace(lines[index])
+		if strings.HasPrefix(trimmed, "╭") && strings.HasSuffix(trimmed, "╮") {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		return false
+	}
+	for index := modelLine; index < len(lines) && index <= modelLine+12; index++ {
+		trimmed := strings.TrimSpace(lines[index])
+		if strings.HasPrefix(trimmed, "╰") && strings.HasSuffix(trimmed, "╯") {
+			return true
+		}
+	}
+	return false
+}
+
 func validStatusTail(parts []string) bool {
 	if len(parts) == 0 {
 		return false
@@ -277,8 +320,15 @@ func validStatusTail(parts []string) bool {
 
 func knownModel(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if slash := strings.LastIndex(value, "/"); slash >= 0 {
-		value = value[slash+1:]
+	if len(value) > 96 {
+		return false
+	}
+	if strings.Contains(value, "/") {
+		parts := strings.Split(value, "/")
+		if len(parts) != 2 || !knownProvider(parts[0]) || !validModelToken(parts[0]) {
+			return false
+		}
+		value = parts[1]
 	}
 	if strings.HasPrefix(value, "gpt-") {
 		return validGPTModel(value)
@@ -300,6 +350,15 @@ func knownModel(value string) bool {
 		}
 	}
 	return false
+}
+
+func knownProvider(value string) bool {
+	switch value {
+	case "openai", "anthropic", "google", "xai", "deepseek", "meta", "mistral", "moonshot", "qwen", "local", "engram":
+		return true
+	default:
+		return false
+	}
 }
 
 func validGPTModel(value string) bool {
@@ -485,24 +544,36 @@ func passivePrompt(prompt string) bool {
 	}
 }
 
-func markChrome(lines []string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
-	for index, line := range lines {
+func markChrome(lines []string, footer int, model string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+	for index := range lines {
+		line := lines[index]
 		trimmed := strings.TrimSpace(line)
+		inLowBand := index >= max(0, footer-8) && index < min(len(lines), footer+9)
 		switch {
-		case roles[index] == RoleActivity:
+		case roles[index] != "":
 			continue
 		case separatorLine(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 100, true, "separator-decoration")
-		case decorativeBorder(trimmed):
+		case inLowBand && decorativeBorder(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "composer-border")
-		case uiCommandHints(trimmed):
+		case inLowBand && uiCommandHints(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 94, true, "command-hints")
-		case elapsedDecoration.MatchString(trimmed), glyphElapsed.MatchString(trimmed):
+		case inLowBand && (elapsedDecoration.MatchString(trimmed) || glyphElapsed.MatchString(trimmed)):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "elapsed-decoration")
-		case collapsedTranscript(trimmed):
+		case inLowBand && collapsedTranscript(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "collapsed-transcript-control")
+		case inLowBand && embeddedComposerStatus(lines, index, model):
+			markLine(remove, roles, confidence, evidence, index, RoleChrome, 96, true, "embedded-composer-status", "low-band-status")
 		}
 	}
+}
+
+func embeddedComposerStatus(lines []string, index int, model string) bool {
+	trimmed := strings.TrimSpace(lines[index])
+	if !strings.HasPrefix(trimmed, "┃") || !strings.Contains(trimmed, " · "+model) || index+1 >= len(lines) {
+		return false
+	}
+	return decorativeBorder(strings.TrimSpace(lines[index+1]))
 }
 
 func markModelCard(lines []string, modelLine int, remove []bool, roles []Role, confidence []int, evidence [][]string) {
@@ -541,24 +612,15 @@ func collapsedTranscript(line string) bool {
 	return strings.HasPrefix(line, "… +") && strings.Contains(lower, "lines") && strings.Contains(lower, "transcript")
 }
 
-func markCompletedApproval(lines []string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
-	for start := 0; start < len(lines); start++ {
-		trimmed := strings.TrimSpace(lines[start])
-		lower := strings.ToLower(trimmed)
-		if trimmed == "" || (!strings.HasPrefix(trimmed, "⚠") && !strings.HasPrefix(trimmed, "✔")) || !strings.Contains(lower, "approv") {
+func markCompletedApproval(lines []string, footer int, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+	for index := max(0, footer-8); index < min(len(lines), footer+1); index++ {
+		if roles[index] != "" {
 			continue
 		}
-		if !strings.Contains(lower, "approved") && !strings.Contains(lower, "review") {
-			continue
+		trimmed := strings.TrimSpace(lines[index])
+		if strings.HasPrefix(trimmed, "⚠ Automatic approval review approved:") {
+			markLine(remove, roles, confidence, evidence, index, RoleChrome, 95, true, "completed-approval-boilerplate", "low-band-status")
 		}
-		end := start + 1
-		for end < len(lines) && strings.TrimSpace(lines[end]) != "" {
-			end++
-		}
-		for index := start; index < end; index++ {
-			markLine(remove, roles, confidence, evidence, index, RoleChrome, 95, true, "completed-approval-boilerplate")
-		}
-		start = end - 1
 	}
 }
 
@@ -621,6 +683,10 @@ func annotateConversation(lines []string, roles []Role, confidence []int, eviden
 func approvalPrompt(line string) bool {
 	lower := strings.ToLower(line)
 	return strings.Contains(lower, "do you want to") || strings.Contains(lower, "would you like to") || strings.Contains(lower, "allow this")
+}
+
+func hasRole(roles []Role, target Role) bool {
+	return slices.Contains(roles, target)
 }
 
 func markLine(remove []bool, roles []Role, confidence []int, evidence [][]string, index int, role Role, score int, omitted bool, signals ...string) {

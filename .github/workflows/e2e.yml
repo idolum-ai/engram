@@ -118,7 +118,7 @@ jobs:
           retention-days: 30
 
   agent-ui:
-    name: Hermetic agent UI semantics
+    name: Credential-isolated agent UI semantics
     if: inputs.suite == 'agent-ui'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -172,7 +172,7 @@ jobs:
             @anthropic-ai/claude-code@2.1.206 \
             opencode-ai@1.18.4
 
-      - name: Run hermetic agent UI semantics
+      - name: Run credential-isolated agent UI semantics
         run: |
           set -euo pipefail
           mkdir -p e2e-artifacts
@@ -195,10 +195,10 @@ jobs:
             exit "${test_status}"
           fi
           {
-            echo "## Hermetic agent UI semantics"
+            echo "## Credential-isolated agent UI semantics"
             echo
-            echo "Real Codex, Claude Code, and OpenCode TUIs reached loopback-only model fixtures and produced equivalent active and idle semantic state."
-            echo "No model credentials or external application services were used."
+            echo "Real Codex, Claude Code, and OpenCode TUIs were configured with loopback model fixtures and produced equivalent active and idle semantic state."
+            echo "The suite uses fake credentials and private application state. Proxy routing is observed but OS-level egress isolation is not enforced."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload review evidence

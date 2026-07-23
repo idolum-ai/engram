@@ -1,10 +1,12 @@
 # End-to-End Testing
 
-Engram has two manually dispatched hermetic suites. The `hermetic` suite asks
+Engram has two manually dispatched suites. The `hermetic` suite asks
 whether the real Engram process can coordinate a Telegram-shaped exchange, an
 isolated real tmux server, and a real local Chromium renderer as one usable
 system. The `agent-ui` suite asks whether real agent CLIs produce equivalent
-semantic state when their provider traffic is replaced by local fixtures.
+semantic state when configured to use local provider fixtures. The agent-UI
+suite isolates credentials and application state, but it is not an OS-level
+network sandbox.
 
 ## What It Exercises
 
@@ -69,7 +71,10 @@ client a private home, config, cache, work directory, and tmux server, and
 routes the Responses, Messages, or OpenAI-compatible chat stream to a stdlib
 loopback server. A loopback proxy rejects and records optional update,
 telemetry, and discovery requests. The fixture uses only visibly fake keys and
-does not read repository or runner credentials.
+does not read repository or runner credentials. Proxy variables do not prevent
+a client from opening a direct socket, so this suite does not prove complete
+egress isolation. The workflow pins the three requested top-level CLI versions;
+their transitive npm dependencies are not lockfile-reproducible.
 
 The equivalent local command is:
 
@@ -100,7 +105,7 @@ with a live Engram service for renderer processes. The escape hatch
 host or after stopping the live service.
 
 The suite retains, per client, active and idle plain-text captures, semantic
-analysis JSON, observed client version, loopback request paths, denied external
+analysis JSON, observed client version, loopback request paths, proxy-rejected
 request destinations, and a Chromium-rendered idle PNG. Its `manifest.json`
 lists clients that passed or were unavailable. These artifacts contain fixture
 content and private temporary paths, never request bodies, headers, tokens, or
@@ -110,8 +115,8 @@ contract.
 
 ## Evidence
 
-Every completed hermetic workflow test uploads a 30-day artifact containing
-the files below. A local hermetic test writes the same evidence bundle to
+Every completed manually dispatched workflow test uploads a 30-day artifact
+containing the files below. A local test writes the same evidence bundle to
 `ENGRAM_E2E_ARTIFACT_DIR` without applying a retention policy.
 
 - `snapshot.png`, the exact canonical terminal image uploaded to the simulator;

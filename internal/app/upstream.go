@@ -110,22 +110,27 @@ func (a *App) recordCodexPresentation(observed state.TerminalSession, presentati
 }
 
 func (a *App) recordPresentation(observed state.TerminalSession, program string, presentation codexui.Presentation) {
+	version := a.redactText(presentation.Version)
+	model := a.redactText(presentation.Model)
+	effort := a.redactText(presentation.Effort)
+	mode := a.redactText(presentation.Mode)
+	activity := a.redactText(presentation.Activity)
 	notice := a.redactText(presentation.Notice)
 	current, ok := a.Store.FindSession(observed.ID)
 	if !ok || !sameTerminalBinding(current, observed) || current.PresentationProgram == program &&
-		current.PresentationVersion == presentation.Version && current.PresentationModel == presentation.Model &&
-		current.PresentationEffort == presentation.Effort && current.PresentationMode == presentation.Mode &&
-		current.PresentationActivity == presentation.Activity &&
+		current.PresentationVersion == version && current.PresentationModel == model &&
+		current.PresentationEffort == effort && current.PresentationMode == mode &&
+		current.PresentationActivity == activity &&
 		current.PresentationNotice == notice {
 		return
 	}
 	_, found, applied, err := a.updateSessionIfCurrent(observed, func(session *state.TerminalSession) {
 		session.PresentationProgram = program
-		session.PresentationVersion = presentation.Version
-		session.PresentationModel = presentation.Model
-		session.PresentationEffort = presentation.Effort
-		session.PresentationMode = presentation.Mode
-		session.PresentationActivity = presentation.Activity
+		session.PresentationVersion = version
+		session.PresentationModel = model
+		session.PresentationEffort = effort
+		session.PresentationMode = mode
+		session.PresentationActivity = activity
 		session.PresentationNotice = notice
 	})
 	if err != nil || !found || !applied {

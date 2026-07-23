@@ -230,5 +230,103 @@
       "excludes": ["Engram Mock", "esc interrupt"],
       "roles": {"activity": 1, "status": 1}
     }
+  },
+  {
+    "name": "embedded_unknown_field_fails_closed",
+    "source": "embedded-footer future-layout regression",
+    "observation": {
+      "current": {
+        "text": "answer\n\n›\n\n▣  Build · gpt-5.6-sol high turbo",
+        "current_command": "opencode",
+        "alternate_screen": "on"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "answer\n\n›\n\n▣  Build · gpt-5.6-sol high turbo"
+    }
+  },
+  {
+    "name": "model_comparison_is_conversation",
+    "source": "embedded-status false-positive regression",
+    "observation": {
+      "current": {
+        "text": "We compared gpt-5.6-sol · claude-sonnet-4-6 for this task.\n\n›"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "We compared gpt-5.6-sol · claude-sonnet-4-6 for this task.\n\n›"
+    }
+  },
+  {
+    "name": "unknown_provider_prefix_fails_closed",
+    "source": "terminal-derived metadata disclosure regression",
+    "observation": {
+      "current": {
+        "text": "answer\n\n›\n\nsecret-bearing-prefix/gpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "answer\n\n›\n\nsecret-bearing-prefix/gpt-5.6-sol high · /work"
+    }
+  },
+  {
+    "name": "keyboard_guidance_is_conversation",
+    "source": "global-chrome retention regression",
+    "observation": {
+      "current": {
+        "text": "• Press Ctrl+C, then Shift+Tab to leave the current mode.\n\n›\n\ngpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "idle",
+      "contains": ["Press Ctrl+C, then Shift+Tab"],
+      "excludes": ["gpt-5.6-sol"],
+      "roles": {"assistant_message": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "static_approval_awaits_user",
+    "source": "static approval activity regression",
+    "observation": {
+      "current": {
+        "text": "• I need permission to continue.\n\nDo you want to allow this command?\n\n›\n\ngpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "awaiting_approval",
+      "contains": ["I need permission", "Do you want to allow"],
+      "excludes": ["gpt-5.6-sol"],
+      "roles": {"assistant_message": 1, "approval": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "approval_guidance_is_conversation",
+    "source": "approval prose retention regression",
+    "observation": {
+      "current": {
+        "text": "✔ The approval review was approved because the command is read-only.\n\n›\n\ngpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "idle",
+      "contains": ["approval review was approved", "read-only"],
+      "excludes": ["gpt-5.6-sol"],
+      "roles": {"composer": 1, "status": 1}
+    }
   }
 ]

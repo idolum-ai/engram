@@ -35,9 +35,10 @@ the underlying process is doing.
 
 Interpretation requires a strong low-band anchor and a known model identifier.
 The model may be in a conventional `model effort · path` footer, embedded in a
-low-band `mode · model provider` row, or displayed in a stable model card while
-effort and composer state appear below. The registry recognizes model families;
-it does not recognize product versions.
+low-band `▣ label · model [effort] [fast]` row, or displayed in a stable model
+card while effort and composer state appear below. Provider-qualified models
+require an allowlisted provider identifier and a valid complete token. The
+registry recognizes model families; it does not recognize product versions.
 
 Engram then combines independent visible signals:
 
@@ -59,10 +60,11 @@ collisions, unrecognized footer fields, and chrome-only results pass through
 byte-for-byte. An ordinary shell line that merely contains a model-like word is
 not enough.
 
-Only high-confidence interface rows are omitted from the derived conversation:
-model/status rows, separators, completed elapsed decorations, active spinners,
-completed approval boilerplate, and passive composers. Actual user prompts,
-approval questions, assistant messages, command invocations, and results remain
+Only high-confidence interface rows in proven spatial regions are omitted from
+the derived conversation: model/status rows, separators, completed elapsed
+decorations, active spinners, an exact completed-approval notice, and passive
+composers. Actual user prompts, approval questions, assistant messages, command
+invocations, results, keyboard guidance, and unknown approval prose remain
 evidence.
 
 The older process-confirmed Codex adapter remains a fallback for supported
@@ -81,8 +83,10 @@ OpenCode binaries in separate private tmux servers and private home/config/cache
 trees. Test-only drivers point each client at a loopback streaming model server.
 A loopback proxy rejects and records optional external requests, and the
 harness supplies only obvious fake credentials. No user credentials or config
-are read. The suite retains active and idle text, semantic JSON, versions,
-request paths, and a rendered idle PNG for review.
+are read. This is credential and application-state isolation, not OS-level
+egress enforcement: a client could bypass proxy variables with a direct socket.
+The suite retains active and idle text, semantic JSON, versions, request paths,
+and a rendered idle PNG for review.
 
 The drivers live only in the E2E test package. They are not a production plugin
 interface and do not expand Engram's authority over terminal processes.
