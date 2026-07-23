@@ -13,7 +13,7 @@ import (
 
 const (
 	MaxExpandedEvents = 32
-	MaxTokens         = 256
+	MaxTokens         = 1024
 )
 
 const SystemPrompt = `Translate one natural-language description of explicit physical keyboard presses into strict JSON.
