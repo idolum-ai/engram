@@ -355,6 +355,9 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 	if ts.PendingResume != nil {
 		return actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}
 	}
+	if ts.Collapsed {
+		return actionResult{Outcome: actionUserError, Message: "session is on the collapsed shelf; tap ➕ Show on the Collapsed sessions shelf"}
+	}
 	if ts.State == state.TerminalLost {
 		tctx, cancel := tmux.TimeoutContext(ctx)
 		defer cancel()
@@ -403,6 +406,18 @@ func (a *App) closeSession(ctx context.Context, id int) actionResult {
 }
 
 func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *closeConfirmation) actionResult {
+	a.collapsedShelfMu.Lock()
+	before, _ := a.Store.FindSession(id)
+	reconcileShelf := before.Collapsed || before.PendingRestore != nil
+	result := a.closeSessionExpectedLocked(ctx, id, confirmation)
+	a.collapsedShelfMu.Unlock()
+	if result.OK() && reconcileShelf {
+		a.reconcileCollapsedShelf(ctx)
+	}
+	return result
+}
+
+func (a *App) closeSessionExpectedLocked(ctx context.Context, id int, confirmation *closeConfirmation) actionResult {
 	disclosureLock := a.disclosureMutex(id)
 	disclosureLock.Lock()
 	defer disclosureLock.Unlock()
@@ -423,6 +438,8 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 			s.State = state.TerminalClosed
 			s.WatchEnabled = false
+			s.Collapsed = false
+			s.PendingCollapse = false
 			clearRecoveryMetadata(s)
 			s.LastSummary = "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed."
 		})
@@ -438,6 +455,9 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 			anchorLock.Unlock()
 			lock.Unlock()
 			return actionResult{Outcome: actionStateFailed, Message: "session changed while untracking"}
+		}
+		if ts.PendingRestore != nil {
+			a.retireClosedPendingRestoreLocked(ctx, ts)
 		}
 		a.resetConversationEpochLocked(id)
 		anchorLock.Unlock()
@@ -465,6 +485,8 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 	_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
+		s.Collapsed = false
+		s.PendingCollapse = false
 		clearRecoveryMetadata(s)
 		s.LastSummary = "status:\nThe Engram-created tmux window was closed."
 	})
@@ -480,6 +502,9 @@ func (a *App) closeSessionExpected(ctx context.Context, id int, confirmation *cl
 		anchorLock.Unlock()
 		lock.Unlock()
 		return actionResult{Outcome: actionStateFailed, Message: "session no longer tracked after close"}
+	}
+	if ts.PendingRestore != nil {
+		a.retireClosedPendingRestoreLocked(ctx, ts)
 	}
 	a.resetConversationEpochLocked(id)
 	anchorLock.Unlock()
@@ -561,7 +586,7 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	var b strings.Builder
 	b.WriteString("sessions\n")
 	actions := writeTrackedSessions(&b, st.TerminalSessions)
-	if len(actions) == 0 {
+	if !hasTrackedSessions(st.TerminalSessions) {
 		b.WriteString("\nNo tracked sessions.\n")
 	}
 	b.WriteString("\ntmux\n")
@@ -569,6 +594,15 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(actions, attachTargets)); err != nil {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
 	}
+}
+
+func hasTrackedSessions(sessions []state.TerminalSession) bool {
+	for _, session := range sessions {
+		if session.State != state.TerminalClosed {
+			return true
+		}
+	}
+	return false
 }
 
 func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) []telegram.SessionAction {
@@ -592,7 +626,8 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 	})
 	labels := map[int]string{
 		0: "lost",
-		1: "active",
+		1: "collapsed",
+		2: "active",
 	}
 	lastRank := -1
 	actions := make([]telegram.SessionAction, 0, len(active))
@@ -603,8 +638,15 @@ func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) 
 			lastRank = rank
 		}
 		fmt.Fprintf(b, "[%d] %s", session.ID, firstNonEmpty(session.Title, "-"))
+		if session.Collapsed {
+			b.WriteString(" · on Collapsed sessions shelf; tap ➕ Show there")
+		}
 		b.WriteString("\n")
-		actions = append(actions, telegram.SessionAction{ID: session.ID, Token: sessionActionToken(session)})
+		actions = append(actions, telegram.SessionAction{
+			ID:        session.ID,
+			Token:     sessionActionToken(session),
+			CloseOnly: session.Collapsed,
+		})
 	}
 	return actions
 }
@@ -617,7 +659,10 @@ func sessionPresentationRank(session state.TerminalSession) int {
 	if session.State == state.TerminalLost {
 		return 0
 	}
-	return 1
+	if session.Collapsed {
+		return 1
+	}
+	return 2
 }
 
 func sessionPresentationTime(session state.TerminalSession) time.Time {

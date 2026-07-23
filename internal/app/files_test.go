@@ -151,6 +151,45 @@ func TestQueuedCaptureDoesNotCrossBindingBoundary(t *testing.T) {
 	}
 }
 
+func TestCollapsedSessionRejectsCaptureBeforeTmux(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.TmuxServerID = appTestServerID
+		current.WatchEnabled = true
+		current.Collapsed = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply string
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			return nil, err
+		}
+		reply, _ = payload["text"].(string)
+		return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
+	})}
+	runner := &fileCaptureRunner{}
+	app := &App{Config: config.Config{Home: dir, TelegramChatID: 100}, Store: store, Telegram: client, Tmux: tmux.New(runner)}
+
+	app.captureSessionFile(context.Background(), telegram.Message{Chat: telegram.Chat{ID: 100}}, session, true)
+
+	if runner.calls != 0 || !strings.Contains(reply, "capture canceled") {
+		t.Fatalf("tmux calls=%d reply=%q", runner.calls, reply)
+	}
+}
+
 func TestCaptureUploadDoesNotHoldTerminalInputMutex(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))

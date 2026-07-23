@@ -94,6 +94,31 @@ func TestDirectionalKeyCallbackRejectedOutsideSnapshotMode(t *testing.T) {
 	}
 }
 
+func TestCollapsedAnchorKeyCallbackIsInert(t *testing.T) {
+	app, runner, refreshed := newAnchorKeyTestApp(t)
+	if _, _, err := app.Store.UpdateSession(1, func(session *state.TerminalSession) {
+		session.Collapsed = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "cb", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+		Data:    "key:1:ctrl-c",
+	})
+	if status != "callback_user_error" {
+		t.Fatalf("handleCallback status = %q", status)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("collapsed callback touched tmux: %#v", runner.calls)
+	}
+	select {
+	case <-refreshed:
+		t.Fatal("collapsed callback queued refresh")
+	default:
+	}
+}
+
 func TestAnchorFileCallbackResolvesOnlyCurrentNumberedList(t *testing.T) {
 	files := []string{"/tmp/first.txt", "/tmp/second.txt"}
 	ts := bindAnchorFiles(state.TerminalSession{State: state.TerminalRunning}, files)
@@ -183,6 +208,69 @@ func TestCurrentAnchorFileCallbackQueuesExactDownload(t *testing.T) {
 	}
 }
 
+func TestQueuedAnchorFileCallbackCannotUploadAfterCollapse(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.txt")
+	if err := os.WriteFile(path, []byte("report body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app.Config.Home = dir
+	app.Config.TelegramChatID = 100
+	app.transferSlots = make(chan struct{}, 1)
+	app.transferSlots <- struct{}{}
+	app.transferQueue = make(chan struct{}, 1)
+	token := anchorFileToken([]string{path})
+	session, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {
+		setAnchorFiles(s, []string{path})
+		s.LastSummary = "Cached status."
+		s.State = state.TerminalRunning
+		s.WatchEnabled = true
+		s.AnchorFormat = anchorFormatText
+		s.AnchorPinned = true
+		s.AnchorPinKnown = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendMessages := 0
+	documentCalls := 0
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery", "/botTOKEN/pinChatMessage", "/botTOKEN/unpinChatMessage":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/sendMessage":
+			sendMessages++
+			messageID := 88 + sendMessages - 1
+			return anchorKeyJSONResponse(fmt.Sprintf(`{"message_id":%d,"chat":{"id":100}}`, messageID)), nil
+		case "/botTOKEN/editMessageText":
+			return anchorKeyJSONResponse(`{"message_id":10,"chat":{"id":100}}`), nil
+		case "/botTOKEN/sendDocument":
+			documentCalls++
+			return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "file", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+		Data:    "file:1:" + token + ":1",
+	})
+	if status != "callback_ok" {
+		t.Fatalf("file callback status = %q", status)
+	}
+	if result := app.collapseAnchor(context.Background(), session); !result.OK() {
+		t.Fatalf("collapse = %#v", result)
+	}
+	<-app.transferSlots
+	app.transferWG.Wait()
+	if documentCalls != 0 {
+		t.Fatalf("queued file callback uploaded %d document(s) after collapse", documentCalls)
+	}
+}
+
 func anchorKeyJSONResponse(result string) *http.Response {
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -261,7 +349,7 @@ func TestKeyCallbackSendsEscEscWithDelay(t *testing.T) {
 }
 
 func TestRetiredAnchorCallbacksAreInert(t *testing.T) {
-	for _, callbackData := range []string{"refresh:1", "snapshot:1", "raw:1", "key:1:ctrl-c", "key:1:up", "recover:1"} {
+	for _, callbackData := range []string{"refresh:1", "snapshot:1", "raw:1", "collapse:1", "expand-all:0", "key:1:ctrl-c", "key:1:up", "recover:1"} {
 		t.Run(callbackData, func(t *testing.T) {
 			app, runner, refreshed := newAnchorKeyTestApp(t)
 			if _, _, err := app.Store.UpdateSession(1, func(s *state.TerminalSession) {

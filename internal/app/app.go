@@ -84,6 +84,11 @@ type App struct {
 	conversationGates             map[int]*conversationGate
 	closeConfirmMu                sync.Mutex
 	closeConfirms                 map[string]closeConfirmation
+	collapsedShelfMu              sync.Mutex
+	collapsedShelfRetryMessageID  int
+	collapsedShelfRetryAt         time.Time
+	collapsedAnchorRetries        sync.Map
+	pendingRestoreRetries         sync.Map
 	sessionLocks                  keyedMutexSet
 	anchorLocks                   keyedMutexSet
 	disclosureLocks               keyedMutexSet
@@ -411,8 +416,12 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 				}
 				return result.status("anchor_reply")
 			} else if found && targetState == state.ReplyTargetStale {
-				a.reply(ctx, msg, staleAlternateReply(ts.ID))
+				a.reply(ctx, msg, a.staleReply(ts))
 				return "anchor_reply_stale"
+			}
+			if a.isCollapsedShelfMessage(msg.Chat.ID, msg.ReplyToMessage.MessageID) {
+				a.reply(ctx, msg, collapsedShelfReplyMessage)
+				return "anchor_reply_user_error"
 			}
 		}
 		a.reply(ctx, msg, "reply to a session anchor to send slash input; for example, //clear sends /clear")
@@ -434,8 +443,12 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 			}
 			return result.status("anchor_reply")
 		} else if found && targetState == state.ReplyTargetStale {
-			a.reply(ctx, msg, staleAlternateReply(ts.ID))
+			a.reply(ctx, msg, a.staleReply(ts))
 			return "anchor_reply_stale"
+		}
+		if a.isCollapsedShelfMessage(msg.Chat.ID, msg.ReplyToMessage.MessageID) {
+			a.reply(ctx, msg, collapsedShelfReplyMessage)
+			return "anchor_reply_user_error"
 		}
 		a.reply(ctx, msg, "session not found for this reply; use /sessions to find an active anchor")
 		return "anchor_reply_user_error"
@@ -451,6 +464,15 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 
 func staleAlternateReply(id int) string {
 	return fmt.Sprintf("That view of [%d] is no longer current. Reply to its latest view or live anchor.", id)
+}
+
+const collapsedShelfReplyMessage = "The Collapsed sessions shelf represents multiple terminals. Tap ➕ Show to restore their individual reply routes."
+
+func (a *App) staleReply(session state.TerminalSession) string {
+	if current, ok := a.Store.FindSession(session.ID); ok && current.Collapsed {
+		return fmt.Sprintf("[%d] is on the Collapsed sessions shelf. Tap ➕ Show to restore its live reply route.", session.ID)
+	}
+	return staleAlternateReply(session.ID)
 }
 
 func escapedSlashInput(text string) (string, bool) {
@@ -747,6 +769,22 @@ func (a *App) registerCommands(ctx context.Context) {
 func (a *App) reply(ctx context.Context, msg telegram.Message, text string) {
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID, nil); err != nil {
 		_ = a.audit("telegram.send", "failed", map[string]any{"reply_to": msg.MessageID, "error": err.Error()})
+	}
+}
+
+func (a *App) replyTransferFailure(ctx context.Context, msg telegram.Message, text string) {
+	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := a.Telegram.SendMessage(noticeCtx, msg.Chat.ID, text, msg.MessageID, nil); err == nil {
+		return
+	} else {
+		_ = a.audit("telegram.send", "failed", map[string]any{"reply_to": msg.MessageID, "error": err.Error()})
+		if !isTelegramReplyUnavailable(err) {
+			return
+		}
+	}
+	if _, err := a.Telegram.SendMessage(noticeCtx, msg.Chat.ID, text, 0, nil); err != nil {
+		_ = a.audit("telegram.send", "fallback_failed", map[string]any{"error": err.Error()})
 	}
 }
 

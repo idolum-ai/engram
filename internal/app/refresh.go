@@ -20,12 +20,12 @@ const maxStoredVisibleCaptureBytes = 16 * 1024
 var errConversationTurnSuperseded = errors.New("conversation turn superseded")
 
 func (a *App) refreshSession(ctx context.Context, id int, force bool) {
-	if a.snapshotAnchors() {
-		a.refreshSnapshotAnchor(ctx, id, force)
+	ts, ok := a.Store.FindSession(id)
+	if !ok || ts.Collapsed || ts.TmuxPaneID == "" || ts.State == state.TerminalClosed || ts.State == state.TerminalLost || (!force && !ts.WatchEnabled) {
 		return
 	}
-	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.TmuxPaneID == "" || ts.State == state.TerminalClosed || ts.State == state.TerminalLost || (!force && !ts.WatchEnabled) {
+	if a.snapshotAnchors() && !ts.Collapsed {
+		a.refreshSnapshotAnchor(ctx, id, force)
 		return
 	}
 	if !force && time.Since(ts.LastAnchorEditAt) < 10*time.Second {
@@ -236,13 +236,13 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 		return "", nil, turn, ctx.Err()
 	}
 	defer releaseSlot(a.guideSlots)
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	identityLock := a.sessionMutex(session.ID)
 	identityLock.Lock()
 	defer identityLock.Unlock()
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	latest, ok := a.Store.FindSession(session.ID)
-	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
+	if a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
 		return "", nil, turn, errConversationTurnSuperseded
 	}
 	var result guide.Result
@@ -264,13 +264,13 @@ func (a *App) snapshotConversationalSummary(ctx context.Context, session state.T
 		return "", ctx.Err()
 	}
 	defer releaseSlot(a.guideSlots)
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	identityLock := a.sessionMutex(session.ID)
 	identityLock.Lock()
 	defer identityLock.Unlock()
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	latest, ok := a.Store.FindSession(session.ID)
-	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
+	if !a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		return "", errConversationTurnSuperseded
 	}
 	summary, err := a.Guide.Converse(ctx, guide.Input{SessionID: session.ID, VisibleText: conversationEvidence(presentationText)})
@@ -305,7 +305,7 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 		return false
 	}
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
+	if !ok || ts.Collapsed || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return false
 	}
 	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
@@ -422,23 +422,35 @@ func (a *App) refreshSoon(id int) {
 }
 
 func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
+	a.queueRefreshWithPolicy(id, force, delay, true)
+}
+
+func (a *App) queueRefreshIfIdle(id int, force bool, delay time.Duration) bool {
+	return a.queueRefreshWithPolicy(id, force, delay, false)
+}
+
+func (a *App) queueRefreshWithPolicy(id int, force bool, delay time.Duration, coalesce bool) bool {
 	ctx := a.workerContext()
 	select {
 	case <-ctx.Done():
-		return
+		return false
 	default:
 	}
 	a.summaryMu.Lock()
 	a.ensureSummaryQueuesLocked()
 	due := time.Now().Add(delay)
 	if a.summaryRunning[id] || a.summaryQueued[id] {
+		if !coalesce {
+			a.summaryMu.Unlock()
+			return false
+		}
 		a.summaryQueued[id] = true
 		a.summaryForce[id] = a.summaryForce[id] || force
 		if force && delay == 0 || delay > 0 && due.After(a.summaryDue[id]) {
 			a.summaryDue[id] = due
 		}
 		a.summaryMu.Unlock()
-		return
+		return true
 	}
 	a.summaryQueued[id] = true
 	a.summaryForce[id] = force
@@ -449,6 +461,7 @@ func (a *App) queueRefresh(id int, force bool, delay time.Duration) {
 		defer a.refreshWG.Done()
 		a.refreshWorker(ctx, id)
 	}()
+	return true
 }
 
 func (a *App) queueManualRefresh(id int) {
@@ -602,14 +615,31 @@ func (a *App) ensureSummaryQueuesLocked() {
 }
 
 func (a *App) sendAnchor(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return a.sendAnchorWithNotification(ctx, chatID, text, replyTo, markup, false)
+}
+
+func (a *App) sendSilentAnchor(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup) (telegram.Message, error) {
+	return a.sendAnchorWithNotification(ctx, chatID, text, replyTo, markup, true)
+}
+
+func (a *App) sendAnchorWithNotification(ctx context.Context, chatID int64, text string, replyTo int, markup *telegram.InlineKeyboardMarkup, silent bool) (telegram.Message, error) {
 	html := telegram.MarkdownToHTML(text)
-	msg, err := a.Telegram.SendHTMLMessage(ctx, chatID, html, replyTo, markup)
+	var msg telegram.Message
+	var err error
+	if silent {
+		msg, err = a.Telegram.SendSilentHTMLMessage(ctx, chatID, html, replyTo, markup)
+	} else {
+		msg, err = a.Telegram.SendHTMLMessage(ctx, chatID, html, replyTo, markup)
+	}
 	if err == nil {
 		return msg, nil
 	}
 	_ = a.audit("telegram.anchor_html", "failed", err.Error())
 	if telegram.IsRateLimited(err) || !isTelegramFormattingError(err) {
 		return telegram.Message{}, err
+	}
+	if silent {
+		return a.Telegram.SendSilentMessage(ctx, chatID, text, replyTo, markup)
 	}
 	return a.Telegram.SendMessage(ctx, chatID, text, replyTo, markup)
 }
@@ -650,6 +680,8 @@ func isTelegramAnchorUnavailable(err error) bool {
 	}
 	description := strings.ToLower(telegramErr.Description)
 	return strings.Contains(description, "message to edit not found") ||
+		strings.Contains(description, "message to pin not found") ||
+		strings.Contains(description, "message not found") ||
 		strings.Contains(description, "message can't be edited") ||
 		strings.Contains(description, "message can not be edited") ||
 		strings.Contains(description, "message is too old")
@@ -683,9 +715,10 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 }
 
 func (a *App) scheduler(ctx context.Context) {
+	a.reconcileCollapsedShelf(ctx)
 	for _, ts := range a.Store.Snapshot().TerminalSessions {
 		a.queueTerminalCapabilityReconcile(ts.ID)
-		if ts.AnchorMessageID != 0 {
+		if ts.AnchorMessageID != 0 && !ts.Collapsed {
 			a.reconcileAnchorControls(ctx, ts.ID)
 			if ts.State == state.TerminalRunning && ts.WatchEnabled {
 				// Anchor file bindings and conversation continuity are process-local.
@@ -707,8 +740,9 @@ func (a *App) scheduler(ctx context.Context) {
 			st := a.Store.Snapshot()
 			now := time.Now()
 			a.reconcileDueTerminalCapabilities(ctx, now)
+			a.reconcileCollapsedShelf(ctx)
 			for _, ts := range st.TerminalSessions {
-				if ts.AnchorMessageID != 0 {
+				if ts.AnchorMessageID != 0 && !ts.Collapsed {
 					a.reconcileAnchorPresentation(ctx, ts.ID)
 				}
 				if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
@@ -721,6 +755,10 @@ func (a *App) scheduler(ctx context.Context) {
 					_ = a.reconcileRecoverySession(ctx, ts)
 				}
 				if !ts.WatchEnabled {
+					delete(nextCapture, ts.ID)
+					continue
+				}
+				if ts.Collapsed {
 					delete(nextCapture, ts.ID)
 					continue
 				}

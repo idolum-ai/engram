@@ -20,6 +20,8 @@ const (
 	actionStateFailed    actionOutcome = "state_failed"
 )
 
+const collapsedSessionActionMessage = "session is on the Collapsed sessions shelf; tap ➕ Show to restore all sessions first"
+
 type actionResult struct {
 	Outcome actionOutcome
 	Message string
@@ -60,7 +62,7 @@ func (a *App) sendReplyInput(ctx context.Context, expected state.TerminalSession
 	if !found || targetState != state.ReplyTargetCurrent || !sameTerminalBinding(current, expected) {
 		anchorLock.Unlock()
 		sessionLock.Unlock()
-		return actionResult{Outcome: actionUserError, Message: staleAlternateReply(expected.ID)}
+		return actionResult{Outcome: actionUserError, Message: a.staleReply(expected)}
 	}
 	completion := a.sendInputExpectedLocked(ctx, expected.ID, text, "command", true, &expected)
 	anchorLock.Unlock()
@@ -87,6 +89,9 @@ func (a *App) sendInputExpectedLocked(ctx context.Context, id int, text, mode st
 	}
 	if ts.State == state.TerminalClosed {
 		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "session is closed"}}
+	}
+	if ts.Collapsed {
+		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: collapsedSessionActionMessage}}
 	}
 	if ts.PendingResume != nil {
 		return inputCompletion{result: actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}}
@@ -203,6 +208,9 @@ func (a *App) sendKeyGroupsExpected(ctx context.Context, id int, groups [][]stri
 	}
 	if ts.State == state.TerminalClosed {
 		return actionResult{Outcome: actionUserError, Message: "session is closed"}
+	}
+	if ts.Collapsed {
+		return actionResult{Outcome: actionUserError, Message: collapsedSessionActionMessage}
 	}
 	if ts.PendingResume != nil {
 		return actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}

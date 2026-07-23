@@ -20,6 +20,14 @@ import (
 const anchorRetirementRetryDelay = 10 * time.Second
 
 func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
+	a.reconcileAnchorPresentationWithRefreshPolicy(ctx, id, false)
+}
+
+func (a *App) reconcileAnchorPresentationAfterModeChange(ctx context.Context, id int) {
+	a.reconcileAnchorPresentationWithRefreshPolicy(ctx, id, true)
+}
+
+func (a *App) reconcileAnchorPresentationWithRefreshPolicy(ctx context.Context, id int, coalesceRunningRefresh bool) {
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
 	lock := a.anchorMutex(id)
@@ -27,7 +35,7 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 	defer lock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
+	if !ok || ts.Collapsed || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return
 	}
 	snapshotReady := a.snapshotAvailable()
@@ -35,7 +43,11 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 		!a.snapshotAnchors() && snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
 		!a.snapshotAnchors() && !snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
 	if formatMismatch && ts.State == state.TerminalRunning && ts.WatchEnabled {
-		a.queueRefresh(id, true, 0)
+		if coalesceRunningRefresh {
+			a.queueRefresh(id, true, 0)
+		} else {
+			a.queueRefreshIfIdle(id, true, 0)
+		}
 	}
 	if anchorShouldBePinned(ts) {
 		a.ensureCurrentAnchorPinnedLocked(ctx, ts)
@@ -52,7 +64,7 @@ func (a *App) reconcileAnchorControls(ctx context.Context, id int) {
 	defer lock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 || ts.State == state.TerminalClosed {
+	if !ok || ts.Collapsed || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 || ts.State == state.TerminalClosed {
 		return
 	}
 	if _, err := a.Telegram.EditReplyMarkup(ctx, ts.AnchorChatID, ts.AnchorMessageID, a.anchorMarkup(ts)); err != nil && !telegram.IsMessageNotModified(err) && !isTelegramAnchorUnavailable(err) {
@@ -240,7 +252,7 @@ func neutralAnchorImage(dir string) (string, error) {
 }
 
 func anchorShouldBePinned(ts state.TerminalSession) bool {
-	return ts.State == state.TerminalRunning && ts.WatchEnabled && ts.AnchorMessageID != 0
+	return !ts.Collapsed && ts.State == state.TerminalRunning && ts.WatchEnabled && ts.AnchorMessageID != 0
 }
 
 func (a *App) retiredAnchorText(ts state.TerminalSession) string {

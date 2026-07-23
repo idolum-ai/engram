@@ -62,9 +62,9 @@ func (a *App) switchAnchorMode(ctx context.Context, raw string) actionResult {
 	}
 	a.presentationMu.Unlock()
 	for _, session := range sessions {
-		if session.State == state.TerminalRunning && session.WatchEnabled {
-			a.reconcileAnchorPresentation(ctx, session.ID)
-			a.queueRefresh(session.ID, true, 0)
+		current, ok := a.Store.FindSession(session.ID)
+		if ok && current.State == state.TerminalRunning && current.WatchEnabled {
+			a.reconcileAnchorPresentationAfterModeChange(ctx, current.ID)
 		}
 	}
 	return actionResult{Outcome: actionOK, Message: "switching to " + mode + " mode"}

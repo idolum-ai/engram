@@ -120,19 +120,29 @@ exports a bounded recent tail, not an unbounded full audit file.
   spam while a failed delivery remains eligible for retry.
 - Session state persists the canonical anchor, at most one predecessor awaiting
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
-  pin state. Restart resets pin knowledge and reconciles presentation without
-  discarding canonical ownership.
-- Startup queues one immediate render for each active watched anchor. This
-  restores process-local conversational continuity and exact numbered file
+  pin state. It separately persists one collapsed-shelf identity and the
+  sessions belonging to it, any inert prospective anchor awaiting activation,
+  any pending collapse whose original anchor remains canonical, and any
+  replaced shelf awaiting retirement. Failed compensation for an inert
+  prospective message is retained in a bounded cleanup ledger. No shelf or restored anchor
+  becomes actionable before its identity is durable. Restart resets pin
+  knowledge and reconciles active anchors, pending restores, shelf replacements,
+  and predecessor cleanup without discarding terminal ownership.
+- Startup queues one immediate render for each expanded active watched anchor.
+  This restores process-local conversational continuity and exact numbered file
   bindings even when the tmux frame itself has not changed across restart.
+  Collapsed sessions remain capture-quiet while the shelf is reconciled.
 - If the state file is corrupt, Engram must preserve a timestamped corrupt
   backup and durably create a fresh state file. Legacy JSON remains readable;
   absent fields receive defaults, and legacy raw captures are omitted from the
   next saved file.
 - A state schema newer than the running binary supports must fail open without
   rewriting or down-stamping the file.
-- State schema v15 persists `anchor_mode`, the canonical anchor presentation
-  format, boot-incarnation and bounded recovery-ledger metadata, the latest
+- State schema v17 persists `anchor_mode`, the canonical anchor presentation
+  format, collapsed membership and the bounded shared-shelf identity, pin,
+  render, retry, pending-collapse, pending-restore, and
+  predecessor-retirement state, plus bounded inert-message cleanup ownership,
+  boot-incarnation and bounded recovery-ledger metadata, the latest
   conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,
   and a bounded stale-alias set used only to reject confusing replies. It binds each watch to
@@ -156,8 +166,8 @@ exports a bounded recent tail, not an unbounded full audit file.
 
 ## Degradation
 
-- If the model provider fails, retain the canonical anchor and report the failure without
-  inventing a conversational rendering.
+- If the model provider fails, retain the canonical anchor and report the
+  failure without inventing a conversational rendering.
 - A guide refresh stages the current capture for deterministic reference
   rendering, but advances its capture hash, persisted summary, and in-memory
   conversational continuity only after Telegram accepts the canonical edit and
@@ -165,9 +175,38 @@ exports a bounded recent tail, not an unbounded full audit file.
   remains eligible for polling retry.
 - A failed mode-migration send leaves the old anchor canonical. A failed
   predecessor retirement or pin transition remains eligible for retry.
+- Collapsing first publishes or updates the shared shelf, atomically records
+  membership only after the shelf has controls and a confirmed pin, then
+  retires and unpins the individual anchor. Until that promotion, the original
+  anchor remains canonical and accepts replies normally. Collapse waits for
+  already accepted model, capture, Chromium, voice, and disclosure work for
+  that session instead of allowing it to cross the hidden-state boundary.
+  Retired replies are stale. If retirement is interrupted, restart retries it
+  while the shelf remains recoverable. Closing during a pending restoration
+  retains cleanup ownership and any rate-limit deadline until the inert
+  prospective message is retired. Expansion publishes each prospective
+  text anchor inertly, persists and pins that inert identity, commits its
+  canonical reply route, and only then exposes controls. A controls failure
+  atomically returns the member to the shelf and defers another attempt. The
+  pending-restore marker remains durable between canonical promotion and
+  controls confirmation, so restart can complete that phase even if rollback
+  itself could not be persisted. Engram leaves the shelf available until every
+  member is restored. Only then is
+  the shelf removed. Normal rendering is queued after cached anchors exist.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
-  update state. Rate limits do not trigger replacement amplification, and
-  unchanged edits count as success.
+  update state. A missing prospective restored anchor is abandoned durably so
+  the next `➕ Show` can create a replacement. Rate limits establish one shared
+  shelf deadline, stop the current multi-session operation, and do not trigger
+  replacement or cleanup amplification. The Telegram client also applies a
+  reported `retry_after` to newly starting outbound requests across concurrent
+  work, and a sleeping retry cannot bypass a longer deadline established by a
+  concurrent request. Rate limits from callback answers also establish that
+  outbound deadline without delaying otherwise healthy callback answers.
+  Unchanged edits count as success.
+- If both the current shelf and its predecessor are unavailable, Engram retires
+  the failed replacement through the ordinary delete/unpin path before creating
+  one fresh shelf. An uneditable but still-existing message therefore retains
+  cleanup ownership until its stale controls and pin are removed.
 - Chromium readiness controls both snapshot startup and whether guide anchors
   expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session

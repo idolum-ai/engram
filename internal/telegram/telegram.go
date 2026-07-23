@@ -277,11 +277,19 @@ func (c *Client) GetUpdates(ctx context.Context, offset int, timeout int) ([]Upd
 }
 
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
-	return c.sendMessage(ctx, chatID, text, replyTo, markup, "")
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "", false)
 }
 
 func (c *Client) SendHTMLMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
-	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML")
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML", false)
+}
+
+func (c *Client) SendSilentMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "", true)
+}
+
+func (c *Client) SendSilentHTMLMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup) (Message, error) {
+	return c.sendMessage(ctx, chatID, text, replyTo, markup, "HTML", true)
 }
 
 func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int) error {
@@ -290,7 +298,7 @@ func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageID int)
 	return c.postJSON(ctx, "deleteMessage", body, &out)
 }
 
-func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string) (Message, error) {
+func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, replyTo int, markup *InlineKeyboardMarkup, parseMode string, silent bool) (Message, error) {
 	body := map[string]any{
 		"chat_id":              chatID,
 		"text":                 clampText(text),
@@ -304,6 +312,9 @@ func (c *Client) sendMessage(ctx context.Context, chatID int64, text string, rep
 	}
 	if parseMode != "" {
 		body["parse_mode"] = parseMode
+	}
+	if silent {
+		body["disable_notification"] = true
 	}
 	var out Message
 	return out, c.postJSON(ctx, "sendMessage", body, &out)
@@ -544,6 +555,7 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 	if options.Raw {
 		actions = append(actions, Button("📄 Raw", fmt.Sprintf("raw:%d", sessionID)))
 	}
+	actions = append(actions, Button("➖ Hide", fmt.Sprintf("collapse:%d", sessionID)))
 	rows := [][]InlineKeyboardButton{actions}
 	if options.FileToken != "" && options.FileCount > 0 {
 		files := make([]InlineKeyboardButton, 0, options.FileCount)
@@ -570,6 +582,12 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
+func CollapsedShelfMarkup() *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("➕ Show", "expand-all:0"),
+	}}}
+}
+
 func ClearMarkup() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
 }
@@ -592,8 +610,9 @@ func RecoveryPlanMarkup(actions []SessionAction) *InlineKeyboardMarkup {
 }
 
 type SessionAction struct {
-	ID    int
-	Token string
+	ID        int
+	Token     string
+	CloseOnly bool
 }
 
 func CloseConfirmationMarkup(token string) *InlineKeyboardMarkup {
@@ -609,10 +628,12 @@ func SessionListMarkup(actions []SessionAction, attachTargets []AttachTarget) *I
 	}
 	rows := make([][]InlineKeyboardButton, 0, len(actions)+len(attachTargets))
 	for _, action := range actions {
-		rows = append(rows, []InlineKeyboardButton{
-			Button(fmt.Sprintf("▶ %d", action.ID), fmt.Sprintf("session-watch:%d:%s", action.ID, action.Token)),
-			Button(fmt.Sprintf("✕ %d", action.ID), fmt.Sprintf("session-close:%d:%s", action.ID, action.Token)),
-		})
+		row := make([]InlineKeyboardButton, 0, 2)
+		if !action.CloseOnly {
+			row = append(row, Button(fmt.Sprintf("▶ %d", action.ID), fmt.Sprintf("session-watch:%d:%s", action.ID, action.Token)))
+		}
+		row = append(row, Button(fmt.Sprintf("✕ %d", action.ID), fmt.Sprintf("session-close:%d:%s", action.ID, action.Token)))
+		rows = append(rows, row)
 	}
 	for _, target := range attachTargets {
 		rows = append(rows, []InlineKeyboardButton{Button("↪ "+target.Label, "attach:"+target.Target)})
@@ -655,20 +676,32 @@ func (c *Client) do(ctx context.Context, method string, outbound bool, newReques
 		defer c.releaseOutbound()
 	}
 
+	var satisfiedThrough time.Time
 	for attempt := 0; ; attempt++ {
 		if outbound {
-			if err := c.waitOutboundTurn(ctx); err != nil {
+			if err := c.waitOutboundTurn(ctx, satisfiedThrough); err != nil {
 				return err
 			}
 		}
+		satisfiedThrough = time.Time{}
 		req, err := newRequest()
 		if err != nil {
 			return c.requestError(method, "could not create request")
 		}
 		err = c.doOnce(ctx, method, req, out)
 		var telegramErr *Error
-		if !errors.As(err, &telegramErr) || !telegramErr.IsRateLimited() || attempt >= maxRateLimitRetries {
+		rateLimited := errors.As(err, &telegramErr) && telegramErr.IsRateLimited()
+		if !rateLimited || attempt >= maxRateLimitRetries {
+			if rateLimited && telegramErr.RetryAfter > 0 {
+				_ = c.deferOutbound(telegramErr.RetryAfter)
+			}
 			return err
+		}
+		if telegramErr.RetryAfter > 0 {
+			deadline := c.deferOutbound(telegramErr.RetryAfter)
+			if outbound {
+				satisfiedThrough = deadline
+			}
 		}
 		if telegramErr.RetryAfter <= 0 || telegramErr.RetryAfter > maxRetryAfter {
 			return err
@@ -891,11 +924,21 @@ func safeDocumentFilename(filename string) string {
 
 func isOutboundMethod(method string) bool {
 	switch method {
-	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageMedia", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage", "deleteMessage":
+	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageMedia", "editMessageReplyMarkup", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage", "deleteMessage":
 		return true
 	default:
 		return false
 	}
+}
+
+func (c *Client) deferOutbound(delay time.Duration) time.Time {
+	deadline := time.Now().Add(delay)
+	c.outboundMu.Lock()
+	if deadline.After(c.nextOutbound) {
+		c.nextOutbound = deadline
+	}
+	c.outboundMu.Unlock()
+	return deadline
 }
 
 func (c *Client) acquireOutbound(ctx context.Context) error {
@@ -914,15 +957,14 @@ func (c *Client) releaseOutbound() {
 	<-c.outboundSlots
 }
 
-func (c *Client) waitOutboundTurn(ctx context.Context) error {
-	if c.outboundInterval <= 0 {
-		return nil
-	}
+func (c *Client) waitOutboundTurn(ctx context.Context, satisfiedThrough time.Time) error {
 	for {
 		c.outboundMu.Lock()
 		now := time.Now()
-		if !now.Before(c.nextOutbound) {
-			c.nextOutbound = now.Add(c.outboundInterval)
+		if !now.Before(c.nextOutbound) || (!satisfiedThrough.IsZero() && !c.nextOutbound.After(satisfiedThrough)) {
+			if c.outboundInterval > 0 {
+				c.nextOutbound = now.Add(c.outboundInterval)
+			}
 			c.outboundMu.Unlock()
 			return nil
 		}

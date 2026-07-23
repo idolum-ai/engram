@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
@@ -36,6 +37,78 @@ func TestSwitchAnchorModePersistsOnlyAvailableMode(t *testing.T) {
 	}
 }
 
+func TestSwitchAnchorModeDefersCollapsedPresentationWork(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AnchorChatID = 100
+		session.AnchorMessageID = 77
+		session.AnchorFormat = anchorFormatText
+		session.AnchorPinned = true
+		session.AnchorPinKnown = true
+		session.Collapsed = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.mode = config.AnchorModeGuide
+	app.guideAvailable = true
+	app.snapshotReady = true
+
+	result := app.switchAnchorMode(context.Background(), config.AnchorModeSnapshot)
+	if !result.OK() || app.anchorMode() != config.AnchorModeSnapshot {
+		t.Fatalf("switch result=%#v mode=%q", result, app.anchorMode())
+	}
+	app.summaryMu.Lock()
+	queued := app.summaryQueued[id] || app.summaryRunning[id]
+	app.summaryMu.Unlock()
+	if queued {
+		t.Fatal("mode switch queued presentation work for a collapsed anchor")
+	}
+}
+
+func TestSwitchAnchorModeCoalescesRefreshBehindRunningOldModeWork(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		initialMode  string
+		targetMode   string
+		anchorFormat string
+	}{
+		{name: "guide to snapshot", initialMode: config.AnchorModeGuide, targetMode: config.AnchorModeSnapshot, anchorFormat: anchorFormatText},
+		{name: "snapshot to guide", initialMode: config.AnchorModeSnapshot, targetMode: config.AnchorModeGuide, anchorFormat: anchorFormatSnapshot},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+			if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+				session.AnchorChatID = 100
+				session.AnchorMessageID = 77
+				session.AnchorFormat = test.anchorFormat
+				session.AnchorPinned = true
+				session.AnchorPinKnown = true
+			}); err != nil {
+				t.Fatal(err)
+			}
+			app.mode = test.initialMode
+			app.guideAvailable = true
+			app.snapshotReady = true
+			app.summaryMu.Lock()
+			app.ensureSummaryQueuesLocked()
+			app.summaryRunning[id] = true
+			app.summaryDue[id] = time.Now()
+			app.summaryMu.Unlock()
+
+			result := app.switchAnchorMode(context.Background(), test.targetMode)
+			if !result.OK() || app.anchorMode() != test.targetMode {
+				t.Fatalf("switch result=%#v mode=%q", result, app.anchorMode())
+			}
+			app.summaryMu.Lock()
+			queued, forced := app.summaryQueued[id], app.summaryForce[id]
+			app.summaryMu.Unlock()
+			if !queued || !forced {
+				t.Fatalf("post-switch refresh queued=%v forced=%v, want coalesced forced refresh", queued, forced)
+			}
+		})
+	}
+}
+
 func TestModeTextDistinguishesConfiguredGuideFromReadyChromium(t *testing.T) {
 	app := &App{
 		Config:         config.Config{LLMProvider: config.LLMProviderAnthropic, AnthropicModel: config.DefaultAnthropicModel},
@@ -59,7 +132,7 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	ts := state.TerminalSession{ID: 7, State: state.TerminalRunning, AnchorFormat: "text"}
 	app := &App{mode: config.AnchorModeGuide, snapshotReady: true}
 	guide := app.anchorMarkup(ts)
-	if got := guide.InlineKeyboard[0]; len(got) != 2 || got[1].CallbackData != "snapshot:7" {
+	if got := guide.InlineKeyboard[0]; len(got) != 3 || got[1].CallbackData != "snapshot:7" || got[2].CallbackData != "collapse:7" {
 		t.Fatalf("guide actions = %#v", got)
 	}
 	if len(guide.InlineKeyboard) != 2 {
@@ -69,7 +142,7 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	app.guideAvailable = true
 	ts.AnchorFormat = "snapshot"
 	snapshot := app.anchorMarkup(ts)
-	if got := snapshot.InlineKeyboard[0]; len(got) != 3 || got[1].CallbackData != "voice:7" || got[2].CallbackData != "raw:7" {
+	if got := snapshot.InlineKeyboard[0]; len(got) != 4 || got[1].CallbackData != "voice:7" || got[2].CallbackData != "raw:7" || got[3].CallbackData != "collapse:7" {
 		t.Fatalf("snapshot actions = %#v", got)
 	}
 	if len(snapshot.InlineKeyboard) != 3 || snapshot.InlineKeyboard[2][0].CallbackData != "key:7:left" {
@@ -77,7 +150,7 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	}
 	app.guideAvailable = false
 	withoutGuide := app.anchorMarkup(ts)
-	if got := withoutGuide.InlineKeyboard[0]; len(got) != 2 || got[1].CallbackData != "raw:7" {
+	if got := withoutGuide.InlineKeyboard[0]; len(got) != 3 || got[1].CallbackData != "raw:7" || got[2].CallbackData != "collapse:7" {
 		t.Fatalf("unavailable alternate leaked into markup: %#v", got)
 	}
 	if len(withoutGuide.InlineKeyboard) != 3 {

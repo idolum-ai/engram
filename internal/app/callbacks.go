@@ -38,6 +38,39 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		return "skipped_unknown_callback"
 	}
 	switch parts[0] {
+	case "collapse":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		ts, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		msg := *cb.Message
+		msg.From = &cb.From
+		return a.queueCallbackTransfer(ctx, cb.ID, "moving to collapsed sessions", "Engram is busy; try Hide again",
+			msg, "Hide stopped before it completed; try again after Engram restarts.", func(workerCtx context.Context) {
+				result := a.collapseAnchor(workerCtx, ts)
+				if !result.OK() {
+					a.replyTransferFailure(workerCtx, msg, result.Message)
+				}
+			})
+	case "expand-all":
+		shelf, status := a.validateCollapsedShelfCallback(ctx, cb)
+		if status != "" {
+			return status
+		}
+		msg := *cb.Message
+		msg.From = &cb.From
+		return a.queueCallbackTransfer(ctx, cb.ID, "restoring sessions", "Engram is busy; try Show again",
+			msg, "Show stopped before it completed; try again after Engram restarts.", func(workerCtx context.Context) {
+				result := a.expandCollapsedShelf(workerCtx, shelf)
+				if !result.OK() {
+					a.replyTransferFailure(workerCtx, msg, result.Message)
+				}
+			})
 	case "refresh":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {
@@ -259,7 +292,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		}
 		msg := *cb.Message
 		msg.From = &cb.From
-		return a.download(ctx, msg, path).status("callback")
+		return a.downloadAnchorFile(ctx, msg, validated, token, index, path).status("callback")
 	case "session-watch":
 		id, _, status := a.validateSessionListCallback(ctx, cb, parts[1])
 		if status != "" {
@@ -389,6 +422,36 @@ func resolveAnchorFile(ts state.TerminalSession, token string, index int) (strin
 	return ts.AnchorFiles[index-1], true
 }
 
+func (a *App) queueCallbackTransfer(
+	ctx context.Context,
+	callbackID, acceptedText, busyText string,
+	message telegram.Message,
+	droppedText string,
+	work func(context.Context),
+) string {
+	proceed := make(chan bool, 1)
+	if !a.queueTransferWithDrop(
+		func(workerCtx context.Context) {
+			if <-proceed {
+				work(workerCtx)
+			}
+		},
+		func(workerCtx context.Context) {
+			if <-proceed {
+				a.replyTransferFailure(workerCtx, message, droppedText)
+			}
+		},
+	) {
+		return callbackAnswerStatus(a.answerCallback(ctx, callbackID, busyText), "callback_state_failed")
+	}
+	answered := a.answerCallback(ctx, callbackID, acceptedText)
+	proceed <- answered
+	if !answered {
+		return "callback_telegram_failed"
+	}
+	return "callback_ok"
+}
+
 func (a *App) callbackAuthorized(cb telegram.CallbackQuery) bool {
 	return cb.From.ID == a.Config.TelegramAllowedUserID && cb.Message != nil && cb.Message.Chat.ID == a.Config.TelegramChatID
 }
@@ -407,7 +470,26 @@ func (a *App) validateAnchorCallback(ctx context.Context, cb telegram.CallbackQu
 		}
 		return state.TerminalSession{}, "callback_user_error"
 	}
+	if ts.Collapsed {
+		if !a.answerCallback(ctx, cb.ID, "Tap ➕ Show on the Collapsed sessions shelf") {
+			return state.TerminalSession{}, "callback_telegram_failed"
+		}
+		return state.TerminalSession{}, "callback_user_error"
+	}
 	return ts, ""
+}
+
+func (a *App) validateCollapsedShelfCallback(ctx context.Context, cb telegram.CallbackQuery) (state.CollapsedShelf, string) {
+	shelf := a.Store.Snapshot().CollapsedShelf
+	current := shelf != nil && cb.Message != nil && shelf.ChatID == cb.Message.Chat.ID && shelf.MessageID == cb.Message.MessageID
+	retiring := shelf != nil && cb.Message != nil && shelf.RetiringChatID == cb.Message.Chat.ID && shelf.RetiringMessageID == cb.Message.MessageID
+	if !current && !retiring {
+		if !a.answerCallback(ctx, cb.ID, "collapsed shelf moved; use the newer message") {
+			return state.CollapsedShelf{}, "callback_telegram_failed"
+		}
+		return state.CollapsedShelf{}, "callback_user_error"
+	}
+	return *shelf, ""
 }
 
 func callbackAnswerStatus(answered bool, status string) string {

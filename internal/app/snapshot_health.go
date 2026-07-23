@@ -137,13 +137,17 @@ func (a *App) snapshotRecoveryLoop(ctx context.Context) {
 				continue
 			}
 			for _, session := range a.Store.Snapshot().TerminalSessions {
-				if session.State == state.TerminalRunning && session.WatchEnabled {
+				if snapshotRecoveryEligible(session) {
 					a.queueRefresh(session.ID, true, 0)
 					a.reconcileAnchorPresentation(ctx, session.ID)
 				}
 			}
 		}
 	}
+}
+
+func snapshotRecoveryEligible(session state.TerminalSession) bool {
+	return session.State == state.TerminalRunning && session.WatchEnabled && !session.Collapsed
 }
 
 func (a *App) markSnapshotsUnavailable(err error, now time.Time, observedGeneration uint64) bool {

@@ -38,8 +38,10 @@ Telegram is Engram's only user interface.
 
 ## Delivery
 
-- `/sessions` always replies and groups tracked work as lost, then active by
-  recency. Presentation mode and model output do not alter this ordering.
+- `/sessions` always replies and groups tracked work as lost, collapsed, then
+  active by recency. Presentation mode and model output do not alter this
+  ordering. Collapsed rows retain only their explicit close action; watching is
+  restored through the shared shelf, and each row names `➕ Show` as that path.
 - Telegram send/edit failures are audited. Empty keyboards are not attached to
   new messages; explicit empty keyboards may retire controls.
 - Anchor HTML falls back to plain text only for formatting errors. Rate limits
@@ -47,7 +49,7 @@ Telegram is Engram's only user interface.
 - Initial delivery failure leaves a session unwatched. A replacement anchor is
   created only when Telegram says the canonical message is uneditable.
 - Bot API errors are typed and sanitized; `retry_after` is honored with bounded,
-  context-aware retry.
+  context-aware retry and defers newly starting outbound Bot API work.
 - Model prose is not trusted as Telegram markup. Engram escapes raw HTML and
   converts only its supported Markdown subset.
 
@@ -75,6 +77,43 @@ Telegram is Engram's only user interface.
   `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
   is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
   `🗣️ Talk` only when a guide is configured.
+- Every running canonical anchor exposes `➖ Hide`. It moves that session into one
+  shared pinned `Collapsed sessions` shelf, retires and unpins the individual
+  anchor, and records the old reply route as stale. The shelf contains bounded
+  recent-first, phone-bounded one-line summaries, explicitly identifies them
+  as cached, and exposes exactly one
+  `➕ Show` control; replying to it does
+  not route input because it represents more than one pane.
+- `➖ Hide` acknowledges immediately and performs the shelf handoff outside the
+  Telegram update loop. The individual anchor remains live until the shelf is
+  rendered and pinned; a delayed or failed handoff therefore does not remove
+  the current terminal route.
+- `➕ Show` acknowledges immediately and restores all shelf members outside the
+  Telegram update loop. Engram first persists and pins each inert prospective
+  anchor, then promotes it to the canonical reply route before exposing its
+  controls. If the controls cannot be exposed, Engram returns that member to
+  the still-actionable shelf instead of leaving an inert canonical anchor. A
+  durable pending marker spans canonical promotion through controls
+  confirmation so restart can complete an interrupted handoff. Replies to an
+  inert prospective anchor are stale and direct the user back to `➕ Show`.
+  Each restored anchor is visibly identified as cached while its ordinary
+  guide or snapshot refresh is queued. A restored lost session instead names
+  its recovery controls and does not promise a refresh. Partial restoration
+  leaves the shelf active for the remaining members. After every member has a
+  canonical anchor, Engram removes the shelf.
+- Hide and Show reserve bounded worker capacity before their success
+  acknowledgement. A full queue answers the callback with an explicit retry
+  instruction and performs no synchronous chat send. During shelf replacement,
+  the still-visible predecessor's Show callback resolves to the current shelf
+  until predecessor retirement succeeds. Replies to either visible shelf
+  identity receive the same shelf-specific guidance. If the message that
+  initiated asynchronous Hide or Show disappears before a failure can be
+  reported, Engram sends that failure unthreaded instead. If shutdown cancels
+  accepted work before a transfer slot opens, Engram uses the same bounded
+  cleanup window to report that the action stopped.
+- Collapse is persisted attention state, not a third anchor mode. Collapsed
+  sessions perform no model, Chromium, terminal capture, raw/dump, or alternate
+  view work and expose no files or key controls until expanded.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
 - `📄 Raw` uploads the process-local plain-text companion for the most recent

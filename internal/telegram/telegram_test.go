@@ -86,6 +86,19 @@ func TestSessionListMarkupWithSessions(t *testing.T) {
 	}
 }
 
+func TestSessionListMarkupOffersOnlyCloseForCollapsedSession(t *testing.T) {
+	t.Parallel()
+
+	got := SessionListMarkup([]SessionAction{{ID: 5, Token: "quiet", CloseOnly: true}}, nil)
+	if got == nil || len(got.InlineKeyboard) != 1 || len(got.InlineKeyboard[0]) != 1 {
+		t.Fatalf("SessionListMarkup(collapsed) = %#v", got)
+	}
+	button := got.InlineKeyboard[0][0]
+	if button.Text != "✕ 5" || button.CallbackData != "session-close:5:quiet" {
+		t.Fatalf("collapsed session action = %#v", button)
+	}
+}
+
 func TestSessionListMarkupWithAttachTargets(t *testing.T) {
 	t.Parallel()
 
@@ -99,7 +112,7 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	t.Parallel()
 
 	got := AnchorMarkup(7, AnchorMarkupOptions{Image: true, Arrows: true})
-	if got == nil || len(got.InlineKeyboard) != 3 || len(got.InlineKeyboard[0]) != 2 {
+	if got == nil || len(got.InlineKeyboard) != 3 || len(got.InlineKeyboard[0]) != 3 {
 		t.Fatalf("AnchorMarkup rows = %#v, want action, key, and arrow rows", got)
 	}
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
@@ -107,6 +120,9 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	}
 	if got.InlineKeyboard[0][1].Text != "🖼️ View" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
+	}
+	if got.InlineKeyboard[0][2].Text != "➖ Hide" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
+		t.Fatalf("collapse callback = %#v", got.InlineKeyboard[0][2])
 	}
 	want := []InlineKeyboardButton{
 		{Text: "Esc", CallbackData: "key:7:esc"},
@@ -152,7 +168,7 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	t.Parallel()
 
 	got := AnchorMarkup(7, AnchorMarkupOptions{Voice: true, Raw: true, Arrows: true})
-	if got == nil || len(got.InlineKeyboard[0]) != 3 {
+	if got == nil || len(got.InlineKeyboard[0]) != 4 {
 		t.Fatalf("AnchorMarkup actions = %#v", got)
 	}
 	if want := (InlineKeyboardButton{Text: "🗣️ Talk", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
@@ -161,6 +177,18 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
 	if got.InlineKeyboard[0][2] != want {
 		t.Fatalf("raw action = %#v, want %#v", got.InlineKeyboard[0][2], want)
+	}
+	if got.InlineKeyboard[0][3].CallbackData != "collapse:7" {
+		t.Fatalf("collapse action = %#v", got.InlineKeyboard[0][3])
+	}
+}
+
+func TestCollapsedShelfMarkupOffersOnlyExpandAll(t *testing.T) {
+	t.Parallel()
+	got := CollapsedShelfMarkup()
+	want := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "➕ Show", CallbackData: "expand-all:0"}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("collapsed shelf markup = %#v, want %#v", got, want)
 	}
 }
 
@@ -214,8 +242,9 @@ func TestAllInlineButtonLabelsFitCompactBudget(t *testing.T) {
 			Image: true, Voice: true, Raw: true, Arrows: true,
 			FileToken: "0123456789abcdef", FileCount: 4,
 		}),
-		"recover":       RecoverMarkup(123456789, true),
-		"recovery plan": RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
+		"collapsed shelf": CollapsedShelfMarkup(),
+		"recover":         RecoverMarkup(123456789, true),
+		"recovery plan":   RecoveryPlanMarkup([]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}}),
 		"sessions": SessionListMarkup(
 			[]SessionAction{{ID: 1, Token: "aaa"}, {ID: 123456789, Token: "bbb"}},
 			[]AttachTarget{{Label: "long-session:window-name", Target: "long-session:window-name"}},
@@ -416,6 +445,26 @@ func TestPinAndUnpinChatMessagePayloads(t *testing.T) {
 	}
 	if requests[1]["chat_id"] != float64(5) || requests[1]["message_id"] != float64(10) {
 		t.Fatalf("unpin payload = %#v", requests[1])
+	}
+}
+
+func TestSilentMessagePayloadsDisableNotifications(t *testing.T) {
+	t.Parallel()
+	var requests []map[string]any
+	client := New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, decodeRequestMap(t, req))
+		return jsonResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 8, "chat": map[string]any{"id": 5}}}), nil
+	})}
+	if _, err := client.SendSilentMessage(context.Background(), 5, "plain", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SendSilentHTMLMessage(context.Background(), 5, "<b>html</b>", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0]["disable_notification"] != true || requests[1]["disable_notification"] != true || requests[1]["parse_mode"] != "HTML" {
+		t.Fatalf("silent payloads = %#v", requests)
 	}
 }
 
@@ -860,6 +909,112 @@ func TestRateLimitAboveBoundIsNotRetried(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestRateLimitDefersNewOutboundMarkupEdits(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return jsonResponseStatus(t, http.StatusTooManyRequests, map[string]any{
+			"ok":          false,
+			"error_code":  429,
+			"description": "Too Many Requests",
+			"parameters":  map[string]any{"retry_after": 31},
+		}), nil
+	})}
+	if _, err := client.SendMessage(context.Background(), 5, "hello", 0, nil); !IsRateLimited(err) {
+		t.Fatalf("first error = %v, want rate limited", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := client.EditReplyMarkup(ctx, 5, 12, ClearMarkup()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("markup error = %v, want deadline while shared flood wait is active", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want no request during shared flood wait", calls.Load())
+	}
+}
+
+func TestCallbackRateLimitDefersNewOutboundWork(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return jsonResponseStatus(t, http.StatusTooManyRequests, map[string]any{
+			"ok":          false,
+			"error_code":  429,
+			"description": "Too Many Requests",
+			"parameters":  map[string]any{"retry_after": 31},
+		}), nil
+	})}
+	if err := client.AnswerCallback(context.Background(), "callback", "ok"); !IsRateLimited(err) {
+		t.Fatalf("callback error = %v, want rate limited", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := client.SendMessage(ctx, 5, "hello", 0, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send error = %v, want deadline behind callback flood wait", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want no outbound call during callback flood wait", calls.Load())
+	}
+}
+
+func TestSleepingRetryHonorsAConcurrentLongerFloodWait(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	sleeping := make(chan struct{})
+	releaseSleep := make(chan struct{})
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.retrySleep = func(context.Context, time.Duration) error {
+		close(sleeping)
+		<-releaseSleep
+		return nil
+	}
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			return jsonResponseStatus(t, http.StatusTooManyRequests, map[string]any{
+				"ok":          false,
+				"error_code":  429,
+				"description": "Too Many Requests",
+				"parameters":  map[string]any{"retry_after": 1},
+			}), nil
+		}
+		return jsonResponse(t, map[string]any{
+			"ok": true,
+			"result": map[string]any{
+				"message_id": 12,
+				"chat":       map[string]any{"id": 5},
+			},
+		}), nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.SendMessage(ctx, 5, "hello", 0, nil)
+		result <- err
+	}()
+	<-sleeping
+	client.deferOutbound(30 * time.Second)
+	close(releaseSleep)
+
+	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("retry error = %v, want deadline behind longer shared wait", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want no retry through longer shared wait", calls.Load())
 	}
 }
 

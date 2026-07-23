@@ -40,6 +40,10 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 		a.reply(ctx, msg, "session not found")
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
+	if ts.Collapsed {
+		a.reply(ctx, msg, collapsedSessionActionMessage)
+		return actionResult{Outcome: actionUserError, Message: collapsedSessionActionMessage}
+	}
 	kind := "raw"
 	if full {
 		kind = "dump"
@@ -61,7 +65,7 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 	identityLock := a.sessionMutex(ts.ID)
 	identityLock.Lock()
 	current, ok := a.Store.FindSession(ts.ID)
-	if !ok || current.State != state.TerminalRunning || !current.WatchEnabled || !sameTerminalBinding(current, ts) {
+	if !ok || current.Collapsed || current.State != state.TerminalRunning || !current.WatchEnabled || !sameTerminalBinding(current, ts) {
 		identityLock.Unlock()
 		a.reply(ctx, msg, "capture canceled: the session changed while this request was queued")
 		return
@@ -128,7 +132,7 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 	}
 	defer os.Remove(path)
 	latest, ok := a.Store.FindSession(ts.ID)
-	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, ts) {
+	if !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, ts) {
 		a.reply(ctx, msg, "capture canceled: the session changed before upload")
 		return
 	}
@@ -154,7 +158,7 @@ func (a *App) uploadAccessibleSnapshotFrame(ctx context.Context, msg telegram.Me
 	sessionLock := a.sessionMutex(expected.ID)
 	sessionLock.Lock()
 	current, ok := a.Store.FindSession(expected.ID)
-	if !ok || current.State != state.TerminalRunning || !mediaAnchorFormat(current.AnchorFormat) || current.AnchorMessageID != expected.AnchorMessageID || !sameTerminalBinding(current, expected) {
+	if !ok || current.Collapsed || current.State != state.TerminalRunning || !mediaAnchorFormat(current.AnchorFormat) || current.AnchorMessageID != expected.AnchorMessageID || !sameTerminalBinding(current, expected) {
 		sessionLock.Unlock()
 		a.reply(ctx, msg, "raw view canceled: the session changed while this request was queued")
 		return
@@ -352,6 +356,52 @@ func (a *App) download(ctx context.Context, msg telegram.Message, path string) a
 		}
 	}) {
 		source.Close()
+		a.reply(ctx, msg, "send unavailable: Engram is stopping or the transfer queue is full")
+		return actionResult{Outcome: actionStateFailed, Message: "upload transfer unavailable"}
+	}
+	return actionResult{Outcome: actionOK, Message: "file send queued"}
+}
+
+func (a *App) downloadAnchorFile(ctx context.Context, msg telegram.Message, expected state.TerminalSession, token string, index int, path string) actionResult {
+	if !a.queueTransfer(func(transferCtx context.Context) {
+		disclosureLock := a.disclosureMutex(expected.ID)
+		disclosureLock.Lock()
+		defer disclosureLock.Unlock()
+
+		sessionLock := a.sessionMutex(expected.ID)
+		sessionLock.Lock()
+		current, ok := a.Store.FindSession(expected.ID)
+		currentPath, pathOK := resolveAnchorFile(current, token, index)
+		deliverable := ok && !current.Collapsed && current.State == state.TerminalRunning &&
+			current.AnchorChatID == expected.AnchorChatID && current.AnchorMessageID == expected.AnchorMessageID &&
+			sameTerminalBinding(current, expected) && pathOK && currentPath == path
+		sessionLock.Unlock()
+		if !deliverable {
+			a.reply(transferCtx, msg, "File send canceled: the session card changed while this request was queued.")
+			return
+		}
+
+		source, info, err := openDownloadSource(path)
+		if err != nil {
+			a.reply(transferCtx, msg, err.Error())
+			return
+		}
+		defer source.Close()
+		if info.Size() > telegramCloudUploadMax {
+			a.reply(transferCtx, msg, fmt.Sprintf("send rejected: %d bytes exceeds Telegram's %d-byte cloud Bot API limit", info.Size(), telegramCloudUploadMax))
+			return
+		}
+		snapshot, err := a.snapshotDownloadSource(source)
+		if err != nil {
+			a.reply(transferCtx, msg, "send snapshot error: "+err.Error())
+			return
+		}
+		defer os.Remove(snapshot)
+		filename := filepath.Base(path)
+		if _, err := a.Telegram.SendDocumentNamed(transferCtx, a.Config.TelegramChatID, snapshot, filename, filename); err != nil {
+			a.reply(transferCtx, msg, "send error: "+err.Error())
+		}
+	}) {
 		a.reply(ctx, msg, "send unavailable: Engram is stopping or the transfer queue is full")
 		return actionResult{Outcome: actionStateFailed, Message: "upload transfer unavailable"}
 	}
@@ -560,6 +610,10 @@ func minInt64(a, b int64) int64 {
 }
 
 func (a *App) queueTransfer(fn func(context.Context)) bool {
+	return a.queueTransferWithDrop(fn, nil)
+}
+
+func (a *App) queueTransferWithDrop(fn, dropped func(context.Context)) bool {
 	ctx := a.workerContext()
 	select {
 	case <-ctx.Done():
@@ -580,6 +634,9 @@ func (a *App) queueTransfer(fn func(context.Context)) bool {
 			defer func() { <-a.transferQueue }()
 		}
 		if !acquireSlot(ctx, a.transferSlots) {
+			if dropped != nil {
+				dropped(ctx)
+			}
 			return
 		}
 		defer releaseSlot(a.transferSlots)

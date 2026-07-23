@@ -63,10 +63,15 @@ func (a *App) queueSnapshot(ts state.TerminalSession) actionResult {
 }
 
 func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession) {
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
+	disclosureLock := a.disclosureMutex(requested.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	lock := a.sessionMutex(requested.ID)
 	lock.Lock()
 	current, ok := a.Store.FindSession(requested.ID)
-	if !ok || current.State == state.TerminalClosed || current.State == state.TerminalLost || !sameTerminalBinding(current, requested) {
+	if !ok || current.Collapsed || current.State == state.TerminalClosed || current.State == state.TerminalLost || !sameTerminalBinding(current, requested) {
 		lock.Unlock()
 		a.snapshotNotice(ctx, requested.ID, "Could not print the window because the session moved or closed.")
 		return
@@ -90,6 +95,14 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	a.processCapturedFrame(ctx, current, capture)
 
+	lock.Lock()
+	latestBeforeRender, ok := a.Store.FindSession(current.ID)
+	if !ok || latestBeforeRender.Collapsed || !sameTerminalBinding(latestBeforeRender, current) {
+		lock.Unlock()
+		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": current.ID})
+		return
+	}
+	lock.Unlock()
 	generation, renderReady := a.acquireSnapshotRender(ctx)
 	if !renderReady {
 		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image because Chromium is recovering or the request timed out; check /status.")
@@ -116,14 +129,12 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	defer os.Remove(pngPath)
 
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	anchorLock := a.anchorMutex(current.ID)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, current.ID)
 	latest, ok := a.Store.FindSession(current.ID)
-	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 {
+	if a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 {
 		_ = a.audit("terminal.snapshot", "superseded", map[string]any{"session_id": current.ID})
 		return
 	}
@@ -140,7 +151,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	updated := false
 	if _, _, err := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if !a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && guideAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 {
+		if !a.snapshotAnchors() && !session.Collapsed && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && guideAnchorFormat(session.AnchorFormat) && session.RetiringAnchorMessageID == 0 {
 			recordAlternateMessage(session, "snapshot", message.MessageID)
 			updated = true
 		}
@@ -191,7 +202,7 @@ func (a *App) deleteSnapshotReply(ctx context.Context, chatID int64, messageID i
 
 func (a *App) snapshotNotice(ctx context.Context, id int, text string) {
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorChatID == 0 || ts.AnchorMessageID == 0 || a.Telegram == nil {
+	if !ok || ts.Collapsed || ts.AnchorChatID == 0 || ts.AnchorMessageID == 0 || a.Telegram == nil {
 		return
 	}
 	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), snapshotNoticeTimeout)

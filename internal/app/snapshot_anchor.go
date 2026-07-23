@@ -80,13 +80,18 @@ func (a *App) snapshotTextFrame(ts state.TerminalSession) (snapshotTextFrame, bo
 func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	manual := a.consumeManualRefresh(id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.TmuxPaneID == "" || ts.State != state.TerminalRunning || !ts.WatchEnabled || ts.AnchorMessageID == 0 {
+	if !ok || ts.TmuxPaneID == "" || ts.State != state.TerminalRunning || !ts.WatchEnabled || ts.AnchorMessageID == 0 || ts.Collapsed {
 		return
 	}
 	ready, _ := a.snapshotRenderHealth()
 	if !ready || a.Snapshots == nil {
 		return
 	}
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
+	disclosureLock := a.disclosureMutex(id)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	if !a.finishSnapshotMigration(ctx, id) {
 		return
 	}
@@ -99,7 +104,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	}
 	attemptedAt := time.Now().UTC()
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == ts.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled {
+		if !session.Collapsed && session.AnchorMessageID == ts.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled {
 			session.LastSnapshotAttemptAt = attemptedAt
 		}
 	}); err != nil {
@@ -113,7 +118,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	identityLock := a.sessionMutex(id)
 	identityLock.Lock()
 	current, currentOK := a.Store.FindSession(id)
-	if !currentOK || current.State != state.TerminalRunning || !current.WatchEnabled || current.AnchorMessageID == 0 {
+	if !currentOK || current.Collapsed || current.State != state.TerminalRunning || !current.WatchEnabled || current.AnchorMessageID == 0 {
 		identityLock.Unlock()
 		return
 	}
@@ -173,17 +178,12 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	}
 	defer os.Remove(pngPath)
 
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
-	disclosureLock := a.disclosureMutex(id)
-	disclosureLock.Lock()
-	defer disclosureLock.Unlock()
 	anchorLock := a.anchorMutex(id)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	latest, ok := a.Store.FindSession(id)
-	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, current) {
+	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || latest.Collapsed || latest.AnchorMessageID == 0 || latest.RetiringAnchorMessageID != 0 || !sameTerminalBinding(latest, current) {
 		return
 	}
 	// The image was rendered with current.Title. A concurrent rename must retry
@@ -214,7 +214,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		oldFormat := firstNonEmpty(latest.AnchorFormat, "text")
 		replaced := false
 		updated, _, stateErr := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-			if a.snapshotAnchors() && session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
+			if a.snapshotAnchors() && !session.Collapsed && session.AnchorMessageID == oldID && session.RetiringAnchorMessageID == 0 && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
 				session.AnchorChatID = msg.Chat.ID
 				session.AnchorMessageID = msg.MessageID
 				session.AnchorFormat = "snapshot"
@@ -255,7 +255,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 
 	updated := false
 	stored, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		if a.snapshotAnchors() && session.AnchorMessageID == latest.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
+		if a.snapshotAnchors() && !session.Collapsed && session.AnchorMessageID == latest.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled && sameTerminalBinding(*session, latest) {
 			session.AnchorFormat = "snapshot"
 			session.LastSnapshotCaptureHash = captureHash
 			session.LastRenderHash = sha(captureHash + "\x00" + caption)

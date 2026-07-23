@@ -54,8 +54,10 @@ hosts. Engram does not resize windows that the user explicitly attaches.
 
 The editable Telegram anchor is the core product surface. It should identify
 the session, show what the pane is doing, and make the next useful action easy.
-Each session has exactly one canonical, pinned anchor. Older anchors become
-inert; two actionable representations of one pane are a product error.
+Each expanded session has exactly one canonical, pinned anchor. A collapsed
+session instead has one inert shelf entry and no individual route. Older
+anchors become inert; two actionable representations of one pane are a product
+error.
 
 A guide anchor uses compact conversational prose. A snapshot anchor uses a
 bounded, ANSI-preserving terminal image. Both retain deterministic references
@@ -63,6 +65,22 @@ and small allowlisted controls, including exact numbered handoffs for files
 already visible in the pane.
 Snapshot anchors keep the exact delivered frame's literal text one tap away
 through a `📄 Raw` attachment; the image is primary, not exclusive.
+
+Running anchors may move into one shared pinned shelf when the user needs less
+visual weight. Each collapsed session contributes one cached status line, but
+the shelf is deliberately not a terminal input route. Its only control is
+`➕ Show`, which restores every member as an individual canonical anchor in the
+selected guide or snapshot mode. Restoration acknowledges immediately, makes
+each prospective anchor durable and pinned while inert, promotes its reply
+identity, and only then grants controls. If those controls cannot be exposed,
+the member returns to the shelf instead of remaining as an inert canonical
+card. The handoff remains explicitly pending until those controls are durable.
+Collapse follows the reciprocal rule: the individual anchor remains
+canonical until the shared shelf is rendered and pinned. The shelf identifies
+its summaries as cached because hiding a session also stops observation. If
+both a shelf and its predecessor disappear, Engram creates one fresh shelf
+instead of oscillating between dead identities. Messages that still exist but
+cannot be edited remain owned until their controls and pin are retired.
 
 ### Fast input path
 
@@ -86,7 +104,18 @@ itself a reason to create a notification.
 
 Automatic anchor edits should be intentionally slow and only occur for changed
 captures. Manual refresh should be immediate. `/sessions` is a concise map:
-lost work first, then active work by recency.
+lost work first, then collapsed and active work by recency.
+
+Collapsed sessions should spend less attention and no presentation machinery.
+They omit captures, model calls, images, references, evidence selection, reply
+routes, raw/dump disclosure, and terminal-key controls. Expansion first restores cached summaries as
+ordinary anchors with their cached state labeled, then lets bounded background
+rendering make each one current without waiting for the rest of the shelf.
+Incomplete handoffs retain durable ownership of prospective and retiring
+Telegram messages, including retry deadlines, so restart or rate limiting
+cannot silently create a second route or abandon cleanup. A collapse also
+waits for already accepted presentation or voice work for that session; once
+membership is promoted, no such work remains in flight.
 
 ### One frame, two presentations
 
@@ -218,8 +247,8 @@ may redraw an unchanged frame because the user explicitly asked to look now.
 
 ### Recoverable local service
 
-State under `~/.engram` should recover sessions, canonical anchors, selected
-mode, attachments, poll position, and recent errors after restart. Diagnostics
+State under `~/.engram` should recover sessions, canonical anchors, the shared
+collapsed shelf and its members, selected mode, attachments, poll position, and recent errors after restart. Diagnostics
 must be available locally and through Telegram without exposing configured
 credentials.
 

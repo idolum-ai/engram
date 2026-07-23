@@ -30,8 +30,12 @@ func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) action
 	}
 	ts, targetState, found := a.Store.FindReplyTarget(msg.Chat.ID, msg.ReplyToMessage.MessageID)
 	if found && targetState == state.ReplyTargetStale {
-		a.reply(ctx, msg, staleAlternateReply(ts.ID))
+		a.reply(ctx, msg, a.staleReply(ts))
 		return actionResult{Outcome: actionUserError, Message: "stale voice reply"}
+	}
+	if !found && a.isCollapsedShelfMessage(msg.Chat.ID, msg.ReplyToMessage.MessageID) {
+		a.reply(ctx, msg, collapsedShelfReplyMessage)
+		return actionResult{Outcome: actionUserError, Message: "collapsed shelf has no voice route"}
 	}
 	if !found || targetState != state.ReplyTargetCurrent {
 		a.reply(ctx, msg, "Session not found for this voice reply. Reply to a session's latest view or live anchor.")
@@ -61,8 +65,11 @@ func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) action
 }
 
 func (a *App) routeVoicePathReply(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int) {
+	disclosureLock := a.disclosureMutex(expected.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	if !a.voiceReplyStillDeliverable(msg.Chat.ID, targetMessageID, expected) {
-		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		a.reply(ctx, msg, a.staleReply(expected))
 		return
 	}
 	file, err := a.Telegram.GetFile(ctx, msg.Voice.FileID)
@@ -93,7 +100,7 @@ func (a *App) routeVoicePathReply(ctx context.Context, msg telegram.Message, exp
 	if !a.voiceReplyStillDeliverableLocked(msg.Chat.ID, targetMessageID, expected) {
 		anchorLock.Unlock()
 		sessionLock.Unlock()
-		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		a.reply(ctx, msg, a.staleReply(expected))
 		return
 	}
 	attachmentErr := a.Store.AddAttachment(state.Attachment{
@@ -131,8 +138,11 @@ func (a *App) routeVoicePathReply(ctx context.Context, msg telegram.Message, exp
 }
 
 func (a *App) transcribeVoiceReply(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int) {
+	disclosureLock := a.disclosureMutex(expected.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	if !a.voiceReplyStillDeliverable(msg.Chat.ID, targetMessageID, expected) {
-		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		a.reply(ctx, msg, a.staleReply(expected))
 		return
 	}
 	file, err := a.Telegram.GetFile(ctx, msg.Voice.FileID)
@@ -151,7 +161,7 @@ func (a *App) transcribeVoiceReply(ctx context.Context, msg telegram.Message, ex
 		return
 	}
 	if !a.voiceReplyStillDeliverable(msg.Chat.ID, targetMessageID, expected) {
-		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		a.reply(ctx, msg, a.staleReply(expected))
 		return
 	}
 	transcript, err := a.Transcriber.Transcribe(ctx, path)
@@ -199,7 +209,7 @@ func (a *App) deliverVoiceInput(ctx context.Context, msg telegram.Message, expec
 	if !a.voiceReplyStillDeliverableLocked(msg.Chat.ID, targetMessageID, expected) {
 		anchorLock.Unlock()
 		sessionLock.Unlock()
-		a.reply(ctx, msg, staleAlternateReply(expected.ID))
+		a.reply(ctx, msg, a.staleReply(expected))
 		return actionResult{Outcome: actionUserError, Message: "voice reply target changed"}
 	}
 	completion := a.sendInputExpectedLocked(ctx, expected.ID, text, "voice", true, &expected)

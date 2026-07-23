@@ -141,6 +141,40 @@ func TestVoiceReplyIsRevalidatedAfterTranscription(t *testing.T) {
 	}
 }
 
+func TestVoiceTranscriptionHoldsDisclosureBoundary(t *testing.T) {
+	app, _, transcriber, _ := newVoiceInputTestApp(t)
+	transcriber.started = make(chan struct{})
+	transcriber.release = make(chan struct{})
+	if status := app.handleUpdate(context.Background(), voiceReplyUpdate(108, 77)); status != "voice_reply_ok" {
+		t.Fatalf("status = %q", status)
+	}
+	select {
+	case <-transcriber.started:
+	case <-time.After(time.Second):
+		t.Fatal("transcription did not start")
+	}
+	acquired := make(chan struct{})
+	go func() {
+		lock := app.disclosureMutex(1)
+		lock.Lock()
+		close(acquired)
+		lock.Unlock()
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("voice transcription released the disclosure boundary before model work finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(transcriber.release)
+	select {
+	case <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("disclosure boundary remained locked after transcription")
+	}
+	app.transferWG.Wait()
+	app.refreshWG.Wait()
+}
+
 func TestVoiceTranscriptionFailureSendsNoInputAndRemovesTemporaryFile(t *testing.T) {
 	app, runner, transcriber, telegramCalls := newVoiceInputTestApp(t)
 	transcriber.err = errors.New("provider rejected audio")
@@ -361,12 +395,14 @@ func voiceReplyUpdate(messageID, targetID int) telegram.Update {
 }
 
 type fakeVoiceTranscriber struct {
-	text  string
-	audio string
-	path  string
-	calls int
-	hook  func()
-	err   error
+	text    string
+	audio   string
+	path    string
+	calls   int
+	hook    func()
+	err     error
+	started chan struct{}
+	release chan struct{}
 }
 
 func (f *fakeVoiceTranscriber) Transcribe(_ context.Context, path string) (string, error) {
@@ -377,6 +413,12 @@ func (f *fakeVoiceTranscriber) Transcribe(_ context.Context, path string) (strin
 		return "", err
 	}
 	f.audio = string(body)
+	if f.started != nil {
+		close(f.started)
+	}
+	if f.release != nil {
+		<-f.release
+	}
 	if f.hook != nil {
 		f.hook()
 	}

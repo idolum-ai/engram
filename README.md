@@ -605,8 +605,10 @@ cannot submit input while staging text without Enter. Expanded
 shell input may still appear in tmux history and Engram's existing bounded,
 best-effort-redacted recovery previews.
 
-Each watched session has exactly one live anchor, and Engram silently pins those
-anchors for navigation. Controls belong only to the canonical anchor. Replies
+Each expanded watched session has exactly one live anchor, and Engram silently
+pins those anchors for navigation. Collapsed sessions surrender their
+individual anchor while they share the shelf. Controls belong only to a
+canonical anchor or to the shelf itself. Replies
 route through that anchor and through the session's latest conversational and
 snapshot replies. The latest upstream-signal notification is another reply
 route to the same outer pane. Replacing any alternate of the same kind makes
@@ -614,7 +616,18 @@ its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
 Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
 `Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
-directional row.
+directional row. Tap `➖ Hide` to move a running anchor into one shared, pinned
+`Collapsed sessions` shelf. The shelf gives each collapsed session one quiet
+status line, labels those lines as cached, and exposes a single `➕ Show`
+control. Engram keeps the individual anchor live until the shelf has been
+successfully rendered and pinned; a delayed or failed collapse therefore never
+removes the current reply route. `➕ Show` acknowledges
+immediately, then restores every collapsed session as its own live anchor in
+the currently selected guide or snapshot mode. Replies to retired individual
+anchors are stale and point back to `➕ Show`; they never reach tmux.
+If restored controls cannot be exposed, that session returns to the shelf
+instead of becoming an inert card. Lost sessions name their recovery controls
+without promising a terminal refresh that cannot run.
 
 ### Nested environments
 
@@ -731,7 +744,26 @@ automatically at most once every ten seconds. This includes visible files that
 appear or disappear without changing terminal text. The refresh button renders
 immediately, including an unchanged capture. If a guide is configured, `🗣️` replies with a one-off
 conversational rendering without replacing the canonical image. `/sessions`
-lists lost sessions first, then active sessions by recency in either mode.
+lists lost sessions first, then collapsed and active sessions by recency in
+either mode. Collapsed entries retain a close button but have no individual
+watch button; the shelf's `➕ Show` restores them together.
+
+The collapsed shelf is an attention boundary, not a third presentation mode.
+Collapsed sessions do no capture, model, Chromium, raw/dump, or alternate-view
+work and expose no reply or terminal-control route. Their persisted summaries and terminal identities
+survive restart. Expansion first reconstructs ordinary anchors from that cached
+state, then queues each eligible bounded refresh as soon as that anchor is
+durable. Prospective anchors are persisted and pinned while inert, promoted to
+the reply route, and only then given controls; a controls failure returns the
+member to the shelf. The shelf remains recoverable
+until every individual anchor has been restored. Collapse and expansion
+callbacks acknowledge without waiting for Telegram delivery. Rate-limited
+retirement work, including cleanup after a session is closed mid-restoration,
+keeps its message identity and retry deadline across restart. Failed cleanup
+of any newly sent inert message is likewise retained in a bounded ledger.
+Hide waits for already accepted capture, rendering, and voice work for that
+session before completing, so presentation spend does not cross into the
+collapsed state.
 
 `/mode guide` and `/mode snapshot` begin changing the canonical presentation
 when the target capability is available. Existing anchors migrate in the
