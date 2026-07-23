@@ -118,10 +118,10 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	if got.InlineKeyboard[0][0].CallbackData != "refresh:7" {
 		t.Fatalf("refresh callback = %q", got.InlineKeyboard[0][0].CallbackData)
 	}
-	if got.InlineKeyboard[0][1].Text != "🖼️ View" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
+	if got.InlineKeyboard[0][1].Text != "🖼️" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
-	if got.InlineKeyboard[0][2].Text != "➖ Hide" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
+	if got.InlineKeyboard[0][2].Text != "➖" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
 		t.Fatalf("collapse callback = %#v", got.InlineKeyboard[0][2])
 	}
 	want := []InlineKeyboardButton{
@@ -173,9 +173,9 @@ func TestModelCapableAnchorMarkupUsesOneKeyboardEntryPoint(t *testing.T) {
 	}
 	want := []InlineKeyboardButton{
 		{Text: "🔄", CallbackData: "refresh:7"},
-		{Text: "🖼️ View", CallbackData: "snapshot:7"},
+		{Text: "🖼️", CallbackData: "snapshot:7"},
 		{Text: "⌨️", CallbackData: "keyboard:7"},
-		{Text: "➖ Hide", CallbackData: "collapse:7"},
+		{Text: "➖", CallbackData: "collapse:7"},
 	}
 	if !reflect.DeepEqual(got.InlineKeyboard[0], want) {
 		t.Fatalf("primary action row = %#v, want %#v", got.InlineKeyboard[0], want)
@@ -220,10 +220,10 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 	if got == nil || len(got.InlineKeyboard[0]) != 4 {
 		t.Fatalf("AnchorMarkup actions = %#v", got)
 	}
-	if want := (InlineKeyboardButton{Text: "🗣️ Talk", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
+	if want := (InlineKeyboardButton{Text: "🗣️", CallbackData: "voice:7"}); got.InlineKeyboard[0][1] != want {
 		t.Fatalf("explain action = %#v, want %#v", got.InlineKeyboard[0][1], want)
 	}
-	want := InlineKeyboardButton{Text: "📄 Raw", CallbackData: "raw:7"}
+	want := InlineKeyboardButton{Text: "📄", CallbackData: "raw:7"}
 	if got.InlineKeyboard[0][2] != want {
 		t.Fatalf("raw action = %#v, want %#v", got.InlineKeyboard[0][2], want)
 	}

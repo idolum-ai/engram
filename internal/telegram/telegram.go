@@ -562,18 +562,18 @@ type AnchorMarkupOptions struct {
 func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMarkup {
 	actions := []InlineKeyboardButton{Button("🔄", fmt.Sprintf("refresh:%d", sessionID))}
 	if options.Image {
-		actions = append(actions, Button("🖼️ View", fmt.Sprintf("snapshot:%d", sessionID)))
+		actions = append(actions, Button("🖼️", fmt.Sprintf("snapshot:%d", sessionID)))
 	}
 	if options.Voice {
-		actions = append(actions, Button("🗣️ Talk", fmt.Sprintf("voice:%d", sessionID)))
+		actions = append(actions, Button("🗣️", fmt.Sprintf("voice:%d", sessionID)))
 	}
 	if options.Raw {
-		actions = append(actions, Button("📄 Raw", fmt.Sprintf("raw:%d", sessionID)))
+		actions = append(actions, Button("📄", fmt.Sprintf("raw:%d", sessionID)))
 	}
 	if options.Keyboard {
 		actions = append(actions, Button("⌨️", fmt.Sprintf("keyboard:%d", sessionID)))
 	}
-	actions = append(actions, Button("➖ Hide", fmt.Sprintf("collapse:%d", sessionID)))
+	actions = append(actions, Button("➖", fmt.Sprintf("collapse:%d", sessionID)))
 	rows := [][]InlineKeyboardButton{actions}
 	if options.FileToken != "" && options.FileCount > 0 {
 		files := make([]InlineKeyboardButton, 0, options.FileCount)
