@@ -676,14 +676,14 @@ func (c *Client) do(ctx context.Context, method string, outbound bool, newReques
 		defer c.releaseOutbound()
 	}
 
-	skipOutboundWait := false
+	var satisfiedThrough time.Time
 	for attempt := 0; ; attempt++ {
-		if outbound && !skipOutboundWait {
-			if err := c.waitOutboundTurn(ctx); err != nil {
+		if outbound {
+			if err := c.waitOutboundTurn(ctx, satisfiedThrough); err != nil {
 				return err
 			}
 		}
-		skipOutboundWait = false
+		satisfiedThrough = time.Time{}
 		req, err := newRequest()
 		if err != nil {
 			return c.requestError(method, "could not create request")
@@ -693,12 +693,12 @@ func (c *Client) do(ctx context.Context, method string, outbound bool, newReques
 		rateLimited := errors.As(err, &telegramErr) && telegramErr.IsRateLimited()
 		if !rateLimited || attempt >= maxRateLimitRetries {
 			if outbound && rateLimited && telegramErr.RetryAfter > 0 {
-				c.deferOutbound(telegramErr.RetryAfter)
+				_ = c.deferOutbound(telegramErr.RetryAfter)
 			}
 			return err
 		}
 		if outbound && telegramErr.RetryAfter > 0 {
-			c.deferOutbound(telegramErr.RetryAfter)
+			satisfiedThrough = c.deferOutbound(telegramErr.RetryAfter)
 		}
 		if telegramErr.RetryAfter <= 0 || telegramErr.RetryAfter > maxRetryAfter {
 			return err
@@ -706,9 +706,6 @@ func (c *Client) do(ctx context.Context, method string, outbound bool, newReques
 		if err := c.sleepRetry(ctx, telegramErr.RetryAfter); err != nil {
 			return err
 		}
-		// This request already observed its retry delay. Other outbound work
-		// still waits on the shared deadline established above.
-		skipOutboundWait = true
 	}
 }
 
@@ -931,13 +928,14 @@ func isOutboundMethod(method string) bool {
 	}
 }
 
-func (c *Client) deferOutbound(delay time.Duration) {
+func (c *Client) deferOutbound(delay time.Duration) time.Time {
 	deadline := time.Now().Add(delay)
 	c.outboundMu.Lock()
 	if deadline.After(c.nextOutbound) {
 		c.nextOutbound = deadline
 	}
 	c.outboundMu.Unlock()
+	return deadline
 }
 
 func (c *Client) acquireOutbound(ctx context.Context) error {
@@ -956,11 +954,11 @@ func (c *Client) releaseOutbound() {
 	<-c.outboundSlots
 }
 
-func (c *Client) waitOutboundTurn(ctx context.Context) error {
+func (c *Client) waitOutboundTurn(ctx context.Context, satisfiedThrough time.Time) error {
 	for {
 		c.outboundMu.Lock()
 		now := time.Now()
-		if !now.Before(c.nextOutbound) {
+		if !now.Before(c.nextOutbound) || (!satisfiedThrough.IsZero() && !c.nextOutbound.After(satisfiedThrough)) {
 			if c.outboundInterval > 0 {
 				c.nextOutbound = now.Add(c.outboundInterval)
 			}

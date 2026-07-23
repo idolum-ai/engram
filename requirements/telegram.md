@@ -92,7 +92,9 @@ Telegram is Engram's only user interface.
   Telegram update loop. Engram first persists and pins each inert prospective
   anchor, then promotes it to the canonical reply route before exposing its
   controls. If the controls cannot be exposed, Engram returns that member to
-  the still-actionable shelf instead of leaving an inert canonical anchor.
+  the still-actionable shelf instead of leaving an inert canonical anchor. A
+  durable pending marker spans canonical promotion through controls
+  confirmation so restart can complete an interrupted handoff.
   Each restored anchor is visibly identified as cached while its ordinary
   guide or snapshot refresh is queued. A restored lost session instead names
   its recovery controls and does not promise a refresh. Partial restoration

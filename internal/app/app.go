@@ -773,7 +773,9 @@ func (a *App) reply(ctx context.Context, msg telegram.Message, text string) {
 }
 
 func (a *App) replyTransferFailure(ctx context.Context, msg telegram.Message, text string) {
-	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID, nil); err == nil {
+	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := a.Telegram.SendMessage(noticeCtx, msg.Chat.ID, text, msg.MessageID, nil); err == nil {
 		return
 	} else {
 		_ = a.audit("telegram.send", "failed", map[string]any{"reply_to": msg.MessageID, "error": err.Error()})
@@ -781,7 +783,7 @@ func (a *App) replyTransferFailure(ctx context.Context, msg telegram.Message, te
 			return
 		}
 	}
-	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, 0, nil); err != nil {
+	if _, err := a.Telegram.SendMessage(noticeCtx, msg.Chat.ID, text, 0, nil); err != nil {
 		_ = a.audit("telegram.send", "fallback_failed", map[string]any{"error": err.Error()})
 	}
 }

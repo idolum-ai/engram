@@ -187,8 +187,11 @@ exports a bounded recent tail, not an unbounded full audit file.
   prospective message is retired. Expansion publishes each prospective
   text anchor inertly, persists and pins that inert identity, commits its
   canonical reply route, and only then exposes controls. A controls failure
-  atomically returns the member to the shelf and defers another attempt. It
-  leaves the shelf available until every member is restored. Only then is
+  atomically returns the member to the shelf and defers another attempt. The
+  pending-restore marker remains durable between canonical promotion and
+  controls confirmation, so restart can complete that phase even if rollback
+  itself could not be persisted. Engram leaves the shelf available until every
+  member is restored. Only then is
   the shelf removed. Normal rendering is queued after cached anchors exist.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. A missing prospective restored anchor is abandoned durably so
@@ -196,7 +199,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   shelf deadline, stop the current multi-session operation, and do not trigger
   replacement or cleanup amplification. The Telegram client also applies a
   reported `retry_after` to newly starting outbound requests across concurrent
-  work. Unchanged edits count as success.
+  work, and a sleeping retry cannot bypass a longer deadline established by a
+  concurrent request. Unchanged edits count as success.
 - Chromium readiness controls both snapshot startup and whether guide anchors
   expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session

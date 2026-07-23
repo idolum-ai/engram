@@ -735,6 +735,8 @@ func TestUnavailableReplacementShelfRecoversVisiblePredecessor(t *testing.T) {
 			}), nil
 		case "/botTOKEN/pinChatMessage":
 			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		case "/botTOKEN/deleteMessage":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
 		default:
 			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
 		}
@@ -744,7 +746,7 @@ func TestUnavailableReplacementShelfRecoversVisiblePredecessor(t *testing.T) {
 
 	app.reconcileCollapsedShelf(context.Background())
 	recovered := app.Store.Snapshot().CollapsedShelf
-	if recovered == nil || recovered.MessageID != 88 || recovered.RetiringMessageID != 0 ||
+	if recovered == nil || recovered.MessageID != 88 || recovered.RetiringMessageID != 89 ||
 		recovered.PinKnown || recovered.Pinned {
 		t.Fatalf("recovered shelf = %#v paths=%#v", recovered, paths)
 	}
@@ -758,6 +760,7 @@ func TestUnavailableReplacementShelfRecoversVisiblePredecessor(t *testing.T) {
 		"/botTOKEN/editMessageText:89",
 		"/botTOKEN/editMessageText:88",
 		"/botTOKEN/pinChatMessage:88",
+		"/botTOKEN/deleteMessage:89",
 	}
 	if strings.Join(paths, "|") != strings.Join(want, "|") {
 		t.Fatalf("paths=%#v want=%#v", paths, want)
@@ -1086,7 +1089,9 @@ func TestTransferFailureFallsBackWhenOriginalAnchorDisappears(t *testing.T) {
 		}), nil
 	})}
 
-	app.replyTransferFailure(context.Background(), telegram.Message{
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	app.replyTransferFailure(canceled, telegram.Message{
 		MessageID: 77,
 		Chat:      telegram.Chat{ID: 100},
 	}, "anchor moved")
@@ -1211,6 +1216,57 @@ func TestPendingRestoreReconcilesAfterRestartBoundary(t *testing.T) {
 	}
 	if slices.Index(paths, "/botTOKEN/pinChatMessage") > slices.Index(paths, "/botTOKEN/editMessageReplyMarkup") {
 		t.Fatalf("restore controls preceded inert pin and durable promotion: %#v", paths)
+	}
+}
+
+func TestPromotedRestoreControlsReconcileAfterRestartBoundary(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	session, _ := app.Store.FindSession(id)
+	if _, committed, err := app.Store.CollapseSessionIntoShelf(id, session, state.CollapsedShelf{
+		ChatID: 100, MessageID: 88, Pinned: true, PinKnown: true,
+	}); err != nil || !committed {
+		t.Fatalf("collapse committed=%v err=%v", committed, err)
+	}
+	if _, begun, err := app.Store.BeginExpandSessionFromShelf(id, 88, 100, 89); err != nil || !begun {
+		t.Fatalf("begin restore committed=%v err=%v", begun, err)
+	}
+	if _, promoted, err := app.Store.FinishExpandSessionFromShelf(id, 100, 89); err != nil || !promoted {
+		t.Fatalf("promote restore committed=%v err=%v", promoted, err)
+	}
+	var paths []string
+	app.Telegram = telegram.New("TOKEN")
+	app.Telegram.BaseURL = "https://api.telegram.org/botTOKEN"
+	app.Telegram.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		switch req.URL.Path {
+		case "/botTOKEN/editMessageReplyMarkup":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{
+				"ok": true, "result": map[string]any{"message_id": body["message_id"], "chat": map[string]any{"id": 100}},
+			}), nil
+		case "/botTOKEN/deleteMessage":
+			return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+		default:
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+	})}
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	app.runCtx = runCtx
+
+	app.reconcileCollapsedShelf(context.Background())
+
+	current, _ := app.Store.FindSession(id)
+	if current.Collapsed || current.PendingRestore != nil || current.AnchorMessageID != 89 ||
+		app.Store.Snapshot().CollapsedShelf != nil {
+		t.Fatalf("reconciled session=%#v shelf=%#v paths=%#v", current, app.Store.Snapshot().CollapsedShelf, paths)
+	}
+	want := []string{"/botTOKEN/editMessageReplyMarkup", "/botTOKEN/deleteMessage"}
+	if strings.Join(paths, "|") != strings.Join(want, "|") {
+		t.Fatalf("paths=%#v want=%#v", paths, want)
 	}
 }
 
@@ -2001,7 +2057,8 @@ func TestCollapsedShelfMatchesSessionOrderAndMakesLossExplicit(t *testing.T) {
 	if lost < 0 || recent < 0 || older < 0 || !(lost < recent && recent < older) {
 		t.Fatalf("shelf order does not match /sessions: %q", rendered)
 	}
-	if !strings.Contains(rendered, "[3] lost · lost") || strings.Contains(rendered, "[3] lost · checks passed") {
+	if !strings.Contains(rendered, "[3] lost · lost - tap ➕ Show for recovery controls") ||
+		strings.Contains(rendered, "/sessions") || strings.Contains(rendered, "[3] lost · checks passed") {
 		t.Fatalf("lost shelf entry retained stale success prose: %q", rendered)
 	}
 }

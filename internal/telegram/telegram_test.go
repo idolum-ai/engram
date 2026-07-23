@@ -941,6 +941,55 @@ func TestRateLimitDefersNewOutboundMarkupEdits(t *testing.T) {
 	}
 }
 
+func TestSleepingRetryHonorsAConcurrentLongerFloodWait(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	sleeping := make(chan struct{})
+	releaseSleep := make(chan struct{})
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.retrySleep = func(context.Context, time.Duration) error {
+		close(sleeping)
+		<-releaseSleep
+		return nil
+	}
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			return jsonResponseStatus(t, http.StatusTooManyRequests, map[string]any{
+				"ok":          false,
+				"error_code":  429,
+				"description": "Too Many Requests",
+				"parameters":  map[string]any{"retry_after": 1},
+			}), nil
+		}
+		return jsonResponse(t, map[string]any{
+			"ok": true,
+			"result": map[string]any{
+				"message_id": 12,
+				"chat":       map[string]any{"id": 5},
+			},
+		}), nil
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.SendMessage(ctx, 5, "hello", 0, nil)
+		result <- err
+	}()
+	<-sleeping
+	client.deferOutbound(30 * time.Second)
+	close(releaseSleep)
+
+	if err := <-result; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("retry error = %v, want deadline behind longer shared wait", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want no retry through longer shared wait", calls.Load())
+	}
+}
+
 func TestMessageNotModifiedClassification(t *testing.T) {
 	t.Parallel()
 

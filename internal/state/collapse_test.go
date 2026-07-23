@@ -98,15 +98,19 @@ func TestCollapsedShelfLifecyclePersistsAndPreservesReplySafety(t *testing.T) {
 	if err != nil || !committed || expanded.Collapsed || expanded.AnchorMessageID != 99 {
 		t.Fatalf("finish expand = %#v committed=%v err=%v", expanded, committed, err)
 	}
-	if expanded.PendingRestore != nil {
-		t.Fatalf("finish retained pending restore: %#v", expanded.PendingRestore)
+	if expanded.PendingRestore == nil || expanded.PendingRestore.MessageID != 99 {
+		t.Fatalf("finish lost controls ownership: %#v", expanded.PendingRestore)
 	}
 	if repeated, repeatedCommit, repeatErr := reopened.FinishExpandSessionFromShelf(session.ID, 100, 99); repeatErr != nil || !repeatedCommit ||
-		repeated.Collapsed || repeated.AnchorMessageID != 99 {
+		repeated.Collapsed || repeated.AnchorMessageID != 99 || repeated.PendingRestore == nil {
 		t.Fatalf("repeat finish = %#v committed=%v err=%v", repeated, repeatedCommit, repeatErr)
 	}
 	if _, target, found := reopened.FindReplyTarget(100, 99); !found || target != ReplyTargetCurrent {
 		t.Fatalf("expanded reply target = %q, found=%v", target, found)
+	}
+	controlled, committed, err := reopened.FinishExpandedSessionControls(session.ID, 100, 99)
+	if err != nil || !committed || controlled.PendingRestore != nil {
+		t.Fatalf("finish controls = %#v committed=%v err=%v", controlled, committed, err)
 	}
 	for _, messageID := range []int{71, 72, 73} {
 		if _, target, found := reopened.FindReplyTarget(100, messageID); !found || target != ReplyTargetStale {
@@ -208,19 +212,33 @@ func TestExpandedSessionCanReturnToItsShelfWhenControlsFail(t *testing.T) {
 		t.Fatalf("finish committed=%v err=%v", finished, err)
 	}
 
-	returned, committed, err := store.ReturnExpandedSessionToShelf(session.ID, 88, 100, 99)
-	if err != nil || !committed || !returned.Collapsed || returned.PendingRestore != nil ||
-		returned.AnchorMessageID != 99 {
-		t.Fatalf("return = %#v committed=%v err=%v", returned, committed, err)
-	}
-	if _, target, found := store.FindReplyTarget(100, 99); !found || target != ReplyTargetStale {
-		t.Fatalf("returned anchor target=%q found=%v", target, found)
+	store.path = filepath.Join(dir, "missing", "state.json")
+	failed, committed, err := store.ReturnExpandedSessionToShelf(session.ID, 88, 100, 99)
+	if err == nil || committed || failed.Collapsed || failed.PendingRestore == nil {
+		t.Fatalf("failed return = %#v committed=%v err=%v", failed, committed, err)
 	}
 	reopened, err := Open(path, audit)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, _ := reopened.FindSession(session.ID)
+	if got.Collapsed || got.PendingRestore == nil || got.AnchorMessageID != 99 {
+		t.Fatalf("durable controls ownership = %#v", got)
+	}
+
+	returned, committed, err := reopened.ReturnExpandedSessionToShelf(session.ID, 88, 100, 99)
+	if err != nil || !committed || !returned.Collapsed || returned.PendingRestore != nil ||
+		returned.AnchorMessageID != 99 {
+		t.Fatalf("return = %#v committed=%v err=%v", returned, committed, err)
+	}
+	if _, target, found := reopened.FindReplyTarget(100, 99); !found || target != ReplyTargetStale {
+		t.Fatalf("returned anchor target=%q found=%v", target, found)
+	}
+	reopened, err = Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ = reopened.FindSession(session.ID)
 	if !got.Collapsed || got.AnchorMessageID != 99 || reopened.Snapshot().CollapsedShelf == nil {
 		t.Fatalf("reopened returned session=%#v shelf=%#v", got, reopened.Snapshot().CollapsedShelf)
 	}
@@ -311,7 +329,7 @@ func TestCollapsedShelfPredecessorCanBeRecoveredAfterReplacementLoss(t *testing.
 
 	recovered, committed, err := store.RecoverCollapsedShelfPredecessor(99)
 	if err != nil || !committed || recovered.ChatID != 100 || recovered.MessageID != 88 ||
-		recovered.RetiringChatID != 0 || recovered.RetiringMessageID != 0 ||
+		recovered.RetiringChatID != 100 || recovered.RetiringMessageID != 99 ||
 		recovered.LastRenderHash != "" || recovered.Pinned || recovered.PinKnown {
 		t.Fatalf("recover = %#v committed=%v err=%v", recovered, committed, err)
 	}
@@ -320,7 +338,7 @@ func TestCollapsedShelfPredecessorCanBeRecoveredAfterReplacementLoss(t *testing.
 		t.Fatal(err)
 	}
 	shelf := reopened.Snapshot().CollapsedShelf
-	if shelf == nil || shelf.MessageID != 88 || shelf.RetiringMessageID != 0 ||
+	if shelf == nil || shelf.MessageID != 88 || shelf.RetiringMessageID != 99 ||
 		shelf.LastRenderHash != "" || shelf.PinKnown {
 		t.Fatalf("reopened recovered shelf = %#v", shelf)
 	}

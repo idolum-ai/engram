@@ -74,7 +74,8 @@ selected guide or snapshot mode. Restoration acknowledges immediately, makes
 each prospective anchor durable and pinned while inert, promotes its reply
 identity, and only then grants controls. If those controls cannot be exposed,
 the member returns to the shelf instead of remaining as an inert canonical
-card. Collapse follows the reciprocal rule: the individual anchor remains
+card. The handoff remains explicitly pending until those controls are durable.
+Collapse follows the reciprocal rule: the individual anchor remains
 canonical until the shared shelf is rendered and pinned. The shelf identifies
 its summaries as cached because hiding a session also stops observation.
 

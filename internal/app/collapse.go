@@ -241,42 +241,58 @@ func (a *App) finishPendingRestoreLocked(ctx context.Context, session state.Term
 	if deadline := a.pendingRestoreRetryDeadline(session.ID, *pending); !deadline.IsZero() && time.Now().Before(deadline) {
 		return false
 	}
-	if err := a.Telegram.PinChatMessage(ctx, pending.ChatID, pending.MessageID); err != nil && !telegram.IsMessageAlreadyPinned(err) {
-		if isTelegramAnchorUnavailable(err) {
-			a.abandonPendingRestore(session, *pending, err)
+	restored := session
+	if session.Collapsed {
+		if err := a.Telegram.PinChatMessage(ctx, pending.ChatID, pending.MessageID); err != nil && !telegram.IsMessageAlreadyPinned(err) {
+			if isTelegramAnchorUnavailable(err) {
+				a.abandonPendingRestore(session, *pending, err)
+				return false
+			}
+			a.deferPendingRestoreRetry(session.ID, pending.MessageID, err)
 			return false
 		}
-		a.deferPendingRestoreRetry(session.ID, pending.MessageID, err)
-		return false
-	}
-	restored, committed, stateErr := a.Store.FinishExpandSessionFromShelf(session.ID, pending.ChatID, pending.MessageID)
-	if !committed {
-		if stateErr != nil {
-			_ = a.audit("state.collapsed_expand", "finish_failed", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
-			a.deferPendingRestoreRetry(session.ID, pending.MessageID, stateErr)
+		var committed bool
+		var stateErr error
+		restored, committed, stateErr = a.Store.FinishExpandSessionFromShelf(session.ID, pending.ChatID, pending.MessageID)
+		if !committed {
+			if stateErr != nil {
+				_ = a.audit("state.collapsed_expand", "finish_failed", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
+				a.deferPendingRestoreRetry(session.ID, pending.MessageID, stateErr)
+			}
+			return false
 		}
-		return false
+		if stateErr != nil {
+			_ = a.audit("state.collapsed_expand", "finish_durability_uncertain", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
+		}
 	}
-	if stateErr != nil {
-		_ = a.audit("state.collapsed_expand", "finish_durability_uncertain", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
-	}
-	a.pendingRestoreRetries.Delete(session.ID)
 	if _, err := a.Telegram.EditReplyMarkup(ctx, restored.AnchorChatID, restored.AnchorMessageID, a.anchorMarkup(restored)); err != nil && !telegram.IsMessageNotModified(err) {
 		_ = a.audit("telegram.collapsed_expand", "controls_failed", map[string]any{"session_id": session.ID, "message_id": restored.AnchorMessageID, "error": err.Error()})
 		shelf := a.Store.Snapshot().CollapsedShelf
 		if shelf != nil {
-			_, returned, stateErr := a.Store.ReturnExpandedSessionToShelf(
+			_, _, stateErr := a.Store.ReturnExpandedSessionToShelf(
 				restored.ID, shelf.MessageID, restored.AnchorChatID, restored.AnchorMessageID,
 			)
 			if stateErr != nil {
 				_ = a.audit("state.collapsed_expand", "controls_rollback_failed", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
 			}
-			if returned {
-				a.deferCollapsedShelfRetry(shelf.MessageID, err)
+			a.deferCollapsedShelfRetry(shelf.MessageID, err)
+		}
+		return false
+	}
+	_, committed, stateErr := a.Store.FinishExpandedSessionControls(restored.ID, restored.AnchorChatID, restored.AnchorMessageID)
+	if !committed {
+		if stateErr != nil {
+			_ = a.audit("state.collapsed_expand", "controls_finish_failed", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
+			if shelf := a.Store.Snapshot().CollapsedShelf; shelf != nil {
+				a.deferCollapsedShelfRetry(shelf.MessageID, stateErr)
 			}
 		}
 		return false
 	}
+	if stateErr != nil {
+		_ = a.audit("state.collapsed_expand", "controls_finish_durability_uncertain", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
+	}
+	a.pendingRestoreRetries.Delete(session.ID)
 	return true
 }
 
@@ -828,7 +844,7 @@ func (a *App) renderCollapsedLine(session state.TerminalSession) string {
 	title = truncateAtWord(title, 40)
 	summary := compactSummaryText(firstNonEmpty(session.LastSummary, compactFallbackSummary(session, tmux.StyledCapture{})))
 	if session.State == state.TerminalLost {
-		summary = "lost - restore the tmux pane from /sessions"
+		summary = "lost - tap ➕ Show for recovery controls"
 	}
 	line := fmt.Sprintf("[%d] %s", session.ID, title)
 	if summary != "" {
@@ -842,7 +858,7 @@ func (a *App) renderCollapsedLine(session state.TerminalSession) string {
 func collapsedShelfSessions(sessions []state.TerminalSession) []state.TerminalSession {
 	members := make([]state.TerminalSession, 0)
 	for _, session := range sessions {
-		if (session.Collapsed || session.PendingCollapse) && session.State != state.TerminalClosed {
+		if (session.Collapsed || session.PendingCollapse || session.PendingRestore != nil) && session.State != state.TerminalClosed {
 			members = append(members, session)
 		}
 	}
