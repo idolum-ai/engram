@@ -37,6 +37,7 @@ type State struct {
 	Version                     int                `json:"version"`
 	AnchorMode                  string             `json:"anchor_mode,omitempty"`
 	CollapsedShelf              *CollapsedShelf    `json:"collapsed_shelf,omitempty"`
+	PendingMessageCleanups      []MessageCleanup   `json:"pending_message_cleanups,omitempty"`
 	NextSessionID               int                `json:"next_session_id"`
 	LastUpdateID                int                `json:"last_update_id"`
 	LastPollAt                  time.Time          `json:"last_poll_at,omitempty"`
@@ -65,6 +66,13 @@ type CollapsedShelf struct {
 	RetiringChatID    int64     `json:"retiring_chat_id,omitempty"`
 	RetiringMessageID int       `json:"retiring_message_id,omitempty"`
 	RetiringRetryAt   time.Time `json:"retiring_retry_at,omitempty"`
+}
+
+type MessageCleanup struct {
+	ChatID      int64     `json:"chat_id"`
+	MessageID   int       `json:"message_id"`
+	RetryAt     time.Time `json:"retry_at,omitempty"`
+	RateLimited bool      `json:"rate_limited,omitempty"`
 }
 
 type RecoveryEvent struct {
@@ -242,6 +250,7 @@ const (
 	maxSeenUpstreamSignals  = 32
 	maxRecoveryEvents       = 24
 	maxRecoveryPlanMessages = 50
+	maxMessageCleanups      = 64
 	maxRecoveryCommandBytes = 512
 	maxRecoveryFieldBytes   = 4096
 	maxProcessedMessages    = 2_000
@@ -290,6 +299,7 @@ func ReadSnapshot(path string) (State, error) {
 	}
 	normalizeCollapsedShelf(&snapshot)
 	normalizeTerminalSessions(snapshot.TerminalSessions)
+	snapshot.PendingMessageCleanups = validMessageCleanups(snapshot.PendingMessageCleanups)
 	for index := range snapshot.TerminalSessions {
 		if snapshot.TerminalSessions[index].Origin != TerminalOriginCreated {
 			snapshot.TerminalSessions[index].Origin = TerminalOriginAttached
@@ -782,7 +792,6 @@ func (s *Store) BeginCollapseSessionIntoShelf(id int, expected TerminalSession, 
 		// The state transition changes shelf membership. Reconciliation records a
 		// render hash only after Telegram has confirmed the resulting text.
 		s.state.CollapsedShelf.LastRenderHash = ""
-		s.state.CollapsedShelf.RetryAt = time.Time{}
 		session.PendingCollapse = true
 		session.UpdatedAt = time.Now().UTC()
 		updated := cloneTerminalSession(*session)
@@ -1002,6 +1011,36 @@ func (s *Store) FinishExpandSessionFromShelf(id int, chatID int64, anchorMessage
 	return TerminalSession{}, false, nil
 }
 
+func (s *Store) AbandonPendingRestore(id int, chatID int64, messageID int) (TerminalSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if !session.Collapsed || session.PendingRestore == nil ||
+			session.PendingRestore.ChatID != chatID || session.PendingRestore.MessageID != messageID {
+			return cloneTerminalSession(*session), false, nil
+		}
+		before := cloneTerminalSession(*session)
+		recordStaleMessageID(session, messageID)
+		session.PendingRestore = nil
+		session.UpdatedAt = time.Now().UTC()
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return before, false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
 func (s *Store) FinishPendingRestoreRetirement(id int, chatID int64, messageID int) (TerminalSession, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1157,6 +1196,61 @@ func (s *Store) ClearCollapsedShelf(messageID int) (bool, error) {
 		return true, err
 	}
 	return true, nil
+}
+
+func (s *Store) RememberMessageCleanup(cleanup MessageCleanup) error {
+	if cleanup.ChatID == 0 || cleanup.MessageID <= 0 {
+		return fmt.Errorf("invalid message cleanup")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := append([]MessageCleanup(nil), s.state.PendingMessageCleanups...)
+	for i := range s.state.PendingMessageCleanups {
+		current := &s.state.PendingMessageCleanups[i]
+		if current.ChatID != cleanup.ChatID || current.MessageID != cleanup.MessageID {
+			continue
+		}
+		current.RetryAt = cleanup.RetryAt
+		current.RateLimited = cleanup.RateLimited
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state.PendingMessageCleanups = previous
+			}
+			return err
+		}
+		return nil
+	}
+	if len(s.state.PendingMessageCleanups) >= maxMessageCleanups {
+		return fmt.Errorf("message cleanup capacity of %d reached", maxMessageCleanups)
+	}
+	s.state.PendingMessageCleanups = append(s.state.PendingMessageCleanups, cleanup)
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state.PendingMessageCleanups = previous
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) FinishMessageCleanup(chatID int64, messageID int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := append([]MessageCleanup(nil), s.state.PendingMessageCleanups...)
+	for i, cleanup := range s.state.PendingMessageCleanups {
+		if cleanup.ChatID != chatID || cleanup.MessageID != messageID {
+			continue
+		}
+		s.state.PendingMessageCleanups = append(s.state.PendingMessageCleanups[:i], s.state.PendingMessageCleanups[i+1:]...)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state.PendingMessageCleanups = previous
+			}
+			return true, err
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *Store) FindSession(id int) (TerminalSession, bool) {
@@ -1438,6 +1532,7 @@ func (s *Store) pruneStateLocked(now time.Time) {
 	}
 	s.pruneProcessedMessagesLocked()
 	s.pruneAttachmentBypassesLocked(now)
+	s.state.PendingMessageCleanups = validMessageCleanups(s.state.PendingMessageCleanups)
 
 	if len(s.state.UpdateJournal) > maxUpdateJournal {
 		s.state.UpdateJournal = append([]UpdateEvent(nil), s.state.UpdateJournal[len(s.state.UpdateJournal)-maxUpdateJournal:]...)
@@ -1455,6 +1550,26 @@ func (s *Store) pruneStateLocked(now time.Time) {
 	if len(s.state.TerminalSessions) > maxTerminalSessions {
 		s.state.TerminalSessions = pruneTerminalSessions(s.state.TerminalSessions)
 	}
+}
+
+func validMessageCleanups(cleanups []MessageCleanup) []MessageCleanup {
+	out := make([]MessageCleanup, 0, min(len(cleanups), maxMessageCleanups))
+	seen := make(map[string]bool, len(cleanups))
+	for _, cleanup := range cleanups {
+		if cleanup.ChatID == 0 || cleanup.MessageID <= 0 {
+			continue
+		}
+		key := strconv.FormatInt(cleanup.ChatID, 10) + ":" + strconv.Itoa(cleanup.MessageID)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, cleanup)
+		if len(out) == maxMessageCleanups {
+			break
+		}
+	}
+	return out
 }
 
 func (s *Store) initializeProcessedMessageOrderLocked() {
@@ -1698,6 +1813,7 @@ func cloneState(in State) State {
 		shelf := *in.CollapsedShelf
 		out.CollapsedShelf = &shelf
 	}
+	out.PendingMessageCleanups = append([]MessageCleanup(nil), in.PendingMessageCleanups...)
 	out.RecoveryPlanMessageIDs = append([]int(nil), in.RecoveryPlanMessageIDs...)
 	out.TerminalSessions = append([]TerminalSession(nil), in.TerminalSessions...)
 	for i := range out.TerminalSessions {

@@ -65,6 +65,9 @@ func (a *App) handleVoiceReply(ctx context.Context, msg telegram.Message) action
 }
 
 func (a *App) routeVoicePathReply(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int) {
+	disclosureLock := a.disclosureMutex(expected.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	if !a.voiceReplyStillDeliverable(msg.Chat.ID, targetMessageID, expected) {
 		a.reply(ctx, msg, a.staleReply(expected))
 		return
@@ -135,6 +138,9 @@ func (a *App) routeVoicePathReply(ctx context.Context, msg telegram.Message, exp
 }
 
 func (a *App) transcribeVoiceReply(ctx context.Context, msg telegram.Message, expected state.TerminalSession, targetMessageID int) {
+	disclosureLock := a.disclosureMutex(expected.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	if !a.voiceReplyStillDeliverable(msg.Chat.ID, targetMessageID, expected) {
 		a.reply(ctx, msg, a.staleReply(expected))
 		return

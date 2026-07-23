@@ -123,7 +123,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   pin state. It separately persists one collapsed-shelf identity and the
   sessions belonging to it, any inert prospective anchor awaiting activation,
   any pending collapse whose original anchor remains canonical, and any
-  replaced shelf awaiting retirement. No shelf or restored anchor
+  replaced shelf awaiting retirement. Failed compensation for an inert
+  prospective message is retained in a bounded cleanup ledger. No shelf or restored anchor
   becomes actionable before its identity is durable. Restart resets pin
   knowledge and reconciles active anchors, pending restores, shelf replacements,
   and predecessor cleanup without discarding terminal ownership.
@@ -140,7 +141,7 @@ exports a bounded recent tail, not an unbounded full audit file.
 - State schema v17 persists `anchor_mode`, the canonical anchor presentation
   format, collapsed membership and the bounded shared-shelf identity, pin,
   render, retry, pending-collapse, pending-restore, and
-  predecessor-retirement state,
+  predecessor-retirement state, plus bounded inert-message cleanup ownership,
   boot-incarnation and bounded recovery-ledger metadata, the latest
   conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,
@@ -177,7 +178,9 @@ exports a bounded recent tail, not an unbounded full audit file.
 - Collapsing first publishes or updates the shared shelf, atomically records
   membership only after the shelf has controls and a confirmed pin, then
   retires and unpins the individual anchor. Until that promotion, the original
-  anchor remains canonical and accepts replies normally.
+  anchor remains canonical and accepts replies normally. Collapse waits for
+  already accepted model, capture, Chromium, voice, and disclosure work for
+  that session instead of allowing it to cross the hidden-state boundary.
   Retired replies are stale. If retirement is interrupted, restart retries it
   while the shelf remains recoverable. Closing during a pending restoration
   retains cleanup ownership and any rate-limit deadline until the inert
@@ -186,8 +189,10 @@ exports a bounded recent tail, not an unbounded full audit file.
   and leaves the shelf available until every member is restored. Only then is
   the shelf removed. Normal rendering is queued after cached anchors exist.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
-  update state. Rate limits do not trigger replacement amplification, and
-  unchanged edits count as success.
+  update state. A missing prospective restored anchor is abandoned durably so
+  the next `➕ Show` can create a replacement. Rate limits establish one shared
+  shelf deadline, stop the current multi-session operation, and do not trigger
+  replacement or cleanup amplification. Unchanged edits count as success.
 - Chromium readiness controls both snapshot startup and whether guide anchors
   expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session

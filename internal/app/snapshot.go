@@ -63,6 +63,11 @@ func (a *App) queueSnapshot(ts state.TerminalSession) actionResult {
 }
 
 func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession) {
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
+	disclosureLock := a.disclosureMutex(requested.ID)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	lock := a.sessionMutex(requested.ID)
 	lock.Lock()
 	current, ok := a.Store.FindSession(requested.ID)
@@ -124,8 +129,6 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	defer os.Remove(pngPath)
 
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	anchorLock := a.anchorMutex(current.ID)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()

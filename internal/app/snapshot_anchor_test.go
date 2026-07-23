@@ -338,6 +338,75 @@ func TestFailedSnapshotMigrationIsThrottledBeforeRendering(t *testing.T) {
 	}
 }
 
+func TestSnapshotRenderHoldsDisclosureBoundary(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {
+		s.TmuxServerID = appTestServerID
+		s.AnchorChatID = 100
+		s.AnchorMessageID = 77
+		s.AnchorFormat = "snapshot"
+		s.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/editMessageMedia" {
+			return nil, errors.New("unexpected Telegram endpoint " + req.URL.Path)
+		}
+		return snapshotJSONResponse(`{"message_id":77,"chat":{"id":100}}`), nil
+	})}
+	acquired := make(chan struct{})
+	attempting := make(chan struct{})
+	var app *App
+	renderer := &countingSnapshotRenderer{onRender: func() {
+		go func() {
+			close(attempting)
+			lock := app.disclosureMutex(session.ID)
+			lock.Lock()
+			close(acquired)
+			lock.Unlock()
+		}()
+		<-attempting
+		select {
+		case <-acquired:
+			t.Fatal("snapshot rendering did not hold the disclosure boundary")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}}
+	app = &App{
+		Config:        config.Config{AnchorMode: config.AnchorModeSnapshot, TelegramChatID: 100, Home: dir},
+		Store:         store,
+		Telegram:      client,
+		Tmux:          tmux.New(snapshotTmuxRunner{}),
+		Snapshots:     renderer,
+		snapshotReady: true,
+		captureSlots:  make(chan struct{}, 1),
+		renderSlots:   make(chan struct{}, 1),
+		manualRefresh: map[int]bool{},
+	}
+
+	app.refreshSnapshotAnchor(context.Background(), session.ID, true)
+
+	select {
+	case <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("snapshot disclosure boundary was not released")
+	}
+	if renderer.renders != 1 {
+		t.Fatalf("snapshot renders = %d", renderer.renders)
+	}
+}
+
 func TestUpstreamSignalDeliversWhenSnapshotRenderingFails(t *testing.T) {
 	store, session := newUpstreamStore(t)
 	if _, _, err := store.UpdateSession(session.ID, func(s *state.TerminalSession) {

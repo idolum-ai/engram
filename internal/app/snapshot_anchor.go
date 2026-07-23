@@ -87,6 +87,11 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !ready || a.Snapshots == nil {
 		return
 	}
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
+	disclosureLock := a.disclosureMutex(id)
+	disclosureLock.Lock()
+	defer disclosureLock.Unlock()
 	if !a.finishSnapshotMigration(ctx, id) {
 		return
 	}
@@ -173,11 +178,6 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	}
 	defer os.Remove(pngPath)
 
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
-	disclosureLock := a.disclosureMutex(id)
-	disclosureLock.Lock()
-	defer disclosureLock.Unlock()
 	anchorLock := a.anchorMutex(id)
 	anchorLock.Lock()
 	defer anchorLock.Unlock()

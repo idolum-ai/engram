@@ -107,7 +107,9 @@ ordinary anchors with their cached state labeled, then lets bounded background
 rendering make each one current without waiting for the rest of the shelf.
 Incomplete handoffs retain durable ownership of prospective and retiring
 Telegram messages, including retry deadlines, so restart or rate limiting
-cannot silently create a second route or abandon cleanup.
+cannot silently create a second route or abandon cleanup. A collapse also
+waits for already accepted presentation or voice work for that session; once
+membership is promoted, no such work remains in flight.
 
 ### One frame, two presentations
 

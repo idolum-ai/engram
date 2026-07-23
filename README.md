@@ -755,7 +755,11 @@ while inert before they gain controls or a pin; the shelf remains recoverable
 until every individual anchor has been restored. Collapse and expansion
 callbacks acknowledge without waiting for Telegram delivery. Rate-limited
 retirement work, including cleanup after a session is closed mid-restoration,
-keeps its message identity and retry deadline across restart.
+keeps its message identity and retry deadline across restart. Failed cleanup
+of any newly sent inert message is likewise retained in a bounded ledger.
+Hide waits for already accepted capture, rendering, and voice work for that
+session before completing, so presentation spend does not cross into the
+collapsed state.
 
 `/mode guide` and `/mode snapshot` begin changing the canonical presentation
 when the target capability is available. Existing anchors migrate in the

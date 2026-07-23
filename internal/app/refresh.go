@@ -680,6 +680,8 @@ func isTelegramAnchorUnavailable(err error) bool {
 	}
 	description := strings.ToLower(telegramErr.Description)
 	return strings.Contains(description, "message to edit not found") ||
+		strings.Contains(description, "message to pin not found") ||
+		strings.Contains(description, "message not found") ||
 		strings.Contains(description, "message can't be edited") ||
 		strings.Contains(description, "message can not be edited") ||
 		strings.Contains(description, "message is too old")

@@ -59,7 +59,6 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 				a.reply(workerCtx, msg, result.Message)
 			}
 		}) {
-			a.reply(ctx, msg, "Collapse is temporarily unavailable because Engram is stopping or its work queue is full.")
 			return "callback_state_failed"
 		}
 		return "callback_ok"
@@ -79,7 +78,6 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 				a.reply(workerCtx, msg, result.Message)
 			}
 		}) {
-			a.reply(ctx, msg, "Restore is temporarily unavailable because Engram is stopping or its work queue is full.")
 			return "callback_state_failed"
 		}
 		return "callback_ok"
