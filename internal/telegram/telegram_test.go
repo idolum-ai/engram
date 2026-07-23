@@ -912,6 +912,35 @@ func TestRateLimitAboveBoundIsNotRetried(t *testing.T) {
 	}
 }
 
+func TestRateLimitDefersNewOutboundMarkupEdits(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	client := New("TOKEN")
+	client.outboundInterval = 0
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return jsonResponseStatus(t, http.StatusTooManyRequests, map[string]any{
+			"ok":          false,
+			"error_code":  429,
+			"description": "Too Many Requests",
+			"parameters":  map[string]any{"retry_after": 31},
+		}), nil
+	})}
+	if _, err := client.SendMessage(context.Background(), 5, "hello", 0, nil); !IsRateLimited(err) {
+		t.Fatalf("first error = %v, want rate limited", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := client.EditReplyMarkup(ctx, 5, 12, ClearMarkup()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("markup error = %v, want deadline while shared flood wait is active", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want no request during shared flood wait", calls.Load())
+	}
+}
+
 func TestMessageNotModifiedClassification(t *testing.T) {
 	t.Parallel()
 

@@ -183,6 +183,49 @@ func TestPendingRestoreRetryPersistsAndBeginRollsBackOnSaveFailure(t *testing.T)
 	}
 }
 
+func TestExpandedSessionCanReturnToItsShelfWhenControlsFail(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, committed, err := store.CollapseSessionIntoShelf(session.ID, session, CollapsedShelf{
+		ChatID: 100, MessageID: 88,
+	}); err != nil || !committed {
+		t.Fatalf("collapse committed=%v err=%v", committed, err)
+	}
+	if _, begun, err := store.BeginExpandSessionFromShelf(session.ID, 88, 100, 99); err != nil || !begun {
+		t.Fatalf("begin committed=%v err=%v", begun, err)
+	}
+	if _, finished, err := store.FinishExpandSessionFromShelf(session.ID, 100, 99); err != nil || !finished {
+		t.Fatalf("finish committed=%v err=%v", finished, err)
+	}
+
+	returned, committed, err := store.ReturnExpandedSessionToShelf(session.ID, 88, 100, 99)
+	if err != nil || !committed || !returned.Collapsed || returned.PendingRestore != nil ||
+		returned.AnchorMessageID != 99 {
+		t.Fatalf("return = %#v committed=%v err=%v", returned, committed, err)
+	}
+	if _, target, found := store.FindReplyTarget(100, 99); !found || target != ReplyTargetStale {
+		t.Fatalf("returned anchor target=%q found=%v", target, found)
+	}
+	reopened, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := reopened.FindSession(session.ID)
+	if !got.Collapsed || got.AnchorMessageID != 99 || reopened.Snapshot().CollapsedShelf == nil {
+		t.Fatalf("reopened returned session=%#v shelf=%#v", got, reopened.Snapshot().CollapsedShelf)
+	}
+}
+
 func TestCollapsedShelfReplacementPersistsPredecessorUntilRetired(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

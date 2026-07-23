@@ -53,7 +53,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		return a.queueCallbackTransfer(ctx, cb.ID, "moving to collapsed sessions", "Engram is busy; try Hide again", func(workerCtx context.Context) {
 			result := a.collapseAnchor(workerCtx, ts)
 			if !result.OK() {
-				a.reply(workerCtx, msg, result.Message)
+				a.replyTransferFailure(workerCtx, msg, result.Message)
 			}
 		})
 	case "expand-all":
@@ -66,7 +66,7 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		return a.queueCallbackTransfer(ctx, cb.ID, "restoring sessions", "Engram is busy; try Show again", func(workerCtx context.Context) {
 			result := a.expandCollapsedShelf(workerCtx, shelf)
 			if !result.OK() {
-				a.reply(workerCtx, msg, result.Message)
+				a.replyTransferFailure(workerCtx, msg, result.Message)
 			}
 		})
 	case "refresh":

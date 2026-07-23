@@ -676,20 +676,29 @@ func (c *Client) do(ctx context.Context, method string, outbound bool, newReques
 		defer c.releaseOutbound()
 	}
 
+	skipOutboundWait := false
 	for attempt := 0; ; attempt++ {
-		if outbound {
+		if outbound && !skipOutboundWait {
 			if err := c.waitOutboundTurn(ctx); err != nil {
 				return err
 			}
 		}
+		skipOutboundWait = false
 		req, err := newRequest()
 		if err != nil {
 			return c.requestError(method, "could not create request")
 		}
 		err = c.doOnce(ctx, method, req, out)
 		var telegramErr *Error
-		if !errors.As(err, &telegramErr) || !telegramErr.IsRateLimited() || attempt >= maxRateLimitRetries {
+		rateLimited := errors.As(err, &telegramErr) && telegramErr.IsRateLimited()
+		if !rateLimited || attempt >= maxRateLimitRetries {
+			if outbound && rateLimited && telegramErr.RetryAfter > 0 {
+				c.deferOutbound(telegramErr.RetryAfter)
+			}
 			return err
+		}
+		if outbound && telegramErr.RetryAfter > 0 {
+			c.deferOutbound(telegramErr.RetryAfter)
 		}
 		if telegramErr.RetryAfter <= 0 || telegramErr.RetryAfter > maxRetryAfter {
 			return err
@@ -697,6 +706,9 @@ func (c *Client) do(ctx context.Context, method string, outbound bool, newReques
 		if err := c.sleepRetry(ctx, telegramErr.RetryAfter); err != nil {
 			return err
 		}
+		// This request already observed its retry delay. Other outbound work
+		// still waits on the shared deadline established above.
+		skipOutboundWait = true
 	}
 }
 
@@ -912,11 +924,20 @@ func safeDocumentFilename(filename string) string {
 
 func isOutboundMethod(method string) bool {
 	switch method {
-	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageMedia", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage", "deleteMessage":
+	case "sendMessage", "editMessageText", "editMessageCaption", "editMessageMedia", "editMessageReplyMarkup", "sendDocument", "sendPhoto", "pinChatMessage", "unpinChatMessage", "deleteMessage":
 		return true
 	default:
 		return false
 	}
+}
+
+func (c *Client) deferOutbound(delay time.Duration) {
+	deadline := time.Now().Add(delay)
+	c.outboundMu.Lock()
+	if deadline.After(c.nextOutbound) {
+		c.nextOutbound = deadline
+	}
+	c.outboundMu.Unlock()
 }
 
 func (c *Client) acquireOutbound(ctx context.Context) error {
@@ -936,14 +957,13 @@ func (c *Client) releaseOutbound() {
 }
 
 func (c *Client) waitOutboundTurn(ctx context.Context) error {
-	if c.outboundInterval <= 0 {
-		return nil
-	}
 	for {
 		c.outboundMu.Lock()
 		now := time.Now()
 		if !now.Before(c.nextOutbound) {
-			c.nextOutbound = now.Add(c.outboundInterval)
+			if c.outboundInterval > 0 {
+				c.nextOutbound = now.Add(c.outboundInterval)
+			}
 			c.outboundMu.Unlock()
 			return nil
 		}

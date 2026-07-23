@@ -625,6 +625,9 @@ removes the current reply route. `➕ Show` acknowledges
 immediately, then restores every collapsed session as its own live anchor in
 the currently selected guide or snapshot mode. Replies to retired individual
 anchors are stale and point back to `➕ Show`; they never reach tmux.
+If restored controls cannot be exposed, that session returns to the shelf
+instead of becoming an inert card. Lost sessions name their recovery controls
+without promising a terminal refresh that cannot run.
 
 ### Nested environments
 
@@ -749,10 +752,10 @@ The collapsed shelf is an attention boundary, not a third presentation mode.
 Collapsed sessions do no capture, model, Chromium, raw/dump, or alternate-view
 work and expose no reply or terminal-control route. Their persisted summaries and terminal identities
 survive restart. Expansion first reconstructs ordinary anchors from that cached
-state with an explicit refreshing label, then queues each normal bounded
-refresh as soon as that anchor is durable. Prospective anchors are persisted
-and pinned while inert, promoted to the reply route, and only then given
-controls; the shelf remains recoverable
+state, then queues each eligible bounded refresh as soon as that anchor is
+durable. Prospective anchors are persisted and pinned while inert, promoted to
+the reply route, and only then given controls; a controls failure returns the
+member to the shelf. The shelf remains recoverable
 until every individual anchor has been restored. Collapse and expansion
 callbacks acknowledge without waiting for Telegram delivery. Rate-limited
 retirement work, including cleanup after a session is closed mid-restoration,

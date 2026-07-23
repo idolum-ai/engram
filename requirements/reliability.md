@@ -186,14 +186,17 @@ exports a bounded recent tail, not an unbounded full audit file.
   retains cleanup ownership and any rate-limit deadline until the inert
   prospective message is retired. Expansion publishes each prospective
   text anchor inertly, persists and pins that inert identity, commits its
-  canonical reply route, and only then exposes controls. It leaves the shelf
-  available until every member is restored. Only then is
+  canonical reply route, and only then exposes controls. A controls failure
+  atomically returns the member to the shelf and defers another attempt. It
+  leaves the shelf available until every member is restored. Only then is
   the shelf removed. Normal rendering is queued after cached anchors exist.
 - If Telegram reports an anchor missing or uneditable, send a replacement and
   update state. A missing prospective restored anchor is abandoned durably so
   the next `➕ Show` can create a replacement. Rate limits establish one shared
   shelf deadline, stop the current multi-session operation, and do not trigger
-  replacement or cleanup amplification. Unchanged edits count as success.
+  replacement or cleanup amplification. The Telegram client also applies a
+  reported `retry_after` to newly starting outbound requests across concurrent
+  work. Unchanged edits count as success.
 - Chromium readiness controls both snapshot startup and whether guide anchors
   expose `🖼️ View` or allow `/mode snapshot`. A later capture, render,
   or upload failure is audited and leaves the canonical anchor and tmux session

@@ -772,6 +772,20 @@ func (a *App) reply(ctx context.Context, msg telegram.Message, text string) {
 	}
 }
 
+func (a *App) replyTransferFailure(ctx context.Context, msg telegram.Message, text string) {
+	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID, nil); err == nil {
+		return
+	} else {
+		_ = a.audit("telegram.send", "failed", map[string]any{"reply_to": msg.MessageID, "error": err.Error()})
+		if !isTelegramReplyUnavailable(err) {
+			return
+		}
+	}
+	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, 0, nil); err != nil {
+		_ = a.audit("telegram.send", "fallback_failed", map[string]any{"error": err.Error()})
+	}
+}
+
 func (a *App) audit(eventType, status string, payload any) error {
 	return a.Store.Audit(eventType, status, a.redactAuditPayload(payload))
 }

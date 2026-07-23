@@ -49,7 +49,7 @@ Telegram is Engram's only user interface.
 - Initial delivery failure leaves a session unwatched. A replacement anchor is
   created only when Telegram says the canonical message is uneditable.
 - Bot API errors are typed and sanitized; `retry_after` is honored with bounded,
-  context-aware retry.
+  context-aware retry and defers newly starting outbound Bot API work.
 - Model prose is not trusted as Telegram markup. Engram escapes raw HTML and
   converts only its supported Markdown subset.
 
@@ -91,16 +91,21 @@ Telegram is Engram's only user interface.
 - `➕ Show` acknowledges immediately and restores all shelf members outside the
   Telegram update loop. Engram first persists and pins each inert prospective
   anchor, then promotes it to the canonical reply route before exposing its
-  controls.
+  controls. If the controls cannot be exposed, Engram returns that member to
+  the still-actionable shelf instead of leaving an inert canonical anchor.
   Each restored anchor is visibly identified as cached while its ordinary
-  guide or snapshot refresh is queued. Partial restoration leaves the shelf
-  active for the remaining members. After every member has a canonical anchor,
-  Engram removes the shelf.
+  guide or snapshot refresh is queued. A restored lost session instead names
+  its recovery controls and does not promise a refresh. Partial restoration
+  leaves the shelf active for the remaining members. After every member has a
+  canonical anchor, Engram removes the shelf.
 - Hide and Show reserve bounded worker capacity before their success
   acknowledgement. A full queue answers the callback with an explicit retry
   instruction and performs no synchronous chat send. During shelf replacement,
   the still-visible predecessor's Show callback resolves to the current shelf
-  until predecessor retirement succeeds.
+  until predecessor retirement succeeds. Replies to either visible shelf
+  identity receive the same shelf-specific guidance. If the message that
+  initiated asynchronous Hide or Show disappears before a failure can be
+  reported, Engram sends that failure unthreaded instead.
 - Collapse is persisted attention state, not a third anchor mode. Collapsed
   sessions perform no model, Chromium, terminal capture, raw/dump, or alternate
   view work and expose no files or key controls until expanded.

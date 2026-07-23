@@ -173,7 +173,11 @@ func (a *App) expandCollapsedShelf(ctx context.Context, expected state.Collapsed
 			presented.Collapsed = false
 			presented.AnchorFormat = anchorFormatText
 			summary := firstNonEmpty(member.LastSummary, compactFallbackSummary(member, tmux.StyledCapture{}))
-			summary += "\n\nRestored from cached state. Refreshing now."
+			if member.State == state.TerminalLost {
+				summary = "The tmux pane is lost. Use the recovery controls below to reconnect it."
+			} else {
+				summary += "\n\nRestored from cached state. Refreshing now."
+			}
 			rendered := a.renderLocal(presented, summary)
 			message, sendErr := a.sendSilentAnchor(ctx, expected.ChatID, rendered, 0, nil)
 			if sendErr != nil {
@@ -259,7 +263,19 @@ func (a *App) finishPendingRestoreLocked(ctx context.Context, session state.Term
 	a.pendingRestoreRetries.Delete(session.ID)
 	if _, err := a.Telegram.EditReplyMarkup(ctx, restored.AnchorChatID, restored.AnchorMessageID, a.anchorMarkup(restored)); err != nil && !telegram.IsMessageNotModified(err) {
 		_ = a.audit("telegram.collapsed_expand", "controls_failed", map[string]any{"session_id": session.ID, "message_id": restored.AnchorMessageID, "error": err.Error()})
-		a.deferCollapsedShelfFloodWait(err)
+		shelf := a.Store.Snapshot().CollapsedShelf
+		if shelf != nil {
+			_, returned, stateErr := a.Store.ReturnExpandedSessionToShelf(
+				restored.ID, shelf.MessageID, restored.AnchorChatID, restored.AnchorMessageID,
+			)
+			if stateErr != nil {
+				_ = a.audit("state.collapsed_expand", "controls_rollback_failed", map[string]any{"session_id": session.ID, "error": stateErr.Error()})
+			}
+			if returned {
+				a.deferCollapsedShelfRetry(shelf.MessageID, err)
+			}
+		}
+		return false
 	}
 	return true
 }
@@ -847,7 +863,8 @@ func collapsedShelfSessions(sessions []state.TerminalSession) []state.TerminalSe
 
 func (a *App) isCollapsedShelfMessage(chatID int64, messageID int) bool {
 	shelf := a.Store.Snapshot().CollapsedShelf
-	return shelf != nil && shelf.ChatID == chatID && shelf.MessageID == messageID
+	return shelf != nil && (shelf.ChatID == chatID && shelf.MessageID == messageID ||
+		shelf.RetiringChatID == chatID && shelf.RetiringMessageID == messageID)
 }
 
 func compactSummaryText(text string) string {

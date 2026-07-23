@@ -1043,6 +1043,37 @@ func (s *Store) FinishExpandSessionFromShelf(id int, chatID int64, anchorMessage
 	return TerminalSession{}, false, nil
 }
 
+func (s *Store) ReturnExpandedSessionToShelf(id, shelfMessageID int, chatID int64, anchorMessageID int) (TerminalSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if s.state.CollapsedShelf == nil || s.state.CollapsedShelf.MessageID != shelfMessageID ||
+			s.state.CollapsedShelf.ChatID != chatID || session.Collapsed || session.PendingRestore != nil ||
+			session.AnchorChatID != chatID || session.AnchorMessageID != anchorMessageID {
+			return cloneTerminalSession(*session), false, nil
+		}
+		before := cloneTerminalSession(*session)
+		session.Collapsed = true
+		session.UpdatedAt = time.Now().UTC()
+		s.state.CollapsedShelf.LastRenderHash = ""
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return before, false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
 func (s *Store) AbandonPendingRestore(id int, chatID int64, messageID int) (TerminalSession, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
