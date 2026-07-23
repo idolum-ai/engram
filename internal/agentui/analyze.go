@@ -75,7 +75,7 @@ func Analyze(observation Observation) Analysis {
 
 	annotateConversation(lines, roles, confidence, evidence)
 	markChrome(lines, footer, model, remove, roles, confidence, evidence)
-	markTrailingPrompt(observation, lines, footer, remove, roles, confidence, evidence)
+	markTrailingPrompt(lines, footer, remove, roles, confidence, evidence)
 	markModelCard(lines, modelLine, remove, roles, confidence, evidence)
 	markCompletedApproval(lines, footer, remove, roles, confidence, evidence)
 	if hasRole(roles, RoleApproval) {
@@ -107,9 +107,6 @@ func Analyze(observation Observation) Analysis {
 }
 
 func sufficientStructuralAnchor(observation Observation, lines []string, footer int) bool {
-	if strings.Count(lines[footer], " · ") >= 2 {
-		return true
-	}
 	for index := max(0, footer-10); index < min(len(lines), footer+10); index++ {
 		if index == footer {
 			continue
@@ -303,19 +300,13 @@ func boxedModelLine(lines []string, modelLine int) bool {
 }
 
 func validStatusTail(parts []string) bool {
-	if len(parts) == 0 {
-		return false
+	for _, part := range parts {
+		field := strings.TrimSpace(part)
+		if strings.HasPrefix(field, "/") || strings.HasPrefix(field, "~/") || field == "~" {
+			return true
+		}
 	}
-	first := strings.TrimSpace(parts[0])
-	if first == "" {
-		return false
-	}
-	if strings.HasPrefix(first, "/") || strings.HasPrefix(first, "~/") || first == "~" {
-		return true
-	}
-	// Some agent TUIs put branch or context metadata before the path. Requiring
-	// a second separated field keeps a prose sentence from becoming a footer.
-	return len(parts) >= 2
+	return false
 }
 
 func knownModel(value string) bool {
@@ -477,7 +468,7 @@ func compatibleFrames(current, previous Frame) bool {
 func sameWhenKnown(left, right string) bool { return left == "" || right == "" || left == right }
 func sameIntWhenKnown(left, right int) bool { return left == 0 || right == 0 || left == right }
 
-func markTrailingPrompt(observation Observation, lines []string, footer int, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+func markTrailingPrompt(lines []string, footer int, remove []bool, roles []Role, confidence []int, evidence [][]string) {
 	end := footer - 1
 	for end >= 0 && (strings.TrimSpace(lines[end]) == "" || remove[end]) {
 		end--
@@ -497,8 +488,7 @@ func markTrailingPrompt(observation Observation, lines []string, footer int, rem
 	promptLines := append([]string(nil), lines[start:end+1]...)
 	promptLines[0] = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(promptLines[0]), "›❯"))
 	prompt := strings.ToLower(strings.Join(strings.Fields(strings.Join(promptLines, " ")), " "))
-	passive := prompt == "" || passivePrompt(prompt) || activityBeforePrompt(roles, start, footer) ||
-		promptPersisted(observation.Previous, lines, start, end)
+	passive := prompt == "" || passivePrompt(prompt)
 	role := RoleUserMessage
 	score := 92
 	signals := []string{"prompt-glyph", "adjacent-to-status"}
@@ -512,32 +502,9 @@ func markTrailingPrompt(observation Observation, lines []string, footer int, rem
 	}
 }
 
-func activityBeforePrompt(roles []Role, start, footer int) bool {
-	for index := max(0, footer-8); index < start; index++ {
-		if roles[index] == RoleActivity {
-			return true
-		}
-	}
-	return false
-}
-
-func promptPersisted(previous *Frame, current []string, start, end int) bool {
-	if previous == nil {
-		return false
-	}
-	prior := strings.Split(previous.Text, "\n")
-	offset := len(prior) - len(current)
-	priorStart := start + offset
-	priorEnd := end + offset
-	if priorStart < 0 || priorEnd >= len(prior) {
-		return false
-	}
-	return slices.Equal(prior[priorStart:priorEnd+1], current[start:end+1])
-}
-
 func passivePrompt(prompt string) bool {
 	switch prompt {
-	case "write tests for @filename", "run /review on my current changes", "find and fix a bug in @filename", "summarize recent commits", "implement {feature}", "explain this codebase":
+	case "write tests for @filename", "run /review on my current changes", "find and fix a bug in @filename", "summarize recent commits", "implement {feature}", "explain this codebase", "try /help":
 		return true
 	default:
 		return false
@@ -552,7 +519,7 @@ func markChrome(lines []string, footer int, model string, remove []bool, roles [
 		switch {
 		case roles[index] != "":
 			continue
-		case separatorLine(trimmed):
+		case index >= max(0, footer-12) && separatorLine(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 100, true, "separator-decoration")
 		case inLowBand && decorativeBorder(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "composer-border")

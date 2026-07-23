@@ -171,9 +171,10 @@ func (a *App) resetConversationEpoch(sessionID int) {
 
 func (a *App) resetConversationEpochLocked(sessionID int) {
 	a.conversationMu.Lock()
-	defer a.conversationMu.Unlock()
 	a.ensureConversationEpochsLocked()
 	a.conversationEpochs[sessionID] = conversationEpoch{resetRevision: a.nextConversationRevisionLocked()}
+	a.conversationMu.Unlock()
+	a.clearAgentFrame(sessionID)
 }
 
 func (a *App) pruneConversationEpochs(sessions []state.TerminalSession) {

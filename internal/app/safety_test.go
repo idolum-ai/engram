@@ -25,6 +25,15 @@ import (
 
 func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginAttached)
+	session, _ := app.Store.FindSession(id)
+	frame := func(seconds string) tmux.StyledCapture {
+		return tmux.StyledCapture{
+			JoinedText: "• Starting analysis\n\nIndexing files (" + seconds + "s)\n\ngpt-5.6-sol high · /work",
+			ServerID:   session.TmuxServerID, WindowID: session.TmuxWindowID, PaneID: session.TmuxPaneID,
+			CurrentCmd: "agent", Columns: 80, VisibleRows: 24,
+		}
+	}
+	app.processCapturedFrame(context.Background(), session, frame("2"))
 
 	result := app.closeSession(context.Background(), id)
 	if !result.OK() || result.Message != "untracked; tmux remains open" {
@@ -36,6 +45,17 @@ func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 	got, ok := app.Store.FindSession(id)
 	if !ok || got.State != state.TerminalClosed || got.WatchEnabled {
 		t.Fatalf("session after untrack = %#v ok=%v", got, ok)
+	}
+	app.agentFrameMu.Lock()
+	cached := len(app.agentFrames)
+	app.agentFrameMu.Unlock()
+	if cached != 0 {
+		t.Fatalf("agent frame cache contains %d entries after untrack, want zero", cached)
+	}
+	reused := session
+	reused.CreatedAt = session.CreatedAt.Add(time.Second)
+	if presentation := app.processCapturedFrame(context.Background(), reused, frame("3")); !strings.Contains(presentation, "Indexing files (3s)") {
+		t.Fatalf("reused session lifecycle consumed stale temporal evidence: %q", presentation)
 	}
 }
 

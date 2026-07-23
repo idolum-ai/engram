@@ -121,3 +121,42 @@ func TestAnalyzeFindsFooterAboveTrailingTerminalRows(t *testing.T) {
 		t.Fatalf("trailing-row analysis = %#v", got)
 	}
 }
+
+func TestAnalyzeRetainsRepeatedArbitraryPrompt(t *testing.T) {
+	input := "• Ready.\n\n› do not deploy production\n\ngpt-5.6-sol high · /work"
+	frame := Frame{Text: input, CurrentCommand: "codex", Columns: 80, VisibleRows: 24}
+	got := Analyze(Observation{Current: frame, Previous: &frame})
+	if !got.Applied || !strings.Contains(got.Conversation, "› do not deploy production") {
+		t.Fatalf("repeated user prompt was not retained: %#v", got)
+	}
+}
+
+func TestAnalyzeRetainsArbitraryPromptBelowActivity(t *testing.T) {
+	input := "• Working (2s • esc to interrupt)\n\n› do not deploy production\n\ngpt-5.6-sol high · /work"
+	got := Analyze(Observation{Current: Frame{Text: input}})
+	if !got.Applied || !strings.Contains(got.Conversation, "› do not deploy production") {
+		t.Fatalf("user prompt below activity was not retained: %#v", got)
+	}
+}
+
+func TestAnalyzeRejectsDelimiterOnlyStatusDecoy(t *testing.T) {
+	input := "Build report\ngpt-5.6-sol high · password=fixture-value · owner=alice"
+	got := Analyze(Observation{Current: Frame{Text: input}})
+	if got.Applied || got.Conversation != input {
+		t.Fatalf("delimiter-only decoy was treated as agent chrome: %#v", got)
+	}
+}
+
+func TestAnalyzeOnlyRemovesSeparatorsInFooterBand(t *testing.T) {
+	conversationSeparator := strings.Repeat("─", 24)
+	footerSeparator := strings.Repeat("═", 24)
+	lines := []string{"• Earlier evidence", conversationSeparator}
+	for index := 0; index < 13; index++ {
+		lines = append(lines, "evidence row")
+	}
+	lines = append(lines, "›", footerSeparator, "gpt-5.6-sol high · /work")
+	got := Analyze(Observation{Current: Frame{Text: strings.Join(lines, "\n")}})
+	if !got.Applied || !strings.Contains(got.Conversation, conversationSeparator) || strings.Contains(got.Conversation, footerSeparator) {
+		t.Fatalf("separator spatial classification = %#v", got)
+	}
+}

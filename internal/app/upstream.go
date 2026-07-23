@@ -22,10 +22,11 @@ type codexRuntimeDetector interface {
 }
 
 type agentFrameState struct {
-	serverID string
-	windowID string
-	paneID   string
-	frame    agentui.Frame
+	serverID  string
+	windowID  string
+	paneID    string
+	createdAt time.Time
+	frame     agentui.Frame
 }
 
 func observeUpstreamSignal(capture tmux.StyledCapture) upstream.Observation {
@@ -68,10 +69,11 @@ func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.Sty
 		CopyMode:        capture.PaneInMode,
 	}
 	state := agentFrameState{
-		serverID: firstNonEmpty(capture.ServerID, observed.TmuxServerID),
-		windowID: firstNonEmpty(capture.WindowID, observed.TmuxWindowID),
-		paneID:   firstNonEmpty(capture.PaneID, observed.TmuxPaneID),
-		frame:    current,
+		serverID:  firstNonEmpty(capture.ServerID, observed.TmuxServerID),
+		windowID:  firstNonEmpty(capture.WindowID, observed.TmuxWindowID),
+		paneID:    firstNonEmpty(capture.PaneID, observed.TmuxPaneID),
+		createdAt: observed.CreatedAt,
+		frame:     current,
 	}
 	a.agentFrameMu.Lock()
 	if a.agentFrames == nil {
@@ -90,7 +92,13 @@ func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.Sty
 }
 
 func sameAgentFrameBinding(left, right agentFrameState) bool {
-	return left.serverID == right.serverID && left.windowID == right.windowID && left.paneID == right.paneID
+	return left.serverID == right.serverID && left.windowID == right.windowID && left.paneID == right.paneID && left.createdAt.Equal(right.createdAt)
+}
+
+func (a *App) clearAgentFrame(sessionID int) {
+	a.agentFrameMu.Lock()
+	defer a.agentFrameMu.Unlock()
+	delete(a.agentFrames, sessionID)
 }
 
 func (a *App) recordAgentPresentation(observed state.TerminalSession, analysis agentui.Analysis) {

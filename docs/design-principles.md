@@ -96,7 +96,7 @@ quietly seeing more of the machine.
 
 Guide mode sends every frame's joined logical text to the selected model after
 removing recognized upstream records. A bounded semantic analyzer uses visible
-position, glyph, style, model, and temporal signals to separate conversation
+position, glyph, model, and temporal signals to separate conversation
 evidence from high-confidence agent-interface chrome. It extracts normalized
 model, effort, mode, and activity without gating on a particular agent CLI or
 version. Unknown or weak layouts keep the ordinary terminal path byte-for-byte;
