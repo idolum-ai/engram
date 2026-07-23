@@ -82,8 +82,11 @@ exports a bounded recent tail, not an unbounded full audit file.
   single-use, and expire after two minutes. Only one workflow remains current
   per session. Provider work shares the bounded guide concurrency ceiling and
   the existing transfer queue, so interpretation cannot block polling or
-  ordinary tmux input. Restart intentionally invalidates every prompt and
-  confirmation rather than recovering latent input authority.
+  ordinary tmux input. The absolute workflow deadline includes both capacity
+  waits, the provider call, and confirmed delivery; queued work rechecks the
+  deadline before gaining model or terminal authority. Restart intentionally
+  invalidates every prompt and confirmation rather than recovering latent input
+  authority.
 - The update journal retains the newest 200 accepted and handled/skipped update
   states so recent polling behavior remains inspectable after restart.
 - Audit records are capped at 64 KiB. `audit.jsonl` rotates before exceeding

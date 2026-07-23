@@ -120,13 +120,20 @@ func (a *App) handleKeyPromptReply(ctx context.Context, msg telegram.Message) (s
 }
 
 func (a *App) interpretKeyPrompt(ctx context.Context, msg telegram.Message, prompt keyPrompt, description string) {
-	if !acquireSlot(ctx, a.guideSlots) {
+	workflowCtx, workflowCancel := context.WithDeadline(ctx, prompt.ExpiresAt)
+	defer workflowCancel()
+	if !acquireSlot(workflowCtx, a.guideSlots) {
 		a.finishKeyWorkflow(prompt.Session.ID, prompt.Token)
 		a.reply(ctx, msg, "Keyboard interpretation stopped before it completed; try again.")
 		return
 	}
 	defer releaseSlot(a.guideSlots)
-	modelCtx, cancel := context.WithTimeout(ctx, keyComposerModelTimeout)
+	if workflowCtx.Err() != nil || !a.keyWorkflowCurrent(prompt.Session.ID, prompt.Token) {
+		a.finishKeyWorkflow(prompt.Session.ID, prompt.Token)
+		a.reply(ctx, msg, "That keyboard prompt expired or was superseded. Open ⌨️ from the latest session card.")
+		return
+	}
+	modelCtx, cancel := context.WithTimeout(workflowCtx, keyComposerModelTimeout)
 	defer cancel()
 	proposal, err := a.KeyInterpreter.InterpretKeys(modelCtx, description)
 	if err != nil {
@@ -241,13 +248,21 @@ func (a *App) cancelKeys(ctx context.Context, cb telegram.CallbackQuery, token s
 }
 
 func (a *App) executeKeyConfirmation(ctx context.Context, msg telegram.Message, confirmation keyConfirmation) {
+	if !confirmation.ExpiresAt.After(time.Now()) {
+		a.retireKeyConfirmation(ctx, &msg)
+		a.reply(ctx, msg, "That keyboard confirmation expired before delivery. Open ⌨️ and try again.")
+		_ = a.audit("keys.confirm", "expired", map[string]any{"session_id": confirmation.Session.ID})
+		return
+	}
+	deliveryCtx, cancel := context.WithDeadline(ctx, confirmation.ExpiresAt)
+	defer cancel()
 	groups := make([][]string, len(confirmation.Plan.Groups))
 	delays := make([]time.Duration, len(confirmation.Plan.Groups))
 	for index, group := range confirmation.Plan.Groups {
 		groups[index] = append([]string(nil), group.Keys...)
 		delays[index] = group.DelayAfter
 	}
-	result := a.sendKeyGroupsForAnchorExpected(ctx, confirmation.Session, groups, keyseq.Format(confirmation.Proposal), delays)
+	result := a.sendKeyGroupsForAnchorExpected(deliveryCtx, confirmation.Session, groups, keyseq.Format(confirmation.Proposal), delays)
 	a.retireKeyConfirmation(ctx, &msg)
 	if !result.OK() {
 		a.reply(ctx, msg, result.Message)

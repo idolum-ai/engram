@@ -290,6 +290,95 @@ func TestKeyConfirmationReturnsBeforeDelayedPlanCompletes(t *testing.T) {
 	}
 }
 
+func TestKeyConfirmationExpiresWhileWaitingForTransferCapacity(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	app.transferSlots = make(chan struct{}, 1)
+	app.transferSlots <- struct{}{}
+	defer func() {
+		select {
+		case <-app.transferSlots:
+		default:
+		}
+		app.transferWG.Wait()
+	}()
+	app.transferQueue = make(chan struct{}, 1)
+	session, _ := app.Store.FindSession(1)
+	proposal := keyseq.Proposal{Kind: keyseq.KindSequence, Events: []keyseq.Event{{
+		Key: keyseq.KeyEnter, Count: 1,
+	}}}
+	plan, err := keyseq.Compile(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := time.Now().Add(40 * time.Millisecond)
+	token := "0123456789abcdef"
+	app.keyPromptSessions = map[int]keyWorkflow{1: {Token: "workflow", ExpiresAt: expiresAt}}
+	app.keyConfirmations = map[string]keyConfirmation{token: {
+		WorkflowToken: "workflow", Session: session, UserID: 42, ChatID: 100, MessageID: 72,
+		Proposal: proposal, Plan: plan, ExpiresAt: expiresAt,
+	}}
+	var expiryReplies int
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/editMessageReplyMarkup":
+			return anchorKeyJSONResponse(`{"message_id":72,"chat":{"id":100}}`), nil
+		case "/botTOKEN/sendMessage":
+			expiryReplies++
+			return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+	status := app.confirmKeys(context.Background(), telegram.CallbackQuery{
+		ID: "approve", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 72, Chat: telegram.Chat{ID: 100}},
+	}, token)
+	if status != "callback_ok" {
+		t.Fatalf("callback status = %q", status)
+	}
+	time.Sleep(80 * time.Millisecond)
+	<-app.transferSlots
+	app.transferWG.Wait()
+	if len(runner.calls) != 0 || expiryReplies != 1 {
+		t.Fatalf("expired delivery: tmux=%#v expiry_replies=%d", runner.calls, expiryReplies)
+	}
+}
+
+func TestKeyInterpretationExpiresWhileWaitingForGuideCapacity(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	app.guideSlots = make(chan struct{}, 1)
+	app.guideSlots <- struct{}{}
+	defer func() { <-app.guideSlots }()
+	interpreter := &fakeKeyInterpreter{proposal: keyseq.Proposal{
+		Kind: keyseq.KindSequence, Events: []keyseq.Event{{Key: keyseq.KeyEnter, Count: 1}},
+	}}
+	app.KeyInterpreter = interpreter
+	session, _ := app.Store.FindSession(1)
+	expiresAt := time.Now().Add(40 * time.Millisecond)
+	prompt := keyPrompt{
+		Token: "workflow", Session: session, UserID: 42, ExpiresAt: expiresAt,
+	}
+	app.keyPromptSessions = map[int]keyWorkflow{1: {Token: prompt.Token, ExpiresAt: expiresAt}}
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/botTOKEN/sendMessage" {
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+		return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
+	})}
+	startedAt := time.Now()
+	app.interpretKeyPrompt(context.Background(), telegram.Message{
+		MessageID: 80, From: &telegram.User{ID: 42}, Chat: telegram.Chat{ID: 100},
+	}, prompt, "press Enter")
+	if interpreter.description != "" {
+		t.Fatalf("expired queued workflow called interpreter with %q", interpreter.description)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("expired queued workflow returned after %s", elapsed)
+	}
+}
+
 func TestExpiredKeyWorkflowCannotCreateFreshConfirmation(t *testing.T) {
 	app, _, _ := newAnchorKeyTestApp(t)
 	session, _ := app.Store.FindSession(1)

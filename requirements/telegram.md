@@ -140,6 +140,10 @@ Telegram is Engram's only user interface.
   immutable tmux binding under the ordinary delivery locks; cancel, expiry,
   restart, reattachment, collapse, close, anchor rotation, duplicate callbacks,
   and superseding `⌨️` use send no keys.
+- The original two-minute deadline includes waiting for guide capacity,
+  provider latency, waiting for transfer capacity, and terminal delivery.
+  Expiry before either worker begins prevents the provider call or every tmux
+  effect; delivery itself inherits the same deadline.
 - Expired, superseded, and bounded-eviction ForceReply prompts are deleted;
   corresponding confirmation controls are cleared. Restart deliberately
   persists neither coordinates nor authority, so a pre-restart confirmation can
