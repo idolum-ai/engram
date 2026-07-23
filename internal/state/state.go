@@ -1133,7 +1133,7 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.PendingResume = nil
 			session.RecoveryEvents = nil
 		}
-		if session.PresentationProgram != "codex" {
+		if session.PresentationProgram != "codex" && session.PresentationProgram != "agent" {
 			session.PresentationProgram = ""
 			session.PresentationVersion = ""
 			session.PresentationModel = ""

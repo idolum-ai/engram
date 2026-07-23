@@ -60,7 +60,7 @@ func (a *App) recordIdentityLoss(ctx context.Context, session state.TerminalSess
 func (a *App) updateSessionIfCurrent(expected state.TerminalSession, fn func(*state.TerminalSession)) (state.TerminalSession, bool, bool, error) {
 	applied := false
 	updated, found, err := a.Store.UpdateSession(expected.ID, func(current *state.TerminalSession) {
-		if !sameTerminalBinding(*current, expected) || current.State != expected.State {
+		if !sameTerminalBinding(*current, expected) || !current.CreatedAt.Equal(expected.CreatedAt) || current.State != expected.State {
 			return
 		}
 		fn(current)

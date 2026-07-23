@@ -1,0 +1,332 @@
+[
+  {
+    "name": "observed_codex_active",
+    "source": "codex 0.144.5-0.144.6 regression corpus",
+    "observation": {
+      "current": {
+        "text": "• Ran go test ./...\n  └ ok example/internal/app\n\n────────────────────────────────────────────────────────\n\n• Tests pass and the implementation is complete.\n\n─ Worked for 1m 08s ────────────────────────────────────\n\n› Write tests for @filename\n\n• Working (34s • esc to interrupt)\n\ngpt-5.6-sol high fast · ~/code/github.com/idolum-ai · Main [default]",
+        "current_command": "codex",
+        "columns": 100,
+        "visible_rows": 24,
+        "alternate_screen": "on",
+        "copy_mode": "off"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "mode": "fast",
+      "activity": "active",
+      "contains": ["Ran go test ./...", "ok example/internal/app", "Tests pass"],
+      "excludes": ["Write tests", "Working (", "gpt-5.6-sol", "Worked for", "────"],
+      "roles": {"tool_invocation": 1, "tool_result": 1, "activity": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "observed_codex_approval",
+    "source": "codex 0.144.6 regression corpus",
+    "observation": {
+      "current": {
+        "text": "• I need permission to run the release check.\n\nDo you want to allow this command?\n\n• Reviewing approval request (8s • esc to interrupt)\n\ngpt-5.6-sol high · /work",
+        "current_command": "codex"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "awaiting_approval",
+      "contains": ["I need permission", "Do you want to allow"],
+      "excludes": ["Reviewing approval request", "gpt-5.6-sol"],
+      "roles": {"assistant_message": 1, "approval": 1, "activity": 1, "status": 1}
+    }
+  },
+  {
+    "name": "generic_claude_idle",
+    "source": "synthetic structural compatibility case",
+    "observation": {
+      "current": {
+        "text": "• The requested refactor is complete.\n\n❯\n\nclaude-sonnet-4-6 · ~/project · main",
+        "current_command": "claude"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "claude-sonnet-4-6",
+      "activity": "idle",
+      "contains": ["requested refactor is complete"],
+      "excludes": ["claude-sonnet", "❯"],
+      "roles": {"assistant_message": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "generic_provider_qualified_model",
+    "source": "synthetic OpenCode structural compatibility case",
+    "observation": {
+      "current": {
+        "text": "• Running tests\n\n⠋ Checking packages (4s)\n\nopenai/gpt-5.6-sol high · /workspace",
+        "current_command": "opencode"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "openai/gpt-5.6-sol",
+      "effort": "high",
+      "activity": "active",
+      "contains": ["Running tests"],
+      "excludes": ["Checking packages", "openai/gpt"],
+      "roles": {"tool_invocation": 1, "activity": 1, "status": 1}
+    }
+  },
+  {
+    "name": "actual_user_prompt_is_evidence",
+    "source": "semantic retention regression",
+    "observation": {
+      "current": {
+        "text": "• Ready.\n\n› implement the parser requested by the user\n\n• Working (2s • esc to interrupt)\n\ngpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "active",
+      "contains": ["implement the parser requested by the user"],
+      "excludes": ["Working (", "gpt-5.6-sol"],
+      "roles": {"user_message": 1, "activity": 1, "status": 1}
+    }
+  },
+  {
+    "name": "temporal_spinner_progress",
+    "source": "synthetic temporal compatibility case",
+    "observation": {
+      "current": {
+        "text": "• Starting analysis\n\nIndexing files (3s)\n\ngemini-2.5-pro high · /work",
+        "current_command": "agent",
+        "columns": 90,
+        "visible_rows": 20,
+        "alternate_screen": "on",
+        "copy_mode": "off"
+      },
+      "previous": {
+        "text": "• Starting analysis\n\nIndexing files (2s)\n\ngemini-2.5-pro high · /work",
+        "current_command": "agent",
+        "columns": 90,
+        "visible_rows": 20,
+        "alternate_screen": "on",
+        "copy_mode": "off"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gemini-2.5-pro",
+      "effort": "high",
+      "activity": "active",
+      "contains": ["Starting analysis"],
+      "excludes": ["Indexing files", "gemini-2.5-pro"],
+      "roles": {"assistant_message": 1, "activity": 1, "status": 1}
+    }
+  },
+  {
+    "name": "ordinary_shell_model_decoy",
+    "source": "false-positive regression",
+    "observation": {
+      "current": {
+        "text": "build passed\ngpt-5report high · /var/log",
+        "current_command": "zsh"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "build passed\ngpt-5report high · /var/log"
+    }
+  },
+  {
+    "name": "unknown_footer_field_fails_closed",
+    "source": "future-layout regression",
+    "observation": {
+      "current": {
+        "text": "answer\ngpt-5.6-sol high turbo · /work"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "answer\ngpt-5.6-sol high turbo · /work"
+    }
+  },
+  {
+    "name": "exact_model_shell_decoy_fails_closed",
+    "source": "false-positive structural-anchor regression",
+    "observation": {
+      "current": {
+        "text": "report follows\ngpt-5.6-sol high · /tmp",
+        "current_command": "zsh"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "report follows\ngpt-5.6-sol high · /tmp"
+    }
+  },
+  {
+    "name": "composite_model_card_idle",
+    "source": "Claude Code 2.1.206 hermetic TUI capture",
+    "observation": {
+      "current": {
+        "text": "╭──────────────╮\n│ Sonnet 4.6 · API Usage Billing │\n│ /workspace │\n╰──────────────╯\n\n❯ Review the fixture.\n\n⏺ ENGRAM_MOCK_REPLY semantic rendering is ready.\n\n✻ Crunched for 3s\n\n────────────────────────\n❯\n────────────────────────\n  bypass permissions on · ● high · /effort",
+        "current_command": "claude",
+        "alternate_screen": "on"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "claude-sonnet-4-6",
+      "effort": "high",
+      "activity": "idle",
+      "contains": ["Review the fixture", "ENGRAM_MOCK_REPLY"],
+      "excludes": ["API Usage Billing", "Crunched for", "bypass permissions", "────"],
+      "roles": {"user_message": 1, "assistant_message": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "composite_model_card_active",
+    "source": "Claude Code structural activity case",
+    "observation": {
+      "current": {
+        "text": "╭──────────────╮\n│ Sonnet 4.6 · API Usage Billing │\n╰──────────────╯\n\n❯ Review the fixture.\n\n✻ Deliberating…\n\n────────────────────────\n❯\n────────────────────────\n  bypass permissions on · ● high · /effort",
+        "current_command": "claude",
+        "alternate_screen": "on"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "claude-sonnet-4-6",
+      "effort": "high",
+      "activity": "active",
+      "contains": ["Review the fixture"],
+      "excludes": ["API Usage Billing", "Deliberating", "bypass permissions", "────"],
+      "roles": {"user_message": 1, "activity": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "embedded_low_band_model_active",
+    "source": "OpenCode 1.18.4 hermetic TUI capture",
+    "observation": {
+      "current": {
+        "text": "  ┃\n  ┃  Review the hermetic fixture without using tools.\n  ┃\n\n     ▣  Build · gpt-5.6-sol\n\n  ┃  Build · gpt-5.6-sol Engram Mock\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n   ⬝⬝⬝⬝⬝⬝⬝⬝  esc interrupt · tab agents",
+        "current_command": "opencode",
+        "alternate_screen": "on"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "activity": "active",
+      "contains": ["Review the hermetic fixture"],
+      "excludes": ["Engram Mock", "esc interrupt"],
+      "roles": {"activity": 1, "status": 1}
+    }
+  },
+  {
+    "name": "embedded_unknown_field_fails_closed",
+    "source": "embedded-footer future-layout regression",
+    "observation": {
+      "current": {
+        "text": "answer\n\n›\n\n▣  Build · gpt-5.6-sol high turbo",
+        "current_command": "opencode",
+        "alternate_screen": "on"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "answer\n\n›\n\n▣  Build · gpt-5.6-sol high turbo"
+    }
+  },
+  {
+    "name": "model_comparison_is_conversation",
+    "source": "embedded-status false-positive regression",
+    "observation": {
+      "current": {
+        "text": "We compared gpt-5.6-sol · claude-sonnet-4-6 for this task.\n\n›"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "We compared gpt-5.6-sol · claude-sonnet-4-6 for this task.\n\n›"
+    }
+  },
+  {
+    "name": "unknown_provider_prefix_fails_closed",
+    "source": "terminal-derived metadata disclosure regression",
+    "observation": {
+      "current": {
+        "text": "answer\n\n›\n\nsecret-bearing-prefix/gpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": false,
+      "activity": "unknown",
+      "conversation_exact": "answer\n\n›\n\nsecret-bearing-prefix/gpt-5.6-sol high · /work"
+    }
+  },
+  {
+    "name": "keyboard_guidance_is_conversation",
+    "source": "global-chrome retention regression",
+    "observation": {
+      "current": {
+        "text": "• Press Ctrl+C, then Shift+Tab to leave the current mode.\n\n›\n\ngpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "idle",
+      "contains": ["Press Ctrl+C, then Shift+Tab"],
+      "excludes": ["gpt-5.6-sol"],
+      "roles": {"assistant_message": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "static_approval_awaits_user",
+    "source": "static approval activity regression",
+    "observation": {
+      "current": {
+        "text": "• I need permission to continue.\n\nDo you want to allow this command?\n\n›\n\ngpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "awaiting_approval",
+      "contains": ["I need permission", "Do you want to allow"],
+      "excludes": ["gpt-5.6-sol"],
+      "roles": {"assistant_message": 1, "approval": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "approval_guidance_is_conversation",
+    "source": "approval prose retention regression",
+    "observation": {
+      "current": {
+        "text": "✔ The approval review was approved because the command is read-only.\n\n›\n\ngpt-5.6-sol high · /work"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "idle",
+      "contains": ["approval review was approved", "read-only"],
+      "excludes": ["gpt-5.6-sol"],
+      "roles": {"composer": 1, "status": 1}
+    }
+  }
+]

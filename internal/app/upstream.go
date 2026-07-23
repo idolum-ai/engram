@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentui"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
@@ -18,6 +19,14 @@ const upstreamSignalInterval = 10 * time.Second
 
 type codexRuntimeDetector interface {
 	Detect(context.Context, int, string) (codexui.Runtime, error)
+}
+
+type agentFrameState struct {
+	serverID  string
+	windowID  string
+	paneID    string
+	createdAt time.Time
+	frame     agentui.Frame
 }
 
 func observeUpstreamSignal(capture tmux.StyledCapture) upstream.Observation {
@@ -33,6 +42,11 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 		a.deliverUpstreamSignalWithArtifacts(ctx, observed, observation.Latest, a.intentionalArtifactPaths(observation.PresentationText, capture.Hyperlinks))
 	}
 	presentationText := observation.PresentationText
+	analysis := a.analyzeAgentFrame(observed, capture, presentationText)
+	if analysis.Applied {
+		a.recordAgentPresentation(observed, analysis)
+		return analysis.Conversation
+	}
 	if a.CodexDetector == nil {
 		return presentationText
 	}
@@ -45,27 +59,98 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 	return presentation.Text
 }
 
+func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.StyledCapture, text string) agentui.Analysis {
+	current := agentui.Frame{
+		Text:            text,
+		CurrentCommand:  strings.TrimSpace(capture.CurrentCmd),
+		Columns:         capture.Columns,
+		VisibleRows:     capture.VisibleRows,
+		AlternateScreen: capture.AlternateOn,
+		CopyMode:        capture.PaneInMode,
+	}
+	// Keep lifecycle validation and cache mutation atomic with clearAgentFrame.
+	// A close may commit while this lock is held, but its lifecycle reset then
+	// waits and removes anything this already-validated observation writes.
+	a.agentFrameMu.Lock()
+	latest, tracked := a.Store.FindSession(observed.ID)
+	if !tracked || latest.State != state.TerminalRunning || !latest.WatchEnabled ||
+		!latest.CreatedAt.Equal(observed.CreatedAt) || !sameTerminalBinding(latest, observed) {
+		a.agentFrameMu.Unlock()
+		return agentui.Analyze(agentui.Observation{Current: current})
+	}
+	if hook := a.agentFrameValidatedHook; hook != nil {
+		hook(observed)
+	}
+	state := agentFrameState{
+		serverID:  firstNonEmpty(capture.ServerID, observed.TmuxServerID),
+		windowID:  firstNonEmpty(capture.WindowID, observed.TmuxWindowID),
+		paneID:    firstNonEmpty(capture.PaneID, observed.TmuxPaneID),
+		createdAt: observed.CreatedAt,
+		frame:     current,
+	}
+	if a.agentFrames == nil {
+		a.agentFrames = make(map[int]agentFrameState)
+	}
+	previousState, found := a.agentFrames[observed.ID]
+	a.agentFrames[observed.ID] = state
+	a.agentFrameMu.Unlock()
+
+	var previous *agentui.Frame
+	if found && sameAgentFrameBinding(previousState, state) {
+		copy := previousState.frame
+		previous = &copy
+	}
+	return agentui.Analyze(agentui.Observation{Current: current, Previous: previous})
+}
+
+func sameAgentFrameBinding(left, right agentFrameState) bool {
+	return left.serverID == right.serverID && left.windowID == right.windowID && left.paneID == right.paneID && left.createdAt.Equal(right.createdAt)
+}
+
+func (a *App) clearAgentFrame(sessionID int) {
+	a.agentFrameMu.Lock()
+	defer a.agentFrameMu.Unlock()
+	delete(a.agentFrames, sessionID)
+}
+
+func (a *App) recordAgentPresentation(observed state.TerminalSession, analysis agentui.Analysis) {
+	presentation := codexui.Presentation{
+		Text: analysis.Conversation, Applied: analysis.Applied, Model: analysis.Model,
+		Effort: analysis.Effort, Mode: analysis.Mode, Activity: string(analysis.Activity),
+	}
+	a.recordPresentation(observed, "agent", presentation)
+}
+
 func (a *App) recordCodexPresentation(observed state.TerminalSession, presentation codexui.Presentation) {
 	program := ""
 	if presentation.Applied {
 		program = "codex"
 	}
+	a.recordPresentation(observed, program, presentation)
+}
+
+func (a *App) recordPresentation(observed state.TerminalSession, program string, presentation codexui.Presentation) {
+	version := a.redactText(presentation.Version)
+	model := a.redactText(presentation.Model)
+	effort := a.redactText(presentation.Effort)
+	mode := a.redactText(presentation.Mode)
+	activity := a.redactText(presentation.Activity)
 	notice := a.redactText(presentation.Notice)
 	current, ok := a.Store.FindSession(observed.ID)
-	if !ok || !sameTerminalBinding(current, observed) || current.PresentationProgram == program &&
-		current.PresentationVersion == presentation.Version && current.PresentationModel == presentation.Model &&
-		current.PresentationEffort == presentation.Effort && current.PresentationMode == presentation.Mode &&
-		current.PresentationActivity == presentation.Activity &&
+	if !ok || !sameTerminalBinding(current, observed) || !current.CreatedAt.Equal(observed.CreatedAt) || current.PresentationProgram == program &&
+		current.PresentationVersion == version && current.PresentationModel == model &&
+		current.PresentationEffort == effort && current.PresentationMode == mode &&
+		current.PresentationActivity == activity &&
 		current.PresentationNotice == notice {
 		return
 	}
 	_, found, applied, err := a.updateSessionIfCurrent(observed, func(session *state.TerminalSession) {
 		session.PresentationProgram = program
-		session.PresentationVersion = presentation.Version
-		session.PresentationModel = presentation.Model
-		session.PresentationEffort = presentation.Effort
-		session.PresentationMode = presentation.Mode
-		session.PresentationActivity = presentation.Activity
+		session.PresentationVersion = version
+		session.PresentationModel = model
+		session.PresentationEffort = effort
+		session.PresentationMode = mode
+		session.PresentationActivity = activity
 		session.PresentationNotice = notice
 	})
 	if err != nil || !found || !applied {

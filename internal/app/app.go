@@ -43,6 +43,9 @@ type App struct {
 	modeMu                        sync.RWMutex
 	mode                          string
 	presentationMu                sync.RWMutex
+	agentFrameMu                  sync.Mutex
+	agentFrames                   map[int]agentFrameState
+	agentFrameValidatedHook       func(state.TerminalSession)
 	guideAvailable                bool
 	snapshotReady                 bool
 	locks                         []*lockfile.Lock
@@ -202,6 +205,7 @@ func New(cfg config.Config) (*App, error) {
 		summaryForce:                  map[int]bool{},
 		summaryDue:                    map[int]time.Time{},
 		manualRefresh:                 map[int]bool{},
+		agentFrames:                   map[int]agentFrameState{},
 		conversationEpochs:            map[int]conversationEpoch{},
 		conversationGates:             map[int]*conversationGate{},
 		closeConfirms:                 map[string]closeConfirmation{},
@@ -835,10 +839,19 @@ func renderLocalWithReferences(ts state.TerminalSession, summary, references str
 }
 
 func terminalPresentationText(ts state.TerminalSession) string {
-	if ts.State != state.TerminalRunning || ts.PresentationProgram != "codex" || ts.PresentationModel == "" || ts.PresentationEffort == "" || ts.PresentationActivity == "" {
+	if ts.State != state.TerminalRunning || ts.PresentationModel == "" || ts.PresentationActivity == "" {
 		return ""
 	}
-	parts := []string{"Codex", ts.PresentationModel, ts.PresentationEffort}
+	program := "Agent"
+	if ts.PresentationProgram == "codex" {
+		program = "Codex"
+	} else if ts.PresentationProgram != "agent" {
+		return ""
+	}
+	parts := []string{program, ts.PresentationModel}
+	if ts.PresentationEffort != "" {
+		parts = append(parts, ts.PresentationEffort)
+	}
 	if ts.PresentationMode != "" {
 		parts = append(parts, ts.PresentationMode)
 	}

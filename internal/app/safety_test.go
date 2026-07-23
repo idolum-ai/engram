@@ -25,8 +25,49 @@ import (
 
 func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginAttached)
-
-	result := app.closeSession(context.Background(), id)
+	session, _ := app.Store.FindSession(id)
+	frame := func(seconds string) tmux.StyledCapture {
+		return tmux.StyledCapture{
+			JoinedText: "• Starting analysis\n\nIndexing files (" + seconds + "s)\n\ngpt-5.6-sol high · /work",
+			ServerID:   session.TmuxServerID, WindowID: session.TmuxWindowID, PaneID: session.TmuxPaneID,
+			CurrentCmd: "agent", Columns: 80, VisibleRows: 24,
+		}
+	}
+	app.processCapturedFrame(context.Background(), session, frame("2"))
+	validated := make(chan struct{})
+	releaseOldFrame := make(chan struct{})
+	app.agentFrameValidatedHook = func(observed state.TerminalSession) {
+		if observed.CreatedAt.Equal(session.CreatedAt) {
+			select {
+			case <-validated:
+			default:
+				close(validated)
+			}
+			<-releaseOldFrame
+		}
+	}
+	lateFrameDone := make(chan struct{})
+	go func() {
+		app.processCapturedFrame(context.Background(), session, frame("2"))
+		close(lateFrameDone)
+	}()
+	<-validated
+	closeDone := make(chan actionResult, 1)
+	go func() { closeDone <- app.closeSession(context.Background(), id) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		current, _ := app.Store.FindSession(id)
+		if current.State == state.TerminalClosed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("untrack did not commit while the validated old frame was paused")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(releaseOldFrame)
+	<-lateFrameDone
+	result := <-closeDone
 	if !result.OK() || result.Message != "untracked; tmux remains open" {
 		t.Fatalf("close result = %#v", result)
 	}
@@ -36,6 +77,49 @@ func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 	got, ok := app.Store.FindSession(id)
 	if !ok || got.State != state.TerminalClosed || got.WatchEnabled {
 		t.Fatalf("session after untrack = %#v ok=%v", got, ok)
+	}
+	app.agentFrameMu.Lock()
+	cached := len(app.agentFrames)
+	app.agentFrameMu.Unlock()
+	if cached != 0 {
+		t.Fatalf("agent frame cache contains %d entries after untrack, want zero", cached)
+	}
+	// An observation captured before untrack can finish processing after the
+	// lifecycle reset. It must not repopulate the cache for a closed lifecycle.
+	app.processCapturedFrame(context.Background(), session, frame("2"))
+	app.agentFrameMu.Lock()
+	cached = len(app.agentFrames)
+	app.agentFrameMu.Unlock()
+	if cached != 0 {
+		t.Fatalf("late old-lifecycle frame cache contains %d entries, want zero", cached)
+	}
+	reused := session
+	reused.CreatedAt = session.CreatedAt.Add(time.Second)
+	if _, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
+		current.CreatedAt = reused.CreatedAt
+		current.State = state.TerminalRunning
+		current.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The old frame can also arrive after the ID has been reused for the same
+	// pane. It must neither seed nor overwrite the new lifecycle's cache.
+	app.processCapturedFrame(context.Background(), session, frame("2"))
+	app.agentFrameMu.Lock()
+	cached = len(app.agentFrames)
+	app.agentFrameMu.Unlock()
+	if cached != 0 {
+		t.Fatalf("old frame populated reused lifecycle cache: entries=%d", cached)
+	}
+	if presentation := app.processCapturedFrame(context.Background(), reused, frame("3")); !strings.Contains(presentation, "Indexing files (3s)") {
+		t.Fatalf("reused session lifecycle consumed stale temporal evidence: %q", presentation)
+	}
+	app.processCapturedFrame(context.Background(), session, frame("4"))
+	app.agentFrameMu.Lock()
+	cachedState, present := app.agentFrames[id]
+	app.agentFrameMu.Unlock()
+	if !present || !cachedState.createdAt.Equal(reused.CreatedAt) || !strings.Contains(cachedState.frame.Text, "Indexing files (3s)") {
+		t.Fatalf("late old frame overwrote reused lifecycle cache: %#v present=%v", cachedState, present)
 	}
 }
 

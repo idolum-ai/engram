@@ -6,10 +6,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/idolum-ai/engram/internal/agentui"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+func TestRecordAgentPresentationRedactsAllTerminalDerivedMetadata(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	const secret = "fixture-provider-secret"
+	app.Config.OpenAIAPIKey = secret
+	session, _ := app.Store.FindSession(id)
+	app.recordAgentPresentation(session, agentui.Analysis{
+		Applied: true, Conversation: "done", Model: secret + "/gpt-5.6-sol",
+		Effort: "high-" + secret, Mode: "fast-" + secret,
+		Activity: agentui.Activity("active-" + secret),
+	})
+	current, _ := app.Store.FindSession(id)
+	metadata := strings.Join([]string{current.PresentationModel, current.PresentationEffort, current.PresentationMode, current.PresentationActivity}, "\n")
+	if strings.Contains(metadata, secret) || !strings.Contains(metadata, "<redacted>") {
+		t.Fatalf("terminal-derived presentation metadata was not redacted: %q", metadata)
+	}
+}
 
 type fixedCodexDetector struct {
 	runtime codexui.Runtime
@@ -24,7 +42,7 @@ func (d *fixedCodexDetector) Detect(_ context.Context, pid int, command string) 
 	return d.runtime, d.err
 }
 
-func TestProcessCapturedFrameCleansCodexGuideInputAndRecordsCardState(t *testing.T) {
+func TestProcessCapturedFrameUsesGenericSemanticsBeforeVersionedCodexFallback(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	detector := &fixedCodexDetector{runtime: codexui.Runtime{Detected: true, Supported: true, Version: codexui.SupportedVersion}}
 	app.CodexDetector = detector
@@ -46,8 +64,8 @@ func TestProcessCapturedFrameCleansCodexGuideInputAndRecordsCardState(t *testing
 	got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{
 		JoinedText: input, PanePID: 4242, CurrentCmd: "node",
 	})
-	if detector.pid != 4242 || detector.command != "node" {
-		t.Fatalf("detector input pid=%d command=%q", detector.pid, detector.command)
+	if detector.pid != 0 || detector.command != "" {
+		t.Fatalf("generic analysis unnecessarily invoked versioned detector: pid=%d command=%q", detector.pid, detector.command)
 	}
 	if !strings.Contains(got, "Ran go test") || strings.Contains(got, "Working (") || strings.Contains(got, "Write tests") || strings.Contains(got, "gpt-5.6-sol") {
 		t.Fatalf("guide input = %q", got)
@@ -57,12 +75,74 @@ func TestProcessCapturedFrameCleansCodexGuideInputAndRecordsCardState(t *testing
 		t.Fatalf("reference boundary refs=%#v guide=%q", refs, got)
 	}
 	current, ok := app.Store.FindSession(id)
-	if !ok || current.PresentationProgram != "codex" || current.PresentationVersion != codexui.SupportedVersion || current.PresentationModel != "gpt-5.6-sol" || current.PresentationEffort != "high" || current.PresentationMode != "fast" || current.PresentationActivity != "working" {
+	if !ok || current.PresentationProgram != "agent" || current.PresentationVersion != "" || current.PresentationModel != "gpt-5.6-sol" || current.PresentationEffort != "high" || current.PresentationMode != "fast" || current.PresentationActivity != "active" {
 		t.Fatalf("session presentation = %#v ok=%v", current, ok)
 	}
 	card := app.renderLocal(current, "Tests are passing.")
-	if !strings.Contains(card, "Codex · gpt-5.6-sol · high · fast · working\n\nTests are passing.") {
+	if !strings.Contains(card, "Agent · gpt-5.6-sol · high · fast · active\n\nTests are passing.") {
 		t.Fatalf("card = %q", card)
+	}
+}
+
+func TestProcessCapturedFrameGenericAnalysisSupportsNonCodexAgentUI(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	detector := &fixedCodexDetector{err: errors.New("must not be called")}
+	app.CodexDetector = detector
+	session, _ := app.Store.FindSession(id)
+	input := "• The refactor is complete.\n\n❯\n\nclaude-sonnet-4-6 · ~/work · main"
+	got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{
+		JoinedText: input, PanePID: 4242, CurrentCmd: "claude", AlternateOn: "on",
+	})
+	if strings.Contains(got, "claude-sonnet") || strings.Contains(got, "❯") || !strings.Contains(got, "refactor is complete") {
+		t.Fatalf("generic guide input = %q", got)
+	}
+	if detector.pid != 0 {
+		t.Fatalf("generic analysis invoked Codex detector with pid %d", detector.pid)
+	}
+	current, ok := app.Store.FindSession(id)
+	if !ok || current.PresentationProgram != "agent" || current.PresentationModel != "claude-sonnet-4-6" || current.PresentationActivity != "idle" {
+		t.Fatalf("generic presentation state = %#v ok=%v", current, ok)
+	}
+	if got := app.renderLocal(current, "Done."); !strings.Contains(got, "Agent · claude-sonnet-4-6 · idle") {
+		t.Fatalf("generic card = %q", got)
+	}
+}
+
+func TestProcessCapturedFrameBoundsTemporalSemanticsToTerminalIdentity(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.CodexDetector = nil
+	session, _ := app.Store.FindSession(id)
+	frame := func(seconds, pane string) tmux.StyledCapture {
+		return tmux.StyledCapture{
+			JoinedText: "› analyze the fixture\n\n• Starting analysis\n\nIndexing files (" + seconds + "s)\n\ngpt-5.6-sol high · /work",
+			ServerID:   session.TmuxServerID, WindowID: session.TmuxWindowID, PaneID: pane,
+			CurrentCmd: "agent", Columns: 80, VisibleRows: 24, AlternateOn: "on", PaneInMode: "off",
+		}
+	}
+	first := app.processCapturedFrame(context.Background(), session, frame("2", session.TmuxPaneID))
+	if !strings.Contains(first, "Indexing files") {
+		t.Fatalf("first frame used nonexistent temporal evidence: %q", first)
+	}
+	second := app.processCapturedFrame(context.Background(), session, frame("3", session.TmuxPaneID))
+	if strings.Contains(second, "Indexing files") {
+		t.Fatalf("aligned changing status was not classified as activity: %q", second)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.PresentationActivity != "active" {
+		t.Fatalf("aligned activity = %q", current.PresentationActivity)
+	}
+	moved := app.processCapturedFrame(context.Background(), session, frame("4", "%different"))
+	if !strings.Contains(moved, "Indexing files") {
+		t.Fatalf("identity change reused stale temporal evidence: %q", moved)
+	}
+	current, _ = app.Store.FindSession(id)
+	if current.PresentationActivity != "idle" {
+		t.Fatalf("activity after identity change = %q", current.PresentationActivity)
+	}
+	app.agentFrameMu.Lock()
+	defer app.agentFrameMu.Unlock()
+	if len(app.agentFrames) != 1 {
+		t.Fatalf("agent frame cache contains %d entries, want one per session", len(app.agentFrames))
 	}
 }
 

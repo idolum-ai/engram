@@ -65,8 +65,14 @@ required_e2e_phrases=(
   'runs-on: ubuntu-24.04'
   'go-version: 1.22.12'
   'ENGRAM_E2E=1'
+  'ENGRAM_AGENT_UI_E2E=1'
+  'ENGRAM_AGENT_UI_REQUIRE_ALL=1'
+  '@openai/codex@0.144.5'
+  '@anthropic-ai/claude-code@2.1.206'
+  'opencode-ai@1.18.4'
   '.supervisor-done'
   "go test ./internal/e2e -run '^TestHermeticGoldenPath$'"
+  "go test ./internal/e2e -run '^TestHermeticAgentUISemantics$'"
   'if-no-files-found: error'
   'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
 )

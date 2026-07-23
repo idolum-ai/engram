@@ -798,9 +798,12 @@ scan, and a smoke build. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for change
 guidance, [`docs/release-strategy.md`](docs/release-strategy.md) for the reviewed
 release path, [`CHANGELOG.md`](CHANGELOG.md) for accumulated user-visible
 changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
-The manually dispatched [hermetic E2E golden path](docs/e2e-testing.md) drives
-the compiled service through a local Telegram simulator, isolated real tmux,
-and real Chromium, then retains reviewable visual evidence.
+The manually dispatched [E2E suites](docs/e2e-testing.md) include the service's
+hermetic Telegram/tmux/Chromium golden path and a real-client agent-screen
+semantic harness for Codex, Claude Code, and OpenCode. Both retain reviewable
+evidence without using real service or model credentials. The generic screen
+contract is documented in
+[`docs/agent-screen-semantics.md`](docs/agent-screen-semantics.md).
 
 The private boundary between Telegram orchestration and tmux truth is
 described in
