@@ -72,7 +72,9 @@ the shelf is deliberately not a terminal input route. Its only control is
 `➕ Show`, which restores every member as an individual canonical anchor in the
 selected guide or snapshot mode. Restoration acknowledges immediately, makes
 each prospective anchor durable while inert, and only then grants controls and
-a pin.
+a pin. Collapse follows the reciprocal rule: the individual anchor remains
+canonical until the shared shelf is rendered and pinned. The shelf identifies
+its summaries as cached because hiding a session also stops observation.
 
 ### Fast input path
 
@@ -103,6 +105,9 @@ They omit captures, model calls, images, references, evidence selection, reply
 routes, raw/dump disclosure, and terminal-key controls. Expansion first restores cached summaries as
 ordinary anchors with their cached state labeled, then lets bounded background
 rendering make each one current without waiting for the rest of the shelf.
+Incomplete handoffs retain durable ownership of prospective and retiring
+Telegram messages, including retry deadlines, so restart or rate limiting
+cannot silently create a second route or abandon cleanup.
 
 ### One frame, two presentations
 

@@ -51,12 +51,16 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if !a.answerCallback(ctx, cb.ID, "moving to collapsed sessions") {
 			return "callback_telegram_failed"
 		}
-		result := a.collapseAnchor(ctx, ts)
-		if !result.OK() {
-			msg := *cb.Message
-			msg.From = &cb.From
-			a.reply(ctx, msg, result.Message)
-			return result.status("callback")
+		msg := *cb.Message
+		msg.From = &cb.From
+		if !a.queueTransfer(func(workerCtx context.Context) {
+			result := a.collapseAnchor(workerCtx, ts)
+			if !result.OK() {
+				a.reply(workerCtx, msg, result.Message)
+			}
+		}) {
+			a.reply(ctx, msg, "Collapse is temporarily unavailable because Engram is stopping or its work queue is full.")
+			return "callback_state_failed"
 		}
 		return "callback_ok"
 	case "expand-all":

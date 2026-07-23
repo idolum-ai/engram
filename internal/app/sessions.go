@@ -439,7 +439,7 @@ func (a *App) closeSessionExpectedLocked(ctx context.Context, id int, confirmati
 			s.State = state.TerminalClosed
 			s.WatchEnabled = false
 			s.Collapsed = false
-			s.PendingRestore = nil
+			s.PendingCollapse = false
 			clearRecoveryMetadata(s)
 			s.LastSummary = "status:\nThis session is no longer tracked. Its tmux window remains open.\n\nrecommendation:\nUse /sessions to attach it again when needed."
 		})
@@ -457,7 +457,7 @@ func (a *App) closeSessionExpectedLocked(ctx context.Context, id int, confirmati
 			return actionResult{Outcome: actionStateFailed, Message: "session changed while untracking"}
 		}
 		if ts.PendingRestore != nil {
-			a.retireProspectiveMessage(ctx, ts.PendingRestore.ChatID, ts.PendingRestore.MessageID)
+			a.retireClosedPendingRestoreLocked(ctx, ts)
 		}
 		a.resetConversationEpochLocked(id)
 		anchorLock.Unlock()
@@ -486,7 +486,7 @@ func (a *App) closeSessionExpectedLocked(ctx context.Context, id int, confirmati
 		s.State = state.TerminalClosed
 		s.WatchEnabled = false
 		s.Collapsed = false
-		s.PendingRestore = nil
+		s.PendingCollapse = false
 		clearRecoveryMetadata(s)
 		s.LastSummary = "status:\nThe Engram-created tmux window was closed."
 	})
@@ -504,7 +504,7 @@ func (a *App) closeSessionExpectedLocked(ctx context.Context, id int, confirmati
 		return actionResult{Outcome: actionStateFailed, Message: "session no longer tracked after close"}
 	}
 	if ts.PendingRestore != nil {
-		a.retireProspectiveMessage(ctx, ts.PendingRestore.ChatID, ts.PendingRestore.MessageID)
+		a.retireClosedPendingRestoreLocked(ctx, ts)
 	}
 	a.resetConversationEpochLocked(id)
 	anchorLock.Unlock()

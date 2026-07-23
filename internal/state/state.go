@@ -141,6 +141,7 @@ type TerminalSession struct {
 	AnchorPinKnown           bool            `json:"anchor_pin_known,omitempty"`
 	WatchEnabled             bool            `json:"watch_enabled"`
 	Collapsed                bool            `json:"collapsed,omitempty"`
+	PendingCollapse          bool            `json:"pending_collapse,omitempty"`
 	PendingRestore           *PendingRestore `json:"pending_restore,omitempty"`
 	ResumeProgram            string          `json:"resume_program,omitempty"`
 	ResumeSessionID          string          `json:"resume_session_id,omitempty"`
@@ -755,7 +756,7 @@ func (s *Store) UpdateSession(id int, fn func(*TerminalSession)) (TerminalSessio
 	return TerminalSession{}, false, nil
 }
 
-func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf CollapsedShelf) (TerminalSession, bool, error) {
+func (s *Store) BeginCollapseSessionIntoShelf(id int, expected TerminalSession, shelf CollapsedShelf) (TerminalSession, bool, error) {
 	if shelf.ChatID == 0 || shelf.MessageID <= 0 {
 		return TerminalSession{}, false, fmt.Errorf("invalid collapsed shelf")
 	}
@@ -767,7 +768,7 @@ func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf
 		if session.ID != id {
 			continue
 		}
-		if session.Collapsed || session.AnchorChatID != expected.AnchorChatID || session.AnchorMessageID != expected.AnchorMessageID ||
+		if session.Collapsed || session.PendingCollapse || session.AnchorChatID != expected.AnchorChatID || session.AnchorMessageID != expected.AnchorMessageID ||
 			session.TmuxServerID != expected.TmuxServerID || session.TmuxWindowID != expected.TmuxWindowID || session.TmuxPaneID != expected.TmuxPaneID {
 			return cloneTerminalSession(*session), false, nil
 		}
@@ -782,6 +783,40 @@ func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf
 		// render hash only after Telegram has confirmed the resulting text.
 		s.state.CollapsedShelf.LastRenderHash = ""
 		s.state.CollapsedShelf.RetryAt = time.Time{}
+		session.PendingCollapse = true
+		session.UpdatedAt = time.Now().UTC()
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return cloneTerminalSession(expected), false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
+func (s *Store) FinishCollapseSessionIntoShelf(id int, shelfMessageID int) (TerminalSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	if s.state.CollapsedShelf == nil || s.state.CollapsedShelf.MessageID != shelfMessageID {
+		return TerminalSession{}, false, nil
+	}
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if session.Collapsed && !session.PendingCollapse {
+			return cloneTerminalSession(*session), true, nil
+		}
+		if !session.PendingCollapse || session.Collapsed {
+			return cloneTerminalSession(*session), false, nil
+		}
+		before := cloneTerminalSession(*session)
 		recordStaleMessageID(session, session.SummaryMessageID)
 		recordStaleMessageID(session, session.SnapshotMessageID)
 		recordStaleMessageID(session, session.UpstreamMessageID)
@@ -789,6 +824,7 @@ func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf
 		session.SnapshotMessageID = 0
 		session.UpstreamMessageID = 0
 		session.Collapsed = true
+		session.PendingCollapse = false
 		session.PendingRestore = nil
 		session.LastRawCaptureHash = ""
 		session.LastSnapshotCaptureHash = ""
@@ -802,13 +838,31 @@ func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf
 		if err := s.saveLocked(); err != nil {
 			if !PersistenceReachedReplacement(err) {
 				s.state = previous
-				return cloneTerminalSession(expected), false, err
+				return before, false, err
 			}
 			return updated, true, err
 		}
 		return updated, true, nil
 	}
 	return TerminalSession{}, false, nil
+}
+
+func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf CollapsedShelf) (TerminalSession, bool, error) {
+	pending, begun, beginErr := s.BeginCollapseSessionIntoShelf(id, expected, shelf)
+	if !begun {
+		return pending, false, beginErr
+	}
+	if beginErr != nil && !PersistenceReachedReplacement(beginErr) {
+		return pending, false, beginErr
+	}
+	collapsed, finished, finishErr := s.FinishCollapseSessionIntoShelf(id, shelf.MessageID)
+	if beginErr != nil && finishErr != nil {
+		return collapsed, finished, errors.Join(beginErr, finishErr)
+	}
+	if finishErr != nil {
+		return collapsed, finished, finishErr
+	}
+	return collapsed, finished, beginErr
 }
 
 func (s *Store) FinishCollapsedAnchorRetirement(id int, chatID int64, messageID int) (TerminalSession, bool, error) {
@@ -935,6 +989,37 @@ func (s *Store) FinishExpandSessionFromShelf(id int, chatID int64, anchorMessage
 		if s.state.CollapsedShelf != nil {
 			s.state.CollapsedShelf.LastRenderHash = ""
 		}
+		updated := cloneTerminalSession(*session)
+		if err := s.saveLocked(); err != nil {
+			if !PersistenceReachedReplacement(err) {
+				s.state = previous
+				return before, false, err
+			}
+			return updated, true, err
+		}
+		return updated, true, nil
+	}
+	return TerminalSession{}, false, nil
+}
+
+func (s *Store) FinishPendingRestoreRetirement(id int, chatID int64, messageID int) (TerminalSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := cloneState(s.state)
+	for i := range s.state.TerminalSessions {
+		session := &s.state.TerminalSessions[i]
+		if session.ID != id {
+			continue
+		}
+		if session.PendingRestore == nil {
+			return cloneTerminalSession(*session), true, nil
+		}
+		if session.State != TerminalClosed || session.PendingRestore.ChatID != chatID || session.PendingRestore.MessageID != messageID {
+			return cloneTerminalSession(*session), false, nil
+		}
+		before := cloneTerminalSession(*session)
+		session.PendingRestore = nil
+		session.UpdatedAt = time.Now().UTC()
 		updated := cloneTerminalSession(*session)
 		if err := s.saveLocked(); err != nil {
 			if !PersistenceReachedReplacement(err) {
@@ -1425,8 +1510,8 @@ func pruneTerminalSessions(sessions []TerminalSession) []TerminalSession {
 	}
 	sort.SliceStable(indices, func(i, j int) bool {
 		a, b := sessions[indices[i]], sessions[indices[j]]
-		aProtected := a.State == TerminalRunning || a.State == TerminalLost
-		bProtected := b.State == TerminalRunning || b.State == TerminalLost
+		aProtected := a.State == TerminalRunning || a.State == TerminalLost || a.PendingCollapse || a.PendingRestore != nil
+		bProtected := b.State == TerminalRunning || b.State == TerminalLost || b.PendingCollapse || b.PendingRestore != nil
 		if aProtected != bProtected {
 			return aProtected
 		}
@@ -1476,12 +1561,15 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.ResumeProgram = ""
 			session.ResumeSessionID = ""
 			session.PendingResume = nil
-			session.PendingRestore = nil
 			session.Collapsed = false
+			session.PendingCollapse = false
 			session.RecoveryEvents = nil
 		}
+		if session.Collapsed {
+			session.PendingCollapse = false
+		}
 		if pending := session.PendingRestore; pending != nil {
-			if !session.Collapsed || pending.ChatID == 0 || pending.MessageID <= 0 ||
+			if (session.State != TerminalClosed && !session.Collapsed) || pending.ChatID == 0 || pending.MessageID <= 0 ||
 				(pending.ChatID == session.AnchorChatID && pending.MessageID == session.AnchorMessageID) {
 				session.PendingRestore = nil
 			}

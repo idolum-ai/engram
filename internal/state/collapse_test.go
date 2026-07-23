@@ -246,6 +246,86 @@ func TestCollapsedShelfReplacementPersistsPredecessorUntilRetired(t *testing.T) 
 	}
 }
 
+func TestPendingCollapseKeepsAnchorLiveUntilShelfIsReady(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err = store.UpdateSession(session.ID, func(current *TerminalSession) {
+		current.AnchorChatID = 100
+		current.AnchorMessageID = 77
+		current.SummaryMessageID = 78
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, committed, err := store.BeginCollapseSessionIntoShelf(session.ID, session, CollapsedShelf{ChatID: 100, MessageID: 88})
+	if err != nil || !committed || pending.Collapsed || !pending.PendingCollapse || pending.AnchorMessageID != 77 || pending.SummaryMessageID != 78 {
+		t.Fatalf("pending=%#v committed=%v err=%v", pending, committed, err)
+	}
+	if routed, target, found := store.FindReplyTarget(100, 77); !found || target != ReplyTargetCurrent || routed.ID != session.ID {
+		t.Fatalf("pending anchor target=%q found=%v session=%#v", target, found, routed)
+	}
+	reopened, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, _ = reopened.FindSession(session.ID)
+	if pending.Collapsed || !pending.PendingCollapse || pending.AnchorMessageID != 77 {
+		t.Fatalf("reopened pending collapse = %#v", pending)
+	}
+	collapsed, committed, err := reopened.FinishCollapseSessionIntoShelf(session.ID, 88)
+	if err != nil || !committed || !collapsed.Collapsed || collapsed.PendingCollapse || collapsed.SummaryMessageID != 0 {
+		t.Fatalf("collapsed=%#v committed=%v err=%v", collapsed, committed, err)
+	}
+	if _, target, found := reopened.FindReplyTarget(100, 78); !found || target != ReplyTargetStale {
+		t.Fatalf("retired summary target=%q found=%v", target, found)
+	}
+}
+
+func TestClosedPendingRestoreOwnershipPersistsUntilRetired(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err = store.UpdateSession(session.ID, func(current *TerminalSession) {
+		current.State = TerminalClosed
+		current.Collapsed = false
+		current.PendingRestore = &PendingRestore{ChatID: 100, MessageID: 99, RetryAt: time.Now().UTC().Add(time.Minute)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := reopened.FindSession(session.ID)
+	if got.PendingRestore == nil || got.PendingRestore.MessageID != 99 {
+		t.Fatalf("closed cleanup identity was lost on reopen: %#v", got.PendingRestore)
+	}
+	retired, committed, err := reopened.FinishPendingRestoreRetirement(session.ID, 100, 99)
+	if err != nil || !committed || retired.PendingRestore != nil {
+		t.Fatalf("retired=%#v committed=%v err=%v", retired, committed, err)
+	}
+}
+
 func TestLegacyStateDefaultsToNoCollapsedShelf(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

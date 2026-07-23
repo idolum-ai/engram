@@ -618,7 +618,10 @@ Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
 `Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
 directional row. Tap `➖ Hide` to move a running anchor into one shared, pinned
 `Collapsed sessions` shelf. The shelf gives each collapsed session one quiet
-status line and exposes a single `➕ Show` control. `➕ Show` acknowledges
+status line, labels those lines as cached, and exposes a single `➕ Show`
+control. Engram keeps the individual anchor live until the shelf has been
+successfully rendered and pinned; a delayed or failed collapse therefore never
+removes the current reply route. `➕ Show` acknowledges
 immediately, then restores every collapsed session as its own live anchor in
 the currently selected guide or snapshot mode. Replies to retired individual
 anchors are stale and point back to `➕ Show`; they never reach tmux.
@@ -749,7 +752,10 @@ survive restart. Expansion first reconstructs ordinary anchors from that cached
 state with an explicit refreshing label, then queues each normal bounded
 refresh as soon as that anchor is durable. Prospective anchors are persisted
 while inert before they gain controls or a pin; the shelf remains recoverable
-until every individual anchor has been restored.
+until every individual anchor has been restored. Collapse and expansion
+callbacks acknowledge without waiting for Telegram delivery. Rate-limited
+retirement work, including cleanup after a session is closed mid-restoration,
+keeps its message identity and retry deadline across restart.
 
 `/mode guide` and `/mode snapshot` begin changing the canonical presentation
 when the target capability is available. Existing anchors migrate in the
