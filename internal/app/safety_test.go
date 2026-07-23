@@ -52,6 +52,16 @@ func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 	if cached != 0 {
 		t.Fatalf("agent frame cache contains %d entries after untrack, want zero", cached)
 	}
+	// An observation captured before untrack can finish processing after the
+	// lifecycle reset and repopulate the cache. Keep that stale frame present
+	// so the next assertion specifically exercises the CreatedAt epoch guard.
+	app.processCapturedFrame(context.Background(), session, frame("2"))
+	app.agentFrameMu.Lock()
+	cached = len(app.agentFrames)
+	app.agentFrameMu.Unlock()
+	if cached != 1 {
+		t.Fatalf("late old-lifecycle frame cache contains %d entries, want one stale entry", cached)
+	}
 	reused := session
 	reused.CreatedAt = session.CreatedAt.Add(time.Second)
 	if presentation := app.processCapturedFrame(context.Background(), reused, frame("3")); !strings.Contains(presentation, "Indexing files (3s)") {
