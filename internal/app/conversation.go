@@ -38,7 +38,7 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 	lock := a.sessionMutex(requested.ID)
 	lock.Lock()
 	current, ok := a.Store.FindSession(requested.ID)
-	if !ok || current.State != state.TerminalRunning || !sameTerminalBinding(current, requested) {
+	if !ok || current.Collapsed || current.State != state.TerminalRunning || !sameTerminalBinding(current, requested) {
 		lock.Unlock()
 		a.conversationNotice(ctx, requested, "I couldn't read that window because the session moved or closed.")
 		return
@@ -81,7 +81,7 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, current.ID)
 	latest, ok := a.Store.FindSession(current.ID)
-	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.AnchorMessageID != requested.AnchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
+	if !a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.AnchorMessageID != requested.AnchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		_ = a.audit("terminal.conversation", "superseded", map[string]any{"session_id": current.ID})
 		a.conversationNotice(ctx, requested, "That window changed while I was reading it, so I left the newer view in place.")
 		return
@@ -94,7 +94,7 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 	}
 	updated := false
 	if _, _, err := a.Store.UpdateSession(latest.ID, func(session *state.TerminalSession) {
-		if a.snapshotAnchors() && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && session.AnchorFormat == "snapshot" && session.RetiringAnchorMessageID == 0 {
+		if a.snapshotAnchors() && !session.Collapsed && session.State == state.TerminalRunning && sameTerminalBinding(*session, latest) && session.AnchorMessageID == latest.AnchorMessageID && session.AnchorFormat == "snapshot" && session.RetiringAnchorMessageID == 0 {
 			recordAlternateMessage(session, "summary", message.MessageID)
 			updated = true
 		}
@@ -124,8 +124,13 @@ func (a *App) conversationNotice(ctx context.Context, requested state.TerminalSe
 		return
 	}
 	target := requested
-	if latest, ok := a.Store.FindSession(requested.ID); ok && latest.AnchorChatID != 0 && latest.AnchorMessageID != 0 {
-		target = latest
+	if latest, ok := a.Store.FindSession(requested.ID); ok {
+		if latest.Collapsed {
+			return
+		}
+		if latest.AnchorChatID != 0 && latest.AnchorMessageID != 0 {
+			target = latest
+		}
 	}
 	if target.AnchorChatID == 0 || target.AnchorMessageID == 0 {
 		return

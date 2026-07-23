@@ -69,7 +69,7 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   additionally include the four arrow keys in a distinct `← ↑ ↓ →` row.
   `Escx2` waits 500 ms between Escape keys.
 - Sessions on the collapsed shelf expose no reply-to-pane or terminal-key route
-  until `➕` restores their individual anchors.
+  until `➕ Show` restores their individual anchors.
 
 ## Capture And Presentation
 

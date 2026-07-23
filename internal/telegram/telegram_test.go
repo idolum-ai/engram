@@ -108,7 +108,7 @@ func TestSnapshotAnchorMarkupIncludesAvailableAlternateAndKeyButtons(t *testing.
 	if got.InlineKeyboard[0][1].Text != "🖼️ View" || got.InlineKeyboard[0][1].CallbackData != "snapshot:7" {
 		t.Fatalf("snapshot callback = %#v", got.InlineKeyboard[0][1])
 	}
-	if got.InlineKeyboard[0][2].Text != "➖" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
+	if got.InlineKeyboard[0][2].Text != "➖ Hide" || got.InlineKeyboard[0][2].CallbackData != "collapse:7" {
 		t.Fatalf("collapse callback = %#v", got.InlineKeyboard[0][2])
 	}
 	want := []InlineKeyboardButton{
@@ -173,7 +173,7 @@ func TestSnapshotAnchorMarkupOffersRawTextCompanion(t *testing.T) {
 func TestCollapsedShelfMarkupOffersOnlyExpandAll(t *testing.T) {
 	t.Parallel()
 	got := CollapsedShelfMarkup()
-	want := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "➕", CallbackData: "expand-all:0"}}}}
+	want := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "➕ Show", CallbackData: "expand-all:0"}}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("collapsed shelf markup = %#v, want %#v", got, want)
 	}

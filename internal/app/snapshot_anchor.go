@@ -99,7 +99,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	}
 	attemptedAt := time.Now().UTC()
 	if _, _, err := a.Store.UpdateSession(id, func(session *state.TerminalSession) {
-		if session.AnchorMessageID == ts.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled {
+		if !session.Collapsed && session.AnchorMessageID == ts.AnchorMessageID && session.State == state.TerminalRunning && session.WatchEnabled {
 			session.LastSnapshotAttemptAt = attemptedAt
 		}
 	}); err != nil {
@@ -113,7 +113,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	identityLock := a.sessionMutex(id)
 	identityLock.Lock()
 	current, currentOK := a.Store.FindSession(id)
-	if !currentOK || current.State != state.TerminalRunning || !current.WatchEnabled || current.AnchorMessageID == 0 {
+	if !currentOK || current.Collapsed || current.State != state.TerminalRunning || !current.WatchEnabled || current.AnchorMessageID == 0 {
 		identityLock.Unlock()
 		return
 	}

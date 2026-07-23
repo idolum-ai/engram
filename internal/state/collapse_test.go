@@ -25,6 +25,9 @@ func TestCollapsedShelfLifecyclePersistsAndPreservesReplySafety(t *testing.T) {
 		current.AnchorMessageID = 77
 		current.AnchorFormat = "snapshot"
 		current.WatchEnabled = true
+		current.SummaryMessageID = 71
+		current.SnapshotMessageID = 72
+		current.UpstreamMessageID = 73
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +41,11 @@ func TestCollapsedShelfLifecyclePersistsAndPreservesReplySafety(t *testing.T) {
 	}
 	if _, _, found := store.FindReplyTarget(100, 88); found {
 		t.Fatal("shared shelf became an ambiguous terminal reply target")
+	}
+	for _, messageID := range []int{71, 72, 73} {
+		if _, target, found := store.FindReplyTarget(100, messageID); !found || target != ReplyTargetStale {
+			t.Fatalf("alternate %d target while collapsed = %q, found=%v", messageID, target, found)
+		}
 	}
 	if _, retired, err := store.FinishCollapsedAnchorRetirement(session.ID, 100, 77); err != nil || !retired {
 		t.Fatalf("retirement committed=%v err=%v", retired, err)
@@ -58,6 +66,11 @@ func TestCollapsedShelfLifecyclePersistsAndPreservesReplySafety(t *testing.T) {
 	}
 	if _, target, found := reopened.FindReplyTarget(100, 99); !found || target != ReplyTargetCurrent {
 		t.Fatalf("expanded reply target = %q, found=%v", target, found)
+	}
+	for _, messageID := range []int{71, 72, 73} {
+		if _, target, found := reopened.FindReplyTarget(100, messageID); !found || target != ReplyTargetStale {
+			t.Fatalf("alternate %d revived after expansion: target=%q found=%v", messageID, target, found)
+		}
 	}
 	if cleared, err := reopened.ClearCollapsedShelf(88); err != nil || !cleared || reopened.Snapshot().CollapsedShelf != nil {
 		t.Fatalf("clear shelf cleared=%v err=%v shelf=%#v", cleared, err, reopened.Snapshot().CollapsedShelf)

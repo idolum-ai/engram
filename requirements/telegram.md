@@ -75,18 +75,19 @@ Telegram is Engram's only user interface.
   `📄 Raw` for their exact displayed crop, and `🖼️ View` only when Chromium
   is ready. Snapshot anchors additionally expose a distinct `← ↑ ↓ →` row and
   `🗣️ Talk` only when a guide is configured.
-- Every running canonical anchor exposes `➖`. It moves that session into one
+- Every running canonical anchor exposes `➖ Hide`. It moves that session into one
   shared pinned `Collapsed sessions` shelf, retires and unpins the individual
   anchor, and records the old reply route as stale. The shelf contains bounded
-  cached one-line summaries and exactly one `➕` control; replying to it does
+  recent-first, phone-bounded cached one-line summaries and exactly one
+  `➕ Show` control; replying to it does
   not route input because it represents more than one pane.
-- `➕` restores all shelf members. Engram publishes each individual anchor from
+- `➕ Show` restores all shelf members. Engram publishes each individual anchor from
   persisted state before queuing ordinary guide or snapshot refreshes. Partial
   restoration leaves the shelf active for the remaining members. After every
   member has a canonical anchor, Engram removes the shelf.
 - Collapse is persisted attention state, not a third anchor mode. Collapsed
-  sessions perform no model, Chromium, or terminal capture work and expose no
-  files, alternate views, or key controls until expanded.
+  sessions perform no model, Chromium, terminal capture, raw/dump, or alternate
+  view work and expose no files or key controls until expanded.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
 - `📄 Raw` uploads the process-local plain-text companion for the most recent

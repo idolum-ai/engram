@@ -169,10 +169,11 @@ exports a bounded recent tail, not an unbounded full audit file.
 - A failed mode-migration send leaves the old anchor canonical. A failed
   predecessor retirement or pin transition remains eligible for retry.
 - Collapsing first publishes or updates the shared shelf, atomically records
-  membership, pins the shelf, then retires and unpins the individual anchor.
+  membership only after the shelf has controls and a confirmed pin, then
+  retires and unpins the individual anchor.
   Retired replies are stale. If retirement is interrupted, restart retries it
   while the shelf remains recoverable. Expansion publishes each prospective
-  text anchor inertly, commits its canonical identity, activates and pins it,
+  text anchor inertly, activates and pins it, commits its canonical identity,
   and leaves the shelf available until every member is restored. Only then is
   the shelf removed. Normal rendering is queued after cached anchors exist.
 - If Telegram reports an anchor missing or uneditable, send a replacement and

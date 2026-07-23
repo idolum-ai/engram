@@ -555,7 +555,7 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 	if options.Raw {
 		actions = append(actions, Button("📄 Raw", fmt.Sprintf("raw:%d", sessionID)))
 	}
-	actions = append(actions, Button("➖", fmt.Sprintf("collapse:%d", sessionID)))
+	actions = append(actions, Button("➖ Hide", fmt.Sprintf("collapse:%d", sessionID)))
 	rows := [][]InlineKeyboardButton{actions}
 	if options.FileToken != "" && options.FileCount > 0 {
 		files := make([]InlineKeyboardButton, 0, options.FileCount)
@@ -584,7 +584,7 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 
 func CollapsedShelfMarkup() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
-		Button("➕", "expand-all:0"),
+		Button("➕ Show", "expand-all:0"),
 	}}}
 }
 

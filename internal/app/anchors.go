@@ -52,7 +52,7 @@ func (a *App) reconcileAnchorControls(ctx context.Context, id int) {
 	defer lock.Unlock()
 	a.finishAnchorRotationLocked(ctx, id)
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 || ts.State == state.TerminalClosed {
+	if !ok || ts.Collapsed || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 || ts.State == state.TerminalClosed {
 		return
 	}
 	if _, err := a.Telegram.EditReplyMarkup(ctx, ts.AnchorChatID, ts.AnchorMessageID, a.anchorMarkup(ts)); err != nil && !telegram.IsMessageNotModified(err) && !isTelegramAnchorUnavailable(err) {

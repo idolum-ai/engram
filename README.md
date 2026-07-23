@@ -616,9 +616,9 @@ its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
 Every anchor's compact key controls include `Esc`, `Escx2`, `^C`, `^D`, and
 `Enter`. Snapshot anchors additionally expose a separate `← ↑ ↓ →`
-directional row. Tap `➖` to move a running anchor into one shared, pinned
+directional row. Tap `➖ Hide` to move a running anchor into one shared, pinned
 `Collapsed sessions` shelf. The shelf gives each collapsed session one quiet
-status line and exposes a single `➕` control. `➕` restores every collapsed
+status line and exposes a single `➕ Show` control. `➕ Show` restores every collapsed
 session as its own live anchor in the currently selected guide or snapshot
 mode. Replies to retired individual anchors are stale and never reach tmux.
 
@@ -739,11 +739,11 @@ immediately, including an unchanged capture. If a guide is configured, `🗣️`
 conversational rendering without replacing the canonical image. `/sessions`
 lists lost sessions first, then collapsed and active sessions by recency in
 either mode. Collapsed entries have no individual watch button; the shelf's
-`➕` restores them together.
+`➕ Show` restores them together.
 
 The collapsed shelf is an attention boundary, not a third presentation mode.
-Collapsed sessions do no capture, model, or Chromium work and expose no reply
-or terminal-control route. Their persisted summaries and terminal identities
+Collapsed sessions do no capture, model, Chromium, raw/dump, or alternate-view
+work and expose no reply or terminal-control route. Their persisted summaries and terminal identities
 survive restart. Expansion first reconstructs ordinary anchors from that cached
 state, then queues normal bounded refreshes; the shelf remains recoverable until
 every individual anchor has been restored.

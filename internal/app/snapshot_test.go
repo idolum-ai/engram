@@ -33,6 +33,27 @@ func TestSnapshotFrameDescriptionDisclosesFullWidthWrapping(t *testing.T) {
 	}
 }
 
+func TestQueuedSnapshotStopsWhenSessionCollapsesAfterCapture(t *testing.T) {
+	dir := t.TempDir()
+	store, session := conversationTestSession(t, anchorFormatGuideEvidence)
+	renderer := &fakeSnapshotRenderer{}
+	runner := &collapseAfterCaptureRunner{collapse: func() {
+		if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+			current.Collapsed = true
+		}); err != nil {
+			t.Error(err)
+		}
+	}}
+	app := &App{
+		Config: config.Config{Home: dir}, Store: store, Tmux: tmux.New(runner),
+		Snapshots: renderer, snapshotReady: true,
+	}
+	app.sendSnapshot(context.Background(), session)
+	if renderer.renders != 0 {
+		t.Fatalf("collapsed queued View rendered %d images", renderer.renders)
+	}
+}
+
 func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
@@ -292,6 +313,19 @@ func (snapshotTmuxRunner) Run(_ context.Context, args ...string) (string, error)
 	default:
 		return "", nil
 	}
+}
+
+type collapseAfterCaptureRunner struct {
+	once     sync.Once
+	collapse func()
+}
+
+func (r *collapseAfterCaptureRunner) Run(ctx context.Context, args ...string) (string, error) {
+	result, err := (snapshotTmuxRunner{}).Run(ctx, args...)
+	if len(args) > 0 && args[0] == "delete-buffer" {
+		r.once.Do(r.collapse)
+	}
+	return result, err
 }
 
 func pairedCaptureResult(args []string, physical, joined string) string {

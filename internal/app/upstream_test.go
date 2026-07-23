@@ -590,6 +590,27 @@ func TestDistinctRecordsWithIdenticalPayloadBothDeliver(t *testing.T) {
 	}
 }
 
+func TestCollapsedSessionSuppressesUpstreamDelivery(t *testing.T) {
+	store, session := newUpstreamStore(t)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.Collapsed = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	client.HTTPClient = &http.Client{Transport: snapshotRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true}), nil
+	})}
+	a := &App{Store: store, Telegram: client}
+	a.deliverUpstreamSignal(context.Background(), session, upstream.Record{ID: firstSignalID, Payload: "done"})
+	if calls != 0 {
+		t.Fatalf("collapsed signal made %d Telegram calls", calls)
+	}
+}
+
 func TestDeletedReplyTargetFallsBackToStandaloneRoutableSignal(t *testing.T) {
 	store, session := newUpstreamStore(t)
 	var bodies []map[string]any

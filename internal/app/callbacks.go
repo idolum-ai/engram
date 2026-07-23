@@ -444,6 +444,12 @@ func (a *App) validateAnchorCallback(ctx context.Context, cb telegram.CallbackQu
 		}
 		return state.TerminalSession{}, "callback_user_error"
 	}
+	if ts.Collapsed {
+		if !a.answerCallback(ctx, cb.ID, "On the collapsed shelf; restore all sessions first") {
+			return state.TerminalSession{}, "callback_telegram_failed"
+		}
+		return state.TerminalSession{}, "callback_user_error"
+	}
 	return ts, ""
 }
 

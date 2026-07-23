@@ -94,6 +94,31 @@ func TestDirectionalKeyCallbackRejectedOutsideSnapshotMode(t *testing.T) {
 	}
 }
 
+func TestCollapsedAnchorKeyCallbackIsInert(t *testing.T) {
+	app, runner, refreshed := newAnchorKeyTestApp(t)
+	if _, _, err := app.Store.UpdateSession(1, func(session *state.TerminalSession) {
+		session.Collapsed = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "cb", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+		Data:    "key:1:ctrl-c",
+	})
+	if status != "callback_user_error" {
+		t.Fatalf("handleCallback status = %q", status)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("collapsed callback touched tmux: %#v", runner.calls)
+	}
+	select {
+	case <-refreshed:
+		t.Fatal("collapsed callback queued refresh")
+	default:
+	}
+}
+
 func TestAnchorFileCallbackResolvesOnlyCurrentNumberedList(t *testing.T) {
 	files := []string{"/tmp/first.txt", "/tmp/second.txt"}
 	ts := bindAnchorFiles(state.TerminalSession{State: state.TerminalRunning}, files)

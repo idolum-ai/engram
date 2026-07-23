@@ -116,6 +116,26 @@ func TestConversationOmitsUpstreamRecordFromModelInput(t *testing.T) {
 	}
 }
 
+func TestQueuedConversationStopsWhenSessionCollapsesAfterCapture(t *testing.T) {
+	store, session := conversationTestSession(t, anchorFormatSnapshot)
+	guide := &recordingShelfGuide{}
+	runner := &collapseAfterCaptureRunner{collapse: func() {
+		if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+			current.Collapsed = true
+		}); err != nil {
+			t.Error(err)
+		}
+	}}
+	app := &App{
+		Store: store, Guide: guide, Tmux: tmux.New(runner),
+		mode: "snapshot", guideAvailable: true,
+	}
+	app.sendConversation(context.Background(), session)
+	if guide.calls != 0 {
+		t.Fatalf("collapsed queued Talk made %d model calls", guide.calls)
+	}
+}
+
 type conversationSignalRunner struct{}
 
 func (conversationSignalRunner) Run(ctx context.Context, args ...string) (string, error) {

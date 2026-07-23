@@ -47,7 +47,7 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 	anchorLock.Lock()
 	defer anchorLock.Unlock()
 	current, ok := a.Store.FindSession(expected.ID)
-	if !ok || current.State != state.TerminalRunning || !current.WatchEnabled || current.AnchorFormat != anchorFormatGuideEvidence || current.RetiringAnchorMessageID != 0 || !sameTerminalBinding(current, expected) {
+	if !ok || current.Collapsed || current.State != state.TerminalRunning || !current.WatchEnabled || current.AnchorFormat != anchorFormatGuideEvidence || current.RetiringAnchorMessageID != 0 || !sameTerminalBinding(current, expected) {
 		return false
 	}
 	frame, ok := a.snapshotTextFrame(current)
@@ -67,7 +67,7 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 	}
 	updated := false
 	if _, _, err := a.Store.UpdateSession(current.ID, func(session *state.TerminalSession) {
-		if session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == current.AnchorMessageID && session.AnchorFormat == anchorFormatGuideEvidence && session.RetiringAnchorMessageID == 0 && sameTerminalBinding(*session, current) {
+		if !session.Collapsed && session.State == state.TerminalRunning && session.WatchEnabled && session.AnchorMessageID == current.AnchorMessageID && session.AnchorFormat == anchorFormatGuideEvidence && session.RetiringAnchorMessageID == 0 && sameTerminalBinding(*session, current) {
 			session.LastRenderHash = renderHash
 			session.LastAnchorEditAt = time.Now().UTC()
 			setAnchorFiles(session, files)

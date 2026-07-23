@@ -85,6 +85,8 @@ type App struct {
 	closeConfirmMu                sync.Mutex
 	closeConfirms                 map[string]closeConfirmation
 	collapsedShelfMu              sync.Mutex
+	collapsedShelfRetryMessageID  int
+	collapsedShelfRetryAt         time.Time
 	sessionLocks                  keyedMutexSet
 	anchorLocks                   keyedMutexSet
 	disclosureLocks               keyedMutexSet

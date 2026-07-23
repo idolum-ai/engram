@@ -280,6 +280,23 @@ func TestReplyInputRejectsBindingChangedAfterTargetResolution(t *testing.T) {
 	}
 }
 
+func TestCollapsedSessionRejectsDirectInputAndKeys(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.Collapsed = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input := app.sendInput(context.Background(), id, "must not cross", "command", true)
+	keys := app.sendKeys(context.Background(), id, []string{"C-c"})
+	if input.OK() || keys.OK() || !strings.Contains(input.Message, "collapsed shelf") || !strings.Contains(keys.Message, "collapsed shelf") {
+		t.Fatalf("input=%#v keys=%#v", input, keys)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("collapsed direct input touched tmux: %#v", runner.calls)
+	}
+}
+
 func TestReplyInputRejectsAlternateRetiredAfterTargetResolution(t *testing.T) {
 	store, err := state.Open(filepath.Join(t.TempDir(), "state.json"), filepath.Join(t.TempDir(), "audit.jsonl"))
 	if err != nil {

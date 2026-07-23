@@ -770,6 +770,12 @@ func (s *Store) CollapseSessionIntoShelf(id int, expected TerminalSession, shelf
 		}
 		s.state.CollapsedShelf.LastRenderHash = renderHash
 		s.state.CollapsedShelf.RetryAt = time.Time{}
+		recordStaleMessageID(session, session.SummaryMessageID)
+		recordStaleMessageID(session, session.SnapshotMessageID)
+		recordStaleMessageID(session, session.UpstreamMessageID)
+		session.SummaryMessageID = 0
+		session.SnapshotMessageID = 0
+		session.UpstreamMessageID = 0
 		session.Collapsed = true
 		session.LastRawCaptureHash = ""
 		session.LastSnapshotCaptureHash = ""
@@ -856,8 +862,8 @@ func (s *Store) ExpandSessionFromShelf(id, shelfMessageID int, chatID int64, anc
 		session.RetiringAnchorMessageID = 0
 		session.RetiringAnchorFormat = ""
 		session.RetiringAnchorRetryAt = time.Time{}
-		session.AnchorPinned = false
-		session.AnchorPinKnown = false
+		session.AnchorPinned = true
+		session.AnchorPinKnown = true
 		session.LastRawCaptureHash = ""
 		session.LastSnapshotCaptureHash = ""
 		session.LastSnapshotAttemptAt = time.Time{}

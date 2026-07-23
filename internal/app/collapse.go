@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	maxCollapsedShelfBytes = 3900
-	maxCollapsedLineBytes  = 280
-	maxCollapsedLineWords  = 28
+	maxCollapsedShelfBytes   = 1800
+	maxCollapsedShelfEntries = 12
+	maxCollapsedLineBytes    = 120
+	maxCollapsedLineWords    = 16
 )
 
 func (a *App) collapseAnchor(ctx context.Context, expected state.TerminalSession) actionResult {
@@ -24,6 +25,9 @@ func (a *App) collapseAnchor(ctx context.Context, expected state.TerminalSession
 	defer a.collapsedShelfMu.Unlock()
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
+	sessionLock := a.sessionMutex(expected.ID)
+	sessionLock.Lock()
+	defer sessionLock.Unlock()
 	lock := a.anchorMutex(expected.ID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -41,7 +45,7 @@ func (a *App) collapseAnchor(ctx context.Context, expected state.TerminalSession
 	}
 
 	snapshot := a.Store.Snapshot()
-	prospective := snapshot.TerminalSessions
+	prospective := append([]state.TerminalSession(nil), snapshot.TerminalSessions...)
 	for index := range prospective {
 		if prospective[index].ID == current.ID {
 			prospective[index].Collapsed = true
@@ -58,41 +62,38 @@ func (a *App) collapseAnchor(ctx context.Context, expected state.TerminalSession
 			_ = a.audit("telegram.collapsed_shelf", "send_failed", map[string]any{"session_id": current.ID, "error": err.Error()})
 			return actionResult{Outcome: actionTelegramFailed, Message: "could not create the collapsed shelf"}
 		}
-		shelf = &state.CollapsedShelf{ChatID: message.Chat.ID, MessageID: message.MessageID}
+		shelf = &state.CollapsedShelf{
+			ChatID: message.Chat.ID, MessageID: message.MessageID,
+			LastRenderHash: renderHash, Pinned: true, PinKnown: true,
+		}
 		created = true
+		if !a.activateAndPinProspectiveShelf(ctx, *shelf, rendered) {
+			a.retireProspectiveMessage(ctx, shelf.ChatID, shelf.MessageID)
+			return actionResult{Outcome: actionTelegramFailed, Message: "could not activate the collapsed shelf"}
+		}
 	} else {
+		if !a.ensureCollapsedShelfPinnedLocked(ctx, *shelf) {
+			return actionResult{Outcome: actionTelegramFailed, Message: "could not pin the collapsed shelf"}
+		}
 		if _, err := a.editAnchor(ctx, shelf.ChatID, shelf.MessageID, rendered, telegram.CollapsedShelfMarkup()); err != nil {
 			_ = a.audit("telegram.collapsed_shelf", "prospective_edit_failed", map[string]any{"session_id": current.ID, "error": err.Error()})
 			return actionResult{Outcome: actionTelegramFailed, Message: "could not update the collapsed shelf"}
 		}
 	}
 
-	committedHash := renderHash
-	if created {
-		committedHash = ""
-	}
-	updated, committed, stateErr := a.Store.CollapseSessionIntoShelf(current.ID, current, *shelf, committedHash)
+	updated, committed, stateErr := a.Store.CollapseSessionIntoShelf(current.ID, current, *shelf, renderHash)
 	if !committed {
 		if created {
-			a.deleteProspectiveMessage(ctx, shelf.ChatID, shelf.MessageID)
+			a.retireProspectiveMessage(ctx, shelf.ChatID, shelf.MessageID)
 		} else {
-			a.reconcileCollapsedShelfLocked(ctx)
+			a.restoreCollapsedShelfAfterFailedCommit(ctx, *shelf, snapshot.TerminalSessions)
 		}
 		return actionResult{Outcome: actionStateFailed, Message: "could not persist the collapsed shelf: " + firstNonEmpty(errorText(stateErr), "session changed")}
 	}
 	if stateErr != nil {
 		_ = a.audit("state.collapsed_shelf", "durability_uncertain", map[string]any{"session_id": current.ID, "error": stateErr.Error()})
 	}
-	if created {
-		if _, err := a.editAnchor(ctx, shelf.ChatID, shelf.MessageID, rendered, telegram.CollapsedShelfMarkup()); err != nil && !telegram.IsMessageNotModified(err) {
-			_ = a.audit("telegram.collapsed_shelf", "controls_failed", map[string]any{"message_id": shelf.MessageID, "error": err.Error()})
-		} else if _, _, stateErr := a.Store.UpdateCollapsedShelf(shelf.MessageID, func(current *state.CollapsedShelf) {
-			current.LastRenderHash = renderHash
-		}); stateErr != nil {
-			_ = a.audit("state.collapsed_shelf", "render_hash_failed", map[string]any{"message_id": shelf.MessageID, "error": stateErr.Error()})
-		}
-	}
-	a.ensureCollapsedShelfPinnedLocked(ctx, *shelf)
+	a.clearCollapsedShelfRetry(shelf.MessageID)
 	a.retireCollapsedSessionAnchorLocked(ctx, updated)
 	a.resetConversationEpochLocked(expected.ID)
 	_ = a.audit("anchor.collapse", "ok", map[string]any{"session_id": expected.ID, "shelf_message_id": shelf.MessageID})
@@ -117,10 +118,13 @@ func (a *App) expandCollapsedShelf(ctx context.Context, expected state.Collapsed
 
 	restored := make([]int, 0, len(members))
 	for _, member := range members {
+		sessionLock := a.sessionMutex(member.ID)
+		sessionLock.Lock()
 		lock := a.anchorMutex(member.ID)
 		lock.Lock()
 		if member.AnchorMessageID != 0 && !a.retireCollapsedSessionAnchorLocked(ctx, member) {
 			lock.Unlock()
+			sessionLock.Unlock()
 			continue
 		}
 		if latest, ok := a.Store.FindSession(member.ID); ok {
@@ -134,27 +138,32 @@ func (a *App) expandCollapsedShelf(ctx context.Context, expected state.Collapsed
 		if sendErr != nil {
 			_ = a.audit("telegram.collapsed_expand", "send_failed", map[string]any{"session_id": member.ID, "error": sendErr.Error()})
 			lock.Unlock()
+			sessionLock.Unlock()
 			continue
 		}
-		updated, committed, stateErr := a.Store.ExpandSessionFromShelf(member.ID, expected.MessageID, message.Chat.ID, message.MessageID)
+		if !a.activateAndPinProspectiveAnchor(ctx, presented, message.Chat.ID, message.MessageID) {
+			a.retireProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
+			lock.Unlock()
+			sessionLock.Unlock()
+			continue
+		}
+		_, committed, stateErr := a.Store.ExpandSessionFromShelf(member.ID, expected.MessageID, message.Chat.ID, message.MessageID)
 		if !committed {
-			a.deleteProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
+			a.retireProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
 			if stateErr != nil {
 				_ = a.audit("state.collapsed_expand", "failed", map[string]any{"session_id": member.ID, "error": stateErr.Error()})
 			}
 			lock.Unlock()
+			sessionLock.Unlock()
 			continue
 		}
 		if stateErr != nil {
 			_ = a.audit("state.collapsed_expand", "durability_uncertain", map[string]any{"session_id": member.ID, "error": stateErr.Error()})
 		}
-		if _, err := a.Telegram.EditReplyMarkup(ctx, updated.AnchorChatID, updated.AnchorMessageID, a.anchorMarkup(updated)); err != nil && !telegram.IsMessageNotModified(err) {
-			_ = a.audit("telegram.collapsed_expand", "controls_failed", map[string]any{"session_id": member.ID, "error": err.Error()})
-		}
-		a.ensureCurrentAnchorPinnedLocked(ctx, updated)
 		a.resetConversationEpochLocked(member.ID)
 		restored = append(restored, member.ID)
 		lock.Unlock()
+		sessionLock.Unlock()
 	}
 	a.reconcileCollapsedShelfLocked(ctx)
 	for _, id := range restored {
@@ -197,19 +206,28 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 			_ = a.audit("telegram.collapsed_shelf", "recovery_send_failed", map[string]any{"error": err.Error()})
 			return
 		}
-		stored, committed, stateErr := a.Store.SetCollapsedShelfIfEmpty(state.CollapsedShelf{
-			ChatID: message.Chat.ID, MessageID: message.MessageID, LastRenderHash: renderHash,
-		})
+		prospective := state.CollapsedShelf{
+			ChatID: message.Chat.ID, MessageID: message.MessageID,
+			LastRenderHash: renderHash, Pinned: true, PinKnown: true,
+		}
+		if !a.activateAndPinProspectiveShelf(ctx, prospective, rendered) {
+			a.retireProspectiveMessage(ctx, prospective.ChatID, prospective.MessageID)
+			return
+		}
+		stored, committed, stateErr := a.Store.SetCollapsedShelfIfEmpty(prospective)
 		if !committed {
-			a.deleteProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
+			a.retireProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
 			if stateErr != nil {
 				_ = a.audit("state.collapsed_shelf", "recovery_failed", map[string]any{"error": stateErr.Error()})
 			}
 			return
 		}
+		if stateErr != nil {
+			_ = a.audit("state.collapsed_shelf", "recovery_durability_uncertain", map[string]any{"error": stateErr.Error()})
+		}
 		shelf = &stored
 	}
-	if !shelf.RetryAt.IsZero() && time.Now().Before(shelf.RetryAt) {
+	if deadline := a.collapsedShelfRetryDeadline(*shelf); !deadline.IsZero() && time.Now().Before(deadline) {
 		return
 	}
 
@@ -219,7 +237,7 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 				a.replaceCollapsedShelfLocked(ctx, *shelf, rendered, renderHash)
 			} else {
 				_ = a.audit("telegram.collapsed_shelf", "edit_failed", map[string]any{"error": err.Error()})
-				a.deferCollapsedShelfRetry(shelf.MessageID)
+				a.deferCollapsedShelfRetry(shelf.MessageID, err)
 			}
 			return
 		}
@@ -235,7 +253,9 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 		}
 		shelf = &updated
 	}
-	a.ensureCollapsedShelfPinnedLocked(ctx, *shelf)
+	if !a.ensureCollapsedShelfPinnedLocked(ctx, *shelf) {
+		return
+	}
 	for _, member := range members {
 		if member.AnchorMessageID == 0 {
 			continue
@@ -251,46 +271,46 @@ func (a *App) replaceCollapsedShelfLocked(ctx context.Context, old state.Collaps
 	message, err := a.sendSilentAnchor(ctx, old.ChatID, rendered, 0, nil)
 	if err != nil {
 		_ = a.audit("telegram.collapsed_shelf", "replacement_failed", map[string]any{"error": err.Error()})
-		a.deferCollapsedShelfRetry(old.MessageID)
+		a.deferCollapsedShelfRetry(old.MessageID, err)
 		return
 	}
-	updated, found, stateErr := a.Store.UpdateCollapsedShelf(old.MessageID, func(current *state.CollapsedShelf) {
+	prospective := state.CollapsedShelf{
+		ChatID: message.Chat.ID, MessageID: message.MessageID,
+		LastRenderHash: renderHash, Pinned: true, PinKnown: true,
+	}
+	if !a.activateAndPinProspectiveShelf(ctx, prospective, rendered) {
+		a.retireProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
+		a.deferCollapsedShelfRetry(old.MessageID, nil)
+		return
+	}
+	_, found, stateErr := a.Store.UpdateCollapsedShelf(old.MessageID, func(current *state.CollapsedShelf) {
 		current.ChatID = message.Chat.ID
 		current.MessageID = message.MessageID
-		current.LastRenderHash = ""
-		current.Pinned = false
-		current.PinKnown = false
+		current.LastRenderHash = renderHash
+		current.Pinned = true
+		current.PinKnown = true
 		current.RetryAt = time.Time{}
 	})
 	committed := found && (stateErr == nil || state.PersistenceReachedReplacement(stateErr))
 	if !committed {
-		a.deleteProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
+		a.retireProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
 		return
 	}
 	if stateErr != nil {
 		_ = a.audit("state.collapsed_shelf", "replacement_durability_uncertain", map[string]any{"error": stateErr.Error()})
 	}
-	if _, markupErr := a.Telegram.EditReplyMarkup(ctx, updated.ChatID, updated.MessageID, telegram.CollapsedShelfMarkup()); markupErr != nil && !telegram.IsMessageNotModified(markupErr) {
-		_ = a.audit("telegram.collapsed_shelf", "replacement_controls_failed", map[string]any{"error": markupErr.Error()})
-		a.deferCollapsedShelfRetry(updated.MessageID)
-	} else if stored, _, hashErr := a.Store.UpdateCollapsedShelf(updated.MessageID, func(current *state.CollapsedShelf) {
-		current.LastRenderHash = renderHash
-	}); hashErr != nil {
-		_ = a.audit("state.collapsed_shelf", "replacement_hash_failed", map[string]any{"error": hashErr.Error()})
-	} else {
-		updated = stored
-	}
-	a.ensureCollapsedShelfPinnedLocked(ctx, updated)
+	a.clearCollapsedShelfRetry(old.MessageID)
 	a.deleteProspectiveMessage(ctx, old.ChatID, old.MessageID)
 }
 
 func (a *App) ensureCollapsedShelfPinnedLocked(ctx context.Context, shelf state.CollapsedShelf) bool {
 	if shelf.PinKnown && shelf.Pinned {
+		a.clearCollapsedShelfRetry(shelf.MessageID)
 		return true
 	}
 	if err := a.Telegram.PinChatMessage(ctx, shelf.ChatID, shelf.MessageID); err != nil && !telegram.IsMessageAlreadyPinned(err) {
 		_ = a.audit("telegram.collapsed_shelf_pin", "failed", map[string]any{"message_id": shelf.MessageID, "error": err.Error()})
-		a.deferCollapsedShelfRetry(shelf.MessageID)
+		a.deferCollapsedShelfRetry(shelf.MessageID, err)
 		return false
 	}
 	_, found, err := a.Store.UpdateCollapsedShelf(shelf.MessageID, func(current *state.CollapsedShelf) {
@@ -301,7 +321,55 @@ func (a *App) ensureCollapsedShelfPinnedLocked(ctx context.Context, shelf state.
 	if err != nil {
 		_ = a.audit("state.collapsed_shelf_pin", "failed", map[string]any{"message_id": shelf.MessageID, "error": err.Error()})
 	}
-	return found
+	committed := found && (err == nil || state.PersistenceReachedReplacement(err))
+	if committed {
+		a.clearCollapsedShelfRetry(shelf.MessageID)
+	} else {
+		a.deferCollapsedShelfRetry(shelf.MessageID, err)
+	}
+	return committed
+}
+
+func (a *App) activateAndPinProspectiveShelf(ctx context.Context, shelf state.CollapsedShelf, rendered string) bool {
+	if _, err := a.editAnchor(ctx, shelf.ChatID, shelf.MessageID, rendered, telegram.CollapsedShelfMarkup()); err != nil && !telegram.IsMessageNotModified(err) {
+		_ = a.audit("telegram.collapsed_shelf", "prospective_controls_failed", map[string]any{"message_id": shelf.MessageID, "error": err.Error()})
+		return false
+	}
+	if err := a.Telegram.PinChatMessage(ctx, shelf.ChatID, shelf.MessageID); err != nil && !telegram.IsMessageAlreadyPinned(err) {
+		_ = a.audit("telegram.collapsed_shelf_pin", "prospective_failed", map[string]any{"message_id": shelf.MessageID, "error": err.Error()})
+		return false
+	}
+	return true
+}
+
+func (a *App) activateAndPinProspectiveAnchor(ctx context.Context, session state.TerminalSession, chatID int64, messageID int) bool {
+	session.Collapsed = false
+	session.AnchorChatID = chatID
+	session.AnchorMessageID = messageID
+	session.AnchorFormat = anchorFormatText
+	if _, err := a.Telegram.EditReplyMarkup(ctx, chatID, messageID, a.anchorMarkup(session)); err != nil && !telegram.IsMessageNotModified(err) {
+		_ = a.audit("telegram.collapsed_expand", "prospective_controls_failed", map[string]any{"session_id": session.ID, "message_id": messageID, "error": err.Error()})
+		return false
+	}
+	if err := a.Telegram.PinChatMessage(ctx, chatID, messageID); err != nil && !telegram.IsMessageAlreadyPinned(err) {
+		_ = a.audit("telegram.collapsed_expand", "prospective_pin_failed", map[string]any{"session_id": session.ID, "message_id": messageID, "error": err.Error()})
+		return false
+	}
+	return true
+}
+
+func (a *App) restoreCollapsedShelfAfterFailedCommit(ctx context.Context, shelf state.CollapsedShelf, sessions []state.TerminalSession) {
+	rendered := a.renderCollapsedShelf(sessions)
+	if _, err := a.editAnchor(ctx, shelf.ChatID, shelf.MessageID, rendered, telegram.CollapsedShelfMarkup()); err != nil && !telegram.IsMessageNotModified(err) {
+		_ = a.audit("telegram.collapsed_shelf", "rollback_edit_failed", map[string]any{"message_id": shelf.MessageID, "error": err.Error()})
+		_, _, stateErr := a.Store.UpdateCollapsedShelf(shelf.MessageID, func(current *state.CollapsedShelf) {
+			current.LastRenderHash = ""
+		})
+		if stateErr != nil {
+			_ = a.audit("state.collapsed_shelf", "rollback_invalidation_failed", map[string]any{"message_id": shelf.MessageID, "error": stateErr.Error()})
+		}
+		a.deferCollapsedShelfRetry(shelf.MessageID, err)
+	}
 }
 
 func (a *App) retireCollapsedShelfLocked(ctx context.Context, shelf state.CollapsedShelf) {
@@ -309,18 +377,20 @@ func (a *App) retireCollapsedShelfLocked(ctx context.Context, shelf state.Collap
 	if err != nil && !isTelegramMessageGone(err) {
 		if _, editErr := a.editAnchor(ctx, shelf.ChatID, shelf.MessageID, "No collapsed sessions.", telegram.ClearMarkup()); editErr != nil && !telegram.IsMessageNotModified(editErr) && !isTelegramAnchorUnavailable(editErr) {
 			_ = a.audit("telegram.collapsed_shelf", "retire_failed", map[string]any{"message_id": shelf.MessageID, "error": editErr.Error()})
-			a.deferCollapsedShelfRetry(shelf.MessageID)
+			a.deferCollapsedShelfRetry(shelf.MessageID, editErr)
 			return
 		}
 		if unpinErr := a.Telegram.UnpinChatMessage(ctx, shelf.ChatID, shelf.MessageID); unpinErr != nil && !telegram.IsMessageNotPinned(unpinErr) && !isTelegramAnchorUnavailable(unpinErr) {
 			_ = a.audit("telegram.collapsed_shelf", "unpin_failed", map[string]any{"message_id": shelf.MessageID, "error": unpinErr.Error()})
-			a.deferCollapsedShelfRetry(shelf.MessageID)
+			a.deferCollapsedShelfRetry(shelf.MessageID, unpinErr)
 			return
 		}
 	}
 	if _, clearErr := a.Store.ClearCollapsedShelf(shelf.MessageID); clearErr != nil {
 		_ = a.audit("state.collapsed_shelf", "clear_failed", map[string]any{"message_id": shelf.MessageID, "error": clearErr.Error()})
+		return
 	}
+	a.clearCollapsedShelfRetry(shelf.MessageID)
 }
 
 func (a *App) retireCollapsedSessionAnchorLocked(ctx context.Context, session state.TerminalSession) bool {
@@ -362,13 +432,38 @@ func (a *App) retireCollapsedSessionAnchorLocked(ctx context.Context, session st
 	return retired
 }
 
-func (a *App) deferCollapsedShelfRetry(messageID int) {
+func (a *App) deferCollapsedShelfRetry(messageID int, cause error) {
+	delay := anchorRetirementRetryDelay
+	if retryAfter := telegram.RetryAfter(cause); retryAfter > delay {
+		delay = retryAfter
+	}
+	deadline := time.Now().UTC().Add(delay)
+	if a.collapsedShelfRetryMessageID != messageID || deadline.After(a.collapsedShelfRetryAt) {
+		a.collapsedShelfRetryMessageID = messageID
+		a.collapsedShelfRetryAt = deadline
+	}
 	_, _, err := a.Store.UpdateCollapsedShelf(messageID, func(current *state.CollapsedShelf) {
-		current.RetryAt = time.Now().UTC().Add(anchorRetirementRetryDelay)
+		current.RetryAt = deadline
 	})
 	if err != nil {
 		_ = a.audit("state.collapsed_shelf", "retry_failed", map[string]any{"message_id": messageID, "error": err.Error()})
 	}
+}
+
+func (a *App) collapsedShelfRetryDeadline(shelf state.CollapsedShelf) time.Time {
+	deadline := shelf.RetryAt
+	if a.collapsedShelfRetryMessageID == shelf.MessageID && a.collapsedShelfRetryAt.After(deadline) {
+		deadline = a.collapsedShelfRetryAt
+	}
+	return deadline
+}
+
+func (a *App) clearCollapsedShelfRetry(messageID int) {
+	if a.collapsedShelfRetryMessageID != messageID {
+		return
+	}
+	a.collapsedShelfRetryMessageID = 0
+	a.collapsedShelfRetryAt = time.Time{}
 }
 
 func (a *App) deferCollapsedAnchorRetirement(id, messageID int) {
@@ -390,6 +485,10 @@ func (a *App) renderCollapsedShelf(sessions []state.TerminalSession) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Collapsed sessions (%d)\n\n", len(members))
 	for index, session := range members {
+		if index >= maxCollapsedShelfEntries {
+			fmt.Fprintf(&builder, "+%d more", len(members)-index)
+			break
+		}
 		line := a.renderCollapsedLine(session)
 		remaining := len(members) - index
 		reserve := len(fmt.Sprintf("\n+%d more", remaining))
@@ -408,8 +507,11 @@ func (a *App) renderCollapsedShelf(sessions []state.TerminalSession) string {
 func (a *App) renderCollapsedLine(session state.TerminalSession) string {
 	a.redactSessionPresentation(&session)
 	title := strings.Join(strings.Fields(firstNonEmpty(session.Title, "terminal")), " ")
-	title = truncateAtWord(title, 56)
+	title = truncateAtWord(title, 40)
 	summary := compactSummaryText(firstNonEmpty(session.LastSummary, compactFallbackSummary(session, tmux.StyledCapture{})))
+	if session.State == state.TerminalLost {
+		summary = "lost - restore the tmux pane from /sessions"
+	}
 	line := fmt.Sprintf("[%d] %s", session.ID, title)
 	if summary != "" {
 		line += " · " + summary
@@ -426,7 +528,18 @@ func collapsedShelfSessions(sessions []state.TerminalSession) []state.TerminalSe
 			members = append(members, session)
 		}
 	}
-	sort.Slice(members, func(i, j int) bool { return members[i].ID < members[j].ID })
+	sort.SliceStable(members, func(i, j int) bool {
+		left, right := members[i], members[j]
+		leftRank, rightRank := sessionPresentationRank(left), sessionPresentationRank(right)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		leftTime, rightTime := sessionPresentationTime(left), sessionPresentationTime(right)
+		if !leftTime.Equal(rightTime) {
+			return leftTime.After(rightTime)
+		}
+		return left.ID < right.ID
+	})
 	return members
 }
 
@@ -464,5 +577,19 @@ func (a *App) deleteProspectiveMessage(ctx context.Context, chatID int64, messag
 	defer cancel()
 	if err := a.Telegram.DeleteMessage(cleanupCtx, chatID, messageID); err != nil && !isTelegramMessageGone(err) {
 		_ = a.audit("telegram.prospective_cleanup", "failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+}
+
+func (a *App) retireProspectiveMessage(ctx context.Context, chatID int64, messageID int) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, err := a.Telegram.EditReplyMarkup(cleanupCtx, chatID, messageID, telegram.ClearMarkup()); err != nil && !telegram.IsMessageNotModified(err) && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_cleanup", "controls_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if err := a.Telegram.UnpinChatMessage(cleanupCtx, chatID, messageID); err != nil && !telegram.IsMessageNotPinned(err) && !isTelegramAnchorUnavailable(err) {
+		_ = a.audit("telegram.prospective_cleanup", "unpin_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+	}
+	if err := a.Telegram.DeleteMessage(cleanupCtx, chatID, messageID); err != nil && !isTelegramMessageGone(err) {
+		_ = a.audit("telegram.prospective_cleanup", "delete_failed", map[string]any{"message_id": messageID, "error": err.Error()})
 	}
 }

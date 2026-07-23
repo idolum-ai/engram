@@ -44,6 +44,13 @@ func TestWatchSessionDoesNotBypassCollapsedShelf(t *testing.T) {
 	}
 }
 
+func TestCollapsedSessionsStillCountAsTracked(t *testing.T) {
+	sessions := []state.TerminalSession{{ID: 1, State: state.TerminalRunning, Collapsed: true}}
+	if !hasTrackedSessions(sessions) {
+		t.Fatal("collapsed session was reported as no tracked work")
+	}
+}
+
 func TestSessionActionTokenChangesWhenAnIDIsRebound(t *testing.T) {
 	created := time.Date(2026, 7, 18, 20, 0, 0, 0, time.UTC)
 	first := state.TerminalSession{ID: 1, CreatedAt: created, TmuxServerID: "server-a", TmuxWindowID: "@1", TmuxPaneID: "%1"}

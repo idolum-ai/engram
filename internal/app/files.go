@@ -40,6 +40,10 @@ func (a *App) captureFile(ctx context.Context, msg telegram.Message, arg string,
 		a.reply(ctx, msg, "session not found")
 		return actionResult{Outcome: actionUserError, Message: "session not found"}
 	}
+	if ts.Collapsed {
+		a.reply(ctx, msg, collapsedSessionActionMessage)
+		return actionResult{Outcome: actionUserError, Message: collapsedSessionActionMessage}
+	}
 	kind := "raw"
 	if full {
 		kind = "dump"
@@ -61,7 +65,7 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 	identityLock := a.sessionMutex(ts.ID)
 	identityLock.Lock()
 	current, ok := a.Store.FindSession(ts.ID)
-	if !ok || current.State != state.TerminalRunning || !current.WatchEnabled || !sameTerminalBinding(current, ts) {
+	if !ok || current.Collapsed || current.State != state.TerminalRunning || !current.WatchEnabled || !sameTerminalBinding(current, ts) {
 		identityLock.Unlock()
 		a.reply(ctx, msg, "capture canceled: the session changed while this request was queued")
 		return
@@ -128,7 +132,7 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 	}
 	defer os.Remove(path)
 	latest, ok := a.Store.FindSession(ts.ID)
-	if !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, ts) {
+	if !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, ts) {
 		a.reply(ctx, msg, "capture canceled: the session changed before upload")
 		return
 	}
@@ -154,7 +158,7 @@ func (a *App) uploadAccessibleSnapshotFrame(ctx context.Context, msg telegram.Me
 	sessionLock := a.sessionMutex(expected.ID)
 	sessionLock.Lock()
 	current, ok := a.Store.FindSession(expected.ID)
-	if !ok || current.State != state.TerminalRunning || !mediaAnchorFormat(current.AnchorFormat) || current.AnchorMessageID != expected.AnchorMessageID || !sameTerminalBinding(current, expected) {
+	if !ok || current.Collapsed || current.State != state.TerminalRunning || !mediaAnchorFormat(current.AnchorFormat) || current.AnchorMessageID != expected.AnchorMessageID || !sameTerminalBinding(current, expected) {
 		sessionLock.Unlock()
 		a.reply(ctx, msg, "raw view canceled: the session changed while this request was queued")
 		return

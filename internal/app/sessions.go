@@ -564,7 +564,7 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	var b strings.Builder
 	b.WriteString("sessions\n")
 	actions := writeTrackedSessions(&b, st.TerminalSessions)
-	if len(actions) == 0 {
+	if !hasTrackedSessions(st.TerminalSessions) {
 		b.WriteString("\nNo tracked sessions.\n")
 	}
 	b.WriteString("\ntmux\n")
@@ -572,6 +572,15 @@ func (a *App) sessions(ctx context.Context, msg telegram.Message) {
 	if _, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, b.String(), msg.MessageID, telegram.SessionListMarkup(actions, attachTargets)); err != nil {
 		_ = a.audit("telegram.send", "failed", map[string]any{"command": "sessions", "error": err.Error()})
 	}
+}
+
+func hasTrackedSessions(sessions []state.TerminalSession) bool {
+	for _, session := range sessions {
+		if session.State != state.TerminalClosed {
+			return true
+		}
+	}
+	return false
 }
 
 func writeTrackedSessions(b *strings.Builder, sessions []state.TerminalSession) []telegram.SessionAction {

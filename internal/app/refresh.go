@@ -236,13 +236,13 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 		return "", nil, turn, ctx.Err()
 	}
 	defer releaseSlot(a.guideSlots)
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	identityLock := a.sessionMutex(session.ID)
 	identityLock.Lock()
 	defer identityLock.Unlock()
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	latest, ok := a.Store.FindSession(session.ID)
-	if a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
+	if a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
 		return "", nil, turn, errConversationTurnSuperseded
 	}
 	var result guide.Result
@@ -264,13 +264,13 @@ func (a *App) snapshotConversationalSummary(ctx context.Context, session state.T
 		return "", ctx.Err()
 	}
 	defer releaseSlot(a.guideSlots)
+	a.presentationMu.RLock()
+	defer a.presentationMu.RUnlock()
 	identityLock := a.sessionMutex(session.ID)
 	identityLock.Lock()
 	defer identityLock.Unlock()
-	a.presentationMu.RLock()
-	defer a.presentationMu.RUnlock()
 	latest, ok := a.Store.FindSession(session.ID)
-	if !a.snapshotAnchors() || !ok || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
+	if !a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		return "", errConversationTurnSuperseded
 	}
 	summary, err := a.Guide.Converse(ctx, guide.Input{SessionID: session.ID, VisibleText: conversationEvidence(presentationText)})
@@ -305,7 +305,7 @@ func (a *App) updateAnchorLocalGuardedWithReferences(ctx context.Context, id int
 		return false
 	}
 	ts, ok := a.Store.FindSession(id)
-	if !ok || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
+	if !ok || ts.Collapsed || ts.AnchorMessageID == 0 || ts.RetiringAnchorMessageID != 0 {
 		return false
 	}
 	if ts.State == state.TerminalClosed || ts.State == state.TerminalLost {
