@@ -23,7 +23,7 @@ import (
 )
 
 func TestCollapsedSessionsShareOneShelfAndExpandTogether(t *testing.T) {
-	app, _, firstID := newSafetyApp(t, state.TerminalOriginCreated)
+	app, runner, firstID := newSafetyApp(t, state.TerminalOriginCreated)
 	second, err := app.Store.AllocateSession("main", "@2", "%2", "riemann")
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +81,8 @@ func TestCollapsedSessionsShareOneShelfAndExpandTogether(t *testing.T) {
 	app.Telegram = client
 	app.Config.TelegramAllowedUserID = 42
 	app.Config.TelegramChatID = 100
+	guideRenderer := &recordingShelfGuide{}
+	app.Guide = guideRenderer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	app.runCtx = ctx
@@ -113,6 +115,9 @@ func TestCollapsedSessionsShareOneShelfAndExpandTogether(t *testing.T) {
 		if !ok || !session.Collapsed || session.AnchorMessageID != 0 {
 			t.Fatalf("collapsed session [%d] = %#v, ok=%v", id, session, ok)
 		}
+	}
+	if guideRenderer.calls != 0 || len(runner.calls) != 0 {
+		t.Fatalf("collapse performed presentation work: guide=%d tmux=%#v", guideRenderer.calls, runner.calls)
 	}
 	if got := countCollapseRequests(requests, "/botTOKEN/sendMessage"); got != 1 {
 		t.Fatalf("shelf sends = %d, want exactly one", got)

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/state"
@@ -61,6 +62,50 @@ func TestSwitchAnchorModeDefersCollapsedPresentationWork(t *testing.T) {
 	app.summaryMu.Unlock()
 	if queued {
 		t.Fatal("mode switch queued presentation work for a collapsed anchor")
+	}
+}
+
+func TestSwitchAnchorModeCoalescesRefreshBehindRunningOldModeWork(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		initialMode  string
+		targetMode   string
+		anchorFormat string
+	}{
+		{name: "guide to snapshot", initialMode: config.AnchorModeGuide, targetMode: config.AnchorModeSnapshot, anchorFormat: anchorFormatText},
+		{name: "snapshot to guide", initialMode: config.AnchorModeSnapshot, targetMode: config.AnchorModeGuide, anchorFormat: anchorFormatSnapshot},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+			if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+				session.AnchorChatID = 100
+				session.AnchorMessageID = 77
+				session.AnchorFormat = test.anchorFormat
+				session.AnchorPinned = true
+				session.AnchorPinKnown = true
+			}); err != nil {
+				t.Fatal(err)
+			}
+			app.mode = test.initialMode
+			app.guideAvailable = true
+			app.snapshotReady = true
+			app.summaryMu.Lock()
+			app.ensureSummaryQueuesLocked()
+			app.summaryRunning[id] = true
+			app.summaryDue[id] = time.Now()
+			app.summaryMu.Unlock()
+
+			result := app.switchAnchorMode(context.Background(), test.targetMode)
+			if !result.OK() || app.anchorMode() != test.targetMode {
+				t.Fatalf("switch result=%#v mode=%q", result, app.anchorMode())
+			}
+			app.summaryMu.Lock()
+			queued, forced := app.summaryQueued[id], app.summaryForce[id]
+			app.summaryMu.Unlock()
+			if !queued || !forced {
+				t.Fatalf("post-switch refresh queued=%v forced=%v, want coalesced forced refresh", queued, forced)
+			}
+		})
 	}
 }
 

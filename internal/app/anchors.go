@@ -20,6 +20,14 @@ import (
 const anchorRetirementRetryDelay = 10 * time.Second
 
 func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
+	a.reconcileAnchorPresentationWithRefreshPolicy(ctx, id, false)
+}
+
+func (a *App) reconcileAnchorPresentationAfterModeChange(ctx context.Context, id int) {
+	a.reconcileAnchorPresentationWithRefreshPolicy(ctx, id, true)
+}
+
+func (a *App) reconcileAnchorPresentationWithRefreshPolicy(ctx context.Context, id int, coalesceRunningRefresh bool) {
 	a.presentationMu.RLock()
 	defer a.presentationMu.RUnlock()
 	lock := a.anchorMutex(id)
@@ -35,7 +43,11 @@ func (a *App) reconcileAnchorPresentation(ctx context.Context, id int) {
 		!a.snapshotAnchors() && snapshotReady && ts.AnchorFormat != anchorFormatGuideEvidence ||
 		!a.snapshotAnchors() && !snapshotReady && mediaAnchorFormat(ts.AnchorFormat)
 	if formatMismatch && ts.State == state.TerminalRunning && ts.WatchEnabled {
-		a.queueRefreshIfIdle(id, true, 0)
+		if coalesceRunningRefresh {
+			a.queueRefresh(id, true, 0)
+		} else {
+			a.queueRefreshIfIdle(id, true, 0)
+		}
 	}
 	if anchorShouldBePinned(ts) {
 		a.ensureCurrentAnchorPinnedLocked(ctx, ts)
