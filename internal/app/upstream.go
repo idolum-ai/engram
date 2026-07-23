@@ -68,6 +68,11 @@ func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.Sty
 		AlternateScreen: capture.AlternateOn,
 		CopyMode:        capture.PaneInMode,
 	}
+	latest, tracked := a.Store.FindSession(observed.ID)
+	if !tracked || latest.State != state.TerminalRunning || !latest.WatchEnabled ||
+		!latest.CreatedAt.Equal(observed.CreatedAt) || !sameTerminalBinding(latest, observed) {
+		return agentui.Analyze(agentui.Observation{Current: current})
+	}
 	state := agentFrameState{
 		serverID:  firstNonEmpty(capture.ServerID, observed.TmuxServerID),
 		windowID:  firstNonEmpty(capture.WindowID, observed.TmuxWindowID),
@@ -125,7 +130,7 @@ func (a *App) recordPresentation(observed state.TerminalSession, program string,
 	activity := a.redactText(presentation.Activity)
 	notice := a.redactText(presentation.Notice)
 	current, ok := a.Store.FindSession(observed.ID)
-	if !ok || !sameTerminalBinding(current, observed) || current.PresentationProgram == program &&
+	if !ok || !sameTerminalBinding(current, observed) || !current.CreatedAt.Equal(observed.CreatedAt) || current.PresentationProgram == program &&
 		current.PresentationVersion == version && current.PresentationModel == model &&
 		current.PresentationEffort == effort && current.PresentationMode == mode &&
 		current.PresentationActivity == activity &&

@@ -53,19 +53,41 @@ func TestCloseAttachedSessionOnlyUntracks(t *testing.T) {
 		t.Fatalf("agent frame cache contains %d entries after untrack, want zero", cached)
 	}
 	// An observation captured before untrack can finish processing after the
-	// lifecycle reset and repopulate the cache. Keep that stale frame present
-	// so the next assertion specifically exercises the CreatedAt epoch guard.
+	// lifecycle reset. It must not repopulate the cache for a closed lifecycle.
 	app.processCapturedFrame(context.Background(), session, frame("2"))
 	app.agentFrameMu.Lock()
 	cached = len(app.agentFrames)
 	app.agentFrameMu.Unlock()
-	if cached != 1 {
-		t.Fatalf("late old-lifecycle frame cache contains %d entries, want one stale entry", cached)
+	if cached != 0 {
+		t.Fatalf("late old-lifecycle frame cache contains %d entries, want zero", cached)
 	}
 	reused := session
 	reused.CreatedAt = session.CreatedAt.Add(time.Second)
+	if _, _, err := app.Store.UpdateSession(id, func(current *state.TerminalSession) {
+		current.CreatedAt = reused.CreatedAt
+		current.State = state.TerminalRunning
+		current.WatchEnabled = true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The old frame can also arrive after the ID has been reused for the same
+	// pane. It must neither seed nor overwrite the new lifecycle's cache.
+	app.processCapturedFrame(context.Background(), session, frame("2"))
+	app.agentFrameMu.Lock()
+	cached = len(app.agentFrames)
+	app.agentFrameMu.Unlock()
+	if cached != 0 {
+		t.Fatalf("old frame populated reused lifecycle cache: entries=%d", cached)
+	}
 	if presentation := app.processCapturedFrame(context.Background(), reused, frame("3")); !strings.Contains(presentation, "Indexing files (3s)") {
 		t.Fatalf("reused session lifecycle consumed stale temporal evidence: %q", presentation)
+	}
+	app.processCapturedFrame(context.Background(), session, frame("4"))
+	app.agentFrameMu.Lock()
+	cachedState, present := app.agentFrames[id]
+	app.agentFrameMu.Unlock()
+	if !present || !cachedState.createdAt.Equal(reused.CreatedAt) || !strings.Contains(cachedState.frame.Text, "Indexing files (3s)") {
+		t.Fatalf("late old frame overwrote reused lifecycle cache: %#v present=%v", cachedState, present)
 	}
 }
 
