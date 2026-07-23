@@ -88,6 +88,7 @@ type App struct {
 	closeConfirms                 map[string]closeConfirmation
 	keyComposerMu                 sync.Mutex
 	keyPrompts                    map[keyPromptRef]keyPrompt
+	keyPromptTombstones           map[keyPromptRef]time.Time
 	keyPromptSessions             map[int]keyWorkflow
 	keyConfirmations              map[string]keyConfirmation
 	collapsedShelfMu              sync.Mutex
@@ -249,6 +250,7 @@ func New(cfg config.Config) (*App, error) {
 		conversationGates:             map[int]*conversationGate{},
 		closeConfirms:                 map[string]closeConfirmation{},
 		keyPrompts:                    map[keyPromptRef]keyPrompt{},
+		keyPromptTombstones:           map[keyPromptRef]time.Time{},
 		keyPromptSessions:             map[int]keyWorkflow{},
 		keyConfirmations:              map[string]keyConfirmation{},
 		pendingRecoveryBootID:         pendingRecoveryBootID,

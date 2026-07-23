@@ -331,18 +331,142 @@ func TestExpiredKeyConfirmationRetiresVisibleControls(t *testing.T) {
 	}
 }
 
+func TestExpiredKeyPromptDeletesForceReplyMessage(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	session, _ := app.Store.FindSession(1)
+	ref := keyPromptRef{ChatID: 100, MessageID: 71}
+	app.keyPrompts = map[keyPromptRef]keyPrompt{ref: {
+		Token: "workflow", Session: session, UserID: 42, ExpiresAt: time.Now().Add(-time.Second),
+	}}
+	app.keyPromptSessions = map[int]keyWorkflow{1: {
+		Token: "workflow", ExpiresAt: time.Now().Add(-time.Second),
+	}}
+	var deleted bool
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Path {
+		case "/botTOKEN/deleteMessage":
+			deleted = true
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/sendMessage":
+			return anchorKeyJSONResponse(`{"message_id":90,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+	app.expireKeyComposer(context.Background())
+	if !deleted || len(app.keyPrompts) != 0 || len(app.keyPromptSessions) != 0 {
+		t.Fatalf("expired prompt state: deleted=%v prompts=%d workflows=%d", deleted, len(app.keyPrompts), len(app.keyPromptSessions))
+	}
+	status := app.handleUpdate(context.Background(), telegram.Update{Message: &telegram.Message{
+		MessageID: 80, From: &telegram.User{ID: 42}, Chat: telegram.Chat{ID: 100},
+		Text: "Enter", ReplyToMessage: &telegram.Message{MessageID: 71},
+	}})
+	if status != "key_prompt_stale" || len(runner.calls) != 0 {
+		t.Fatalf("late prompt reply status=%q tmux=%#v", status, runner.calls)
+	}
+}
+
+func TestInvalidKeyConfirmationAnswersBeforeRetiringControls(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	session, _ := app.Store.FindSession(1)
+	token := "0123456789abcdef"
+	app.keyPromptSessions = map[int]keyWorkflow{1: {
+		Token: "workflow", ExpiresAt: time.Now().Add(-time.Second),
+	}}
+	app.keyConfirmations = map[string]keyConfirmation{token: {
+		WorkflowToken: "workflow", Session: session, UserID: 42, ChatID: 100, MessageID: 72,
+		ExpiresAt: time.Now().Add(-time.Second),
+	}}
+	var paths []string
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/editMessageReplyMarkup":
+			return anchorKeyJSONResponse(`{"message_id":72,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+	status := app.confirmKeys(context.Background(), telegram.CallbackQuery{
+		ID: "expired", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 72, Chat: telegram.Chat{ID: 100}},
+	}, token)
+	if status != "callback_user_error" {
+		t.Fatalf("status = %q", status)
+	}
+	want := []string{"/botTOKEN/answerCallbackQuery", "/botTOKEN/editMessageReplyMarkup"}
+	if fmt.Sprint(paths) != fmt.Sprint(want) {
+		t.Fatalf("Telegram call order = %v, want %v", paths, want)
+	}
+}
+
+func TestKeyCleanupBatchSharesOneDeadline(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	var deadlines []time.Time
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		deadline, ok := req.Context().Deadline()
+		if !ok {
+			return nil, fmt.Errorf("cleanup request has no deadline")
+		}
+		deadlines = append(deadlines, deadline)
+		switch req.URL.Path {
+		case "/botTOKEN/deleteMessage":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/editMessageReplyMarkup":
+			return anchorKeyJSONResponse(`{"message_id":72,"chat":{"id":100}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+	})}
+	app.cleanupKeyMessages(context.Background(), keyMessageRetirements{
+		Prompts:       []keyMessageRef{{ChatID: 100, MessageID: 71}},
+		Confirmations: []keyMessageRef{{ChatID: 100, MessageID: 72}},
+	})
+	if len(deadlines) != 2 || !deadlines[0].Equal(deadlines[1]) {
+		t.Fatalf("cleanup deadlines = %v, want one shared batch deadline", deadlines)
+	}
+}
+
+func TestStoppedWatchCannotOpenKeyComposer(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	app.KeyInterpreter = &fakeKeyInterpreter{}
+	session, _ := app.Store.FindSession(1)
+	session.WatchEnabled = false
+	var paths []string
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		if req.URL.Path != "/botTOKEN/answerCallbackQuery" {
+			return nil, fmt.Errorf("unexpected path %s", req.URL.Path)
+		}
+		return anchorKeyJSONResponse(`true`), nil
+	})}
+	status := app.openKeyComposer(context.Background(), telegram.CallbackQuery{
+		ID: "keyboard", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: 100}},
+	}, session)
+	if status != "callback_user_error" || fmt.Sprint(paths) != "[/botTOKEN/answerCallbackQuery]" {
+		t.Fatalf("status=%q Telegram paths=%v", status, paths)
+	}
+}
+
 func TestNewKeyPromptSupersedesPriorWorkflow(t *testing.T) {
 	app, _, _ := newAnchorKeyTestApp(t)
 	session, _ := app.Store.FindSession(1)
 	if _, err := app.issueKeyPrompt(100, 71, 42, session); err != nil {
 		t.Fatal(err)
 	}
-	first, current, recognized := app.consumeKeyPrompt(keyPromptRef{ChatID: 100, MessageID: 71})
-	if !recognized || !current {
+	first, recognized := app.keyPrompts[keyPromptRef{ChatID: 100, MessageID: 71}]
+	if !recognized {
 		t.Fatal("first prompt missing")
 	}
-	if _, err := app.issueKeyPrompt(100, 72, 42, session); err != nil {
+	retired, err := app.issueKeyPrompt(100, 72, 42, session)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(retired.Prompts) != 1 || retired.Prompts[0] != (keyMessageRef{ChatID: 100, MessageID: 71}) {
+		t.Fatalf("superseded prompt retirements = %#v", retired)
 	}
 	if app.keyWorkflowCurrent(session.ID, first.Token) {
 		t.Fatal("superseded workflow remained current")

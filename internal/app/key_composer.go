@@ -52,8 +52,14 @@ type keyMessageRef struct {
 	MessageID int
 }
 
+type keyMessageRetirements struct {
+	Prompts       []keyMessageRef
+	Confirmations []keyMessageRef
+}
+
 func (a *App) openKeyComposer(ctx context.Context, cb telegram.CallbackQuery, session state.TerminalSession) string {
-	if a.KeyInterpreter == nil || session.State != state.TerminalRunning || session.RetiringAnchorMessageID != 0 {
+	if a.KeyInterpreter == nil || session.State != state.TerminalRunning || !session.WatchEnabled ||
+		session.Collapsed || session.RetiringAnchorMessageID != 0 {
 		a.answerCallback(ctx, cb.ID, "keyboard composer is unavailable")
 		return "callback_user_error"
 	}
@@ -72,9 +78,7 @@ func (a *App) openKeyComposer(ctx context.Context, cb telegram.CallbackQuery, se
 		_ = a.Telegram.DeleteMessage(ctx, prompt.Chat.ID, prompt.MessageID)
 		return "callback_state_failed"
 	}
-	for _, ref := range retired {
-		a.retireKeyMessageRef(ctx, ref)
-	}
+	a.cleanupKeyMessages(ctx, retired)
 	return "callback_ok"
 }
 
@@ -159,7 +163,7 @@ func (a *App) interpretKeyPrompt(ctx context.Context, msg telegram.Message, prom
 	confirmationMessage, err := a.Telegram.SendMessage(ctx, msg.Chat.ID, text, msg.MessageID, telegram.KeyConfirmationMarkup(token))
 	if err != nil {
 		a.finishKeyWorkflow(prompt.Session.ID, prompt.Token)
-		_ = a.audit("keys.confirmation", "send_failed", map[string]any{"session_id": prompt.Session.ID, "error": err.Error()})
+		_ = a.audit("keys.confirmation", "send_failed", map[string]any{"session_id": prompt.Session.ID})
 		return
 	}
 	confirmation := keyConfirmation{
@@ -180,8 +184,11 @@ func (a *App) interpretKeyPrompt(ctx context.Context, msg telegram.Message, prom
 func (a *App) confirmKeys(ctx context.Context, cb telegram.CallbackQuery, token string) string {
 	confirmation, ok := a.consumeKeyConfirmation(token, cb)
 	if !ok {
+		answered := a.answerCallback(ctx, cb.ID, "confirmation expired")
 		a.retireKeyConfirmation(ctx, cb.Message)
-		a.answerCallback(ctx, cb.ID, "confirmation expired")
+		if !answered {
+			return "callback_telegram_failed"
+		}
 		return "callback_user_error"
 	}
 	msg := *cb.Message
@@ -201,8 +208,11 @@ func (a *App) confirmKeys(ctx context.Context, cb telegram.CallbackQuery, token 
 			a.retireKeyConfirmation(workerCtx, &msg)
 		}
 	}) {
+		answered := a.answerCallback(ctx, cb.ID, "Engram is busy; sequence canceled")
 		a.retireKeyConfirmation(ctx, &msg)
-		a.answerCallback(ctx, cb.ID, "Engram is busy; sequence canceled")
+		if !answered {
+			return "callback_telegram_failed"
+		}
 		return "callback_state_failed"
 	}
 	answered := a.answerCallback(ctx, cb.ID, "sending keys")
@@ -216,8 +226,11 @@ func (a *App) confirmKeys(ctx context.Context, cb telegram.CallbackQuery, token 
 func (a *App) cancelKeys(ctx context.Context, cb telegram.CallbackQuery, token string) string {
 	_, ok := a.consumeKeyConfirmation(token, cb)
 	if !ok {
+		answered := a.answerCallback(ctx, cb.ID, "confirmation expired")
 		a.retireKeyConfirmation(ctx, cb.Message)
-		a.answerCallback(ctx, cb.ID, "confirmation expired")
+		if !answered {
+			return "callback_telegram_failed"
+		}
 		return "callback_user_error"
 	}
 	if !a.answerCallback(ctx, cb.ID, "canceled") {
@@ -249,15 +262,29 @@ func (a *App) retireKeyConfirmation(ctx context.Context, message *telegram.Messa
 	if message == nil || a.Telegram == nil {
 		return
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-	defer cancel()
-	_, _ = a.Telegram.EditReplyMarkup(cleanupCtx, message.Chat.ID, message.MessageID, telegram.ClearMarkup())
+	a.cleanupKeyMessages(ctx, keyMessageRetirements{Confirmations: []keyMessageRef{{
+		ChatID: message.Chat.ID, MessageID: message.MessageID,
+	}}})
 }
 
-func (a *App) issueKeyPrompt(chatID int64, messageID int, userID int64, session state.TerminalSession) ([]keyMessageRef, error) {
+func (a *App) cleanupKeyMessages(ctx context.Context, retired keyMessageRetirements) {
+	if a.Telegram == nil || len(retired.Prompts)+len(retired.Confirmations) == 0 {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	for _, ref := range retired.Prompts {
+		_ = a.Telegram.DeleteMessage(cleanupCtx, ref.ChatID, ref.MessageID)
+	}
+	for _, ref := range retired.Confirmations {
+		_, _ = a.Telegram.EditReplyMarkup(cleanupCtx, ref.ChatID, ref.MessageID, telegram.ClearMarkup())
+	}
+}
+
+func (a *App) issueKeyPrompt(chatID int64, messageID int, userID int64, session state.TerminalSession) (keyMessageRetirements, error) {
 	token, err := randomKeyToken()
 	if err != nil {
-		return nil, err
+		return keyMessageRetirements{}, err
 	}
 	now := time.Now()
 	ref := keyPromptRef{ChatID: chatID, MessageID: messageID}
@@ -266,23 +293,34 @@ func (a *App) issueKeyPrompt(chatID int64, messageID int, userID int64, session 
 	if a.keyPrompts == nil {
 		a.keyPrompts = map[keyPromptRef]keyPrompt{}
 	}
+	if a.keyPromptTombstones == nil {
+		a.keyPromptTombstones = map[keyPromptRef]time.Time{}
+	}
 	if a.keyPromptSessions == nil {
 		a.keyPromptSessions = map[int]keyWorkflow{}
 	}
 	if a.keyConfirmations == nil {
 		a.keyConfirmations = map[string]keyConfirmation{}
 	}
-	var retired []keyMessageRef
+	var retired keyMessageRetirements
+	for existingRef, prompt := range a.keyPrompts {
+		if prompt.Session.ID == session.ID {
+			retired.Prompts = append(retired.Prompts, keyMessageRef{ChatID: existingRef.ChatID, MessageID: existingRef.MessageID})
+			delete(a.keyPrompts, existingRef)
+			a.addKeyPromptTombstoneLocked(existingRef, now)
+		}
+	}
 	for existingToken, confirmation := range a.keyConfirmations {
 		if confirmation.Session.ID == session.ID {
-			retired = append(retired, keyMessageRef{ChatID: confirmation.ChatID, MessageID: confirmation.MessageID})
+			retired.Confirmations = append(retired.Confirmations, keyMessageRef{ChatID: confirmation.ChatID, MessageID: confirmation.MessageID})
 			delete(a.keyConfirmations, existingToken)
 		}
 	}
-	retired = append(retired, a.enforceKeyComposerLimitLocked()...)
+	retired.append(a.enforceKeyComposerLimitLocked())
 	a.keyPrompts[ref] = keyPrompt{
 		Token: token, Session: session, UserID: userID, ExpiresAt: now.Add(keyComposerTTL),
 	}
+	delete(a.keyPromptTombstones, ref)
 	a.keyPromptSessions[session.ID] = keyWorkflow{Token: token, ExpiresAt: now.Add(keyComposerTTL)}
 	return retired, nil
 }
@@ -293,6 +331,11 @@ func (a *App) consumeKeyPrompt(ref keyPromptRef) (keyPrompt, bool, bool) {
 	prompt, ok := a.keyPrompts[ref]
 	delete(a.keyPrompts, ref)
 	if !ok {
+		expiresAt, stale := a.keyPromptTombstones[ref]
+		delete(a.keyPromptTombstones, ref)
+		if stale && expiresAt.After(time.Now()) {
+			return keyPrompt{}, false, true
+		}
 		return keyPrompt{}, false, false
 	}
 	workflow := a.keyPromptSessions[prompt.Session.ID]
@@ -363,10 +406,12 @@ func (a *App) finishKeyWorkflow(sessionID int, token string) {
 func (a *App) expireKeyComposer(ctx context.Context) {
 	now := time.Now()
 	a.keyComposerMu.Lock()
-	var retired []keyMessageRef
+	var retired keyMessageRetirements
 	for ref, prompt := range a.keyPrompts {
 		if !prompt.ExpiresAt.After(now) {
+			retired.Prompts = append(retired.Prompts, keyMessageRef{ChatID: ref.ChatID, MessageID: ref.MessageID})
 			delete(a.keyPrompts, ref)
+			a.addKeyPromptTombstoneLocked(ref, now)
 			if a.keyPromptSessions[prompt.Session.ID].Token == prompt.Token {
 				delete(a.keyPromptSessions, prompt.Session.ID)
 			}
@@ -375,7 +420,7 @@ func (a *App) expireKeyComposer(ctx context.Context) {
 	for token, confirmation := range a.keyConfirmations {
 		workflow := a.keyPromptSessions[confirmation.Session.ID]
 		if !confirmation.ExpiresAt.After(now) || workflow.Token != confirmation.WorkflowToken || !workflow.ExpiresAt.After(now) {
-			retired = append(retired, keyMessageRef{ChatID: confirmation.ChatID, MessageID: confirmation.MessageID})
+			retired.Confirmations = append(retired.Confirmations, keyMessageRef{ChatID: confirmation.ChatID, MessageID: confirmation.MessageID})
 			delete(a.keyConfirmations, token)
 			if a.keyPromptSessions[confirmation.Session.ID].Token == confirmation.WorkflowToken {
 				delete(a.keyPromptSessions, confirmation.Session.ID)
@@ -387,14 +432,17 @@ func (a *App) expireKeyComposer(ctx context.Context) {
 			delete(a.keyPromptSessions, sessionID)
 		}
 	}
-	a.keyComposerMu.Unlock()
-	for _, ref := range retired {
-		a.retireKeyMessageRef(ctx, ref)
+	for ref, expiresAt := range a.keyPromptTombstones {
+		if !expiresAt.After(now) {
+			delete(a.keyPromptTombstones, ref)
+		}
 	}
+	a.keyComposerMu.Unlock()
+	a.cleanupKeyMessages(ctx, retired)
 }
 
-func (a *App) enforceKeyComposerLimitLocked() []keyMessageRef {
-	var retired []keyMessageRef
+func (a *App) enforceKeyComposerLimitLocked() keyMessageRetirements {
+	var retired keyMessageRetirements
 	for len(a.keyPrompts)+len(a.keyConfirmations) >= maxKeyComposerWorkflows {
 		var oldestPromptRef keyPromptRef
 		var oldestPrompt keyPrompt
@@ -411,14 +459,16 @@ func (a *App) enforceKeyComposerLimitLocked() []keyMessageRef {
 			}
 		}
 		if !oldestPrompt.ExpiresAt.IsZero() && (oldestConfirmation.ExpiresAt.IsZero() || oldestPrompt.ExpiresAt.Before(oldestConfirmation.ExpiresAt)) {
+			retired.Prompts = append(retired.Prompts, keyMessageRef{ChatID: oldestPromptRef.ChatID, MessageID: oldestPromptRef.MessageID})
 			delete(a.keyPrompts, oldestPromptRef)
+			a.addKeyPromptTombstoneLocked(oldestPromptRef, time.Now())
 			if a.keyPromptSessions[oldestPrompt.Session.ID].Token == oldestPrompt.Token {
 				delete(a.keyPromptSessions, oldestPrompt.Session.ID)
 			}
 			continue
 		}
 		if oldestConfirmationToken != "" {
-			retired = append(retired, keyMessageRef{ChatID: oldestConfirmation.ChatID, MessageID: oldestConfirmation.MessageID})
+			retired.Confirmations = append(retired.Confirmations, keyMessageRef{ChatID: oldestConfirmation.ChatID, MessageID: oldestConfirmation.MessageID})
 			delete(a.keyConfirmations, oldestConfirmationToken)
 			if a.keyPromptSessions[oldestConfirmation.Session.ID].Token == oldestConfirmation.WorkflowToken {
 				delete(a.keyPromptSessions, oldestConfirmation.Session.ID)
@@ -447,6 +497,24 @@ func keyConfirmationText(sessionID int, title string, proposal keyseq.Proposal) 
 	return fmt.Sprintf("Keys:\n%s\n\nTarget: [%d] %s", keyseq.Format(proposal), sessionID, keyComposerTitle(title))
 }
 
-func (a *App) retireKeyMessageRef(ctx context.Context, ref keyMessageRef) {
-	a.retireKeyConfirmation(ctx, &telegram.Message{MessageID: ref.MessageID, Chat: telegram.Chat{ID: ref.ChatID}})
+func (r *keyMessageRetirements) append(other keyMessageRetirements) {
+	r.Prompts = append(r.Prompts, other.Prompts...)
+	r.Confirmations = append(r.Confirmations, other.Confirmations...)
+}
+
+func (a *App) addKeyPromptTombstoneLocked(ref keyPromptRef, now time.Time) {
+	if a.keyPromptTombstones == nil {
+		a.keyPromptTombstones = map[keyPromptRef]time.Time{}
+	}
+	a.keyPromptTombstones[ref] = now.Add(keyComposerTTL)
+	for len(a.keyPromptTombstones) > maxKeyComposerWorkflows {
+		var oldestRef keyPromptRef
+		var oldestExpiry time.Time
+		for candidate, expiry := range a.keyPromptTombstones {
+			if oldestExpiry.IsZero() || expiry.Before(oldestExpiry) {
+				oldestRef, oldestExpiry = candidate, expiry
+			}
+		}
+		delete(a.keyPromptTombstones, oldestRef)
+	}
 }

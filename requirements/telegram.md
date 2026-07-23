@@ -140,6 +140,10 @@ Telegram is Engram's only user interface.
   immutable tmux binding under the ordinary delivery locks; cancel, expiry,
   restart, reattachment, collapse, close, anchor rotation, duplicate callbacks,
   and superseding `⌨️` use send no keys.
+- Expired, superseded, and bounded-eviction ForceReply prompts are deleted;
+  corresponding confirmation controls are cleared. Restart deliberately
+  persists neither coordinates nor authority, so a pre-restart confirmation can
+  remain visible, but its first tap fails closed and clears its controls.
 - Direct key callbacks answer immediately before tmux work begins. Confirmed
   plans reserve bounded worker capacity, answer immediately, and execute outside
   the polling loop. A later tmux failure is delivered as a normal reply rather

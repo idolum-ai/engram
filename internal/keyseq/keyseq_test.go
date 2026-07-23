@@ -73,8 +73,30 @@ func TestParseRejectsUntrustedShapes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse(input); err == nil {
 				t.Fatalf("Parse(%q) succeeded", input)
-			} else if !errors.Is(err, ErrInvalidProposal) {
-				t.Fatalf("Parse(%q) error = %v, want ErrInvalidProposal", input, err)
+			}
+		})
+	}
+}
+
+func TestParseDistinguishesMalformedOutputFromLocalRejection(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  error
+	}{
+		{name: "invalid JSON", input: `{"kind":`, want: ErrMalformedProposal},
+		{name: "unknown field", input: `{"kind":"clarification","events":[],"message":"x"}`, want: ErrMalformedProposal},
+		{name: "unknown kind", input: `{"kind":"execute","events":[]}`, want: ErrMalformedProposal},
+		{name: "unknown key", input: `{"kind":"sequence","events":[{"key":"launch","modifiers":[],"count":1}]}`, want: ErrMalformedProposal},
+		{name: "unknown modifier", input: `{"kind":"sequence","events":[{"key":"c","modifiers":["command"],"count":1}]}`, want: ErrMalformedProposal},
+		{name: "locally bounded count", input: `{"kind":"sequence","events":[{"key":"enter","modifiers":[],"count":0}]}`, want: ErrInvalidProposal},
+		{name: "locally unsupported chord", input: `{"kind":"sequence","events":[{"key":"c","modifiers":["control","shift"],"count":1}]}`, want: ErrInvalidProposal},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Parse(test.input)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Parse() error = %v, want %v", err, test.want)
 			}
 		})
 	}
@@ -85,7 +107,7 @@ func TestParseDiscardsInertEventsFromClarification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Proposal{Kind: KindClarification}
+	want := Proposal{Kind: KindClarification, DiscardedClarificationEvents: 1}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("proposal = %#v, want %#v", got, want)
 	}

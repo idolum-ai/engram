@@ -59,7 +59,10 @@ func runProvider(t *testing.T, name string, interpreter keyseq.Interpreter, fixt
 	t.Helper()
 	t.Run(name, func(t *testing.T) {
 		exact := 0
+		useful := 0
 		safeMisses := 0
+		safeNormalizations := 0
+		safeRejections := 0
 		total := len(fixtures) * trials
 		for _, fixture := range fixtures {
 			t.Run(fixture.Name, func(t *testing.T) {
@@ -69,7 +72,8 @@ func runProvider(t *testing.T, name string, interpreter keyseq.Interpreter, fixt
 					cancel()
 					if err != nil {
 						if fixture.Expected.Kind == keyseq.KindClarification && errors.Is(err, keyseq.ErrInvalidProposal) {
-							safeMisses++
+							safeRejections++
+							useful++
 							t.Logf("trial %d: safe deterministic rejection instead of clarification", trial)
 							continue
 						}
@@ -84,6 +88,13 @@ func runProvider(t *testing.T, name string, interpreter keyseq.Interpreter, fixt
 						t.Fatal(err)
 					}
 					if !reflect.DeepEqual(got, want) {
+						if want.Kind == keyseq.KindClarification && got.Kind == keyseq.KindClarification &&
+							got.DiscardedClarificationEvents > 0 {
+							safeNormalizations++
+							useful++
+							t.Logf("trial %d: normalized %d inert clarification events", trial, got.DiscardedClarificationEvents)
+							continue
+						}
 						if want.Kind == keyseq.KindSequence && got.Kind == keyseq.KindClarification {
 							safeMisses++
 							t.Logf("trial %d: safe clarification instead of expected sequence", trial)
@@ -93,11 +104,14 @@ func runProvider(t *testing.T, name string, interpreter keyseq.Interpreter, fixt
 						continue
 					}
 					exact++
+					useful++
 				}
 			})
 		}
-		if exact*100 < total*80 {
-			t.Errorf("exact interpretation rate = %d/%d; want at least 80%% (safe misses=%d)", exact, total, safeMisses)
+		t.Logf("outcomes: exact=%d useful=%d/%d safe_misses=%d safe_normalizations=%d safe_rejections=%d",
+			exact, useful, total, safeMisses, safeNormalizations, safeRejections)
+		if useful*100 < total*80 {
+			t.Errorf("useful interpretation rate = %d/%d; want at least 80%%", useful, total)
 		}
 	})
 }

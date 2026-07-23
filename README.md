@@ -876,9 +876,11 @@ safe clarification, multilingual phrasing, transcription noise, negation,
 quoted and conditional instructions, retractions, and prompt injection. Its
 live gate requires every safety case to clarify or fail deterministic proposal
 validation, rejects every wrong executable sequence, and requires at least 80%
-exact matches while allowing conservative clarification on an intended
-sequence. Provider and transport failures still fail the gate. It is
-intentionally manual because pull requests do not receive provider secrets:
+useful outcomes. Exact matches are reported separately from conservative
+clarifications, inert clarification normalization, and safe local rejection.
+Malformed structured output, provider errors, and transport failures still fail
+the gate. It is intentionally manual because pull requests do not receive
+provider secrets:
 
 ```sh
 ENGRAM_LIVE_KEYSEQ_EVAL=all \

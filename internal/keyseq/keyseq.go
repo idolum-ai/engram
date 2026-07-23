@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-var ErrInvalidProposal = errors.New("invalid key proposal")
+var (
+	ErrMalformedProposal = errors.New("malformed key proposal")
+	ErrInvalidProposal   = errors.New("invalid key proposal")
+)
 
 const (
 	MaxExpandedEvents           = 32
@@ -95,8 +98,9 @@ type Event struct {
 }
 
 type Proposal struct {
-	Kind   Kind    `json:"kind"`
-	Events []Event `json:"events"`
+	Kind                         Kind    `json:"kind"`
+	Events                       []Event `json:"events"`
+	DiscardedClarificationEvents int     `json:"-"`
 }
 
 type Group struct {
@@ -161,14 +165,30 @@ func Parse(raw string) (Proposal, error) {
 	decoder.DisallowUnknownFields()
 	var proposal Proposal
 	if err := decoder.Decode(&proposal); err != nil {
-		return Proposal{}, fmt.Errorf("%w: decode: %v", ErrInvalidProposal, err)
+		return Proposal{}, fmt.Errorf("%w: decode: %v", ErrMalformedProposal, err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return Proposal{}, fmt.Errorf("%w: trailing JSON value", ErrInvalidProposal)
+			return Proposal{}, fmt.Errorf("%w: trailing JSON value", ErrMalformedProposal)
 		}
-		return Proposal{}, fmt.Errorf("%w: trailing data", ErrInvalidProposal)
+		return Proposal{}, fmt.Errorf("%w: trailing data", ErrMalformedProposal)
+	}
+	proposal.Kind = Kind(strings.ToLower(strings.TrimSpace(string(proposal.Kind))))
+	if proposal.Kind != KindSequence && proposal.Kind != KindClarification {
+		return Proposal{}, fmt.Errorf("%w: unknown proposal kind %q", ErrMalformedProposal, proposal.Kind)
+	}
+	for _, event := range proposal.Events {
+		key := Key(strings.ToLower(strings.TrimSpace(string(event.Key))))
+		if !validKey(key) {
+			return Proposal{}, fmt.Errorf("%w: unknown key %q", ErrMalformedProposal, key)
+		}
+		for _, rawModifier := range event.Modifiers {
+			modifier := Modifier(strings.ToLower(strings.TrimSpace(string(rawModifier))))
+			if modifier != ModifierControl && modifier != ModifierAlt && modifier != ModifierShift {
+				return Proposal{}, fmt.Errorf("%w: unknown modifier %q", ErrMalformedProposal, modifier)
+			}
+		}
 	}
 	validated, err := Validate(proposal)
 	if err != nil {
@@ -185,6 +205,7 @@ func Validate(proposal Proposal) (Proposal, error) {
 		// decoders populate optional array items even when the model selected
 		// clarification; discard those inert fields instead of rejecting a safe
 		// outcome or ever attempting to interpret them.
+		proposal.DiscardedClarificationEvents += len(proposal.Events)
 		proposal.Events = nil
 		return proposal, nil
 	case KindSequence:
