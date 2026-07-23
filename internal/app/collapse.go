@@ -194,6 +194,9 @@ func (a *App) expandCollapsedShelf(ctx context.Context, expected state.Collapsed
 				}
 				lock.Unlock()
 				sessionLock.Unlock()
+				if a.collapsedShelfBackoffActive(expected.MessageID) {
+					break
+				}
 				continue
 			}
 			if stateErr != nil {
@@ -210,7 +213,8 @@ func (a *App) expandCollapsedShelf(ctx context.Context, expected state.Collapsed
 		sessionLock.Unlock()
 		if restoredMember {
 			a.queueManualRefresh(member.ID)
-		} else if a.collapsedShelfBackoffActive(expected.MessageID) {
+		}
+		if a.collapsedShelfBackoffActive(expected.MessageID) {
 			break
 		}
 	}
@@ -378,6 +382,9 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 			if restoredMember {
 				a.queueManualRefresh(member.ID)
 			}
+			if shelf := a.Store.Snapshot().CollapsedShelf; shelf != nil && a.collapsedShelfBackoffActive(shelf.MessageID) {
+				return
+			}
 		}
 		snapshot = a.Store.Snapshot()
 	}
@@ -425,14 +432,12 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 		if _, err := a.editAnchor(ctx, shelf.ChatID, shelf.MessageID, rendered, telegram.CollapsedShelfMarkup()); err != nil && !telegram.IsMessageNotModified(err) {
 			if isTelegramAnchorUnavailable(err) {
 				if shelf.RetiringMessageID != 0 {
-					if !a.retireCollapsedShelfPredecessorLocked(ctx, *shelf) {
-						return
+					if _, recovered, stateErr := a.Store.RecoverCollapsedShelfPredecessor(shelf.MessageID); stateErr != nil {
+						_ = a.audit("state.collapsed_shelf", "predecessor_recovery_failed", map[string]any{"message_id": shelf.RetiringMessageID, "error": stateErr.Error()})
+					} else if recovered {
+						a.clearCollapsedShelfRetry(shelf.MessageID)
 					}
-					refreshed := a.Store.Snapshot().CollapsedShelf
-					if refreshed == nil || refreshed.MessageID != shelf.MessageID {
-						return
-					}
-					shelf = refreshed
+					return
 				}
 				a.replaceCollapsedShelfLocked(ctx, *shelf, rendered, renderHash)
 			} else {
@@ -498,8 +503,11 @@ func (a *App) reconcileCollapsedShelfLocked(ctx context.Context) {
 		}
 		lock := a.anchorMutex(member.ID)
 		lock.Lock()
-		a.retireCollapsedSessionAnchorLocked(ctx, member)
+		retired := a.retireCollapsedSessionAnchorLocked(ctx, member)
 		lock.Unlock()
+		if !retired && a.collapsedShelfBackoffActive(shelf.MessageID) {
+			return
+		}
 	}
 }
 
@@ -886,6 +894,7 @@ func (a *App) retireProspectiveMessage(ctx context.Context, chatID int64, messag
 		if stateErr := a.Store.RememberMessageCleanup(cleanup); stateErr != nil {
 			_ = a.audit("state.prospective_cleanup", "remember_failed", map[string]any{"message_id": messageID, "error": stateErr.Error()})
 		}
+		a.deferCollapsedShelfFloodWait(err)
 	}
 }
 

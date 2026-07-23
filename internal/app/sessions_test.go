@@ -39,7 +39,7 @@ func TestWatchSessionDoesNotBypassCollapsedShelf(t *testing.T) {
 		t.Fatal(err)
 	}
 	result := app.watchSession(context.Background(), id, 0)
-	if result.OK() || !strings.Contains(result.Message, "collapsed shelf") {
+	if result.OK() || result.Message != "session is on the collapsed shelf; tap ➕ Show on the Collapsed sessions shelf" {
 		t.Fatalf("watch result = %#v", result)
 	}
 }

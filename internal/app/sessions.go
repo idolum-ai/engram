@@ -356,7 +356,7 @@ func (a *App) watchSession(ctx context.Context, id int, replyTo int) actionResul
 		return actionResult{Outcome: actionUserError, Message: "resume recovery is still being reconciled; try again shortly"}
 	}
 	if ts.Collapsed {
-		return actionResult{Outcome: actionUserError, Message: "session is on the collapsed shelf; use + on that shelf to restore all sessions"}
+		return actionResult{Outcome: actionUserError, Message: "session is on the collapsed shelf; tap ➕ Show on the Collapsed sessions shelf"}
 	}
 	if ts.State == state.TerminalLost {
 		tctx, cancel := tmux.TimeoutContext(ctx)

@@ -1190,6 +1190,35 @@ func (s *Store) FinishCollapsedShelfRetirement(messageID int, chatID int64, reti
 	return updated, true, nil
 }
 
+func (s *Store) RecoverCollapsedShelfPredecessor(messageID int) (CollapsedShelf, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.CollapsedShelf == nil || s.state.CollapsedShelf.MessageID != messageID ||
+		s.state.CollapsedShelf.RetiringChatID == 0 || s.state.CollapsedShelf.RetiringMessageID <= 0 {
+		return CollapsedShelf{}, false, nil
+	}
+	previous := cloneState(s.state)
+	shelf := s.state.CollapsedShelf
+	shelf.ChatID = shelf.RetiringChatID
+	shelf.MessageID = shelf.RetiringMessageID
+	shelf.LastRenderHash = ""
+	shelf.Pinned = false
+	shelf.PinKnown = false
+	shelf.RetryAt = time.Time{}
+	shelf.RetiringChatID = 0
+	shelf.RetiringMessageID = 0
+	shelf.RetiringRetryAt = time.Time{}
+	updated := *shelf
+	if err := s.saveLocked(); err != nil {
+		if !PersistenceReachedReplacement(err) {
+			s.state = previous
+			return *previous.CollapsedShelf, false, err
+		}
+		return updated, true, err
+	}
+	return updated, true, nil
+}
+
 func (s *Store) UpdateCollapsedShelf(messageID int, fn func(*CollapsedShelf)) (CollapsedShelf, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

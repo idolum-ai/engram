@@ -246,6 +246,43 @@ func TestCollapsedShelfReplacementPersistsPredecessorUntilRetired(t *testing.T) 
 	}
 }
 
+func TestCollapsedShelfPredecessorCanBeRecoveredAfterReplacementLoss(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	audit := filepath.Join(dir, "audit.jsonl")
+	store, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, committed, err := store.SetCollapsedShelfIfEmpty(CollapsedShelf{
+		ChatID: 100, MessageID: 88, LastRenderHash: "old", Pinned: true, PinKnown: true,
+	}); err != nil || !committed {
+		t.Fatalf("set shelf committed=%v err=%v", committed, err)
+	}
+	if _, committed, err := store.ReplaceCollapsedShelf(88, CollapsedShelf{
+		ChatID: 100, MessageID: 99, LastRenderHash: "new",
+	}); err != nil || !committed {
+		t.Fatalf("replace committed=%v err=%v", committed, err)
+	}
+
+	recovered, committed, err := store.RecoverCollapsedShelfPredecessor(99)
+	if err != nil || !committed || recovered.ChatID != 100 || recovered.MessageID != 88 ||
+		recovered.RetiringChatID != 0 || recovered.RetiringMessageID != 0 ||
+		recovered.LastRenderHash != "" || recovered.Pinned || recovered.PinKnown {
+		t.Fatalf("recover = %#v committed=%v err=%v", recovered, committed, err)
+	}
+	reopened, err := Open(path, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shelf := reopened.Snapshot().CollapsedShelf
+	if shelf == nil || shelf.MessageID != 88 || shelf.RetiringMessageID != 0 ||
+		shelf.LastRenderHash != "" || shelf.PinKnown {
+		t.Fatalf("reopened recovered shelf = %#v", shelf)
+	}
+}
+
 func TestPendingCollapseKeepsAnchorLiveUntilShelfIsReady(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
