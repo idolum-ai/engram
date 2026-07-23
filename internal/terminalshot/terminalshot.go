@@ -65,6 +65,28 @@ type CommandRunner interface {
 	Run(context.Context, string, ...string) error
 }
 
+// BrowserError identifies failures in browser discovery, execution, or output.
+// Callers may use it to distinguish renderer-health failures from invalid
+// input, request cancellation, and local artifact-directory errors.
+type BrowserError struct {
+	Err error
+}
+
+func (e *BrowserError) Error() string { return e.Err.Error() }
+func (e *BrowserError) Unwrap() error { return e.Err }
+
+func IsBrowserFailure(err error) bool {
+	var browserErr *BrowserError
+	return errors.As(err, &browserErr)
+}
+
+func browserFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &BrowserError{Err: err}
+}
+
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) error {
@@ -114,9 +136,10 @@ func New(browser, theme string) *Renderer {
 
 func (r *Renderer) Available() (string, error) {
 	if r == nil {
-		return "", fmt.Errorf("snapshot renderer is not configured")
+		return "", browserFailure(fmt.Errorf("snapshot renderer is not configured"))
 	}
-	return browserPath(r.Browser)
+	path, err := browserPath(r.Browser)
+	return path, browserFailure(err)
 }
 
 func (r *Renderer) Probe(ctx context.Context) (string, error) {
@@ -231,14 +254,14 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 		pageURL,
 	}
 	if err := runner.Run(ctx, browser, args...); err != nil {
-		return "", err
+		return "", browserFailure(err)
 	}
 	info, err := os.Stat(pngPath)
 	if err != nil {
-		return "", fmt.Errorf("snapshot browser produced no PNG: %w", err)
+		return "", browserFailure(fmt.Errorf("snapshot browser produced no PNG: %w", err))
 	}
 	if !info.Mode().IsRegular() || info.Size() == 0 {
-		return "", fmt.Errorf("snapshot browser produced an invalid PNG")
+		return "", browserFailure(fmt.Errorf("snapshot browser produced an invalid PNG"))
 	}
 	pngFile, err = os.Open(pngPath)
 	if err != nil {
@@ -247,13 +270,13 @@ func (r *Renderer) Render(ctx context.Context, input Input, dir string) (string,
 	pngConfig, decodeErr := png.DecodeConfig(pngFile)
 	closeErr := pngFile.Close()
 	if decodeErr != nil {
-		return "", fmt.Errorf("decode snapshot PNG: %w", decodeErr)
+		return "", browserFailure(fmt.Errorf("decode snapshot PNG: %w", decodeErr))
 	}
 	if closeErr != nil {
 		return "", fmt.Errorf("close snapshot PNG: %w", closeErr)
 	}
 	if pngConfig.Width != logicalWidth*PixelRatio || pngConfig.Height != logicalHeight*PixelRatio {
-		return "", fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, logicalWidth*PixelRatio, logicalHeight*PixelRatio)
+		return "", browserFailure(fmt.Errorf("snapshot browser produced %dx%d PNG, want %dx%d", pngConfig.Width, pngConfig.Height, logicalWidth*PixelRatio, logicalHeight*PixelRatio))
 	}
 	if err := os.Chmod(pngPath, 0o600); err != nil {
 		return "", fmt.Errorf("protect snapshot PNG: %w", err)

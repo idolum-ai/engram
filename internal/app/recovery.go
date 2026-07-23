@@ -89,6 +89,7 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 	}
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	tmuxCtx = tmux.BackgroundContext(tmuxCtx)
 	pane, err := a.terminalMechanics().Validate(tmuxCtx, terminalBinding(expected))
 	if err != nil {
 		if tmux.IsIdentityLoss(err) {

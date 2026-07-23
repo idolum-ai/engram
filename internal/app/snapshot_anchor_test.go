@@ -110,6 +110,7 @@ func TestSnapshotAnchorConvertsInPlaceDeduplicatesAndRefreshesManually(t *testin
 		Telegram:           client,
 		Tmux:               tmux.New(tmuxRunner),
 		Snapshots:          renderer,
+		snapshotReady:      true,
 		captureSlots:       make(chan struct{}, 1),
 		renderSlots:        make(chan struct{}, 1),
 		manualRefresh:      map[int]bool{},
@@ -320,6 +321,7 @@ func TestFailedSnapshotMigrationIsThrottledBeforeRendering(t *testing.T) {
 		Telegram:      client,
 		Tmux:          tmux.New(snapshotTmuxRunner{}),
 		Snapshots:     renderer,
+		snapshotReady: true,
 		captureSlots:  make(chan struct{}, 1),
 		renderSlots:   make(chan struct{}, 1),
 		manualRefresh: map[int]bool{},
@@ -356,12 +358,20 @@ func TestUpstreamSignalDeliversWhenSnapshotRenderingFails(t *testing.T) {
 	a := &App{
 		Config: config.Config{AnchorMode: config.AnchorModeSnapshot, TelegramChatID: 100, Home: t.TempDir()},
 		Store:  store, Telegram: client, Tmux: tmux.New(snapshotReferenceTmuxRunner{capture: capture}), Snapshots: renderer,
-		mode: config.AnchorModeSnapshot, captureSlots: make(chan struct{}, 1), renderSlots: make(chan struct{}, 1), manualRefresh: map[int]bool{},
+		mode: config.AnchorModeSnapshot, snapshotReady: true, captureSlots: make(chan struct{}, 1), renderSlots: make(chan struct{}, 1), manualRefresh: map[int]bool{},
 	}
 	a.refreshSnapshotAnchor(context.Background(), session.ID, true)
 	got, _ := store.FindSession(session.ID)
 	if got.UpstreamMessageID != 88 || got.LastSnapshotCaptureHash != "" || renderer.renders != 1 {
 		t.Fatalf("session=%#v renders=%d", got, renderer.renders)
+	}
+	if a.snapshotAvailable() {
+		t.Fatal("canonical browser failure did not enter snapshot recovery")
+	}
+	ageSnapshotAttempt(t, store, session.ID)
+	a.refreshSnapshotAnchor(context.Background(), session.ID, true)
+	if renderer.renders != 1 {
+		t.Fatalf("degraded canonical renderer retried before recovery: renders=%d", renderer.renders)
 	}
 }
 
@@ -377,7 +387,7 @@ func TestGuideRendererUsesOnlySelectedConfiguredProvider(t *testing.T) {
 	}
 }
 
-func TestSnapshotModeRequiresAvailableBrowser(t *testing.T) {
+func TestSnapshotModeStartsDegradedWhenBrowserProbeFails(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -392,8 +402,12 @@ func TestSnapshotModeRequiresAvailableBrowser(t *testing.T) {
 		SnapshotBrowser:       filepath.Join(dir, "missing-chromium"),
 		SnapshotTheme:         "terminal",
 	})
-	if app != nil || err == nil || !strings.Contains(err.Error(), "snapshot requires probed Chromium") {
-		t.Fatalf("snapshot browser requirement app=%#v err=%v", app, err)
+	if err != nil || app == nil {
+		t.Fatalf("degraded snapshot startup app=%#v err=%v", app, err)
+	}
+	defer app.Close()
+	if app.snapshotAvailable() || app.anchorMode() != config.AnchorModeSnapshot || !strings.Contains(app.snapshotStatus(), "missing-chromium") {
+		t.Fatalf("degraded snapshot state mode=%q status=%q", app.anchorMode(), app.snapshotStatus())
 	}
 }
 
@@ -577,6 +591,7 @@ func TestSnapshotAnchorReplacesUnavailableTextAnchor(t *testing.T) {
 		Telegram:      client,
 		Tmux:          tmux.New(snapshotTmuxRunner{}),
 		Snapshots:     &countingSnapshotRenderer{},
+		snapshotReady: true,
 		captureSlots:  make(chan struct{}, 1),
 		renderSlots:   make(chan struct{}, 1),
 		manualRefresh: map[int]bool{},
@@ -633,6 +648,7 @@ func TestSnapshotRefreshBacksOffPendingRetirementBeforeRendering(t *testing.T) {
 		Telegram:      client,
 		Tmux:          tmux.New(snapshotTmuxRunner{}),
 		Snapshots:     renderer,
+		snapshotReady: true,
 		captureSlots:  make(chan struct{}, 1),
 		renderSlots:   make(chan struct{}, 1),
 		manualRefresh: map[int]bool{},
@@ -722,7 +738,7 @@ type failingSnapshotRenderer struct{ renders int }
 func (r *failingSnapshotRenderer) Available() (string, error) { return "/usr/bin/chromium", nil }
 func (r *failingSnapshotRenderer) Render(context.Context, terminalshot.Input, string) (string, error) {
 	r.renders++
-	return "", errors.New("render failed")
+	return "", &terminalshot.BrowserError{Err: errors.New("render failed")}
 }
 
 type snapshotReferenceTmuxRunner struct {

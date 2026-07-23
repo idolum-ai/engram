@@ -801,6 +801,17 @@ func TestDumpScrollbackRequiresStreamingRunner(t *testing.T) {
 	}
 }
 
+func TestDumpScrollbackRejectsPriorityWrappedNonStreamingRunnerWithoutBuffering(t *testing.T) {
+	inner := &fakeRunner{out: "complete scrollback must not be buffered"}
+	err := New(NewPriorityRunner(inner)).DumpScrollback(context.Background(), "%10", "@2", styledCaptureServerID, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "does not support streaming") {
+		t.Fatalf("DumpScrollback error = %v", err)
+	}
+	if len(inner.calls) != 0 {
+		t.Fatalf("non-streaming inner runner was invoked: %#v", inner.calls)
+	}
+}
+
 func TestListPanesParsesImmutableIdentity(t *testing.T) {
 	f := &fakeRunner{out: tmuxRecord("$1", "@2", "%3", "main", "0", "1", "1", "/home/me", "bash") +
 		tmuxRecord("$1", "@4", "%5", "main", "2", "0", "0", "/tmp", "vim")}

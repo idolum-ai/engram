@@ -44,6 +44,7 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		return
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
+	tctx = tmux.BackgroundContext(tctx)
 	if !acquireSlot(tctx, a.captureSlots) {
 		cancel()
 		lock.Unlock()

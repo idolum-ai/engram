@@ -610,6 +610,16 @@ func TestRendererRejectsMissingConfiguredBrowser(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing-browser")
 	if _, err := (&Renderer{Browser: path, Theme: "terminal"}).Available(); err == nil {
 		t.Fatal("missing configured browser was accepted")
+	} else if !IsBrowserFailure(err) {
+		t.Fatalf("missing browser error was not classified as browser health: %v", err)
+	}
+}
+
+func TestBrowserFailureClassificationExcludesInvalidInput(t *testing.T) {
+	t.Parallel()
+	_, err := (&Renderer{}).Render(context.Background(), Input{Columns: -1}, t.TempDir())
+	if err == nil || IsBrowserFailure(err) {
+		t.Fatalf("invalid input classification = %v", err)
 	}
 }
 

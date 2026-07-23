@@ -21,12 +21,21 @@ type snapshotRenderer interface {
 }
 
 func (a *App) snapshotStatus() string {
-	if a.Snapshots == nil || !a.snapshotReady {
-		return "unavailable"
+	ready, path, probeError, _, retryAt := a.snapshotHealth()
+	if !ready {
+		return snapshotUnavailableStatus(a.redactText(probeError), retryAt)
 	}
-	path, err := a.Snapshots.Available()
-	if err != nil {
-		return "unavailable"
+	if path == "" && a.Snapshots != nil {
+		availablePath, err := a.Snapshots.Available()
+		if err != nil {
+			_, generation := a.snapshotRenderHealth()
+			a.markSnapshotsUnavailable(err, time.Now(), generation)
+			return snapshotUnavailableStatus(a.redactText(err.Error()), time.Now().Add(snapshotProbeInitialDelay))
+		}
+		path = availablePath
+	}
+	if path == "" {
+		return "ready (Chromium, " + a.Config.SnapshotTheme + ")"
 	}
 	return "ready (" + filepath.Base(path) + ", " + a.Config.SnapshotTheme + ")"
 }
@@ -35,7 +44,12 @@ func (a *App) queueSnapshot(ts state.TerminalSession) actionResult {
 	if a.Snapshots == nil {
 		return actionResult{Outcome: actionStateFailed, Message: "image renderer unavailable"}
 	}
+	if !a.snapshotAvailable() {
+		return actionResult{Outcome: actionStateFailed, Message: "image renderer is recovering; check /status"}
+	}
 	if _, err := a.Snapshots.Available(); err != nil {
+		_, generation := a.snapshotRenderHealth()
+		a.markSnapshotsUnavailable(err, time.Now(), generation)
 		_ = a.audit("terminal.snapshot", "unavailable", map[string]any{"session_id": ts.ID, "error": err.Error()})
 		return actionResult{Outcome: actionStateFailed, Message: "image renderer unavailable; check /status"}
 	}
@@ -58,6 +72,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		return
 	}
 	tctx, cancel := tmux.TimeoutContext(ctx)
+	tctx = tmux.BackgroundContext(tctx)
 	if !acquireSlot(tctx, a.captureSlots) {
 		cancel()
 		lock.Unlock()
@@ -75,8 +90,9 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	}
 	a.processCapturedFrame(ctx, current, capture)
 
-	if !acquireSlot(ctx, a.renderSlots) {
-		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image before the request timed out.")
+	generation, renderReady := a.acquireSnapshotRender(ctx)
+	if !renderReady {
+		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image because Chromium is recovering or the request timed out; check /status.")
 		return
 	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
@@ -93,6 +109,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	renderCancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {
+		a.markSnapshotsUnavailable(renderErr, time.Now(), generation)
 		_ = a.audit("terminal.snapshot", "render_failed", map[string]any{"session_id": current.ID, "error": renderErr.Error()})
 		a.snapshotNotice(ctx, current.ID, "Could not render the terminal image; check /status and /logs.")
 		return

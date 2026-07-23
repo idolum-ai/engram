@@ -887,7 +887,7 @@ func captureNonce() (string, error) {
 }
 
 func (m Manager) cleanupCaptureBuffers(ctx context.Context, names ...string) {
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	cleanupCtx, cancel := context.WithTimeout(ProtectedContext(context.WithoutCancel(ctx)), 2*time.Second)
 	defer cancel()
 	args := make([]string, 0, len(names)*4)
 	for _, name := range names {

@@ -81,7 +81,7 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 }
 
 func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, refs visibleReferences, excerpts []string, force bool, guard, accepted func() bool) bool {
-	if !a.snapshotReady || a.Snapshots == nil || a.snapshotAnchors() {
+	if !a.snapshotAvailable() || a.Snapshots == nil || a.snapshotAnchors() {
 		return false
 	}
 	crop := a.selectGuidedEvidenceCrop(expected, capture, previous, semanticText, summary, excerpts)
@@ -90,10 +90,17 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	}
 	renderCtx, cancel := context.WithTimeout(ctx, snapshotRenderTimeout)
 	input := a.withSnapshotFooterStatus(renderCtx, crop.input, capture.CurrentPath)
+	ready, generation := a.snapshotRenderHealth()
+	if !ready {
+		cancel()
+		releaseSlot(a.renderSlots)
+		return false
+	}
 	pngPath, renderErr := a.Snapshots.Render(renderCtx, input, a.Config.ArtifactDir())
 	cancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {
+		a.markSnapshotsUnavailable(renderErr, time.Now(), generation)
 		_ = a.audit("terminal.guided_evidence", "render_failed", map[string]any{"session_id": expected.ID, "error": renderErr.Error()})
 		return false
 	}

@@ -4,11 +4,40 @@ package mechanics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
 	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+const (
+	StageIdentity = "identity"
+	StageInput    = "input"
+)
+
+type stageError struct {
+	stage string
+	err   error
+}
+
+func (e *stageError) Error() string { return e.err.Error() }
+func (e *stageError) Unwrap() error { return e.err }
+
+func FailureStage(err error) string {
+	var staged *stageError
+	if errors.As(err, &staged) {
+		return staged.stage
+	}
+	return "unknown"
+}
+
+func withStage(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &stageError{stage: stage, err: err}
+}
 
 // Binding identifies one pane for the lifetime of its tmux server.
 type Binding struct {
@@ -34,10 +63,10 @@ func (c Controller) Validate(ctx context.Context, binding Binding) (tmux.Pane, e
 func (c Controller) SendCommand(ctx context.Context, binding Binding, text string) (tmux.Pane, error) {
 	pane, err := c.Validate(ctx, binding)
 	if err != nil {
-		return tmux.Pane{}, err
+		return tmux.Pane{}, withStage(StageIdentity, err)
 	}
 	if err := c.tmux.SendCommandIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, text); err != nil {
-		return tmux.Pane{}, err
+		return tmux.Pane{}, withStage(StageInput, err)
 	}
 	return pane, nil
 }
@@ -45,10 +74,10 @@ func (c Controller) SendCommand(ctx context.Context, binding Binding, text strin
 func (c Controller) SendText(ctx context.Context, binding Binding, text string) (tmux.Pane, error) {
 	pane, err := c.Validate(ctx, binding)
 	if err != nil {
-		return tmux.Pane{}, err
+		return tmux.Pane{}, withStage(StageIdentity, err)
 	}
 	if err := c.tmux.SendTextIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, text); err != nil {
-		return tmux.Pane{}, err
+		return tmux.Pane{}, withStage(StageInput, err)
 	}
 	return pane, nil
 }
@@ -59,10 +88,10 @@ func (c Controller) SendKeys(ctx context.Context, binding Binding, keys []string
 	}
 	pane, err := c.Validate(ctx, binding)
 	if err != nil {
-		return tmux.Pane{}, err
+		return tmux.Pane{}, withStage(StageIdentity, err)
 	}
 	if err := c.tmux.SendKeysIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, keys); err != nil {
-		return tmux.Pane{}, err
+		return tmux.Pane{}, withStage(StageInput, err)
 	}
 	return pane, nil
 }

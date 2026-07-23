@@ -83,6 +83,10 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !ok || ts.TmuxPaneID == "" || ts.State != state.TerminalRunning || !ts.WatchEnabled || ts.AnchorMessageID == 0 {
 		return
 	}
+	ready, _ := a.snapshotRenderHealth()
+	if !ready || a.Snapshots == nil {
+		return
+	}
 	if !a.finishSnapshotMigration(ctx, id) {
 		return
 	}
@@ -105,6 +109,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 
 	tctx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
+	tctx = tmux.BackgroundContext(tctx)
 	identityLock := a.sessionMutex(id)
 	identityLock.Lock()
 	current, currentOK := a.Store.FindSession(id)
@@ -144,7 +149,8 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if captureHash == current.LastSnapshotCaptureHash && current.AnchorFormat == "snapshot" && !manual {
 		return
 	}
-	if !acquireSlot(ctx, a.renderSlots) {
+	generation, renderReady := a.acquireSnapshotRender(ctx)
+	if !renderReady {
 		return
 	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
@@ -161,6 +167,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	renderCancel()
 	releaseSlot(a.renderSlots)
 	if renderErr != nil {
+		a.markSnapshotsUnavailable(renderErr, time.Now(), generation)
 		_ = a.audit("terminal.snapshot_anchor", "render_failed", map[string]any{"session_id": id, "error": renderErr.Error()})
 		return
 	}

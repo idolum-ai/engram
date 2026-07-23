@@ -96,6 +96,7 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 		Telegram:           client,
 		Tmux:               tmux.New(snapshotTmuxRunner{}),
 		Snapshots:          renderer,
+		snapshotReady:      true,
 		captureSlots:       make(chan struct{}, 1),
 		renderSlots:        make(chan struct{}, 1),
 		transferSlots:      make(chan struct{}, 1),
@@ -178,7 +179,7 @@ func TestSnapshotDeletesReplyWhenBindingChangesDuringTelegramSend(t *testing.T) 
 		}
 		return snapshotJSONResponse(`true`), nil
 	})}
-	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client, Tmux: tmux.New(snapshotTmuxRunner{}), Snapshots: &fakeSnapshotRenderer{}}
+	a := &App{Config: config.Config{Home: dir}, Store: store, Telegram: client, Tmux: tmux.New(snapshotTmuxRunner{}), Snapshots: &fakeSnapshotRenderer{}, snapshotReady: true}
 	a.sendSnapshot(context.Background(), session)
 	got, _ := store.FindSession(session.ID)
 	if len(paths) != 2 || paths[0] != "/botTOKEN/sendPhoto" || paths[1] != "/botTOKEN/deleteMessage" || got.SnapshotMessageID != 0 {
@@ -220,13 +221,14 @@ func TestOnDemandSnapshotUsesSharedRenderLimit(t *testing.T) {
 		return snapshotJSONResponse(`{"message_id":88,"chat":{"id":100}}`), nil
 	})}
 	app := &App{
-		Config:       config.Config{TelegramChatID: 100, Home: dir},
-		Store:        store,
-		Telegram:     client,
-		Tmux:         tmux.New(snapshotTmuxRunner{}),
-		Snapshots:    renderer,
-		captureSlots: make(chan struct{}, 1),
-		renderSlots:  make(chan struct{}, 1),
+		Config:        config.Config{TelegramChatID: 100, Home: dir},
+		Store:         store,
+		Telegram:      client,
+		Tmux:          tmux.New(snapshotTmuxRunner{}),
+		Snapshots:     renderer,
+		snapshotReady: true,
+		captureSlots:  make(chan struct{}, 1),
+		renderSlots:   make(chan struct{}, 1),
 	}
 	app.renderSlots <- struct{}{}
 	canceled, cancel := context.WithCancel(context.Background())
