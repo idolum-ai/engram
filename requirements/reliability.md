@@ -122,7 +122,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   retirement, each anchor's text or snapshot format, and known/unknown Telegram
   pin state. It separately persists one collapsed-shelf identity and the
   sessions belonging to it, any inert prospective anchor awaiting activation,
-  and any replaced shelf awaiting retirement. No shelf or restored anchor
+  any pending collapse whose original anchor remains canonical, and any
+  replaced shelf awaiting retirement. No shelf or restored anchor
   becomes actionable before its identity is durable. Restart resets pin
   knowledge and reconciles active anchors, pending restores, shelf replacements,
   and predecessor cleanup without discarding terminal ownership.
@@ -138,7 +139,8 @@ exports a bounded recent tail, not an unbounded full audit file.
   rewriting or down-stamping the file.
 - State schema v17 persists `anchor_mode`, the canonical anchor presentation
   format, collapsed membership and the bounded shared-shelf identity, pin,
-  render, retry, pending-restore, and predecessor-retirement state,
+  render, retry, pending-collapse, pending-restore, and
+  predecessor-retirement state,
   boot-incarnation and bounded recovery-ledger metadata, the latest
   conversational, snapshot, and upstream-signal reply IDs,
   upstream deduplication facts,
@@ -174,9 +176,12 @@ exports a bounded recent tail, not an unbounded full audit file.
   predecessor retirement or pin transition remains eligible for retry.
 - Collapsing first publishes or updates the shared shelf, atomically records
   membership only after the shelf has controls and a confirmed pin, then
-  retires and unpins the individual anchor.
+  retires and unpins the individual anchor. Until that promotion, the original
+  anchor remains canonical and accepts replies normally.
   Retired replies are stale. If retirement is interrupted, restart retries it
-  while the shelf remains recoverable. Expansion publishes each prospective
+  while the shelf remains recoverable. Closing during a pending restoration
+  retains cleanup ownership and any rate-limit deadline until the inert
+  prospective message is retired. Expansion publishes each prospective
   text anchor inertly, activates and pins it, commits its canonical identity,
   and leaves the shelf available until every member is restored. Only then is
   the shelf removed. Normal rendering is queued after cached anchors exist.

@@ -80,9 +80,14 @@ Telegram is Engram's only user interface.
 - Every running canonical anchor exposes `➖ Hide`. It moves that session into one
   shared pinned `Collapsed sessions` shelf, retires and unpins the individual
   anchor, and records the old reply route as stale. The shelf contains bounded
-  recent-first, phone-bounded cached one-line summaries and exactly one
+  recent-first, phone-bounded one-line summaries, explicitly identifies them
+  as cached, and exposes exactly one
   `➕ Show` control; replying to it does
   not route input because it represents more than one pane.
+- `➖ Hide` acknowledges immediately and performs the shelf handoff outside the
+  Telegram update loop. The individual anchor remains live until the shelf is
+  rendered and pinned; a delayed or failed handoff therefore does not remove
+  the current terminal route.
 - `➕ Show` acknowledges immediately and restores all shelf members outside the
   Telegram update loop. Engram first persists each inert prospective anchor,
   then activates and pins it, then promotes it to the canonical reply route.
