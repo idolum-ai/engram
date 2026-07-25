@@ -171,6 +171,24 @@ func TestWideSnapshotDimensionsPreserveAllColumnsWithinTelegramPhotoBounds(t *te
 	}
 }
 
+func TestAlternateScreenViewportUsesCapturedHeight(t *testing.T) {
+	t.Parallel()
+	input := Input{
+		ANSI:         strings.Repeat("viewport row\n", 25),
+		Columns:      80,
+		VisibleRows:  24,
+		BufferRows:   25,
+		ViewportOnly: true,
+	}
+	if got, want := renderHeight(input), 372; got != want {
+		t.Fatalf("alternate-screen render height = %d, want %d", got, want)
+	}
+	input.ViewportOnly = false
+	if got := renderHeight(input); got != LogicalHeight {
+		t.Fatalf("ordinary bounded render height = %d, want %d", got, LogicalHeight)
+	}
+}
+
 func TestRenderHTMLAccessibilityThemesCorrectLowContrastText(t *testing.T) {
 	t.Parallel()
 	input := Input{
@@ -971,6 +989,40 @@ func TestLiveChromiumWideRender(t *testing.T) {
 	logicalHeight := renderHeight(input)
 	if !regionContainsCyan(img, image.Rect(8, logicalHeight-32, renderWidth(input)-8, logicalHeight-22)) {
 		t.Fatal("final wrapped terminal row is not visible immediately above the footer")
+	}
+}
+
+func TestLiveChromiumAlternateViewportKeepsBottomRow(t *testing.T) {
+	if os.Getenv("ENGRAM_LIVE_SNAPSHOT") != "1" {
+		t.Skip("set ENGRAM_LIVE_SNAPSHOT=1 to run the local Chromium render")
+	}
+	rows := make([]string, 24)
+	for index := range rows {
+		rows[index] = fmt.Sprintf("viewport row %02d", index+1)
+	}
+	rows[len(rows)-1] = "\x1b[36mBOTTOM VIEWPORT ROW\x1b[0m"
+	input := Input{
+		ANSI: strings.Join(rows, "\n"), Title: "alternate viewport", Target: "[2]", CWD: "/tmp",
+		Columns: 80, VisibleRows: 24, BufferRows: 24, ViewportOnly: true,
+	}
+	renderer := New(os.Getenv("ENGRAM_SNAPSHOT_BROWSER"), "contrast-dark")
+	path, err := renderer.Render(context.Background(), input, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logicalHeight := renderHeight(input)
+	if !regionContainsCyan(img, image.Rect(8, logicalHeight-36, renderWidth(input)-8, logicalHeight-22)) {
+		t.Fatal("final alternate-screen viewport row is not visible immediately above the footer")
 	}
 }
 

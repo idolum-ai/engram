@@ -93,6 +93,37 @@ func TestAnalyzeReportsActivityWithoutGuessingModel(t *testing.T) {
 	}
 }
 
+func TestAnalyzeUsesObservedClaudeComposerWhenStatusRowIsAbsent(t *testing.T) {
+	input := strings.Join([]string{
+		"⏺ Every candidate was checked against the current tree.",
+		"",
+		"✻ Cooked for 4m 18s",
+		"",
+		"9 tasks (8 done, 1 open)",
+		"◻ Draft the next target contract",
+		"✔ Open the implementation pull request",
+		"… +4 completed",
+		"",
+		"────────────────────────────────────",
+		"❯ implement the selected candidate",
+		"────────────────────────────────────",
+	}, "\n")
+	got := Analyze(supportedRuntime("runtime-a"), agentui.Observation{Current: claudeFrame(input)}, "")
+	if !got.Applied || got.Model != "" || got.Effort != "" || got.Activity != agentui.ActivityIdle {
+		t.Fatalf("analysis = %#v", got)
+	}
+	for _, unwanted := range []string{"Cooked for", "… +4 completed", "────"} {
+		if strings.Contains(got.Conversation, unwanted) {
+			t.Fatalf("conversation retained %q: %q", unwanted, got.Conversation)
+		}
+	}
+	for _, wanted := range []string{"Every candidate", "Draft the next target contract", "implement the selected candidate"} {
+		if !strings.Contains(got.Conversation, wanted) {
+			t.Fatalf("conversation omitted %q: %q", wanted, got.Conversation)
+		}
+	}
+}
+
 func TestAnalyzeRecognizesClaudeApprovalAndModelSwitch(t *testing.T) {
 	approval := strings.Join([]string{
 		"⏺ I need to run the release check.",
@@ -160,10 +191,18 @@ func TestAnalyzeFailsClosedForUnsupportedRuntimeAndUnknownLayout(t *testing.T) {
 	}
 }
 
-func TestAnalyzeRejectsRememberedModelWithoutClaudeStatusControl(t *testing.T) {
+func TestAnalyzeDoesNotTreatConversationConfidenceAsClaudeEffort(t *testing.T) {
 	input := "⏺ Confidence report\n\nresult · high confidence\n\n────────────────────\n❯\n────────────────────"
 	got := Analyze(supportedRuntime("runtime-a"), agentui.Observation{Current: claudeFrame(input)}, "claude-opus-4-8")
+	if !got.Applied || got.Effort != "" || !strings.Contains(got.Conversation, "result · high confidence") {
+		t.Fatalf("confidence text analysis = %#v", got)
+	}
+}
+
+func TestAnalyzeRejectsUnframedClaudePromptLookalike(t *testing.T) {
+	input := "⏺ Report follows\n\n❯ ordinary quoted prompt\n\n────────────────────"
+	got := Analyze(supportedRuntime("runtime-a"), agentui.Observation{Current: claudeFrame(input)}, "claude-opus-4-8")
 	if got.Applied || got.Conversation != input {
-		t.Fatalf("status decoy analysis = %#v", got)
+		t.Fatalf("composer decoy analysis = %#v", got)
 	}
 }

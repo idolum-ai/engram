@@ -14,6 +14,8 @@ Notable user-visible and operational changes are recorded here.
 - Remove verified Claude composer controls, elapsed status, active spinners,
   and token-saving hints from guide evidence while preserving prompts,
   approvals, task state, and terminal output.
+- Render alternate-screen snapshots at their captured viewport height instead
+  of placing short Claude-style frames on a synthetic 64-row canvas.
 
 ### Verification
 

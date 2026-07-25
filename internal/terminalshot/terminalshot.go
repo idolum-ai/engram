@@ -55,6 +55,7 @@ type Input struct {
 	Columns       int
 	VisibleRows   int
 	BufferRows    int
+	ViewportOnly  bool
 	Compact       bool
 	HighlightRows []int
 	Footer        string
@@ -426,10 +427,19 @@ func renderWidth(input Input) int {
 func renderHeight(input Input) int {
 	if !input.Compact {
 		renderColumns, _, lineHeight := readableTerminalLayout(input.Columns)
+		visualRows := input.BufferRows
+		if renderColumns < input.Columns {
+			visualRows = snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
+		}
+		if input.ViewportOnly {
+			// Alternate-screen programs own their scrollback. tmux can capture
+			// only the current viewport, so do not place that short frame on a
+			// canvas sized for the usual 64-row history capture.
+			return max(180, 76+int(math.Ceil(float64(visualRows)*lineHeight)))
+		}
 		if renderColumns >= input.Columns {
 			return LogicalHeight
 		}
-		visualRows := snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
 		// The screen's border-box includes 10px of top padding. Reserve it in
 		// addition to the 44px header and 22px footer so the final visual row
 		// remains above the footer instead of being clipped by overflow:hidden.

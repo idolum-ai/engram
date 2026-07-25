@@ -278,7 +278,36 @@ func findVerifiedClaudeStatus(lines []string) (index int, effort string, ok bool
 			}
 		}
 	}
+	for index = last; index >= 0 && index >= last-9; index-- {
+		prompt := strings.TrimSpace(lines[index])
+		if !strings.HasPrefix(prompt, "❯") {
+			continue
+		}
+		above := previousNonemptyLine(lines, index-1)
+		below := nextNonemptyLine(lines, index+1)
+		if above >= 0 && below >= 0 && separatorLine(strings.TrimSpace(lines[above])) && separatorLine(strings.TrimSpace(lines[below])) {
+			return below, "", true
+		}
+	}
 	return 0, "", false
+}
+
+func previousNonemptyLine(lines []string, index int) int {
+	for ; index >= 0; index-- {
+		if strings.TrimSpace(lines[index]) != "" {
+			return index
+		}
+	}
+	return -1
+}
+
+func nextNonemptyLine(lines []string, index int) int {
+	for ; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) != "" {
+			return index
+		}
+	}
+	return -1
 }
 
 func findDisplayModel(lines []string) (string, int) {

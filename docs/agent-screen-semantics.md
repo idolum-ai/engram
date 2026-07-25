@@ -72,9 +72,10 @@ while the generic structural analyzer remains available.
 
 Runtime confirmation may also expose Claude's activity without a known model.
 In that case the card says `Claude` with effort and activity, but no model is
-guessed. Exact completed elapsed rows, the low-band composer/status controls,
-and Claude's `/clear` token-saving hint are omitted from guide evidence only
-inside this versioned boundary.
+guessed. The structural anchor may be the effort/status row or the observed
+pair of separators enclosing Claude's composer. Exact completed elapsed rows,
+the low-band composer/status controls, and Claude's `/clear` token-saving hint
+are omitted from guide evidence only inside this versioned boundary.
 
 ## Fail-closed behavior
 
