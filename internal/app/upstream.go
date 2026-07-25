@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/agentui"
+	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
@@ -21,12 +23,18 @@ type codexRuntimeDetector interface {
 	Detect(context.Context, int, string) (codexui.Runtime, error)
 }
 
+type claudeRuntimeDetector interface {
+	Detect(context.Context, int, string) (claudeui.Runtime, error)
+}
+
 type agentFrameState struct {
-	serverID  string
-	windowID  string
-	paneID    string
-	createdAt time.Time
-	frame     agentui.Frame
+	serverID      string
+	windowID      string
+	paneID        string
+	createdAt     time.Time
+	frame         agentui.Frame
+	claudeRuntime string
+	verifiedModel string
 }
 
 func observeUpstreamSignal(capture tmux.StyledCapture) upstream.Observation {
@@ -42,24 +50,75 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 		a.deliverUpstreamSignalWithArtifacts(ctx, observed, observation.Latest, a.intentionalArtifactPaths(observation.PresentationText, capture.Hyperlinks))
 	}
 	presentationText := observation.PresentationText
+	if a.ClaudeDetector != nil {
+		runtime, err := a.ClaudeDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
+		if err != nil {
+			a.recordPresentationDecision(observed, "claude", runtime.Version, "unavailable", "runtime_detection_failed", false, "")
+			if runtime.Detected {
+				return presentationText
+			}
+		} else if runtime.Detected && runtime.Supported {
+			analysis := a.analyzeClaudeFrame(observed, capture, presentationText, runtime)
+			if analysis.Applied {
+				a.recordClaudePresentation(observed, runtime, analysis)
+				a.recordPresentationDecision(observed, "claude", runtime.Version, "applied", "runtime_and_layout_verified", analysis.Model != "", string(analysis.Activity))
+				return analysis.Conversation
+			}
+			if current, ok := a.Store.FindSession(observed.ID); ok && current.PresentationProgram == "claude" {
+				reason := "layout_unrecognized"
+				if current.PresentationRuntimeID != runtime.Identity {
+					reason = "runtime_changed"
+				}
+				a.clearPresentation(observed, reason)
+			}
+			a.recordPresentationDecision(observed, "claude", runtime.Version, "literal", "layout_unrecognized", false, "")
+			return presentationText
+		} else if runtime.Detected {
+			if current, ok := a.Store.FindSession(observed.ID); ok && current.PresentationProgram == "claude" {
+				a.clearPresentation(observed, "unsupported_version")
+			}
+			a.recordPresentationDecision(observed, "claude", runtime.Version, "literal", "unsupported_version", false, "")
+			return presentationText
+		}
+	}
 	analysis := a.analyzeAgentFrame(observed, capture, presentationText)
 	if analysis.Applied {
 		a.recordAgentPresentation(observed, analysis)
+		a.recordPresentationDecision(observed, "agent", "", "applied", "structural_anchor_verified", analysis.Model != "", string(analysis.Activity))
 		return analysis.Conversation
 	}
 	if a.CodexDetector == nil {
+		a.recordPresentationDecision(observed, "", "", "literal", "no_adapter_applied", false, "")
 		return presentationText
 	}
 	runtime, err := a.CodexDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
 	if err != nil {
+		a.recordPresentationDecision(observed, "codex", runtime.Version, "unavailable", "runtime_detection_failed", false, "")
 		return presentationText
 	}
 	presentation := codexui.Present(runtime, presentationText)
 	a.recordCodexPresentation(observed, presentation)
+	if presentation.Applied {
+		a.recordPresentationDecision(observed, "codex", presentation.Version, "applied", "runtime_and_layout_verified", presentation.Model != "", presentation.Activity)
+	} else {
+		a.recordPresentationDecision(observed, "codex", runtime.Version, "literal", "runtime_or_layout_unrecognized", false, "")
+	}
 	return presentation.Text
 }
 
 func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.StyledCapture, text string) agentui.Analysis {
+	return a.analyzeFrame(observed, capture, text, "", "", func(observation agentui.Observation, _ string) agentui.Analysis {
+		return agentui.Analyze(observation)
+	})
+}
+
+func (a *App) analyzeClaudeFrame(observed state.TerminalSession, capture tmux.StyledCapture, text string, runtime claudeui.Runtime) agentui.Analysis {
+	return a.analyzeFrame(observed, capture, text, "claude", runtime.Identity, func(observation agentui.Observation, model string) agentui.Analysis {
+		return claudeui.Analyze(runtime, observation, model)
+	})
+}
+
+func (a *App) analyzeFrame(observed state.TerminalSession, capture tmux.StyledCapture, text, program, runtimeID string, analyze func(agentui.Observation, string) agentui.Analysis) agentui.Analysis {
 	current := agentui.Frame{
 		Text:            text,
 		CurrentCommand:  strings.TrimSpace(capture.CurrentCmd),
@@ -76,12 +135,12 @@ func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.Sty
 	if !tracked || latest.State != state.TerminalRunning || !latest.WatchEnabled ||
 		!latest.CreatedAt.Equal(observed.CreatedAt) || !sameTerminalBinding(latest, observed) {
 		a.agentFrameMu.Unlock()
-		return agentui.Analyze(agentui.Observation{Current: current})
+		return analyze(agentui.Observation{Current: current}, "")
 	}
 	if hook := a.agentFrameValidatedHook; hook != nil {
 		hook(observed)
 	}
-	state := agentFrameState{
+	frameState := agentFrameState{
 		serverID:  firstNonEmpty(capture.ServerID, observed.TmuxServerID),
 		windowID:  firstNonEmpty(capture.WindowID, observed.TmuxWindowID),
 		paneID:    firstNonEmpty(capture.PaneID, observed.TmuxPaneID),
@@ -92,15 +151,31 @@ func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.Sty
 		a.agentFrames = make(map[int]agentFrameState)
 	}
 	previousState, found := a.agentFrames[observed.ID]
-	a.agentFrames[observed.ID] = state
-	a.agentFrameMu.Unlock()
-
 	var previous *agentui.Frame
-	if found && sameAgentFrameBinding(previousState, state) {
+	verifiedModel := ""
+	sameFrameBoundary := found && sameAgentFrameBinding(previousState, frameState)
+	sameRuntimeBoundary := program != "claude" || previousState.claudeRuntime == runtimeID
+	if sameFrameBoundary && sameRuntimeBoundary {
 		copy := previousState.frame
 		previous = &copy
+		if program == "claude" && previousState.claudeRuntime == runtimeID {
+			verifiedModel = previousState.verifiedModel
+		}
 	}
-	return agentui.Analyze(agentui.Observation{Current: current, Previous: previous})
+	if verifiedModel == "" && program == "claude" && latest.PresentationProgram == "claude" && latest.PresentationRuntimeID == runtimeID {
+		verifiedModel = latest.PresentationModel
+	}
+	analysis := analyze(agentui.Observation{Current: current, Previous: previous}, verifiedModel)
+	if program == "claude" {
+		frameState.claudeRuntime = runtimeID
+		frameState.verifiedModel = verifiedModel
+		if analysis.Applied && analysis.Model != "" {
+			frameState.verifiedModel = analysis.Model
+		}
+	}
+	a.agentFrames[observed.ID] = frameState
+	a.agentFrameMu.Unlock()
+	return analysis
 }
 
 func sameAgentFrameBinding(left, right agentFrameState) bool {
@@ -111,6 +186,7 @@ func (a *App) clearAgentFrame(sessionID int) {
 	a.agentFrameMu.Lock()
 	defer a.agentFrameMu.Unlock()
 	delete(a.agentFrames, sessionID)
+	a.presentationDiagnostics.Delete(sessionID)
 }
 
 func (a *App) recordAgentPresentation(observed state.TerminalSession, analysis agentui.Analysis) {
@@ -118,7 +194,15 @@ func (a *App) recordAgentPresentation(observed state.TerminalSession, analysis a
 		Text: analysis.Conversation, Applied: analysis.Applied, Model: analysis.Model,
 		Effort: analysis.Effort, Mode: analysis.Mode, Activity: string(analysis.Activity),
 	}
-	a.recordPresentation(observed, "agent", presentation)
+	a.recordPresentation(observed, "agent", "", presentation)
+}
+
+func (a *App) recordClaudePresentation(observed state.TerminalSession, runtime claudeui.Runtime, analysis agentui.Analysis) {
+	a.recordPresentation(observed, "claude", runtime.Identity, codexui.Presentation{
+		Text: analysis.Conversation, Applied: analysis.Applied, Version: runtime.Version,
+		Model: analysis.Model, Effort: analysis.Effort, Mode: analysis.Mode,
+		Activity: string(analysis.Activity),
+	})
 }
 
 func (a *App) recordCodexPresentation(observed state.TerminalSession, presentation codexui.Presentation) {
@@ -126,11 +210,17 @@ func (a *App) recordCodexPresentation(observed state.TerminalSession, presentati
 	if presentation.Applied {
 		program = "codex"
 	}
-	a.recordPresentation(observed, program, presentation)
+	a.recordPresentation(observed, program, "", presentation)
 }
 
-func (a *App) recordPresentation(observed state.TerminalSession, program string, presentation codexui.Presentation) {
+func (a *App) clearPresentation(observed state.TerminalSession, reason string) {
+	a.recordPresentation(observed, "", "", codexui.Presentation{})
+	a.recordPresentationDecision(observed, "", "", "cleared", reason, false, "")
+}
+
+func (a *App) recordPresentation(observed state.TerminalSession, program, runtimeID string, presentation codexui.Presentation) {
 	version := a.redactText(presentation.Version)
+	runtimeID = a.redactText(runtimeID)
 	model := a.redactText(presentation.Model)
 	effort := a.redactText(presentation.Effort)
 	mode := a.redactText(presentation.Mode)
@@ -138,7 +228,7 @@ func (a *App) recordPresentation(observed state.TerminalSession, program string,
 	notice := a.redactText(presentation.Notice)
 	current, ok := a.Store.FindSession(observed.ID)
 	if !ok || !sameTerminalBinding(current, observed) || !current.CreatedAt.Equal(observed.CreatedAt) || current.PresentationProgram == program &&
-		current.PresentationVersion == version && current.PresentationModel == model &&
+		current.PresentationVersion == version && current.PresentationRuntimeID == runtimeID && current.PresentationModel == model &&
 		current.PresentationEffort == effort && current.PresentationMode == mode &&
 		current.PresentationActivity == activity &&
 		current.PresentationNotice == notice {
@@ -147,6 +237,7 @@ func (a *App) recordPresentation(observed state.TerminalSession, program string,
 	_, found, applied, err := a.updateSessionIfCurrent(observed, func(session *state.TerminalSession) {
 		session.PresentationProgram = program
 		session.PresentationVersion = version
+		session.PresentationRuntimeID = runtimeID
 		session.PresentationModel = model
 		session.PresentationEffort = effort
 		session.PresentationMode = mode
@@ -156,6 +247,17 @@ func (a *App) recordPresentation(observed state.TerminalSession, program string,
 	if err != nil || !found || !applied {
 		_ = a.audit("state.presentation", "failed", map[string]any{"session_id": observed.ID, "error": firstNonEmpty(errorText(err), "superseded")})
 	}
+}
+
+func (a *App) recordPresentationDecision(observed state.TerminalSession, program, version, outcome, reason string, modelPresent bool, activity string) {
+	signature := strings.Join([]string{program, version, outcome, reason, strconv.FormatBool(modelPresent), activity}, "\x00")
+	if previous, loaded := a.presentationDiagnostics.Swap(observed.ID, signature); loaded && previous == signature {
+		return
+	}
+	_ = a.audit("terminal.presentation", outcome, map[string]any{
+		"session_id": observed.ID, "program": program, "version": version,
+		"reason": reason, "model_present": modelPresent, "activity": activity,
+	})
 }
 
 func (a *App) deliverUpstreamSignal(ctx context.Context, observed state.TerminalSession, record upstream.Record) {

@@ -843,8 +843,10 @@ changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
 The manually dispatched [E2E suites](docs/e2e-testing.md) include the service's
 hermetic Telegram/tmux/Chromium golden path and a real-client agent-screen
 semantic harness for Codex, Claude Code, and OpenCode. Both retain reviewable
-evidence without using real service or model credentials. The generic screen
-contract is documented in
+evidence without using real service or model credentials. Exact tested Claude
+Code versions can retain a visibly proven model for the same process
+incarnation after its model card scrolls away; process replacement and unknown
+layouts fail closed. The screen contract is documented in
 [`docs/agent-screen-semantics.md`](docs/agent-screen-semantics.md).
 
 The private boundary between Telegram orchestration and tmux truth is

@@ -1,9 +1,11 @@
 # Agent Screen Semantics
 
-Engram interprets agent terminal interfaces by visible structure rather than by
-the executable's name or a CLI version. The goal is deliberately narrow: keep
-conversation evidence legible for the guide and expose model and activity state
-on the card without making the terminal less truthful.
+Engram normally interprets agent terminal interfaces by visible structure
+rather than by an executable name or CLI version. Two narrow compatibility
+adapters supplement that rule for exact, tested Codex and Claude Code versions.
+The goal is deliberately narrow: keep conversation evidence legible for the
+guide and expose model and activity state on the card without making the
+terminal less truthful.
 
 The raw `CaptureStyled` frame remains the source of truth. It is still used for
 screenshots, inspection, links, and file references. Semantic interpretation
@@ -53,6 +55,27 @@ Engram then combines independent visible signals:
 Temporal evidence is process-local, limited to one previous frame per tracked
 session, and never persisted. Reattachment or identity change discards it.
 
+Claude Code's model card may scroll away while its composer and activity rows
+remain visible. For explicitly supported Claude Code versions, Engram confirms
+the executable through the pane's process tree and derives a process-incarnation
+fingerprint from its absolute executable, version, PID, and start time. A model
+visibly proven earlier for that same fingerprint may then remain the structural
+model anchor. The fingerprint and model survive an Engram service restart
+because systemd does not own the tmux child process. A changed process
+fingerprint discards the model. A later visible model card replaces it, which
+covers in-session model switches.
+
+Linux resolves the running executable through `/proc/<pid>/exe`. Engram does
+not substitute a `$PATH` lookup on platforms that cannot expose that identity;
+the dedicated Claude adapter therefore fails closed on current macOS builds
+while the generic structural analyzer remains available.
+
+Runtime confirmation may also expose Claude's activity without a known model.
+In that case the card says `Claude` with effort and activity, but no model is
+guessed. Exact completed elapsed rows, the low-band composer/status controls,
+and Claude's `/clear` token-saving hint are omitted from guide evidence only
+inside this versioned boundary.
+
 ## Fail-closed behavior
 
 Frames longer than 64 rows, unknown model identities, weak shell-like
@@ -67,16 +90,26 @@ composers. Actual user prompts, approval questions, assistant messages, command
 invocations, results, keyboard guidance, and unknown approval prose remain
 evidence.
 
-The older process-confirmed Codex adapter remains a fallback for supported
-Codex versions when a frame is too weak for the generic structural contract.
-This keeps already-proven layouts working while the generic analyzer remains
-independent of a particular agent CLI.
+The process-confirmed Codex adapter remains a fallback for supported Codex
+versions when a frame is too weak for the generic structural contract. The
+Claude adapter runs first because its remembered model is part of the
+structural proof. Engram currently supports Claude Code `2.1.219` plus the
+hermetic `2.1.206` fixture version. Unsupported versions, ambiguous process
+trees, unreadable process identity, and unknown layouts preserve the captured
+text byte-for-byte. Detection failures do not erase the last card state.
+
+Bounded `terminal.presentation` audit records report program, version, outcome,
+reason, whether a model was present, and normalized activity. Identical
+decisions are coalesced per session. Raw terminal text and executable paths are
+not recorded.
 
 ## Tests
 
 The ordinary test suite replays a checked-in corpus covering observed Codex,
-Claude Code, and OpenCode structures plus false-positive and identity-change
-cases. These tests are deterministic, stdlib-only, and make no network calls.
+sanitized Claude Code `2.1.219`, hermetic Claude Code `2.1.206`, and OpenCode
+structures plus false-positive, model-switch, process-replacement, and
+identity-change cases. These tests are deterministic, stdlib-only, and make no
+network calls.
 
 The optional `agent-ui` E2E suite starts the real Codex, Claude Code, and
 OpenCode binaries in separate private tmux servers and private home/config/cache

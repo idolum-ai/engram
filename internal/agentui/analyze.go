@@ -13,12 +13,15 @@ var (
 	elapsedDecoration = regexp.MustCompile(`(?i)^[─━═]+\s*(?:worked|ran|completed)\s+for\s+(?:[0-9]+h\s+)?(?:[0-9]+m\s+)?[0-9]+s\s*[─━═]+$`)
 	glyphElapsed      = regexp.MustCompile(`(?i)^[^\pL\pN\s]\s*[\pL]+\s+for\s+(?:[0-9]+h\s+)?(?:[0-9]+m\s+)?[0-9]+s$`)
 	durationStatus    = regexp.MustCompile(`\((?:[0-9]+h\s+)?(?:[0-9]+m\s+)?[0-9]+s(?:\s*[•·;][^)]*)?\)`)
-	displayModel      = regexp.MustCompile(`(?i)\b(sonnet|opus|haiku|gemini|gpt)[ -]([0-9]+(?:\.[0-9]+)*)(?:[ -]([a-z][a-z0-9]*))?\b`)
+	displayModel      = regexp.MustCompile(`(?i)\b(sonnet|opus|haiku|fable|gemini|gpt)[ -]([0-9]+(?:\.[0-9]+)*)(?:[ -]([a-z][a-z0-9]*))?\b`)
 )
 
 // Analyze conservatively interprets one bounded terminal frame. A recognized
-// model status line acts as the structural anchor. Without that anchor, or
-// when the frame exceeds the bound, Analyze returns the text byte-for-byte.
+// model status line acts as the structural anchor. A versioned runtime adapter
+// may provide a model it previously verified for the same process incarnation;
+// the visible composer/status structure must still match. Without either
+// anchor, or when the frame exceeds the bound, Analyze returns the text
+// byte-for-byte.
 func Analyze(observation Observation) Analysis {
 	original := observation.Current.Text
 	analysis := Analysis{Original: original, Conversation: original, Activity: ActivityUnknown}
@@ -37,6 +40,10 @@ func Analyze(observation Observation) Analysis {
 	}
 	if !ok {
 		footer, model, effort, modelLine, ok = findCompositeStatus(lines)
+	}
+	if !ok && observation.VerifiedProgram == "claude" && strings.HasPrefix(observation.VerifiedModel, "claude-") && knownModel(observation.VerifiedModel) {
+		footer, effort, ok = findVerifiedClaudeStatus(lines)
+		model = observation.VerifiedModel
 	}
 	if !ok || !sufficientStructuralAnchor(observation, lines, footer) {
 		return analysis
@@ -74,7 +81,7 @@ func Analyze(observation Observation) Analysis {
 	}
 
 	annotateConversation(lines, roles, confidence, evidence)
-	markChrome(lines, footer, model, remove, roles, confidence, evidence)
+	markChrome(lines, footer, model, observation.VerifiedProgram, remove, roles, confidence, evidence)
 	markTrailingPrompt(lines, footer, remove, roles, confidence, evidence)
 	markModelCard(lines, modelLine, remove, roles, confidence, evidence)
 	markCompletedApproval(lines, footer, remove, roles, confidence, evidence)
@@ -226,6 +233,11 @@ func findCompositeStatus(lines []string) (index int, model, effort string, model
 	if model == "" {
 		return 0, "", "", -1, false
 	}
+	index, effort, ok = findCompositeStatusForModel(lines)
+	return index, model, effort, modelLine, ok
+}
+
+func findCompositeStatusForModel(lines []string) (index int, effort string, ok bool) {
 	last := len(lines) - 1
 	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
 		last--
@@ -239,12 +251,34 @@ func findCompositeStatus(lines []string) (index int, model, effort string, model
 			for _, field := range strings.Fields(part) {
 				field = strings.Trim(field, "●○◉◌")
 				if validEffort(field) {
-					return index, model, strings.ToLower(field), modelLine, true
+					return index, strings.ToLower(field), true
 				}
 			}
 		}
 	}
-	return 0, "", "", -1, false
+	return 0, "", false
+}
+
+func findVerifiedClaudeStatus(lines []string) (index int, effort string, ok bool) {
+	last := len(lines) - 1
+	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
+	for index = last; index >= 0 && index >= last-9; index-- {
+		line := strings.TrimSpace(lines[index])
+		if !strings.Contains(strings.ToLower(line), "/effort") {
+			continue
+		}
+		for _, part := range strings.Split(line, " · ") {
+			for _, field := range strings.Fields(part) {
+				field = strings.Trim(field, "●○◉◌")
+				if validEffort(field) {
+					return index, strings.ToLower(field), true
+				}
+			}
+		}
+	}
+	return 0, "", false
 }
 
 func findDisplayModel(lines []string) (string, int) {
@@ -257,7 +291,7 @@ func findDisplayModel(lines []string) (string, int) {
 		version := strings.ReplaceAll(match[2], ".", "-")
 		suffix := strings.ToLower(match[3])
 		switch family {
-		case "sonnet", "opus", "haiku":
+		case "sonnet", "opus", "haiku", "fable":
 			return "claude-" + family + "-" + version, index
 		case "gemini":
 			model := "gemini-" + version
@@ -511,7 +545,7 @@ func passivePrompt(prompt string) bool {
 	}
 }
 
-func markChrome(lines []string, footer int, model string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+func markChrome(lines []string, footer int, model, verifiedProgram string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
 	for index := range lines {
 		line := lines[index]
 		trimmed := strings.TrimSpace(line)
@@ -525,6 +559,10 @@ func markChrome(lines []string, footer int, model string, remove []bool, roles [
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "composer-border")
 		case inLowBand && uiCommandHints(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 94, true, "command-hints")
+		case verifiedProgram == "claude" && inLowBand && claudeCommandHint(trimmed):
+			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "claude-command-hint", "versioned-runtime")
+		case verifiedProgram == "claude" && glyphElapsed.MatchString(trimmed):
+			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "elapsed-decoration", "versioned-runtime")
 		case inLowBand && (elapsedDecoration.MatchString(trimmed) || glyphElapsed.MatchString(trimmed)):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "elapsed-decoration")
 		case inLowBand && collapsedTranscript(trimmed):
@@ -533,6 +571,12 @@ func markChrome(lines []string, footer int, model string, remove []bool, roles [
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 96, true, "embedded-composer-status", "low-band-status")
 		}
 	}
+}
+
+func claudeCommandHint(line string) bool {
+	lower := strings.ToLower(strings.Join(strings.Fields(line), " "))
+	return strings.Contains(lower, "/clear to save ") && strings.Contains(lower, " token") ||
+		strings.HasPrefix(lower, "… +") && strings.HasSuffix(lower, " completed")
 }
 
 func embeddedComposerStatus(lines []string, index int, model string) bool {

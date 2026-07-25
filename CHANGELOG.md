@@ -4,6 +4,23 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Conversational guide
+
+- Recognize exact tested Claude Code versions through the live pane process,
+  retain only visibly proven model identity for the same process incarnation,
+  and surface Claude model, effort, and activity after its model card scrolls
+  away. Process replacement, unsupported versions, and unknown layouts fail
+  closed without changing raw snapshots or references.
+- Remove verified Claude composer controls, elapsed status, active spinners,
+  and token-saving hints from guide evidence while preserving prompts,
+  approvals, task state, and terminal output.
+
+### Verification
+
+- Add sanitized Claude Code `2.1.219` replays and deterministic coverage for
+  model-card loss, activity, approval, model switching, process replacement,
+  restart continuity, unsupported versions, and semantic lookalikes.
+
 ## [v0.6.0] - 2026-07-21
 
 ### Recovery

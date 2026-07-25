@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/anthropic"
+	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
@@ -39,6 +40,7 @@ type App struct {
 	KeyInterpreter                keyseq.Interpreter
 	Transcriber                   voiceTranscriber
 	Tmux                          tmux.Manager
+	ClaudeDetector                claudeRuntimeDetector
 	CodexDetector                 codexRuntimeDetector
 	Snapshots                     snapshotRenderer
 	SnapshotProber                snapshotProber
@@ -49,6 +51,7 @@ type App struct {
 	agentFrameMu                  sync.Mutex
 	agentFrames                   map[int]agentFrameState
 	agentFrameValidatedHook       func(state.TerminalSession)
+	presentationDiagnostics       sync.Map
 	guideAvailable                bool
 	snapshotHealthMu              sync.RWMutex
 	snapshotReady                 bool
@@ -220,6 +223,7 @@ func New(cfg config.Config) (*App, error) {
 		KeyInterpreter:                keyInterpreter,
 		Transcriber:                   transcriber,
 		Tmux:                          tmux.New(tmux.NewPriorityRunner(tmux.ExecRunner{})),
+		ClaudeDetector:                claudeui.NewDetector(),
 		CodexDetector:                 codexui.NewDetector(),
 		Snapshots:                     snapshotRenderer,
 		SnapshotProber:                snapshotRenderer,
@@ -931,16 +935,23 @@ func renderLocalWithReferences(ts state.TerminalSession, summary, references str
 }
 
 func terminalPresentationText(ts state.TerminalSession) string {
-	if ts.State != state.TerminalRunning || ts.PresentationModel == "" || ts.PresentationActivity == "" {
+	if ts.State != state.TerminalRunning || ts.PresentationActivity == "" {
 		return ""
 	}
 	program := "Agent"
 	if ts.PresentationProgram == "codex" {
 		program = "Codex"
+	} else if ts.PresentationProgram == "claude" {
+		program = "Claude"
 	} else if ts.PresentationProgram != "agent" {
 		return ""
 	}
-	parts := []string{program, ts.PresentationModel}
+	parts := []string{program}
+	if ts.PresentationModel != "" {
+		parts = append(parts, ts.PresentationModel)
+	} else if ts.PresentationProgram != "claude" {
+		return ""
+	}
 	if ts.PresentationEffort != "" {
 		parts = append(parts, ts.PresentationEffort)
 	}

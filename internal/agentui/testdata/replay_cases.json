@@ -213,6 +213,56 @@
     }
   },
   {
+    "name": "claude_2_1_219_verified_idle_without_model_card",
+    "source": "sanitized Claude Code 2.1.219 terminal replay",
+    "observation": {
+      "current": {
+        "text": "⏺ All repository checks pass.\n\n✻ Brewed for 8m 54s\n\n9 tasks (8 done, 1 open)\n… +4 completed\nnew task? /clear to save 484k tokens\n\n────────────────────────\n❯ draft the next contract\n────────────────────────\n  bypass permissions on · ● high · /effort",
+        "current_command": "claude",
+        "columns": 80,
+        "visible_rows": 24,
+        "alternate_screen": "on",
+        "copy_mode": "off"
+      },
+      "verified_program": "claude",
+      "verified_model": "claude-opus-4-8"
+    },
+    "want": {
+      "applied": true,
+      "model": "claude-opus-4-8",
+      "effort": "high",
+      "activity": "idle",
+      "contains": ["All repository checks pass", "draft the next contract"],
+      "excludes": ["Brewed for", "/clear to save", "bypass permissions", "────", "… +4 completed"],
+      "roles": {"assistant_message": 1, "user_message": 1, "status": 1}
+    }
+  },
+  {
+    "name": "claude_2_1_219_verified_active_without_model_card",
+    "source": "sanitized Claude Code 2.1.219 terminal replay",
+    "observation": {
+      "current": {
+        "text": "❯ Run the complete repository gate.\n\n⏺ Starting verification.\n\n✻ Deliberating…\n\n────────────────────────\n❯\n────────────────────────\n  bypass permissions on · ● high · /effort",
+        "current_command": "claude",
+        "columns": 80,
+        "visible_rows": 24,
+        "alternate_screen": "on",
+        "copy_mode": "off"
+      },
+      "verified_program": "claude",
+      "verified_model": "claude-opus-4-8"
+    },
+    "want": {
+      "applied": true,
+      "model": "claude-opus-4-8",
+      "effort": "high",
+      "activity": "active",
+      "contains": ["Run the complete repository gate", "Starting verification"],
+      "excludes": ["Deliberating", "bypass permissions", "────"],
+      "roles": {"user_message": 1, "assistant_message": 1, "activity": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
     "name": "embedded_low_band_model_active",
     "source": "OpenCode 1.18.4 hermetic TUI capture",
     "observation": {

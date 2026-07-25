@@ -134,9 +134,13 @@ position, glyph, model, and temporal signals to separate conversation
 evidence from high-confidence agent-interface chrome. It extracts normalized
 model, effort, mode, and activity without gating on a particular agent CLI or
 version. Unknown or weak layouts keep the ordinary terminal path byte-for-byte;
-a process-confirmed, versioned Codex adapter remains as a compatibility fallback
-for its already-proven layouts. The raw frame remains intact for screenshots,
-local inspection, and references. See
+a process-confirmed, versioned Codex adapter remains as a compatibility
+fallback for its already-proven layouts. A similarly narrow Claude Code adapter
+may retain a visibly proven model only for the same hashed process incarnation,
+allowing activity and known UI chrome to remain legible after Claude's model
+card scrolls away. Process replacement, unsupported versions, and unknown
+layouts fail closed. The raw frame remains intact for screenshots, local
+inspection, and references. See
 [`agent-screen-semantics.md`](agent-screen-semantics.md) for the role,
 confidence, retention, and credential-isolated real-client test contract. Guide hashes for recognized
 agent presentations use cleaned conversation so UI animation or extracted
