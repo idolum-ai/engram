@@ -256,6 +256,110 @@ footer slot so provenance and dimensions retain priority. Status changes alone
 do not trigger automatic Telegram edits; the next terminal-driven or manual
 render picks up the current value.
 
+### Pane-scoped GitHub App capabilities
+
+Engram can keep a GitHub App private key encrypted at rest and broker
+short-lived, explicitly scoped installation-token leases to watched tmux panes.
+The bearer token is never printed by Engram or written to disk. Instead,
+`engram github exec` waits for human approval and then starts one child command
+with `GH_TOKEN` in its environment.
+
+Enroll a GitHub App under a short local alias:
+
+```sh
+engram github app add idolum \
+  --app-id 123456 \
+  --installation-id 987654 \
+  --pem ./github-app.private-key.pem
+```
+
+Engram prompts twice for a passphrase of at least 12 bytes. It stores the PEM
+under `ENGRAM_HOME/github-apps.json` using PBKDF2-HMAC-SHA256 with 600,000
+iterations and authenticated AES-256-GCM encryption. This standard-library-only
+KDF is CPU-hard rather than memory-hard, so a unique high-entropy passphrase is
+important. The passphrase is not stored. The source PEM remains untouched;
+remove or secure it separately after confirming enrollment.
+
+From a watched tmux pane, request only the repositories and permissions the
+child command needs:
+
+```sh
+engram github exec \
+  --app idolum \
+  --repo idolum-ai/engram \
+  --permission contents=read \
+  --permission pull_requests=write \
+  -- gh pr view 49
+```
+
+Repository and permission flags are mandatory and repeatable. Engram rejects
+requests that omit either boundary. It validates the live tmux
+server/window/pane identity, sends an exact approval request to the configured
+Telegram user, and blocks for at most three minutes. Approval is single-use and
+bound to the waiting local connection.
+
+By default, the passphrase is entered locally before the Telegram approval.
+This keeps it out of Telegram. A user who explicitly accepts Telegram's cloud
+transport boundary may enroll with:
+
+```sh
+engram github app add idolum \
+  --app-id 123456 \
+  --installation-id 987654 \
+  --pem ./github-app.private-key.pem \
+  --telegram-unlock
+```
+
+Telegram bot chats are **not end-to-end encrypted**. With this opt-in, approval
+causes Engram to request the passphrase as a forced reply. Engram deletes the
+reply and prompt immediately after receiving them and never records their text
+in state or audit data, but the passphrase still traverses Telegram's cloud and
+is exposed to anyone controlling the Telegram account or bot token. Use a
+unique, high-entropy passphrase. `--local-unlock` overrides the opt-in for one
+execution.
+
+The GitHub installation is inspected before minting. Requested permission names
+must exist on the installation, requested levels cannot exceed its current
+grants, and GitHub's response must contain the exact repository and permission
+scope (apart from GitHub's implicit read-only metadata permission). Omitting a
+scope never falls back to the installation's broader defaults.
+
+An active pane lease can satisfy later same-pane requests only when they are a
+subset of its repositories and permissions. Broader requests require another
+approval. While active, the Telegram anchor gains one compact line:
+
+```text
+GH idolum · read-only · 1 repo · 42m
+GH idolum · 1R 1W · 1 repo · 42m
+```
+
+Inspect or revoke the current pane's lease with:
+
+```sh
+engram github status
+engram github revoke
+```
+
+List or remove enrolled apps with:
+
+```sh
+engram github app list
+engram github app remove idolum --yes
+```
+
+Leases live only in Engram's memory. They are removed when they expire, the
+terminal binding disappears, the user revokes them, or Engram restarts.
+Engram attempts to revoke every live installation token during invalidation,
+explicit revocation, and orderly shutdown. Removing an enrolled app prevents
+new use but does not by itself revoke an existing in-memory lease; revoke the
+affected panes or restart Engram as part of credential removal.
+Engram's broker socket is owner-only and lives in its private runtime
+directory. These controls protect against credentials resting in plaintext and
+against accidental agent overreach; they do not isolate secrets from root or
+malicious code already controlling the same operating-system user. A child
+command can deliberately print its own environment, so commands executed under
+a lease must still be treated as trusted with the requested authority.
+
 ## Data Flow / Privacy
 
 Engram deliberately connects a private chat, a local shell, and an external
@@ -648,15 +752,17 @@ tmux show-options -pv @engram
 tmux show-options -pv @engram_watch_id
 tmux show-options -pv @engram_notify
 tmux show-options -pv @engram_artifact
+tmux show-options -pv @engram_github
 ```
 
 The versioned `@engram` value is the commit marker and reports the Telegram
 surface and watch ID. Ignore the auxiliary options unless that marker is present
-and its watch ID agrees with `@engram_watch_id`. The other two
-options state the exact terminal-native notification command and the artifact
-sequence: print a visible `file://` URI, optionally as OSC 8, then signal. Because these are
+and its watch ID agrees with `@engram_watch_id`. The auxiliary options state
+the exact terminal-native notification command, the artifact sequence (print a
+visible `file://` URI, optionally as OSC 8, then signal), and the pane-scoped
+GitHub capability command. Because these are
 ordinary tmux metadata and terminal standards, an onlooking agent can discover
-and use them without an Engram API, socket, plugin, or `AGENTS.md`. Engram
+and use them without a plugin or `AGENTS.md`. Engram
 removes the options when an attached pane is untracked and restores them for
 active watches after service restart.
 

@@ -243,6 +243,9 @@ func (a *App) guidedEvidenceCaption(session state.TerminalSession, summary strin
 	if presentation := terminalPresentationText(session); presentation != "" {
 		header += "\n" + a.redactText(presentation)
 	}
+	if status := a.githubStatusLine(session); status != "" {
+		header += "\n" + status
+	}
 	remaining := guidedCaptionBytes - len(header) - 2
 	if remaining <= 0 {
 		return headUTF8(header, guidedCaptionBytes), nil

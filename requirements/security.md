@@ -25,6 +25,15 @@ privacy model must stay small and explicit.
   redaction before persistence and Telegram delivery.
 - Documentation must state that redaction is best effort and does not make an
   artifact safe to share without review.
+- Enrolled GitHub App PEMs must be authenticated-encrypted at rest under a
+  passphrase-derived key. The passphrase, decrypted PEM, app JWT, and
+  installation token must never be persisted, audited, or emitted by Engram on
+  stdout or stderr.
+- GitHub installation-token requests must contain at least one explicit
+  repository and permission. They must not inherit GitHub's all-repositories
+  or all-installation-permissions defaults.
+- GitHub installation-token responses must be checked against the requested
+  repository and permission scope before a token reaches a child process.
 
 ## External Data Flow
 
@@ -130,6 +139,10 @@ privacy model must stay small and explicit.
 - `templates.json` contains exact user-authored template bodies in plaintext.
   It must be an owner-only regular file, must not follow symlinks, and must be
   treated like `.env`. Template audit events retain names but not bodies.
+- `github-apps.json` contains encrypted GitHub App private keys, identifiers,
+  public-key fingerprints, and KDF parameters. It must be an owner-only regular
+  file under `ENGRAM_HOME`, must not follow symlinks, and remains sensitive
+  despite encryption because it permits offline passphrase guessing.
 - An existing owner-controlled `ENGRAM_HOME` is tightened to mode `0700` during
   startup so upgrades do not trade availability for privacy. A foreign-owned,
   non-directory, or symlinked home remains a hard failure. Canonical operating
@@ -190,6 +203,26 @@ privacy model must stay small and explicit.
 - Runtime and attachment roots must be directories owned by the process UID
   with mode `0700`; startup must reject preexisting symlinks, non-directories,
   unsafe permissions, and foreign ownership.
+- The GitHub broker socket must be owner-only in Engram's validated private
+  runtime directory. Its bounded protocol must stay connected through the
+  approval handshake so requester exit cancels pending authority.
+- GitHub capability approvals are process-local, random, single-use, expire
+  within three minutes, and bind the authorized Telegram identity and message
+  to one current immutable tmux server/window/pane identity.
+- Telegram passphrase replies are forbidden by default because bot chats are
+  not end-to-end encrypted. Per-app opt-in must be explicit and visibly warned;
+  accepted passphrase replies and prompts must be deleted immediately and
+  their text must not enter state, audit, or error output.
+- Active GitHub leases are process-local and pane-bound. A reused request must
+  be a repository and permission subset of the lease. Pane loss, replacement,
+  unwatch, expiry, explicit revocation, or restart removes authority; broader
+  requests require a new approval. Engram must attempt remote token revocation
+  when a live lease is explicitly revoked, invalidated, or discarded during an
+  orderly shutdown.
+- `engram github exec` replaces ambient `GH_TOKEN` and `GITHUB_TOKEN` values
+  and gives the scoped installation token only to the requested child
+  environment. The child remains trusted with that authority and can
+  deliberately disclose its environment.
 - Attachments are saved under the private runtime root's `attachments`
   directory.
 - Large attachments require a hash-confirmed bypass and remain subject to a

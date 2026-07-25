@@ -57,6 +57,11 @@ Telegram is Engram's only user interface.
 
 - Every callback is answered and authorized against configured user, chat, and
   current canonical message. Retired controls are inert.
+- GitHub capability Approve and Deny callbacks are accepted only on the exact
+  process-local approval message for one unexpired request. An approved
+  Telegram-unlock enrollment creates one ForceReply whose message ID is bound
+  to that request; replies to any other message cannot unlock it. The secret
+  reply and ForceReply prompt are deleted immediately after capture.
 - Every inline button label is limited to the seven-rune budget established by
   `🖼️ View`. Dynamic display labels are shortened locally when necessary while
   their callback data remains exact; dense Telegram rows must not rely on the

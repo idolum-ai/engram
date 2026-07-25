@@ -252,9 +252,15 @@ func (c Config) EffectiveTelegramAPIBase() string {
 	return strings.TrimRight(firstNonEmpty(strings.TrimSpace(c.TelegramAPIBase), DefaultTelegramAPIBase), "/")
 }
 
-func (c Config) StatePath() string     { return filepath.Join(c.Home, "state.json") }
-func (c Config) AuditPath() string     { return filepath.Join(c.Home, "audit.jsonl") }
-func (c Config) TemplatePath() string  { return filepath.Join(c.Home, "templates.json") }
+func (c Config) StatePath() string    { return filepath.Join(c.Home, "state.json") }
+func (c Config) AuditPath() string    { return filepath.Join(c.Home, "audit.jsonl") }
+func (c Config) TemplatePath() string { return filepath.Join(c.Home, "templates.json") }
+func (c Config) GitHubVaultPath() string {
+	return filepath.Join(c.Home, "github-apps.json")
+}
+func (c Config) GitHubBrokerSocketPath() string {
+	return filepath.Join(c.ArtifactDir(), "github.sock")
+}
 func (c Config) LockDir() string       { return filepath.Join(c.Home, "locks") }
 func (c Config) AttachmentDir() string { return filepath.Join(c.ArtifactDir(), "attachments") }
 func (c Config) ArtifactDir() string   { return artifactRoot() }

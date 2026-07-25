@@ -730,6 +730,7 @@ func (a *App) scheduler(ctx context.Context) {
 		}
 	}
 	a.reconcileDueTerminalCapabilities(ctx, time.Now())
+	a.expireGitHubLeases(time.Now())
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	nextCapture := map[int]time.Time{}
@@ -743,6 +744,7 @@ func (a *App) scheduler(ctx context.Context) {
 			st := a.Store.Snapshot()
 			now := time.Now()
 			a.reconcileDueTerminalCapabilities(ctx, now)
+			a.expireGitHubLeases(now)
 			a.reconcileCollapsedShelf(ctx)
 			for _, ts := range st.TerminalSessions {
 				if ts.AnchorMessageID != 0 && !ts.Collapsed {

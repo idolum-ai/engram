@@ -131,6 +131,7 @@ const (
 	EngramWatchIDOption  = "@engram_watch_id"
 	EngramNotifyOption   = "@engram_notify"
 	EngramArtifactOption = "@engram_artifact"
+	EngramGitHubOption   = "@engram_github"
 	EngramRecoveryOption = "@engram_recovery"
 )
 
@@ -576,6 +577,7 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 		{EngramWatchIDOption, strconv.Itoa(watchID)},
 		{EngramNotifyOption, "run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)"},
 		{EngramArtifactOption, "print a visible file:// URI (OSC 8 optional), then run @engram_notify"},
+		{EngramGitHubOption, "run: engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND"},
 	} {
 		commands = append(commands, "set-option -p -q -t "+paneID+" "+option.name+" "+ShellQuote(option.value))
 	}
@@ -590,8 +592,8 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 func (m Manager) ClearEngramAdvertisementIfBindingMatches(ctx context.Context, paneID, windowID, serverID string) error {
 	// Clear the commit marker first so stale auxiliary values are never treated
 	// as a live capability advertisement if a later clear is interrupted.
-	commands := make([]string, 0, 4)
-	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption} {
+	commands := make([]string, 0, 5)
+	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption, EngramGitHubOption} {
 		commands = append(commands, "set-option -p -q -u -t "+paneID+" "+option)
 	}
 	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(commands, " ; "))
