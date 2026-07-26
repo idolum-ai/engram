@@ -127,6 +127,7 @@ type TerminalSession struct {
 	LastSummary              string          `json:"last_summary,omitempty"`
 	PresentationProgram      string          `json:"presentation_program,omitempty"`
 	PresentationVersion      string          `json:"presentation_version,omitempty"`
+	PresentationRuntimeID    string          `json:"presentation_runtime_id,omitempty"`
 	PresentationModel        string          `json:"presentation_model,omitempty"`
 	PresentationEffort       string          `json:"presentation_effort,omitempty"`
 	PresentationMode         string          `json:"presentation_mode,omitempty"`
@@ -1835,9 +1836,10 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 				session.PendingRestore = nil
 			}
 		}
-		if session.PresentationProgram != "codex" && session.PresentationProgram != "agent" {
+		if session.PresentationProgram != "codex" && session.PresentationProgram != "claude" && session.PresentationProgram != "agent" {
 			session.PresentationProgram = ""
 			session.PresentationVersion = ""
+			session.PresentationRuntimeID = ""
 			session.PresentationModel = ""
 			session.PresentationEffort = ""
 			session.PresentationMode = ""
@@ -1845,6 +1847,10 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.PresentationNotice = ""
 		} else {
 			session.PresentationVersion = truncateUTF8(session.PresentationVersion, 32)
+			session.PresentationRuntimeID = truncateUTF8(session.PresentationRuntimeID, 64)
+			if session.PresentationProgram != "claude" {
+				session.PresentationRuntimeID = ""
+			}
 			session.PresentationModel = truncateUTF8(session.PresentationModel, 64)
 			session.PresentationEffort = truncateUTF8(session.PresentationEffort, 16)
 			session.PresentationMode = truncateUTF8(session.PresentationMode, 16)

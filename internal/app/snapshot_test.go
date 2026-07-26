@@ -33,6 +33,38 @@ func TestSnapshotFrameDescriptionDisclosesFullWidthWrapping(t *testing.T) {
 	}
 }
 
+func TestSnapshotRenderInputDistinguishesAlternateScreenViewport(t *testing.T) {
+	t.Parallel()
+	session := state.TerminalSession{ID: 3, Title: "claude"}
+	capture := tmux.StyledCapture{
+		ANSI: "\x1b[32mready\x1b[0m", Title: "terminal", CurrentPath: "/tmp",
+		Columns: 80, VisibleRows: 24, BufferRows: 25, AlternateOn: "1",
+	}
+	input := snapshotRenderInput(session, capture)
+	if !input.ViewportOnly || input.Title != "claude" || input.Target != "[3]" || input.ANSI != capture.ANSI {
+		t.Fatalf("alternate-screen snapshot input = %#v", input)
+	}
+	capture.AlternateOn = "0"
+	if input := snapshotRenderInput(session, capture); input.ViewportOnly {
+		t.Fatalf("ordinary snapshot treated as viewport-only: %#v", input)
+	}
+}
+
+func TestSnapshotAnchorHashChangesWithAlternateScreenGeometry(t *testing.T) {
+	t.Parallel()
+	session := state.TerminalSession{ID: 3, Title: "terminal"}
+	capture := tmux.StyledCapture{
+		ANSI: "same text", Title: "terminal", CurrentPath: "/tmp",
+		Columns: 80, VisibleRows: 24, BufferRows: 25, AlternateOn: "0",
+	}
+	ordinary := snapshotAnchorHash(session, capture, "same text", "same caption", "contrast-dark")
+	capture.AlternateOn = "1"
+	alternate := snapshotAnchorHash(session, capture, "same text", "same caption", "contrast-dark")
+	if ordinary == alternate {
+		t.Fatal("snapshot hash ignored alternate-screen geometry")
+	}
+}
+
 func TestQueuedSnapshotStopsWhenSessionCollapsesAfterCapture(t *testing.T) {
 	dir := t.TempDir()
 	store, session := conversationTestSession(t, anchorFormatGuideEvidence)
@@ -137,7 +169,7 @@ func TestSnapshotCallbackCapturesCanonicalPaneAndRepliesWithPhoto(t *testing.T) 
 	if callbackText != "printing window" {
 		t.Fatalf("callback text = %q", callbackText)
 	}
-	if renderer.input.Columns != 71 || renderer.input.VisibleRows != 37 || renderer.input.BufferRows != 64 || !strings.Contains(renderer.input.ANSI, "green") || renderer.input.Status != "disk 47G free" {
+	if renderer.input.Columns != 71 || renderer.input.VisibleRows != 37 || renderer.input.BufferRows != 64 || !renderer.input.ViewportOnly || !strings.Contains(renderer.input.ANSI, "green") || renderer.input.Status != "disk 47G free" {
 		t.Fatalf("snapshot input = %#v", renderer.input)
 	}
 	if replyTo != "77" || !strings.Contains(caption, "[1] build") || !strings.Contains(caption, "64 buffer rows") {

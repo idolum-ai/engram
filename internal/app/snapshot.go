@@ -109,15 +109,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		return
 	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
-	input := a.withSnapshotFooterStatus(renderCtx, terminalshot.Input{
-		ANSI:        capture.ANSI,
-		Title:       firstNonEmpty(current.Title, capture.Title),
-		Target:      fmt.Sprintf("[%d]", current.ID),
-		CWD:         capture.CurrentPath,
-		Columns:     capture.Columns,
-		VisibleRows: capture.VisibleRows,
-		BufferRows:  capture.BufferRows,
-	}, capture.CurrentPath)
+	input := a.withSnapshotFooterStatus(renderCtx, snapshotRenderInput(current, capture), capture.CurrentPath)
 	pngPath, renderErr := a.Snapshots.Render(renderCtx, input, a.Config.ArtifactDir())
 	renderCancel()
 	releaseSlot(a.renderSlots)
@@ -177,6 +169,19 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		a.rememberOneOffViewTextFrame(anchor, capture)
 	}
 	_ = a.audit("terminal.snapshot", "sent", map[string]any{"session_id": latest.ID, "columns": capture.Columns, "visible_rows": capture.VisibleRows, "buffer_rows": capture.BufferRows})
+}
+
+func snapshotRenderInput(session state.TerminalSession, capture tmux.StyledCapture) terminalshot.Input {
+	return terminalshot.Input{
+		ANSI:         capture.ANSI,
+		Title:        firstNonEmpty(session.Title, capture.Title),
+		Target:       fmt.Sprintf("[%d]", session.ID),
+		CWD:          capture.CurrentPath,
+		Columns:      capture.Columns,
+		VisibleRows:  capture.VisibleRows,
+		BufferRows:   capture.BufferRows,
+		ViewportOnly: capture.AlternateOn == "1",
+	}
 }
 
 func snapshotFrameDescription(capture tmux.StyledCapture, _ bool) string {

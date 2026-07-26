@@ -36,8 +36,10 @@ type Frame struct {
 }
 
 type Observation struct {
-	Current  Frame  `json:"current"`
-	Previous *Frame `json:"previous,omitempty"`
+	Current         Frame  `json:"current"`
+	Previous        *Frame `json:"previous,omitempty"`
+	VerifiedProgram string `json:"verified_program,omitempty"`
+	VerifiedModel   string `json:"verified_model,omitempty"`
 }
 
 type Region struct {

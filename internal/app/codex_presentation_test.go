@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/idolum-ai/engram/internal/agentui"
+	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
@@ -34,6 +35,19 @@ type fixedCodexDetector struct {
 	err     error
 	pid     int
 	command string
+}
+
+type fixedClaudeDetector struct {
+	runtime claudeui.Runtime
+	err     error
+	pid     int
+	command string
+}
+
+func (d *fixedClaudeDetector) Detect(_ context.Context, pid int, command string) (claudeui.Runtime, error) {
+	d.pid = pid
+	d.command = command
+	return d.runtime, d.err
 }
 
 func (d *fixedCodexDetector) Detect(_ context.Context, pid int, command string) (codexui.Runtime, error) {
@@ -105,6 +119,213 @@ func TestProcessCapturedFrameGenericAnalysisSupportsNonCodexAgentUI(t *testing.T
 	}
 	if got := app.renderLocal(current, "Done."); !strings.Contains(got, "Agent · claude-sonnet-4-6 · idle") {
 		t.Fatalf("generic card = %q", got)
+	}
+}
+
+func TestProcessCapturedFrameRetainsClaudeModelForSameRuntime(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runtime := claudeui.Runtime{Detected: true, Supported: true, Version: claudeui.SupportedVersion, Identity: strings.Repeat("a", 64)}
+	detector := &fixedClaudeDetector{runtime: runtime}
+	app.ClaudeDetector = detector
+	app.CodexDetector = &fixedCodexDetector{err: errors.New("must not be called")}
+	session, _ := app.Store.FindSession(id)
+	modelCard := strings.Join([]string{
+		"╭──────────────────────────────────╮",
+		"│ Opus 4.8 · API Usage Billing     │",
+		"╰──────────────────────────────────╯",
+		"",
+		"⏺ The implementation is ready.",
+		"",
+		"────────────────────────────────────",
+		"❯",
+		"────────────────────────────────────",
+		"  bypass permissions on · ● high · /effort",
+	}, "\n")
+	capture := func(text string) tmux.StyledCapture {
+		return tmux.StyledCapture{
+			JoinedText: text, PanePID: 4242, CurrentCmd: "claude",
+			ServerID: session.TmuxServerID, WindowID: session.TmuxWindowID, PaneID: session.TmuxPaneID,
+			Columns: 80, VisibleRows: 24, AlternateOn: "on", PaneInMode: "off",
+		}
+	}
+	if got := app.processCapturedFrame(context.Background(), session, capture(modelCard)); strings.Contains(got, "API Usage Billing") {
+		t.Fatalf("initial guide input retained model card: %q", got)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.PresentationProgram != "claude" || current.PresentationVersion != claudeui.SupportedVersion ||
+		current.PresentationRuntimeID != runtime.Identity || current.PresentationModel != "claude-opus-4-8" ||
+		current.PresentationEffort != "high" || current.PresentationActivity != "idle" {
+		t.Fatalf("initial Claude presentation = %#v", current)
+	}
+
+	noModel := strings.Join([]string{
+		"⏺ Running repository checks.",
+		"",
+		"✻ Deliberating…",
+		"",
+		"────────────────────────────────────",
+		"❯",
+		"────────────────────────────────────",
+		"  bypass permissions on · ● high · /effort",
+	}, "\n")
+	if got := app.processCapturedFrame(context.Background(), current, capture(noModel)); strings.Contains(got, "Deliberating") {
+		t.Fatalf("continued guide input retained active chrome: %q", got)
+	}
+	current, _ = app.Store.FindSession(id)
+	if current.PresentationModel != "claude-opus-4-8" || current.PresentationActivity != "active" {
+		t.Fatalf("continued Claude presentation = %#v", current)
+	}
+	if detector.pid != 4242 || detector.command != "claude" {
+		t.Fatalf("detector observed pid=%d command=%q", detector.pid, detector.command)
+	}
+	if got := app.renderLocal(current, "Checks are running."); !strings.Contains(got, "Claude · claude-opus-4-8 · high · active") {
+		t.Fatalf("Claude card = %q", got)
+	}
+}
+
+func TestProcessCapturedFrameRestoresClaudeModelAfterServiceRestart(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	runtime := claudeui.Runtime{Detected: true, Supported: true, Version: claudeui.SupportedVersion, Identity: strings.Repeat("b", 64)}
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.PresentationProgram = "claude"
+		session.PresentationVersion = runtime.Version
+		session.PresentationRuntimeID = runtime.Identity
+		session.PresentationModel = "claude-opus-4-8"
+		session.PresentationEffort = "high"
+		session.PresentationActivity = "active"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.ClaudeDetector = &fixedClaudeDetector{runtime: runtime}
+	app.CodexDetector = nil
+	app.agentFrames = map[int]agentFrameState{}
+	session, _ := app.Store.FindSession(id)
+	input := "⏺ Work is complete.\n\n✻ Brewed for 3m 12s\n\n────────────────────\n❯\n────────────────────\n  bypass permissions on · ● high · /effort"
+	got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{
+		JoinedText: input, PanePID: 4242, CurrentCmd: "claude",
+		ServerID: session.TmuxServerID, WindowID: session.TmuxWindowID, PaneID: session.TmuxPaneID,
+		Columns: 80, VisibleRows: 24, AlternateOn: "on", PaneInMode: "off",
+	})
+	if strings.Contains(got, "Brewed for") {
+		t.Fatalf("restart guide input retained elapsed chrome: %q", got)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.PresentationModel != "claude-opus-4-8" || current.PresentationActivity != "idle" {
+		t.Fatalf("restored Claude presentation = %#v", current)
+	}
+}
+
+func TestProcessCapturedFrameDoesNotCarryClaudeModelAcrossRuntimeIdentity(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	oldIdentity := strings.Repeat("c", 64)
+	newIdentity := strings.Repeat("d", 64)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.PresentationProgram = "claude"
+		session.PresentationVersion = claudeui.SupportedVersion
+		session.PresentationRuntimeID = oldIdentity
+		session.PresentationModel = "claude-fable-5"
+		session.PresentationEffort = "high"
+		session.PresentationActivity = "active"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.ClaudeDetector = &fixedClaudeDetector{runtime: claudeui.Runtime{
+		Detected: true, Supported: true, Version: claudeui.SupportedVersion, Identity: newIdentity,
+	}}
+	app.CodexDetector = nil
+	session, _ := app.Store.FindSession(id)
+	input := "⏺ Waiting for input.\n\n────────────────────\n❯\n────────────────────\n  bypass permissions on · ● high · /effort"
+	app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{
+		JoinedText: input, PanePID: 5252, CurrentCmd: "claude",
+		ServerID: session.TmuxServerID, WindowID: session.TmuxWindowID, PaneID: session.TmuxPaneID,
+		Columns: 80, VisibleRows: 24, AlternateOn: "on", PaneInMode: "off",
+	})
+	current, _ := app.Store.FindSession(id)
+	if current.PresentationProgram != "claude" || current.PresentationRuntimeID != newIdentity ||
+		current.PresentationModel != "" || current.PresentationActivity != "idle" {
+		t.Fatalf("replacement Claude presentation = %#v", current)
+	}
+	if got := app.renderLocal(current, "Waiting."); !strings.Contains(got, "Claude · high · idle") || strings.Contains(got, "fable") {
+		t.Fatalf("replacement Claude card = %q", got)
+	}
+}
+
+func TestProcessCapturedFrameClearsClaudeStateForUnsupportedVersion(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.PresentationProgram = "claude"
+		session.PresentationVersion = claudeui.SupportedVersion
+		session.PresentationRuntimeID = strings.Repeat("e", 64)
+		session.PresentationModel = "claude-opus-4-8"
+		session.PresentationActivity = "idle"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.ClaudeDetector = &fixedClaudeDetector{runtime: claudeui.Runtime{Detected: true, Version: "2.1.220", Identity: strings.Repeat("f", 64)}}
+	app.CodexDetector = nil
+	session, _ := app.Store.FindSession(id)
+	input := "future Claude layout"
+	if got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{JoinedText: input, PanePID: 4242, CurrentCmd: "claude"}); got != input {
+		t.Fatalf("unsupported version changed input: %q", got)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.PresentationProgram != "" || current.PresentationRuntimeID != "" || current.PresentationModel != "" {
+		t.Fatalf("unsupported Claude state survived: %#v", current)
+	}
+}
+
+func TestProcessCapturedFrameClearsStaleClaudeActivityForUnknownLayout(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	identity := strings.Repeat("7", 64)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.PresentationProgram = "claude"
+		session.PresentationVersion = claudeui.SupportedVersion
+		session.PresentationRuntimeID = identity
+		session.PresentationModel = "claude-opus-4-8"
+		session.PresentationActivity = "active"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.ClaudeDetector = &fixedClaudeDetector{runtime: claudeui.Runtime{
+		Detected: true, Supported: true, Version: claudeui.SupportedVersion, Identity: identity,
+	}}
+	app.CodexDetector = nil
+	session, _ := app.Store.FindSession(id)
+	input := "future Claude layout"
+	if got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{JoinedText: input, PanePID: 4242, CurrentCmd: "claude"}); got != input {
+		t.Fatalf("unknown layout changed input: %q", got)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.PresentationProgram != "" || current.PresentationActivity != "" {
+		t.Fatalf("stale Claude activity survived unknown layout: %#v", current)
+	}
+}
+
+func TestProcessCapturedFrameKeepsClaudeStateOnTransientDetectionFailure(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	identity := strings.Repeat("9", 64)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.PresentationProgram = "claude"
+		session.PresentationVersion = claudeui.SupportedVersion
+		session.PresentationRuntimeID = identity
+		session.PresentationModel = "claude-opus-4-8"
+		session.PresentationActivity = "idle"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.ClaudeDetector = &fixedClaudeDetector{
+		runtime: claudeui.Runtime{Detected: true, Version: claudeui.SupportedVersion},
+		err:     errors.New("process start unavailable"),
+	}
+	app.CodexDetector = &fixedCodexDetector{err: errors.New("ps unavailable")}
+	session, _ := app.Store.FindSession(id)
+	input := "ordinary capture"
+	if got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{JoinedText: input, PanePID: 4242, CurrentCmd: "claude"}); got != input {
+		t.Fatalf("transient failure changed input: %q", got)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.PresentationProgram != "claude" || current.PresentationRuntimeID != identity || current.PresentationModel != "claude-opus-4-8" {
+		t.Fatalf("transient failure cleared Claude state: %#v", current)
 	}
 }
 

@@ -159,15 +159,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 		return
 	}
 	renderCtx, renderCancel := context.WithTimeout(ctx, snapshotRenderTimeout)
-	input := a.withSnapshotFooterStatus(renderCtx, terminalshot.Input{
-		ANSI:        capture.ANSI,
-		Title:       firstNonEmpty(current.Title, capture.Title),
-		Target:      fmt.Sprintf("[%d]", current.ID),
-		CWD:         capture.CurrentPath,
-		Columns:     capture.Columns,
-		VisibleRows: capture.VisibleRows,
-		BufferRows:  capture.BufferRows,
-	}, capture.CurrentPath)
+	input := a.withSnapshotFooterStatus(renderCtx, snapshotRenderInput(current, capture), capture.CurrentPath)
 	pngPath, renderErr := a.Snapshots.Render(renderCtx, input, a.Config.ArtifactDir())
 	renderCancel()
 	releaseSlot(a.renderSlots)
@@ -287,7 +279,7 @@ func (a *App) finishSnapshotMigration(ctx context.Context, id int) bool {
 }
 
 func snapshotAnchorHash(ts state.TerminalSession, capture tmux.StyledCapture, presentationText, caption, theme string) string {
-	return sha(strings.Join([]string{capture.ANSI, presentationText, capture.Title, capture.CurrentPath, fmt.Sprint(capture.Columns), fmt.Sprint(capture.VisibleRows), fmt.Sprint(capture.BufferRows), ts.Title, caption, theme}, "\x00"))
+	return sha(strings.Join([]string{capture.ANSI, presentationText, capture.Title, capture.CurrentPath, capture.AlternateOn, fmt.Sprint(capture.Columns), fmt.Sprint(capture.VisibleRows), fmt.Sprint(capture.BufferRows), ts.Title, caption, theme}, "\x00"))
 }
 
 func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.StyledCapture, refs visibleReferences) (string, []string) {

@@ -21,7 +21,7 @@ substrate for a small remote-work tool.
 
 | Conversational guide | Chromium |
 | --- | --- |
-| **Experience:** the selected model conveys the bounded terminal frame as compact, natural conversation.<br><br>**Pros:** quick to absorb across many sessions; plain language can make dense output legible.<br><br>**Cons:** a model can misunderstand the pane; raw bounded terminal text leaves the machine.<br><br>**Dependencies:** Anthropic Haiku 4.5 or OpenAI Luna, selected with `LLM_PROVIDER`, plus that provider's API key and network access. Chromium is optional and enables `🖼️ View` plus `/mode snapshot`. | **Experience:** Chromium renders the same bounded frame as an iPhone-sized, ANSI-preserving terminal image.<br><br>**Pros:** literal and deterministic; no model interpretation is required.<br><br>**Cons:** exact terminal content is uploaded to Telegram; rendering uses more local CPU and each frame is denser to inspect.<br><br>**Dependencies:** a local Chromium-compatible executable, optionally selected with `ENGRAM_SNAPSHOT_BROWSER`. A configured guide provider is optional and enables `🗣️ Talk` plus `/mode guide`. |
+| **Experience:** the selected model conveys the bounded terminal frame as compact, natural conversation.<br><br>**Pros:** quick to absorb across many sessions; plain language can make dense output legible.<br><br>**Cons:** a model can misunderstand the pane; raw bounded terminal text leaves the machine.<br><br>**Dependencies:** Anthropic Haiku 4.5 or OpenAI Luna, selected with `LLM_PROVIDER`, plus that provider's API key and network access. Chromium is optional and enables `🖼️ View` plus `/mode snapshot`. | **Experience:** Chromium renders the same bounded frame as a phone-width, ANSI-preserving terminal image. Retained history uses the established tall canvas; alternate-screen programs use their actual viewport height.<br><br>**Pros:** literal and deterministic; no model interpretation is required.<br><br>**Cons:** exact terminal content is uploaded to Telegram; rendering uses more local CPU and each frame is denser to inspect.<br><br>**Dependencies:** a local Chromium-compatible executable, optionally selected with `ENGRAM_SNAPSHOT_BROWSER`. A configured guide provider is optional and enables `🗣️ Talk` plus `/mode guide`. |
 
 `ENGRAM_ANCHOR_MODE` is the startup fallback when no usable persisted choice
 exists. The selected guide is available when configured; Chromium is locally probed.
@@ -843,8 +843,10 @@ changes, and [`SECURITY.md`](SECURITY.md) for private vulnerability reporting.
 The manually dispatched [E2E suites](docs/e2e-testing.md) include the service's
 hermetic Telegram/tmux/Chromium golden path and a real-client agent-screen
 semantic harness for Codex, Claude Code, and OpenCode. Both retain reviewable
-evidence without using real service or model credentials. The generic screen
-contract is documented in
+evidence without using real service or model credentials. Exact tested Claude
+Code versions can retain a visibly proven model for the same process
+incarnation after its model card scrolls away; process replacement and unknown
+layouts fail closed. The screen contract is documented in
 [`docs/agent-screen-semantics.md`](docs/agent-screen-semantics.md).
 
 The private boundary between Telegram orchestration and tmux truth is
