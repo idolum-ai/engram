@@ -92,15 +92,12 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 		return Runtime{Detected: true}, fmt.Errorf("Claude Code version resolver is unavailable")
 	}
 	candidate := candidates[0]
-	executable := candidate.path
-	if executable == "" {
-		if d.Executables == nil {
-			return Runtime{Detected: true}, fmt.Errorf("Claude Code executable resolver is unavailable")
-		}
-		executable, err = d.Executables.Resolve(candidate.pid)
-		if err != nil {
-			return Runtime{Detected: true}, fmt.Errorf("resolve running Claude Code executable: %w", err)
-		}
+	if d.Executables == nil {
+		return Runtime{Detected: true}, fmt.Errorf("Claude Code executable resolver is unavailable")
+	}
+	executable, err := d.Executables.Resolve(candidate.pid)
+	if err != nil {
+		return Runtime{Detected: true}, fmt.Errorf("resolve running Claude Code executable: %w", err)
 	}
 	if !filepath.IsAbs(executable) || !isClaudeExecutablePath(executable) {
 		return Runtime{Detected: true}, fmt.Errorf("running Claude Code executable is not a recognized absolute path")
@@ -161,7 +158,6 @@ func parseProcesses(out string) []process {
 
 type executableCandidate struct {
 	pid   int
-	path  string
 	depth int
 }
 
@@ -185,13 +181,12 @@ func nearestDescendantClaudeProcesses(processes []process, root int) []executabl
 		if !descendant || !possibleClaudeProcess(process) {
 			continue
 		}
-		path := claudeExecutable(process)
 		key := strconv.Itoa(process.pid)
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		candidates = append(candidates, executableCandidate{pid: process.pid, path: path, depth: depth})
+		candidates = append(candidates, executableCandidate{pid: process.pid, depth: depth})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].depth != candidates[j].depth {
@@ -200,7 +195,7 @@ func nearestDescendantClaudeProcesses(processes []process, root int) []executabl
 		if candidates[i].pid != candidates[j].pid {
 			return candidates[i].pid < candidates[j].pid
 		}
-		return candidates[i].path < candidates[j].path
+		return false
 	})
 	if len(candidates) == 0 {
 		return nil
@@ -214,27 +209,18 @@ func nearestDescendantClaudeProcesses(processes []process, root int) []executabl
 }
 
 func possibleClaudeProcess(process process) bool {
-	if claudeExecutable(process) != "" {
-		return true
-	}
 	if strings.EqualFold(filepath.Base(strings.TrimSpace(process.comm)), "claude") {
 		return true
 	}
 	fields := strings.Fields(process.args)
-	return len(fields) > 0 && strings.EqualFold(filepath.Base(strings.Trim(fields[0], "'\"")), "claude")
-}
-
-func claudeExecutable(process process) string {
-	for _, field := range strings.Fields(process.args) {
-		candidate := strings.Trim(field, "'\"")
-		if filepath.IsAbs(candidate) && isClaudeExecutablePath(candidate) {
-			return candidate
-		}
+	if len(fields) == 0 {
+		return false
 	}
-	if filepath.IsAbs(process.comm) && isClaudeExecutablePath(process.comm) {
-		return process.comm
+	command := strings.Trim(fields[0], "'\"")
+	if strings.EqualFold(filepath.Base(command), "claude") {
+		return true
 	}
-	return ""
+	return filepath.IsAbs(command) && isClaudeExecutablePath(command)
 }
 
 type ExecutableResolver interface {

@@ -124,6 +124,23 @@ func TestAnalyzeUsesObservedClaudeComposerWhenStatusRowIsAbsent(t *testing.T) {
 	}
 }
 
+func TestAnalyzePreservesComposerPromptContainingEffortCommand(t *testing.T) {
+	input := strings.Join([]string{
+		"⏺ I can explain the setting before changing it.",
+		"",
+		"────────────────────────────────────",
+		"❯ explain /effort high before changing it",
+		"────────────────────────────────────",
+	}, "\n")
+	got := Analyze(supportedRuntime("runtime-a"), agentui.Observation{Current: claudeFrame(input)}, "claude-opus-4-8")
+	if !got.Applied || got.Effort != "" {
+		t.Fatalf("analysis = %#v", got)
+	}
+	if !strings.Contains(got.Conversation, "❯ explain /effort high before changing it") {
+		t.Fatalf("conversation lost composer prompt: %q", got.Conversation)
+	}
+}
+
 func TestAnalyzeRecognizesClaudeApprovalAndModelSwitch(t *testing.T) {
 	approval := strings.Join([]string{
 		"⏺ I need to run the release check.",

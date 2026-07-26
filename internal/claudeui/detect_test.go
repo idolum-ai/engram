@@ -68,6 +68,23 @@ func TestDetectorResolvesRelativeClaudeProcessToRunningExecutable(t *testing.T) 
 	}
 }
 
+func TestDetectorRejectsClaudePathInUnrelatedProcessArgument(t *testing.T) {
+	const claimed = "/home/example/.local/share/claude/versions/2.1.219"
+	runner := &fakeRunner{
+		processes: "100 1 bash -bash\n110 100 cat cat " + claimed + "\n",
+		started:   "Thu Jul 24 22:11:23 2026\n",
+	}
+	executables := &fakeExecutableResolver{path: "/usr/bin/cat"}
+	versions := &fakeVersionResolver{version: SupportedVersion}
+	got, err := (&Detector{Runner: runner, Executables: executables, Versions: versions}).Detect(context.Background(), 100, "claude")
+	if err != nil || got != (Runtime{}) {
+		t.Fatalf("runtime = %#v, err=%v", got, err)
+	}
+	if len(executables.calls) != 0 || len(versions.calls) != 0 {
+		t.Fatalf("unrelated process was resolved: executable calls=%#v version calls=%#v", executables.calls, versions.calls)
+	}
+}
+
 func TestDetectorIdentifiesSupportedVersionedClaudeProcess(t *testing.T) {
 	const executable = "/home/example/.local/share/claude/versions/2.1.219"
 	runner := &fakeRunner{
@@ -80,7 +97,10 @@ func TestDetectorIdentifiesSupportedVersionedClaudeProcess(t *testing.T) {
 		started: "Thu Jul 24 22:11:23 2026\n",
 	}
 	versions := &fakeVersionResolver{version: SupportedVersion}
-	detector := &Detector{Runner: runner, Versions: versions}
+	executables := &fakeExecutableResolver{path: executable}
+	detector := &Detector{
+		Runner: runner, Executables: executables, Versions: versions,
+	}
 
 	got, err := detector.Detect(context.Background(), 100, "claude")
 	if err != nil || !got.Detected || !got.Supported || got.Version != SupportedVersion || len(got.Identity) != 64 {
@@ -88,6 +108,9 @@ func TestDetectorIdentifiesSupportedVersionedClaudeProcess(t *testing.T) {
 	}
 	if !reflect.DeepEqual(versions.calls, []string{executable}) {
 		t.Fatalf("version calls = %#v", versions.calls)
+	}
+	if !reflect.DeepEqual(executables.calls, []int{110}) {
+		t.Fatalf("executable calls = %#v", executables.calls)
 	}
 	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1], []string{"ps", "-o", "lstart=", "-p", "110"}) {
 		t.Fatalf("runner calls = %#v", runner.calls)
@@ -97,7 +120,10 @@ func TestDetectorIdentifiesSupportedVersionedClaudeProcess(t *testing.T) {
 func TestDetectorProcessIdentityChangesAcrossRelaunch(t *testing.T) {
 	const executable = "/home/example/.local/share/claude/versions/2.1.219"
 	runner := &fakeRunner{processes: "100 1 bash -bash\n110 100 2.1.219 " + executable + "\n", started: "Thu Jul 24 22:11:23 2026\n"}
-	detector := &Detector{Runner: runner, Versions: &fakeVersionResolver{version: SupportedVersion}}
+	detector := &Detector{
+		Runner: runner, Executables: &fakeExecutableResolver{path: executable},
+		Versions: &fakeVersionResolver{version: SupportedVersion},
+	}
 	first, err := detector.Detect(context.Background(), 100, "claude")
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +171,7 @@ func TestDetectorFailsClosedForAmbiguousUnsupportedAndUnrelatedProcesses(t *test
 		t.Run(test.name, func(t *testing.T) {
 			runner := &fakeRunner{processes: test.processes, started: "Thu Jul 24 22:11:23 2026\n"}
 			versions := &fakeVersionResolver{version: test.version}
-			got, err := (&Detector{Runner: runner, Executables: &fakeExecutableResolver{}, Versions: versions}).Detect(context.Background(), 100, test.foreground)
+			got, err := (&Detector{Runner: runner, Executables: &fakeExecutableResolver{path: executable}, Versions: versions}).Detect(context.Background(), 100, test.foreground)
 			if err != nil || got.Detected != test.detected {
 				t.Fatalf("runtime = %#v, err=%v", got, err)
 			}
@@ -162,7 +188,10 @@ func TestDetectorFailsClosedForAmbiguousUnsupportedAndUnrelatedProcesses(t *test
 func TestDetectorFailsClosedWhenStartTimeOrVersionCannotBeRead(t *testing.T) {
 	const executable = "/home/example/.local/share/claude/versions/2.1.219"
 	runner := &fakeRunner{processes: "100 1 bash -bash\n110 100 2.1.219 " + executable + "\n"}
-	detector := &Detector{Runner: runner, Executables: &fakeExecutableResolver{}, Versions: &fakeVersionResolver{version: SupportedVersion}}
+	detector := &Detector{
+		Runner: runner, Executables: &fakeExecutableResolver{path: executable},
+		Versions: &fakeVersionResolver{version: SupportedVersion},
+	}
 	got, err := detector.Detect(context.Background(), 100, "claude")
 	if err == nil || !got.Detected || got.Identity != "" {
 		t.Fatalf("empty start runtime = %#v, err=%v", got, err)
@@ -198,14 +227,15 @@ func TestPathVersionResolverUsesResolvedVersionedInstallation(t *testing.T) {
 	}
 }
 
-func TestClaudeExecutableRejectsRelativeAndPathLookalikes(t *testing.T) {
+func TestPossibleClaudeProcessRejectsRelativeAndPathLookalikes(t *testing.T) {
 	for _, process := range []process{
 		{comm: "claude", args: "claude"},
 		{comm: "/tmp/2.1.219", args: "/tmp/2.1.219"},
 		{comm: "/tmp/claude/versions/not-a-version", args: "/tmp/claude/versions/not-a-version"},
 	} {
-		if got := claudeExecutable(process); got != "" {
-			t.Fatalf("lookalike executable = %q for %#v", got, process)
+		want := strings.EqualFold(filepath.Base(strings.TrimSpace(process.comm)), "claude")
+		if got := possibleClaudeProcess(process); got != want {
+			t.Fatalf("possibleClaudeProcess(%#v) = %v, want %v", process, got, want)
 		}
 	}
 }

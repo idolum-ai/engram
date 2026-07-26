@@ -266,16 +266,16 @@ func findVerifiedClaudeStatus(lines []string) (index int, effort string, ok bool
 	}
 	for index = last; index >= 0 && index >= last-9; index-- {
 		line := strings.TrimSpace(lines[index])
-		if !strings.Contains(strings.ToLower(line), "/effort") {
+		if strings.HasPrefix(line, "❯") || strings.HasPrefix(line, "›") {
 			continue
 		}
-		for _, part := range strings.Split(line, " · ") {
-			for _, field := range strings.Fields(part) {
-				field = strings.Trim(field, "●○◉◌")
-				if validEffort(field) {
-					return index, strings.ToLower(field), true
-				}
-			}
+		parts := strings.Split(line, " · ")
+		if len(parts) != 3 || strings.TrimSpace(parts[2]) != "/effort" || !validClaudePermissionStatus(parts[0]) {
+			continue
+		}
+		field := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "●○◉◌"))
+		if validEffort(field) {
+			return index, strings.ToLower(field), true
 		}
 	}
 	for index = last; index >= 0 && index >= last-9; index-- {
@@ -290,6 +290,10 @@ func findVerifiedClaudeStatus(lines []string) (index int, effort string, ok bool
 		}
 	}
 	return 0, "", false
+}
+
+func validClaudePermissionStatus(value string) bool {
+	return strings.EqualFold(strings.Join(strings.Fields(value), " "), "bypass permissions on")
 }
 
 func previousNonemptyLine(lines []string, index int) int {
