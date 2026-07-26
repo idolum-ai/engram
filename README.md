@@ -296,7 +296,12 @@ Repository and permission flags are mandatory and repeatable. Engram rejects
 requests that omit either boundary. It validates the live tmux
 server/window/pane identity, sends an exact approval request to the configured
 Telegram user, and blocks for at most three minutes. Approval is single-use and
-bound to the waiting local connection.
+bound to the waiting local connection. The approval card includes the complete
+shell-quoted child command; if the repositories, permissions, and full command
+cannot fit safely in one card, Engram refuses the request instead of presenting
+a truncated command. It likewise refuses a command containing material that
+would require redaction in Telegram, because approving a redacted command would
+not be informed approval.
 
 By default, the passphrase is entered locally before the Telegram approval.
 This keeps it out of Telegram. A user who explicitly accepts Telegram's cloud
@@ -359,6 +364,26 @@ against accidental agent overreach; they do not isolate secrets from root or
 malicious code already controlling the same operating-system user. A child
 command can deliberately print its own environment, so commands executed under
 a lease must still be treated as trusted with the requested authority.
+
+### Why the broker lives in Engram
+
+The trusted action is not merely minting a GitHub token. It is binding one
+short-lived grant to the same Telegram identity, approval message, live tmux
+server/window/pane identity, requester connection, and terminal card lifecycle
+that Engram already owns. A separate broker would either need to duplicate that
+control plane or accept a weaker assertion from the terminal about who approved
+which pane. Keeping the narrow coordination path in Engram lets pane
+invalidation and requester cancellation revoke or discard authority before it
+is delivered.
+
+This is not a general credential manager. The provider-specific boundary is
+limited to GitHub App enrollment, installation inspection, exact-scope token
+minting, and revocation behind `internal/githubauth` and the `engram github`
+command namespace. Engram does not accept personal access tokens, OAuth user
+tokens, arbitrary secrets, or generic cloud-provider credentials. Future
+providers should remain external unless they require the same pane-scoped,
+Telegram-approved lifecycle and can preserve this small adapter boundary
+without moving provider workflows into the terminal bridge.
 
 ## Data Flow / Privacy
 

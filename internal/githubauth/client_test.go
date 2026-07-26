@@ -69,6 +69,54 @@ func TestClientMintsExactlyScopedInstallationToken(t *testing.T) {
 	}
 }
 
+func TestClientRevokesMintedTokenWhenEffectiveScopeDoesNotMatch(t *testing.T) {
+	privateKeyPEM, privateKey := testPrivateKey(t)
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	var revokeCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations/456":
+			verifyTestJWT(t, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), privateKey, 123, now)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": 456, "app_slug": "idolum-app",
+				"account":     map[string]any{"login": "idolum-ai"},
+				"permissions": map[string]string{"contents": "write", "issues": "write"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/456/access_tokens":
+			verifyTestJWT(t, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), privateKey, 123, now)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token":       "ghs_scope_mismatch",
+				"expires_at":  now.Add(time.Hour),
+				"permissions": map[string]string{"contents": "read", "issues": "write"},
+				"repositories": []map[string]string{
+					{"full_name": "idolum-ai/engram"},
+				},
+			})
+		case r.Method == http.MethodDelete && r.URL.Path == "/installation/token":
+			if got := r.Header.Get("Authorization"); got != "Bearer ghs_scope_mismatch" {
+				t.Fatalf("revoke authorization = %q", got)
+			}
+			revokeCalls++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewClient()
+	client.BaseURL = server.URL
+	client.HTTPClient = server.Client()
+	client.Now = func() time.Time { return now }
+	_, err := client.Mint(context.Background(), App{AppID: 123, InstallationID: 456}, privateKeyPEM,
+		[]string{"idolum-ai/engram"}, map[string]string{"contents": "read"})
+	if err == nil || !strings.Contains(err.Error(), "unrequested permission") {
+		t.Fatalf("Mint error = %v", err)
+	}
+	if revokeCalls != 1 {
+		t.Fatalf("revoke calls = %d, want 1", revokeCalls)
+	}
+}
+
 func TestValidateTokenFailsClosedOnExtraAuthority(t *testing.T) {
 	now := time.Now().UTC()
 	token := Token{

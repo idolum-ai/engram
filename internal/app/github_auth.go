@@ -122,6 +122,11 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		return githubauth.BrokerResponse{Error: approval.err.Error()}
 	}
 	defer githubauth.Zero(approval.passphrase)
+	if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
+		a.completeGitHubApprovalMessage(pending, "Canceled: the requesting tmux pane is no longer valid.")
+		_ = a.audit("github.approval", "invalidated", githubAuditRequest(session.ID, request))
+		return githubauth.BrokerResponse{Error: err.Error()}
+	}
 
 	privateKey, unlockedApp, err := a.GitHubVault.Unlock(request.App, approval.passphrase)
 	if err != nil {
@@ -157,6 +162,16 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		},
 		Token: token.Value,
 	}
+	if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
+		cleanupErr := a.revokeDiscardedGitHubToken(ctx, token.Value, err)
+		a.completeGitHubApprovalMessage(pending, "Canceled: the requesting tmux pane changed before the capability could be delivered.")
+		_ = a.audit("github.mint", "discarded", map[string]any{
+			"session_id": session.ID,
+			"app":        request.App,
+			"error":      cleanupErr.Error(),
+		})
+		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
+	}
 	oldTokens := a.storeGitHubLease(lease)
 	a.revokeGitHubTokens(oldTokens)
 	a.queueManualRefresh(session.ID)
@@ -190,10 +205,41 @@ func (a *App) validateGitHubBrokerBinding(ctx context.Context, binding githubaut
 	return matched, nil
 }
 
+func (a *App) validateGitHubBrokerContinuation(ctx context.Context, expected state.TerminalSession, binding githubauth.Binding) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("GitHub capability request was canceled")
+	}
+	current, err := a.validateGitHubBrokerBinding(ctx, binding)
+	if err != nil {
+		return err
+	}
+	if current.ID != expected.ID || !current.CreatedAt.Equal(expected.CreatedAt) {
+		return fmt.Errorf("requesting tmux pane identity changed during GitHub capability approval")
+	}
+	return nil
+}
+
+func (a *App) revokeDiscardedGitHubToken(ctx context.Context, token string, cause error) error {
+	if a.GitHubMinter == nil {
+		return cause
+	}
+	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	err := a.GitHubMinter.Revoke(revokeCtx, token)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("%w; revoke discarded GitHub token: %v", cause, err)
+	}
+	return cause
+}
+
 func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App) (*githubPendingRequest, error) {
 	requestID, err := githubRequestID()
 	if err != nil {
 		return nil, err
+	}
+	command := compactGitHubCommand(request.Command)
+	if a.redactText(command) != command {
+		return nil, fmt.Errorf("GitHub child command contains secret material that cannot be disclosed safely for approval")
 	}
 	text := a.githubApprovalText(session, request, app)
 	if len(text) > 3500 {
@@ -667,16 +713,11 @@ func githubAuditRequest(sessionID int, request githubauth.BrokerRequest) map[str
 }
 
 func compactGitHubCommand(command []string) string {
-	const maxCommandBytes = 300
 	quoted := make([]string, len(command))
 	for index, argument := range command {
 		quoted[index] = strconv.Quote(argument)
 	}
-	joined := strings.Join(quoted, " ")
-	if len(joined) <= maxCommandBytes {
-		return joined
-	}
-	return headUTF8(joined, maxCommandBytes-3) + "..."
+	return strings.Join(quoted, " ")
 }
 
 func sessionLabel(session state.TerminalSession) string {

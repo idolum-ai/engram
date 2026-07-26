@@ -111,6 +111,118 @@ func TestGitHubCapabilityRemoteApprovalMintsLeaseAndDeletesPassphraseReply(t *te
 	}
 }
 
+func TestGitHubCapabilityCancellationDuringMintRevokesTokenWithoutStoringLease(t *testing.T) {
+	minter := &fakeGitHubMinter{
+		expiresAt:   time.Now().UTC().Add(42 * time.Minute),
+		mintStarted: make(chan struct{}),
+		mintRelease: make(chan struct{}),
+	}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+
+	request := testLocalGitHubBrokerRequest()
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	responseChannel := make(chan githubauth.BrokerResponse, 1)
+	go func() {
+		responseChannel <- app.handleGitHubBrokerRequest(requestCtx, request)
+	}()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "callback-cancel-mint", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+		Data:    "github-approve:" + requestID,
+	}); status != "callback_ok" {
+		t.Fatalf("approval callback status = %q", status)
+	}
+	<-minter.mintStarted
+	cancelRequest()
+	close(minter.mintRelease)
+
+	response := <-responseChannel
+	if response.OK || !strings.Contains(strings.ToLower(response.Error), "canceled") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if len(app.githubLeases) != 0 {
+		t.Fatal("canceled request stored a GitHub lease")
+	}
+	if minter.revokeCount() != 1 {
+		t.Fatalf("revoke calls = %d, want 1", minter.revokeCount())
+	}
+}
+
+func TestGitHubCapabilityBindingInvalidatedDuringMintRevokesTokenWithoutStoringLease(t *testing.T) {
+	minter := &fakeGitHubMinter{
+		expiresAt:   time.Now().UTC().Add(42 * time.Minute),
+		mintStarted: make(chan struct{}),
+		mintRelease: make(chan struct{}),
+	}
+	app, transport, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+
+	responseChannel := make(chan githubauth.BrokerResponse, 1)
+	go func() {
+		responseChannel <- app.handleGitHubBrokerRequest(context.Background(), testLocalGitHubBrokerRequest())
+	}()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "callback-invalidate-mint", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+		Data:    "github-approve:" + requestID,
+	}); status != "callback_ok" {
+		t.Fatalf("approval callback status = %q", status)
+	}
+	<-minter.mintStarted
+	if _, _, err := app.Store.UpdateSession(sessionID, func(session *state.TerminalSession) {
+		session.WatchEnabled = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(minter.mintRelease)
+
+	response := <-responseChannel
+	if response.OK || !strings.Contains(response.Error, "not an active Engram session") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if len(app.githubLeases) != 0 {
+		t.Fatal("invalidated pane stored a GitHub lease")
+	}
+	if minter.revokeCount() != 1 {
+		t.Fatalf("revoke calls = %d, want 1", minter.revokeCount())
+	}
+}
+
+func TestGitHubCapabilityRevalidatesBindingAfterApprovalBeforeMint(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(42 * time.Minute)}
+	app, transport, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+
+	responseChannel := make(chan githubauth.BrokerResponse, 1)
+	go func() {
+		responseChannel <- app.handleGitHubBrokerRequest(context.Background(), testLocalGitHubBrokerRequest())
+	}()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if _, _, err := app.Store.UpdateSession(sessionID, func(session *state.TerminalSession) {
+		session.WatchEnabled = false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "callback-invalidate-approved", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+		Data:    "github-approve:" + requestID,
+	}); status != "callback_ok" {
+		t.Fatalf("approval callback status = %q", status)
+	}
+
+	response := <-responseChannel
+	if response.OK || !strings.Contains(response.Error, "not an active Engram session") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if minter.mintCount() != 0 {
+		t.Fatalf("mint calls = %d, want 0", minter.mintCount())
+	}
+}
+
 func TestGitHubCapabilityReusesOnlySubsetAndRevokesPaneLease(t *testing.T) {
 	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
 	app.githubPending = map[string]*githubPendingRequest{}
@@ -290,9 +402,65 @@ func TestGitHubShutdownRevokesEveryLiveLease(t *testing.T) {
 }
 
 func TestGitHubApprovalCommandRenderingEscapesControlCharacters(t *testing.T) {
-	rendered := compactGitHubCommand([]string{"gh", "api", "line one\nPermissions:\ncontents: write"})
+	trailing := "TRAILING_ARGUMENT_MUST_BE_VISIBLE"
+	rendered := compactGitHubCommand([]string{"gh", "api", "line one\nPermissions:\ncontents: write", strings.Repeat("x", 400) + trailing})
 	if strings.Contains(rendered, "\n") || !strings.Contains(rendered, `\nPermissions:\n`) {
 		t.Fatalf("rendered command was ambiguous: %q", rendered)
+	}
+	if !strings.Contains(rendered, trailing) {
+		t.Fatalf("rendered command hid trailing content: %q", rendered)
+	}
+}
+
+func TestGitHubApprovalRejectsCommandThatCannotBeShownInFull(t *testing.T) {
+	transport := newGitHubTelegramTransport()
+	client := telegram.New("TOKEN")
+	client.HTTPClient = &http.Client{Transport: transport}
+	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	app.Telegram = client
+	app.githubPending = map[string]*githubPendingRequest{}
+	app.githubLeases = map[string]githubLease{}
+	session, ok := app.Store.FindSession(sessionID)
+	if !ok {
+		t.Fatal("session not found")
+	}
+	request := testLocalGitHubBrokerRequest()
+	request.Command = []string{"gh", "api", strings.Repeat("x", 4000) + "TRAILING_ARGUMENT"}
+	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{})
+	if pending != nil {
+		app.finishGitHubPending(pending)
+	}
+	if err == nil || !strings.Contains(err.Error(), "too large to present safely") {
+		t.Fatalf("beginGitHubApproval error = %v", err)
+	}
+	if len(transport.sent) != 0 {
+		t.Fatal("oversized undisclosed command was sent for approval")
+	}
+}
+
+func TestGitHubApprovalRejectsCommandThatRedactionWouldHide(t *testing.T) {
+	transport := newGitHubTelegramTransport()
+	client := telegram.New("TOKEN")
+	client.HTTPClient = &http.Client{Transport: transport}
+	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	app.Telegram = client
+	app.githubPending = map[string]*githubPendingRequest{}
+	app.githubLeases = map[string]githubLease{}
+	session, ok := app.Store.FindSession(sessionID)
+	if !ok {
+		t.Fatal("session not found")
+	}
+	request := testLocalGitHubBrokerRequest()
+	request.Command = []string{"gh", "api", "--field", "token=ghp_1234567890abcdef"}
+	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{})
+	if pending != nil {
+		app.finishGitHubPending(pending)
+	}
+	if err == nil || !strings.Contains(err.Error(), "cannot be disclosed safely") {
+		t.Fatalf("beginGitHubApproval error = %v", err)
+	}
+	if len(transport.sent) != 0 {
+		t.Fatal("redacted command was sent for approval")
 	}
 }
 
@@ -360,6 +528,8 @@ type fakeGitHubMinter struct {
 	repositories []string
 	permissions  map[string]string
 	expiresAt    time.Time
+	mintStarted  chan struct{}
+	mintRelease  chan struct{}
 }
 
 func (m *fakeGitHubMinter) InspectInstallation(context.Context, githubauth.App, []byte) (githubauth.Installation, error) {
@@ -367,6 +537,12 @@ func (m *fakeGitHubMinter) InspectInstallation(context.Context, githubauth.App, 
 }
 
 func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey []byte, repositories []string, permissions map[string]string) (githubauth.Token, error) {
+	if m.mintStarted != nil {
+		close(m.mintStarted)
+	}
+	if m.mintRelease != nil {
+		<-m.mintRelease
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !bytes.Contains(privateKey, []byte("RSA PRIVATE KEY")) {
@@ -397,6 +573,51 @@ func (m *fakeGitHubMinter) Revoke(context.Context, string) error {
 	m.revokeCalls++
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *fakeGitHubMinter) mintCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.mintCalls
+}
+
+func (m *fakeGitHubMinter) revokeCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revokeCalls
+}
+
+func testLocalGitHubBrokerRequest() githubauth.BrokerRequest {
+	return githubauth.BrokerRequest{
+		Version:      githubauth.ProtocolVersion,
+		Action:       githubauth.ActionExec,
+		App:          "idolum",
+		Repositories: []string{"idolum-ai/engram"},
+		Permissions:  map[string]string{"contents": "read"},
+		Command:      []string{"gh", "pr", "view", "51"},
+		Binding:      githubauth.Binding{ServerID: appTestServerID, WindowID: "@1", PaneID: "%1"},
+		Passphrase:   []byte("correct horse battery staple"),
+	}
+}
+
+func newLocalGitHubApprovalTestApp(t *testing.T, minter githubauth.Minter) (*App, *githubTelegramTransport, int) {
+	t.Helper()
+	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	app.Config.TelegramBotToken = "BOT_SECRET"
+	app.GitHubVault = testGitHubVault(t, false)
+	app.GitHubMinter = minter
+	app.githubPending = map[string]*githubPendingRequest{}
+	app.githubLeases = map[string]githubLease{}
+	app.githubNow = time.Now
+	stopped, stop := context.WithCancel(context.Background())
+	stop()
+	app.runCtx = stopped
+
+	transport := newGitHubTelegramTransport()
+	client := telegram.New("BOT_SECRET")
+	client.HTTPClient = &http.Client{Transport: transport}
+	app.Telegram = client
+	return app, transport, sessionID
 }
 
 type githubTelegramMessage struct {

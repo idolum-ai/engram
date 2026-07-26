@@ -209,6 +209,12 @@ privacy model must stay small and explicit.
 - GitHub capability approvals are process-local, random, single-use, expire
   within three minutes, and bind the authorized Telegram identity and message
   to one current immutable tmux server/window/pane identity.
+- GitHub capability approval must disclose the complete shell-quoted child
+  command. If the full repositories, permissions, and command do not fit safely
+  in the approval message, Engram must reject the request rather than truncate
+  or omit executable content. If safe Telegram presentation would redact any
+  command content, Engram must reject the request rather than approve a command
+  that differs from its preview.
 - Telegram passphrase replies are forbidden by default because bot chats are
   not end-to-end encrypted. Per-app opt-in must be explicit and visibly warned;
   accepted passphrase replies and prompts must be deleted immediately and
@@ -218,7 +224,9 @@ privacy model must stay small and explicit.
   unwatch, expiry, explicit revocation, or restart removes authority; broader
   requests require a new approval. Engram must attempt remote token revocation
   when a live lease is explicitly revoked, invalidated, or discarded during an
-  orderly shutdown.
+  orderly shutdown. It must also revoke a newly minted token before returning
+  any effective-scope validation failure or post-mint cancellation/binding
+  invalidation error.
 - `engram github exec` replaces ambient `GH_TOKEN` and `GITHUB_TOKEN` values
   and gives the scoped installation token only to the requested child
   environment. The child remains trusted with that authority and can

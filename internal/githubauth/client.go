@@ -115,6 +115,12 @@ func (c *Client) Mint(ctx context.Context, app App, privateKeyPEM []byte, reposi
 		return Token{}, err
 	}
 	if err := ValidateToken(token, repositories, permissions, c.now()); err != nil {
+		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		revokeErr := c.Revoke(revokeCtx, token.Value)
+		cancel()
+		if revokeErr != nil {
+			return Token{}, fmt.Errorf("%w; revoke rejected GitHub token: %v", err, revokeErr)
+		}
 		return Token{}, err
 	}
 	return token, nil
