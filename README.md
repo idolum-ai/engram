@@ -264,6 +264,10 @@ The bearer token is never printed by Engram or written to disk. Instead,
 `engram github exec` waits for human approval and then starts one child command
 with `GH_TOKEN` in its environment.
 
+For a complete enrollment, verification, approval, revocation, PEM-lifecycle,
+and troubleshooting walkthrough, see the
+[pane-scoped GitHub App capability guide](docs/github-app-capabilities.md).
+
 Enroll a GitHub App under a short local alias:
 
 ```sh

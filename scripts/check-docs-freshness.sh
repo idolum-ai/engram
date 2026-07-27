@@ -7,6 +7,7 @@ cd "$repo_root"
 required_docs=(
   docs/agent-screen-semantics.md
   docs/design-principles.md
+  docs/github-app-capabilities.md
   docs/headless-operation.md
   docs/protocol-posture.md
   docs/release-strategy.md
