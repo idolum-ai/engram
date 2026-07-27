@@ -225,14 +225,17 @@ privacy model must stay small and explicit.
   accepted passphrase replies and prompts must be deleted immediately and
   their text must not enter state, audit, or error output.
 - Active GitHub leases are process-local and pane-bound. A reused request must
-  be a repository and permission subset of the lease. Pane loss, replacement,
-  unwatch, expiry, explicit revocation, or restart removes authority; broader
-  requests require a new approval. Pane identity and watch state must be checked
-  again immediately before a reused token is returned. Engram must attempt
-  remote token revocation when a live lease is explicitly revoked, invalidated,
-  or discarded during an orderly shutdown. It must also revoke a newly minted
-  token before returning any effective-scope validation failure or post-mint
-  cancellation/binding invalidation error.
+  be a repository and permission subset of the lease and must match the complete
+  enrollment identity that minted it, including App ID, installation ID, public
+  fingerprint, unlock mode, and enrollment generation. Pane identity, watch
+  state, and enrollment identity must be checked again immediately before a
+  reused token is returned. Pane loss, replacement, unwatch, expiry, explicit
+  revocation, enrollment replacement, or restart removes authority; broader
+  requests require a new approval. Engram must attempt remote token revocation
+  when a live lease is explicitly revoked, invalidated, or discarded during an
+  orderly shutdown. It must also revalidate the exact enrollment after minting
+  and revoke a newly minted token before returning any effective-scope,
+  post-mint cancellation/binding, or enrollment-identity failure.
 - Source GitHub App PEM files must be regular, non-symlink files owned by the
   process UID with no group or other permission bits. A malformed optional
   GitHub App vault must disable and disclose only that capability; it must not

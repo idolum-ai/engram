@@ -233,10 +233,17 @@ func TestGitHubCapabilityReusesOnlySubsetAndRevokesPaneLease(t *testing.T) {
 	cancel()
 	app.runCtx = canceled
 	binding := githubauth.Binding{ServerID: appTestServerID, WindowID: "@1", PaneID: "%1"}
+	enrollment := githubauth.App{
+		Alias:             "idolum",
+		AppID:             123,
+		InstallationID:    456,
+		PublicFingerprint: "fingerprint",
+		CreatedAt:         time.Unix(1_700_000_000, 0).UTC(),
+	}
 	app.githubLeases[githubBindingKey(binding)] = githubLease{
-		SessionID:      sessionID,
-		Binding:        binding,
-		AppFingerprint: "fingerprint",
+		SessionID:  sessionID,
+		Binding:    binding,
+		Enrollment: enrollment,
 		Info: githubauth.LeaseInfo{
 			App:          "idolum",
 			Repositories: []string{"idolum-ai/engram", "idolum-ai/grimoire"},
@@ -251,11 +258,11 @@ func TestGitHubCapabilityReusesOnlySubsetAndRevokesPaneLease(t *testing.T) {
 		Permissions:  map[string]string{"pull_requests": "read"},
 		Binding:      binding,
 	}
-	if token, _, ok := app.reusableGitHubLease(subset, "fingerprint"); !ok || token != "secret-token" {
+	if lease, ok := app.reusableGitHubLease(subset, enrollment); !ok || lease.Token != "secret-token" {
 		t.Fatal("same-pane subset did not reuse the lease")
 	}
 	subset.Permissions["contents"] = "write"
-	if _, _, ok := app.reusableGitHubLease(subset, "fingerprint"); ok {
+	if _, ok := app.reusableGitHubLease(subset, enrollment); ok {
 		t.Fatal("broader write permission reused the lease")
 	}
 	app.revokeGitHubBindingLeases(context.Background(), sessionID, binding)
@@ -280,9 +287,9 @@ func TestGitHubCapabilityRevalidatesBindingBeforeReturningReusedLease(t *testing
 	}
 	request := testLocalGitHubBrokerRequest()
 	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
-		SessionID:      sessionID,
-		Binding:        request.Binding,
-		AppFingerprint: enrollment.PublicFingerprint,
+		SessionID:  sessionID,
+		Binding:    request.Binding,
+		Enrollment: enrollment,
 		Info: githubauth.LeaseInfo{
 			App:          request.App,
 			Repositories: append([]string(nil), request.Repositories...),
@@ -309,6 +316,119 @@ func TestGitHubCapabilityRevalidatesBindingBeforeReturningReusedLease(t *testing
 	}
 	if app.GitHubMinter.(*fakeGitHubMinter).revokeCount() != 1 {
 		t.Fatal("invalidated reused token was not revoked")
+	}
+}
+
+func TestGitHubCapabilityRejectsEnrollmentRemovedDuringMint(t *testing.T) {
+	minter := &fakeGitHubMinter{
+		expiresAt:   time.Now().UTC().Add(42 * time.Minute),
+		mintStarted: make(chan struct{}),
+		mintRelease: make(chan struct{}),
+	}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+
+	responseChannel := make(chan githubauth.BrokerResponse, 1)
+	go func() {
+		responseChannel <- app.handleGitHubBrokerRequest(context.Background(), testLocalGitHubBrokerRequest())
+	}()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "callback-remove-during-mint", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+		Data:    "github-approve:" + requestID,
+	}); status != "callback_ok" {
+		t.Fatalf("approval callback status = %q", status)
+	}
+	<-minter.mintStarted
+
+	external, err := githubauth.OpenVault(app.GitHubVault.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := external.Remove("idolum"); err != nil || !removed {
+		t.Fatalf("remove enrollment = %t, %v", removed, err)
+	}
+	close(minter.mintRelease)
+
+	response := <-responseChannel
+	if response.OK || !strings.Contains(response.Error, "no longer enrolled") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if len(app.githubLeases) != 0 {
+		t.Fatal("mint-time enrollment removal stored a GitHub lease")
+	}
+	if minter.revokeCount() != 1 {
+		t.Fatalf("revoke calls = %d, want 1", minter.revokeCount())
+	}
+}
+
+func TestGitHubCapabilityRejectsSameKeyInstallationRetargetBeforeLeaseReuse(t *testing.T) {
+	app, runner, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	app.GitHubVault = testGitHubVault(t, false)
+	app.GitHubMinter = &fakeGitHubMinter{}
+	app.githubPending = map[string]*githubPendingRequest{}
+	app.githubLeases = map[string]githubLease{}
+	app.githubNow = time.Now
+	enrollment, found := app.GitHubVault.Get("idolum")
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
+	passphrase := []byte("correct horse battery staple")
+	privateKey, _, err := app.GitHubVault.Unlock("idolum", passphrase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer githubauth.Zero(privateKey)
+	external, err := githubauth.OpenVault(app.GitHubVault.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := testLocalGitHubBrokerRequest()
+	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
+		SessionID:  sessionID,
+		Binding:    request.Binding,
+		Enrollment: enrollment,
+		Info: githubauth.LeaseInfo{
+			App:          request.App,
+			Repositories: append([]string(nil), request.Repositories...),
+			Permissions:  copyStringMap(request.Permissions),
+			ExpiresAt:    time.Now().Add(time.Hour),
+		},
+		Token: "old-installation-token",
+	}
+	identityChecks := 0
+	runner.onIdentity = func() {
+		identityChecks++
+		if identityChecks != 2 {
+			return
+		}
+		replacement, _, err := external.Add(
+			"idolum",
+			enrollment.AppID,
+			enrollment.InstallationID+1,
+			privateKey,
+			passphrase,
+			enrollment.TelegramUnlock,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if replacement.PublicFingerprint != enrollment.PublicFingerprint {
+			t.Fatal("same private key produced a different public fingerprint")
+		}
+	}
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "enrollment changed") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if len(app.githubLeases) != 0 {
+		t.Fatal("retargeted enrollment retained its old installation lease")
+	}
+	if app.GitHubMinter.(*fakeGitHubMinter).revokeCount() != 1 {
+		t.Fatal("retargeted installation token was not revoked")
 	}
 }
 

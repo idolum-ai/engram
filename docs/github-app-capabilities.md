@@ -421,8 +421,11 @@ pane invalidation abandons the request. Late Telegram passphrase replies are
 consumed and deleted rather than falling through to terminal input.
 
 Removing or replacing an enrolled App while its approval is pending also
-cancels the request. Start a fresh request after the intended enrollment is
-stable.
+cancels the request. Engram repeats that exact enrollment check after token
+minting and before delivery. Existing pane leases also bind the App ID,
+installation ID, public fingerprint, unlock mode, and enrollment generation;
+retargeting an alias cannot reuse the prior installation's token. Start a fresh
+request after the intended enrollment is stable.
 
 ### The GitHub App vault is unavailable
 
