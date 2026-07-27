@@ -274,6 +274,64 @@ func TestGitHubCapabilityReusesOnlySubsetAndRevokesPaneLease(t *testing.T) {
 	}
 }
 
+func TestGitHubCapabilityUnavailableVaultZeroesSuppliedPassphrase(t *testing.T) {
+	app, _, _ := newSafetyApp(t, state.TerminalOriginAttached)
+	request := testLocalGitHubBrokerRequest()
+	passphrase := request.Passphrase
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "capabilities are unavailable") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	requireZeroedGitHubPassphrase(t, passphrase)
+}
+
+func TestGitHubCapabilityBindingRejectionZeroesSuppliedPassphrase(t *testing.T) {
+	app, _, _ := newSafetyApp(t, state.TerminalOriginAttached)
+	app.GitHubVault = testGitHubVault(t, false)
+	request := testLocalGitHubBrokerRequest()
+	request.Binding.PaneID = "%999"
+	passphrase := request.Passphrase
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "not an active Engram session") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	requireZeroedGitHubPassphrase(t, passphrase)
+}
+
+func TestGitHubCapabilityReuseZeroesSuppliedPassphrase(t *testing.T) {
+	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	app.GitHubVault = testGitHubVault(t, false)
+	app.GitHubMinter = &fakeGitHubMinter{}
+	app.githubPending = map[string]*githubPendingRequest{}
+	app.githubLeases = map[string]githubLease{}
+	enrollment, found := app.GitHubVault.Get("idolum")
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
+	request := testLocalGitHubBrokerRequest()
+	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
+		SessionID:  sessionID,
+		Binding:    request.Binding,
+		Enrollment: enrollment,
+		Info: githubauth.LeaseInfo{
+			App:          request.App,
+			Repositories: append([]string(nil), request.Repositories...),
+			Permissions:  copyStringMap(request.Permissions),
+			ExpiresAt:    time.Now().Add(time.Hour),
+		},
+		Token: "reused-token",
+	}
+	passphrase := request.Passphrase
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if !response.OK || response.Token != "reused-token" {
+		t.Fatalf("broker response = %#v", response)
+	}
+	requireZeroedGitHubPassphrase(t, passphrase)
+}
+
 func TestGitHubCapabilityRevalidatesBindingBeforeReturningReusedLease(t *testing.T) {
 	app, runner, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
 	app.GitHubVault = testGitHubVault(t, false)
@@ -964,4 +1022,13 @@ func intValue(value any) int {
 
 func configForGitHubTest() config.Config {
 	return config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100}
+}
+
+func requireZeroedGitHubPassphrase(t *testing.T, passphrase []byte) {
+	t.Helper()
+	for index, value := range passphrase {
+		if value != 0 {
+			t.Fatalf("passphrase byte %d = %d, want zero", index, value)
+		}
+	}
 }
