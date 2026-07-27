@@ -66,6 +66,7 @@ func (a *App) startGitHubBroker(ctx context.Context) {
 }
 
 func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.BrokerRequest) githubauth.BrokerResponse {
+	defer githubauth.Zero(request.Passphrase)
 	session, err := a.validateGitHubBrokerBinding(ctx, request.Binding)
 	if err != nil {
 		return githubauth.BrokerResponse{Error: err.Error()}
@@ -95,7 +96,6 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if !app.TelegramUnlock && len(request.Passphrase) == 0 {
 		return githubauth.BrokerResponse{Error: "this GitHub App requires local passphrase entry"}
 	}
-	defer githubauth.Zero(request.Passphrase)
 
 	pending, err := a.beginGitHubApproval(ctx, session, request, app)
 	if err != nil {

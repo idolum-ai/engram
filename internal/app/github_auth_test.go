@@ -266,6 +266,54 @@ func TestGitHubCapabilityReusesOnlySubsetAndRevokesPaneLease(t *testing.T) {
 	}
 }
 
+func TestGitHubCapabilityReuseZeroesSuppliedPassphrase(t *testing.T) {
+	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	app.GitHubVault = testGitHubVault(t, false)
+	app.githubPending = map[string]*githubPendingRequest{}
+	app.githubLeases = map[string]githubLease{}
+	enrolled, ok := app.GitHubVault.Get("idolum")
+	if !ok {
+		t.Fatal("test GitHub App is not enrolled")
+	}
+	binding := githubauth.Binding{ServerID: appTestServerID, WindowID: "@1", PaneID: "%1"}
+	app.githubLeases[githubBindingKey(binding)] = githubLease{
+		SessionID:      sessionID,
+		Binding:        binding,
+		AppFingerprint: enrolled.PublicFingerprint,
+		Info: githubauth.LeaseInfo{
+			App:          "idolum",
+			Repositories: []string{"idolum-ai/engram"},
+			Permissions:  map[string]string{"contents": "read"},
+			ExpiresAt:    time.Now().Add(time.Hour),
+		},
+		Token: "secret-token",
+	}
+	passphrase := []byte("reuse must erase this passphrase")
+	request := testLocalGitHubBrokerRequest()
+	request.Binding = binding
+	request.Passphrase = passphrase
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if !response.OK || response.Token != "secret-token" {
+		t.Fatalf("reuse response = %#v", response)
+	}
+	requireZeroedGitHubPassphrase(t, passphrase)
+}
+
+func TestGitHubCapabilityBindingRejectionZeroesSuppliedPassphrase(t *testing.T) {
+	app, _, _ := newSafetyApp(t, state.TerminalOriginAttached)
+	passphrase := []byte("rejection must erase this passphrase")
+	request := testLocalGitHubBrokerRequest()
+	request.Binding.PaneID = "%999"
+	request.Passphrase = passphrase
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "not an active Engram session") {
+		t.Fatalf("binding rejection response = %#v", response)
+	}
+	requireZeroedGitHubPassphrase(t, passphrase)
+}
+
 func TestGitHubUnlockReplyCannotSatisfyDifferentPrompt(t *testing.T) {
 	app := &App{
 		Config:        configForGitHubTest(),
@@ -715,4 +763,13 @@ func intValue(value any) int {
 
 func configForGitHubTest() config.Config {
 	return config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100}
+}
+
+func requireZeroedGitHubPassphrase(t *testing.T, passphrase []byte) {
+	t.Helper()
+	for index, value := range passphrase {
+		if value != 0 {
+			t.Fatalf("passphrase byte %d = %d, want zero", index, value)
+		}
+	}
 }
