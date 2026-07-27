@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,6 +48,64 @@ func TestBrokerRoundTripNeverRequiresTokenOutput(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestListenRefusesToReplaceLiveBroker(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "engram-github-live-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	first, err := Listen(path, func(context.Context, BrokerRequest) BrokerResponse {
+		return BrokerResponse{OK: true}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+
+	second, err := Listen(path, func(context.Context, BrokerRequest) BrokerResponse {
+		return BrokerResponse{OK: true}
+	})
+	if second != nil || err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("second broker = %#v, error = %v", second, err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("live broker socket disappeared: %v", err)
+	}
+}
+
+func TestBrokerCloseDoesNotRemoveReplacementSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "engram-github-replaced-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	first, err := Listen(path, func(context.Context, BrokerRequest) BrokerResponse {
+		return BrokerResponse{OK: true}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Listen(path, func(context.Context, BrokerRequest) BrokerResponse {
+		return BrokerResponse{OK: true}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("closing displaced broker removed replacement socket: %v", err)
 	}
 }
 

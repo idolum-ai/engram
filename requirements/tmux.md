@@ -103,18 +103,18 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   caps each target at 2 KiB. Hyperlink controls remain absent from semantic text
   and rendered terminal pixels.
 - A running watched pane publishes `@engram`, `@engram_watch_id`,
-  `@engram_notify`, `@engram_artifact`, and `@engram_github` tmux pane user
-  options behind the
-  same immutable server/window binding guard used for input. `@engram` is the
-  commit marker: Engram clears it before changing auxiliary values, publishes
-  it last, and clears it first on removal. Consumers ignore auxiliary options
-  unless the marker is present and its watch ID agrees with `@engram_watch_id`.
-  The versioned summary advertises the remote surface; the other options give a
-  human-readable notification command, the standard OSC 8 artifact sequence,
-  and the pane-scoped GitHub capability command. Startup
-  repairs metadata for persisted running watches; normal unwatch or
-  attached-pane untracking removes it without changing the pane program,
-  environment, title, or other options.
+  `@engram_notify`, and `@engram_artifact` tmux pane user options, plus
+  `@engram_github` only while the optional GitHub App vault is available,
+  behind the same immutable server/window binding guard used for input.
+  `@engram` is the commit marker: Engram clears it before changing auxiliary
+  values, publishes it last, and clears it first on removal. Consumers ignore
+  auxiliary options unless the marker is present and its watch ID agrees with
+  `@engram_watch_id`. The versioned summary advertises the remote surface; the
+  other options give a human-readable notification command, the standard OSC 8
+  artifact sequence, and, when available, the pane-scoped GitHub capability
+  command. Startup repairs metadata for persisted running watches; normal
+  unwatch or attached-pane untracking removes it without changing the pane
+  program, environment, title, or other options.
 - Deterministic reference extraction uses the joined logical-text view after
   terminal-authored upstream records have been removed. Unmatched closing
   wrappers are removed; other terminal punctuation is retained. URL candidates

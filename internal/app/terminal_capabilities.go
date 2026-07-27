@@ -44,7 +44,7 @@ func (a *App) reconcileTerminalCapabilities(ctx context.Context, sessionID int) 
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	var err error
 	if advertise {
-		err = a.terminalMechanics().AdvertiseEngram(tmuxCtx, terminalBinding(session), session.ID)
+		err = a.terminalMechanics().AdvertiseEngram(tmuxCtx, terminalBinding(session), session.ID, a.GitHubVault != nil)
 	} else {
 		err = a.terminalMechanics().ClearEngramAdvertisement(tmuxCtx, terminalBinding(session))
 	}

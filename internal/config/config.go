@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -259,7 +260,13 @@ func (c Config) GitHubVaultPath() string {
 	return filepath.Join(c.Home, "github-apps.json")
 }
 func (c Config) GitHubBrokerSocketPath() string {
-	return filepath.Join(c.ArtifactDir(), "github.sock")
+	instance := sha256.Sum256([]byte(strings.Join([]string{
+		filepath.Clean(c.Home),
+		c.TelegramBotToken,
+		strconv.FormatInt(c.TelegramAllowedUserID, 10),
+		strconv.FormatInt(c.TelegramChatID, 10),
+	}, "\x00")))
+	return filepath.Join(c.ArtifactDir(), fmt.Sprintf("github-%x.sock", instance[:8]))
 }
 func (c Config) LockDir() string       { return filepath.Join(c.Home, "locks") }
 func (c Config) AttachmentDir() string { return filepath.Join(c.ArtifactDir(), "attachments") }

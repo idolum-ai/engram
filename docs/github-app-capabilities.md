@@ -89,7 +89,8 @@ stat -c '%A %U %G %s %n' "$PEM_PATH"     # Linux
 ```
 
 Do not use `cat`, paste the key into a prompt, add it to a repository, or send
-it through Telegram.
+it through Telegram. Enrollment rejects symlinks, files not owned by the
+current UID, and files with any group or other permission bits.
 
 ## Choose the passphrase route
 
@@ -218,7 +219,9 @@ Continue only when:
 - `@engram_github` advertises the GitHub capability command.
 
 Empty metadata usually means the pane is not currently watched or the running
-Engram version does not include this feature.
+Engram version does not include this feature. It can also mean the optional
+GitHub credential vault is unavailable; `/status` reports that condition while
+the rest of Engram continues running.
 
 ## Make the first read-only request
 
@@ -416,6 +419,18 @@ revoked before the error returns.
 Approvals expire after three minutes. Requester disconnect, cancellation, or
 pane invalidation abandons the request. Late Telegram passphrase replies are
 consumed and deleted rather than falling through to terminal input.
+
+Removing or replacing an enrolled App while its approval is pending also
+cancels the request. Start a fresh request after the intended enrollment is
+stable.
+
+### The GitHub App vault is unavailable
+
+`/status` reports the vault path and startup error. Engram continues serving its
+Telegram and tmux workflows but does not advertise or listen for GitHub
+capability requests. Preserve the malformed file for diagnosis, then restore a
+known-good owner-only `github-apps.json` or deliberately move it aside and
+reenroll the Apps before restarting Engram.
 
 ### The command cannot be presented safely
 

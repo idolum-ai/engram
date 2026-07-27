@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -266,6 +267,86 @@ func TestGitHubCapabilityReusesOnlySubsetAndRevokesPaneLease(t *testing.T) {
 	}
 }
 
+func TestGitHubCapabilityRevalidatesBindingBeforeReturningReusedLease(t *testing.T) {
+	app, runner, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	app.GitHubVault = testGitHubVault(t, false)
+	app.GitHubMinter = &fakeGitHubMinter{}
+	app.githubPending = map[string]*githubPendingRequest{}
+	app.githubLeases = map[string]githubLease{}
+	app.githubNow = time.Now
+	enrollment, found := app.GitHubVault.Get("idolum")
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
+	request := testLocalGitHubBrokerRequest()
+	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
+		SessionID:      sessionID,
+		Binding:        request.Binding,
+		AppFingerprint: enrollment.PublicFingerprint,
+		Info: githubauth.LeaseInfo{
+			App:          request.App,
+			Repositories: append([]string(nil), request.Repositories...),
+			Permissions:  copyStringMap(request.Permissions),
+			ExpiresAt:    time.Now().Add(time.Hour),
+		},
+		Token: "reused-token",
+	}
+	runner.onIdentity = func() {
+		runner.onIdentity = nil
+		if _, _, err := app.Store.UpdateSession(sessionID, func(session *state.TerminalSession) {
+			session.WatchEnabled = false
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "not an active Engram session") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if len(app.githubLeases) != 0 {
+		t.Fatal("invalidated reused lease remained active")
+	}
+	if app.GitHubMinter.(*fakeGitHubMinter).revokeCount() != 1 {
+		t.Fatal("invalidated reused token was not revoked")
+	}
+}
+
+func TestGitHubCapabilityRejectsEnrollmentRemovedDuringApproval(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(42 * time.Minute)}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+
+	responseChannel := make(chan githubauth.BrokerResponse, 1)
+	go func() {
+		responseChannel <- app.handleGitHubBrokerRequest(context.Background(), testLocalGitHubBrokerRequest())
+	}()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+
+	external, err := githubauth.OpenVault(app.GitHubVault.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := external.Remove("idolum"); err != nil || !removed {
+		t.Fatalf("remove enrollment = %t, %v", removed, err)
+	}
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "callback-enrollment-removed", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+		Data:    "github-approve:" + requestID,
+	})
+	if status != "callback_user_error" {
+		t.Fatalf("approval callback status = %q", status)
+	}
+	response := <-responseChannel
+	if response.OK || !strings.Contains(response.Error, "no longer enrolled") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if minter.mintCount() != 0 {
+		t.Fatalf("mint calls = %d, want 0", minter.mintCount())
+	}
+}
+
 func TestGitHubUnlockReplyCannotSatisfyDifferentPrompt(t *testing.T) {
 	app := &App{
 		Config:        configForGitHubTest(),
@@ -340,6 +421,10 @@ func TestGitHubApprovalUsesLocalUnlockOverrideWithoutTelegramPassphrasePrompt(t 
 		githubPending: map[string]*githubPendingRequest{},
 		githubLeases:  map[string]githubLease{},
 	}
+	enrollment, found := app.GitHubVault.Get("idolum")
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
 	passphrase := []byte("correct horse battery staple")
 	pending := &githubPendingRequest{
 		ID:                "local-unlock",
@@ -349,6 +434,7 @@ func TestGitHubApprovalUsesLocalUnlockOverrideWithoutTelegramPassphrasePrompt(t 
 		ApprovalMessageID: 77,
 		State:             "pending",
 		Result:            make(chan githubApproval, 1),
+		Enrollment:        enrollment,
 	}
 	storedPassphrase := pending.LocalPassphrase
 	app.githubPending[pending.ID] = pending
@@ -376,6 +462,49 @@ func TestGitHubApprovalUsesLocalUnlockOverrideWithoutTelegramPassphrasePrompt(t 
 		if value != 0 {
 			t.Fatal("pending local passphrase was not zeroed")
 		}
+	}
+}
+
+func TestGitHubApprovalLabelsLocalUnlockOverrideTruthfully(t *testing.T) {
+	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	session, found := app.Store.FindSession(sessionID)
+	if !found {
+		t.Fatal("session not found")
+	}
+	request := testLocalGitHubBrokerRequest()
+	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true})
+	if !strings.Contains(text, "Unlock: local passphrase") || strings.Contains(text, "Telegram reply") {
+		t.Fatalf("approval text = %q", text)
+	}
+}
+
+func TestNewKeepsCoreServiceAvailableWhenGitHubVaultIsCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "github-apps.json"), []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(config.Config{
+		TelegramBotToken:      "token",
+		TelegramAllowedUserID: 42,
+		TelegramChatID:        42,
+		AnchorMode:            config.AnchorModeSnapshot,
+		Home:                  dir,
+		Workdir:               dir,
+		SnapshotBrowser:       filepath.Join(dir, "missing-chromium"),
+		SnapshotTheme:         "terminal",
+	})
+	if err != nil || app == nil {
+		t.Fatalf("degraded GitHub startup app=%#v err=%v", app, err)
+	}
+	defer app.Close()
+	if app.GitHubVault != nil || app.githubVaultError == nil {
+		t.Fatalf("GitHub vault=%#v error=%v", app.GitHubVault, app.githubVaultError)
+	}
+	if status := app.statusText(); !strings.Contains(status, "github apps: unavailable") {
+		t.Fatalf("status omitted degraded GitHub capability:\n%s", status)
 	}
 }
 

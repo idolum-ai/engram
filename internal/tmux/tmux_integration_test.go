@@ -529,7 +529,7 @@ func TestTmuxIntegrationCapabilityOptionsConvergeAsOneGuardedTransaction(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.AdvertiseEngramIfBindingMatches(ctx, window.PaneID, window.ID, serverID, 42); err != nil {
+	if err := manager.AdvertiseEngramIfBindingMatches(ctx, window.PaneID, window.ID, serverID, 42, true); err != nil {
 		t.Fatal(err)
 	}
 	format := "#{@engram}\x1f#{@engram_watch_id}\x1f#{@engram_notify}\x1f#{@engram_artifact}"

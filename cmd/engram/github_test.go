@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +50,32 @@ func TestSplitGitHubCommandRequiresExplicitBoundary(t *testing.T) {
 	if !ok || !reflect.DeepEqual(flags, []string{"--app", "idolum"}) ||
 		!reflect.DeepEqual(command, []string{"gh", "pr", "view"}) {
 		t.Fatalf("split = %#v %#v %t", flags, command, ok)
+	}
+}
+
+func TestReadPrivateKeyFileRequiresOwnerOnlyRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	private := filepath.Join(dir, "private.pem")
+	if err := os.WriteFile(private, []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := readPrivateKeyFile(private); err != nil || string(data) != "private" {
+		t.Fatalf("private file data = %q, error = %v", data, err)
+	}
+
+	public := filepath.Join(dir, "public.pem")
+	if err := os.WriteFile(public, []byte("public"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPrivateKeyFile(public); err == nil || !strings.Contains(err.Error(), "private regular file") {
+		t.Fatalf("world-readable private key error = %v", err)
+	}
+
+	link := filepath.Join(dir, "linked.pem")
+	if err := os.Symlink(private, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPrivateKeyFile(link); err == nil {
+		t.Fatal("symlinked private key was accepted")
 	}
 }

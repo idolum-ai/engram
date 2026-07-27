@@ -4,6 +4,18 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Security
+
+- Isolate the GitHub capability broker socket per Engram home and Telegram
+  identity, refuse to displace a live listener, and preserve replacement
+  sockets when an older broker closes.
+- Revalidate pane identity immediately before returning reused installation
+  tokens, and cancel pending approvals when their enrolled GitHub App is
+  removed or replaced.
+- Enforce owner-only, non-symlink source PEM files during enrollment. A corrupt
+  optional GitHub App vault now disables that capability visibly without
+  preventing Telegram and tmux service startup.
+
 ### Conversational guide
 
 - Recognize exact tested Claude Code versions through the live pane process,

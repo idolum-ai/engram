@@ -34,6 +34,39 @@ func TestArtifactDirPrefersPrivateXDGRunTimeDir(t *testing.T) {
 	}
 }
 
+func TestGitHubBrokerSocketPathIsStableAndInstanceScoped(t *testing.T) {
+	runtimeDir := filepath.Join(canonicalTestTempDir(t), "runtime")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+
+	first := Config{
+		Home:                  "/home/example/.engram-one",
+		TelegramBotToken:      "token-one",
+		TelegramAllowedUserID: 42,
+		TelegramChatID:        42,
+	}
+	same := first
+	otherHome := first
+	otherHome.Home = "/home/example/.engram-two"
+	otherTelegram := first
+	otherTelegram.TelegramBotToken = "token-two"
+
+	if first.GitHubBrokerSocketPath() != same.GitHubBrokerSocketPath() {
+		t.Fatal("same Engram instance produced unstable GitHub broker socket paths")
+	}
+	if first.GitHubBrokerSocketPath() == otherHome.GitHubBrokerSocketPath() {
+		t.Fatal("different ENGRAM_HOME values shared a GitHub broker socket")
+	}
+	if first.GitHubBrokerSocketPath() == otherTelegram.GitHubBrokerSocketPath() {
+		t.Fatal("different Telegram identities shared a GitHub broker socket")
+	}
+	if strings.Contains(first.GitHubBrokerSocketPath(), first.TelegramBotToken) {
+		t.Fatal("GitHub broker socket path exposed the Telegram bot token")
+	}
+}
+
 func TestArtifactDirFallsBackForUnsafeXDGRunTimeDir(t *testing.T) {
 	parent := t.TempDir()
 	runtimeDir := filepath.Join(parent, "runtime")

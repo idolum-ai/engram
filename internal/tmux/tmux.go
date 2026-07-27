@@ -564,21 +564,30 @@ func (m Manager) SendKeysIfBindingMatches(ctx context.Context, paneID, windowID,
 // description on the watched pane. tmux user options are deliberately used as
 // durable, inspectable environment metadata rather than injecting text or shell
 // configuration into the pane.
-func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, windowID, serverID string, watchID int) error {
+func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, windowID, serverID string, watchID int, githubAvailable bool) error {
 	if watchID <= 0 {
 		return fmt.Errorf("invalid Engram watch ID %d", watchID)
 	}
 	marker := fmt.Sprintf("v1 watch=%d remote=telegram", watchID)
 	commands := []string{"set-option -p -q -u -t " + paneID + " " + EngramPaneOption}
-	for _, option := range []struct {
+	type capabilityOption struct {
 		name  string
 		value string
-	}{
+	}
+	options := []capabilityOption{
 		{EngramWatchIDOption, strconv.Itoa(watchID)},
 		{EngramNotifyOption, "run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)"},
 		{EngramArtifactOption, "print a visible file:// URI (OSC 8 optional), then run @engram_notify"},
-		{EngramGitHubOption, "run: engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND"},
-	} {
+	}
+	if githubAvailable {
+		options = append(options, capabilityOption{
+			EngramGitHubOption,
+			"run: engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND",
+		})
+	} else {
+		commands = append(commands, "set-option -p -q -u -t "+paneID+" "+EngramGitHubOption)
+	}
+	for _, option := range options {
 		commands = append(commands, "set-option -p -q -t "+paneID+" "+option.name+" "+ShellQuote(option.value))
 	}
 	// @engram is the commit marker: consumers ignore auxiliary fields while it
