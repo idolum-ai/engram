@@ -4,37 +4,87 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.7.0] - 2026-07-27
+
+### Attention
+
+- Collapse any number of quiet session anchors into one pinned, recoverable
+  shelf. Hidden sessions remain tracked without accepting stale replies or
+  occupying one pinned Telegram message each, and `Show` restores their current
+  anchors together.
+- Add a confirmed natural-language key composer for installations with a guide
+  provider. Engram translates a plain-language request into a closed set of
+  tmux keys, shows the exact destination and sequence, and sends no keys to
+  tmux until the authorized user confirms it.
+
+### Conversational guide
+
+- Use visible terminal structure to distinguish prompts, output, activity,
+  model identity, and interface chrome. Version-specific adapters cover Codex
+  CLI `0.144.5` and `0.144.6`, and Claude Code `2.1.219` on Linux; `2.1.206` is
+  retained for the hermetic fixture. Unsupported versions and uncertain
+  layouts use the generic semantic guide, while raw captures, snapshots, and
+  references remain unchanged.
+- For supported Claude layouts, retain visibly established model, effort, and
+  activity while the same process remains running, and omit recognized
+  composer, status, spinner, and token-saving chrome from guide evidence.
+
+### Terminal images
+
+- Let foreground Telegram input preempt queued or active read-only tmux
+  captures used by background guide and snapshot refreshes, reducing delays
+  before interactive keys and replies reach the pane.
+- Recover Chromium snapshot rendering after transient browser failures by
+  probing health and re-establishing the renderer without requiring a service
+  restart.
+- Render alternate-screen snapshots at their captured viewport height instead
+  of placing short Claude-style frames on a synthetic 64-row canvas.
+
+### GitHub capabilities
+
+- Add an optional pane-scoped GitHub App broker. After Telegram approval,
+  Engram launches the requested child command with a short-lived installation
+  token limited to named repositories and permissions; the App private key
+  remains in an encrypted local vault. The approved child remains trusted to
+  use or disclose its token.
+- Bind in-memory leases to the watched tmux server, window, pane, and complete
+  enrollment identity, and revalidate those bindings immediately before
+  returning a reused or newly minted token. Pane or enrollment replacement,
+  removal, retargeting, or revocation invalidates the affected lease; an
+  enrollment change while minting discards and revokes the new token.
+
 ### Security
 
 - Isolate the GitHub capability broker socket per Engram home and Telegram
   identity, refuse to displace a live listener, and preserve replacement
   sockets when an older broker closes.
-- Revalidate pane and complete enrollment identity immediately before returning
-  reused or newly minted installation tokens. Removing, replacing, or
-  retargeting an enrollment while a request is in flight discards and revokes
-  the affected token.
 - Enforce owner-only, non-symlink source PEM files during enrollment. A corrupt
   optional GitHub App vault now disables that capability visibly without
   preventing Telegram and tmux service startup.
+- Erase locally supplied GitHub broker passphrase buffers on every request
+  return path, including unavailable capability, rejected binding, and
+  successful lease reuse.
 
-### Conversational guide
+### Compatibility
 
-- Recognize exact tested Claude Code versions through the live pane process,
-  retain only visibly proven model identity for the same process incarnation,
-  and surface Claude model, effort, and activity after its model card scrolls
-  away. Process replacement, unsupported versions, and unknown layouts fail
-  closed without changing raw snapshots or references.
-- Remove verified Claude composer controls, elapsed status, active spinners,
-  and token-saving hints from guide evidence while preserving prompts,
-  approvals, task state, and terminal output.
-- Render alternate-screen snapshots at their captured viewport height instead
-  of placing short Claude-style frames on a synthetic 64-row canvas.
+- State migrates from schema 15 to schema 17 on its first save. Back up
+  `~/.engram/state.json` before upgrading when rollback matters: after
+  migration, v0.6.0 and older binaries reject the newer schema.
 
 ### Verification
 
+- Add hermetic semantic-screen fixtures, snapshot recovery tests, tmux input
+  priority coverage, collapsed-shelf lifecycle tests, and adversarial key
+  composer cases.
 - Add sanitized Claude Code `2.1.219` replays and deterministic coverage for
   model-card loss, activity, approval, model switching, process replacement,
   restart continuity, unsupported versions, and semantic lookalikes.
+
+### Fixed
+
+- Omit absent Telegram reply markup instead of serializing an empty keyboard,
+  restoring ordinary transcription replies and other messages without
+  controls.
 
 ## [v0.6.0] - 2026-07-21
 
