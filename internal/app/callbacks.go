@@ -38,6 +38,10 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		return "skipped_unknown_callback"
 	}
 	switch parts[0] {
+	case "github-approve":
+		return a.handleGitHubApprovalCallback(ctx, cb, true, parts[1])
+	case "github-deny":
+		return a.handleGitHubApprovalCallback(ctx, cb, false, parts[1])
 	case "collapse":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {

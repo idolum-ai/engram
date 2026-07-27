@@ -292,6 +292,9 @@ func (a *App) snapshotAnchorCaption(ts state.TerminalSession, capture tmux.Style
 	if presentation := terminalPresentationText(ts); presentation != "" {
 		details += "\n" + presentation
 	}
+	if status := a.githubStatusLine(ts); status != "" {
+		details += "\n" + status
+	}
 	detailBytes := max(0, safeCaptionBytes-len(prefix)-len(suffix))
 	caption := prefix + headUTF8(details, detailBytes) + suffix
 	if references, files := renderSnapshotReferenceSetWithFiles(refs, safeCaptionBytes-len(caption)-2); references != "" {
@@ -305,6 +308,9 @@ func (a *App) updateMediaAnchorCaptionLocked(ctx context.Context, ts state.Termi
 	caption := fmt.Sprintf("[%d] %s · %s", ts.ID, ts.State, a.redactText(firstNonEmpty(ts.Title, "terminal")))
 	if presentation := terminalPresentationText(ts); presentation != "" {
 		caption += "\n" + a.redactText(presentation)
+	}
+	if status := a.githubStatusLine(ts); status != "" {
+		caption += "\n" + status
 	}
 	caption += "\n" + a.redactText(summary)
 	renderHash := sha(caption)

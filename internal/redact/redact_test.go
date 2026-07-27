@@ -14,6 +14,7 @@ func TestSecretsRedactsCommonSecretShapes(t *testing.T) {
 		`TELEGRAM_BOT_TOKEN=123:telegram-secret`,
 		`{"password":"pw-secret-value","token":"json-token-value"}`,
 		`github_pat_1234567890abcdef`,
+		`ghs_1234567890.jwt_payload.signature`,
 		`https://example.test/file?X-Amz-Signature=signed-secret-value&ok=1`,
 		"-----BEGIN PRIVATE KEY-----\nabc123privatekeymaterial\n-----END PRIVATE KEY-----",
 	}, "\n")
@@ -27,6 +28,7 @@ func TestSecretsRedactsCommonSecretShapes(t *testing.T) {
 		"pw-secret-value",
 		"json-token-value",
 		"github_pat_1234567890abcdef",
+		"ghs_1234567890.jwt_payload.signature",
 		"signed-secret-value",
 		"abc123privatekeymaterial",
 	} {

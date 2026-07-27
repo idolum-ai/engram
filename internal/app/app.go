@@ -18,6 +18,7 @@ import (
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
+	"github.com/idolum-ai/engram/internal/githubauth"
 	"github.com/idolum-ai/engram/internal/guide"
 	"github.com/idolum-ai/engram/internal/keyseq"
 	"github.com/idolum-ai/engram/internal/lockfile"
@@ -35,6 +36,8 @@ type App struct {
 	Config                        config.Config
 	Store                         *state.Store
 	Templates                     *templates.Store
+	GitHubVault                   *githubauth.Vault
+	GitHubMinter                  githubauth.Minter
 	Telegram                      *telegram.Client
 	Guide                         guide.Renderer
 	KeyInterpreter                keyseq.Interpreter
@@ -116,6 +119,12 @@ type App struct {
 	pendingRecoveryPlanHash       string
 	pendingRecoveryPlanNextPage   int
 	recoveryPlanMu                sync.Mutex
+	githubMu                      sync.Mutex
+	githubPending                 map[string]*githubPendingRequest
+	githubLeases                  map[string]githubLease
+	githubUnlockTombstones        map[int]time.Time
+	githubBroker                  *githubauth.BrokerServer
+	githubNow                     func() time.Time
 }
 
 const summaryQuietPeriod = 2 * time.Second
@@ -185,6 +194,11 @@ func New(cfg config.Config) (*App, error) {
 		}
 		_ = store.Audit("template.recover", status, payload)
 	}
+	githubVault, err := githubauth.OpenVault(cfg.GitHubVaultPath())
+	if err != nil {
+		closeLocks()
+		return nil, fmt.Errorf("open GitHub App vault: %w", err)
+	}
 	pendingRecoveryBootID := store.Snapshot().PendingRecoveryBootID
 	if bootID := readHostBootID(); bootID != "" {
 		pendingRecoveryBootID, _, err = store.ObserveHostBoot(bootID)
@@ -218,6 +232,8 @@ func New(cfg config.Config) (*App, error) {
 		Config:                        cfg,
 		Store:                         store,
 		Templates:                     templateStore,
+		GitHubVault:                   githubVault,
+		GitHubMinter:                  githubauth.NewClient(),
 		Telegram:                      telegramClient,
 		Guide:                         guideRenderer,
 		KeyInterpreter:                keyInterpreter,
@@ -261,6 +277,10 @@ func New(cfg config.Config) (*App, error) {
 		pendingRecoveryPlanMessageIDs: append([]int(nil), stateSnapshot.RecoveryPlanMessageIDs...),
 		pendingRecoveryPlanHash:       stateSnapshot.PendingRecoveryPlanHash,
 		pendingRecoveryPlanNextPage:   stateSnapshot.PendingRecoveryPlanNextPage,
+		githubPending:                 map[string]*githubPendingRequest{},
+		githubLeases:                  map[string]githubLease{},
+		githubUnlockTombstones:        map[int]time.Time{},
+		githubNow:                     time.Now,
 	}, nil
 }
 
@@ -330,10 +350,12 @@ func (a *App) Run(ctx context.Context) int {
 	defer func() {
 		cancel()
 		a.schedulerWG.Wait()
+		a.revokeAllGitHubLeases()
 		a.refreshWG.Wait()
 		a.transferWG.Wait()
 	}()
 	_ = a.audit("service.start", "ok", map[string]any{"version": version.String()})
+	a.startGitHubBroker(runCtx)
 	a.registerCommands(runCtx)
 	a.schedulerWG.Add(1)
 	go func() {
@@ -414,6 +436,9 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if err := a.Store.MarkMessage(key); err != nil {
 		_ = a.audit("state.message", "failed", map[string]any{"message_id": msg.MessageID, "error": err.Error()})
 		return "failed_state_mark_message"
+	}
+	if status, handled := a.handleGitHubUnlockReply(ctx, msg); handled {
+		return status
 	}
 	if status, handled := a.handleKeyPromptReply(ctx, msg); handled {
 		return status
@@ -853,7 +878,7 @@ func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
 func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 	a.redactSessionPresentation(&ts)
 	references := renderReferences(a.visibleReferences(ts.LastRawCapture), true, maxGuideReferenceBytes)
-	return renderLocalWithReferences(ts, a.redactText(summary), references)
+	return renderLocalWithReferencesAndStatus(ts, a.redactText(summary), references, a.githubStatusLine(ts))
 }
 
 func (a *App) visibleReferences(capture string) visibleReferences {
@@ -877,6 +902,10 @@ func (a *App) statusText() string {
 		templateCount = len(a.Templates.List())
 	}
 	space := diskFree(a.Config.ArtifactDir())
+	githubApps := 0
+	if a.GitHubVault != nil {
+		githubApps = len(a.GitHubVault.List())
+	}
 	guideStatus := "unavailable"
 	if a.guideAvailable {
 		guideStatus = "configured, not probed (" + a.Config.EffectiveLLMProvider() + "/" + a.Config.GuideModel() + ")"
@@ -885,7 +914,7 @@ func (a *App) statusText() string {
 	if a.Config.EffectiveVoiceInputMode() == config.VoiceInputModeTranscribe {
 		voiceStatus = "transcribe, configured but not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\ngithub apps: %d (%s)\ngithub leases: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
@@ -895,6 +924,9 @@ func (a *App) statusText() string {
 		a.snapshotStatus(),
 		templateCount,
 		a.Config.TemplatePath(),
+		githubApps,
+		a.Config.GitHubVaultPath(),
+		a.githubLeaseCount(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),
 		a.Config.AttachmentDir(),
@@ -912,6 +944,10 @@ func renderLocal(ts state.TerminalSession, summary string) string {
 }
 
 func renderLocalWithReferences(ts state.TerminalSession, summary, references string) string {
+	return renderLocalWithReferencesAndStatus(ts, summary, references, "")
+}
+
+func renderLocalWithReferencesAndStatus(ts state.TerminalSession, summary, references, status string) string {
 	title := firstNonEmpty(ts.Title, "-")
 	if len(title) > 40 {
 		title = headUTF8(title, 40)
@@ -923,6 +959,10 @@ func renderLocalWithReferences(ts state.TerminalSession, summary, references str
 	}
 	if presentation := terminalPresentationText(ts); presentation != "" {
 		b.WriteString(presentation)
+		b.WriteByte('\n')
+	}
+	if status != "" {
+		b.WriteString(status)
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")

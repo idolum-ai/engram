@@ -134,6 +134,9 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 	if presentation := terminalPresentationText(latest); presentation != "" {
 		caption += "\n" + a.redactText(presentation)
 	}
+	if status := a.githubStatusLine(latest); status != "" {
+		caption += "\n" + status
+	}
 	caption += "\n" + snapshotFrameDescription(capture, false)
 	message, err := a.Telegram.SendPhoto(ctx, latest.AnchorChatID, pngPath, caption, latest.AnchorMessageID)
 	if err != nil {

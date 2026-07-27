@@ -621,6 +621,13 @@ func KeyConfirmationMarkup(token string) *InlineKeyboardMarkup {
 	}}}
 }
 
+func GitHubApprovalMarkup(requestID string) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("Approve", "github-approve:"+requestID),
+		Button("Deny", "github-deny:"+requestID),
+	}}}
+}
+
 func CollapsedShelfMarkup() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
 		Button("➕ Show", "expand-all:0"),

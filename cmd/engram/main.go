@@ -117,6 +117,8 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "github":
+		return runGitHub(args[1:])
 	case "help", "--help", "-h":
 		printHelp()
 		return 0
@@ -139,6 +141,7 @@ func printHelp() {
   engram commands
   engram signal [--stdout] <message>
   engram codex-hook
+  engram github help
   engram version
   engram help
 `)

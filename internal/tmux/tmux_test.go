@@ -248,6 +248,7 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		"set-option -p -q -t %7 @engram_watch_id '42'",
 		"set-option -p -q -t %7 @engram_notify 'run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)'",
 		"set-option -p -q -t %7 @engram_artifact 'print a visible file:// URI (OSC 8 optional), then run @engram_notify'",
+		"set-option -p -q -t %7 @engram_github 'run: engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND'",
 		"set-option -p -q -t %7 @engram 'v1 watch=42 remote=telegram'",
 	}
 	call := runner.calls[0]
@@ -277,6 +278,7 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		"set-option -p -q -u -t %7 @engram_watch_id",
 		"set-option -p -q -u -t %7 @engram_notify",
 		"set-option -p -q -u -t %7 @engram_artifact",
+		"set-option -p -q -u -t %7 @engram_github",
 	}
 	if len(runner.calls) != 1 || len(runner.calls[0]) != 7 {
 		t.Fatalf("guarded option clear calls = %#v, want one transaction", runner.calls)
