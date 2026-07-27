@@ -237,7 +237,7 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 	t.Parallel()
 	runner := &fakeRunner{}
 	manager := New(runner)
-	if err := manager.AdvertiseEngramIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID, 42); err != nil {
+	if err := manager.AdvertiseEngramIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID, 42, true); err != nil {
 		t.Fatal(err)
 	}
 	if len(runner.calls) != 1 {
@@ -287,6 +287,25 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		if !strings.Contains(runner.calls[0][5], command) {
 			t.Fatalf("guarded option clear transaction = %q, missing %q", runner.calls[0][5], command)
 		}
+	}
+}
+
+func TestEngramAdvertisementClearsUnavailableGitHubCapability(t *testing.T) {
+	t.Parallel()
+	runner := &fakeRunner{}
+	manager := New(runner)
+	if err := manager.AdvertiseEngramIfBindingMatches(context.Background(), "%7", "@2", styledCaptureServerID, 42, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %#v, want one guarded pane option transaction", runner.calls)
+	}
+	transaction := runner.calls[0][5]
+	if !strings.Contains(transaction, "set-option -p -q -u -t %7 @engram_github") {
+		t.Fatalf("unavailable GitHub capability was not cleared: %q", transaction)
+	}
+	if strings.Contains(transaction, "engram github exec") {
+		t.Fatalf("unavailable GitHub capability was advertised: %q", transaction)
 	}
 }
 

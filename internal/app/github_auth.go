@@ -37,14 +37,15 @@ type githubPendingRequest struct {
 	UnlockMessageID   int
 	State             string
 	Result            chan githubApproval
+	Enrollment        githubauth.App
 }
 
 type githubLease struct {
-	SessionID      int
-	Binding        githubauth.Binding
-	AppFingerprint string
-	Info           githubauth.LeaseInfo
-	Token          string
+	SessionID  int
+	Binding    githubauth.Binding
+	Enrollment githubauth.App
+	Info       githubauth.LeaseInfo
+	Token      string
 }
 
 func (a *App) startGitHubBroker(ctx context.Context) {
@@ -66,6 +67,9 @@ func (a *App) startGitHubBroker(ctx context.Context) {
 }
 
 func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.BrokerRequest) githubauth.BrokerResponse {
+	if a.GitHubVault == nil {
+		return githubauth.BrokerResponse{Error: "GitHub App capabilities are unavailable"}
+	}
 	session, err := a.validateGitHubBrokerBinding(ctx, request.Binding)
 	if err != nil {
 		return githubauth.BrokerResponse{Error: err.Error()}
@@ -88,9 +92,23 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if !found {
 		return githubauth.BrokerResponse{Error: fmt.Sprintf("GitHub App %q is not enrolled", request.App)}
 	}
-	if token, expiresAt, ok := a.reusableGitHubLease(request, app.PublicFingerprint); ok {
+	if lease, ok := a.reusableGitHubLease(request, app); ok {
+		if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
+			if a.discardGitHubLease(request.Binding, lease.Token) {
+				err = a.revokeDiscardedGitHubToken(ctx, lease.Token, err)
+			}
+			_ = a.audit("github.lease", "invalidated", githubAuditRequest(session.ID, request))
+			return githubauth.BrokerResponse{Error: err.Error()}
+		}
+		if _, err := a.reloadMatchingGitHubEnrollment(lease.Enrollment); err != nil {
+			if a.discardGitHubLease(request.Binding, lease.Token) {
+				err = a.revokeDiscardedGitHubToken(ctx, lease.Token, err)
+			}
+			_ = a.audit("github.lease", "enrollment_changed", githubAuditRequest(session.ID, request))
+			return githubauth.BrokerResponse{Error: err.Error()}
+		}
 		_ = a.audit("github.lease", "reused", githubAuditRequest(session.ID, request))
-		return githubauth.BrokerResponse{OK: true, Token: token, ExpiresAt: expiresAt}
+		return githubauth.BrokerResponse{OK: true, Token: lease.Token, ExpiresAt: lease.Info.ExpiresAt}
 	}
 	if !app.TelegramUnlock && len(request.Passphrase) == 0 {
 		return githubauth.BrokerResponse{Error: "this GitHub App requires local passphrase entry"}
@@ -127,6 +145,11 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		_ = a.audit("github.approval", "invalidated", githubAuditRequest(session.ID, request))
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
+	if _, err := a.reloadMatchingGitHubEnrollment(pending.Enrollment); err != nil {
+		a.completeGitHubApprovalMessage(pending, "Canceled: the GitHub App enrollment changed during approval.")
+		_ = a.audit("github.approval", "enrollment_changed", githubAuditRequest(session.ID, request))
+		return githubauth.BrokerResponse{Error: err.Error()}
+	}
 
 	privateKey, unlockedApp, err := a.GitHubVault.Unlock(request.App, approval.passphrase)
 	if err != nil {
@@ -151,9 +174,9 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
 	lease := githubLease{
-		SessionID:      session.ID,
-		Binding:        request.Binding,
-		AppFingerprint: unlockedApp.PublicFingerprint,
+		SessionID:  session.ID,
+		Binding:    request.Binding,
+		Enrollment: unlockedApp,
 		Info: githubauth.LeaseInfo{
 			App:          request.App,
 			Repositories: append([]string(nil), request.Repositories...),
@@ -165,6 +188,16 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
 		cleanupErr := a.revokeDiscardedGitHubToken(ctx, token.Value, err)
 		a.completeGitHubApprovalMessage(pending, "Canceled: the requesting tmux pane changed before the capability could be delivered.")
+		_ = a.audit("github.mint", "discarded", map[string]any{
+			"session_id": session.ID,
+			"app":        request.App,
+			"error":      cleanupErr.Error(),
+		})
+		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
+	}
+	if _, err := a.reloadMatchingGitHubEnrollment(pending.Enrollment); err != nil {
+		cleanupErr := a.revokeDiscardedGitHubToken(ctx, token.Value, err)
+		a.completeGitHubApprovalMessage(pending, "Canceled: the GitHub App enrollment changed before the capability could be delivered.")
 		_ = a.audit("github.mint", "discarded", map[string]any{
 			"session_id": session.ID,
 			"app":        request.App,
@@ -257,6 +290,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 		ApprovalText:    text,
 		State:           "pending",
 		Result:          make(chan githubApproval, 1),
+		Enrollment:      app,
 	}
 	a.githubMu.Lock()
 	for _, existing := range a.githubPending {
@@ -288,7 +322,7 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 	text.WriteString("GitHub capability requested\n\n")
 	fmt.Fprintf(&text, "Window: %s\n", sessionLabel(session))
 	fmt.Fprintf(&text, "App: %s\n", request.App)
-	if app.TelegramUnlock {
+	if len(request.Passphrase) == 0 && app.TelegramUnlock {
 		text.WriteString("Unlock: Telegram reply (not end-to-end encrypted)\n")
 	} else {
 		text.WriteString("Unlock: local passphrase\n")
@@ -337,12 +371,12 @@ func (a *App) handleGitHubApprovalCallback(ctx context.Context, cb telegram.Call
 		return "callback_user_error"
 	}
 	appAlias := pending.Request.App
-	app, appFound := a.GitHubVault.Get(appAlias)
-	if !appFound {
+	app, appErr := a.reloadMatchingGitHubEnrollment(pending.Enrollment)
+	if appErr != nil {
 		pending.State = "resolved"
-		pending.Result <- githubApproval{err: fmt.Errorf("GitHub App is no longer enrolled")}
+		pending.Result <- githubApproval{err: appErr}
 		a.githubMu.Unlock()
-		a.answerCallback(ctx, cb.ID, "app is no longer enrolled")
+		a.answerCallback(ctx, cb.ID, "app enrollment changed")
 		return "callback_user_error"
 	}
 	if len(pending.LocalPassphrase) > 0 {
@@ -538,18 +572,56 @@ func (a *App) completeGitHubApprovalMessage(pending *githubPendingRequest, text 
 	_, _ = a.Telegram.EditMessage(editCtx, a.Config.TelegramChatID, messageID, text, telegram.ClearMarkup())
 }
 
-func (a *App) reusableGitHubLease(request githubauth.BrokerRequest, appFingerprint string) (string, time.Time, bool) {
+func (a *App) reusableGitHubLease(request githubauth.BrokerRequest, enrollment githubauth.App) (githubLease, bool) {
 	key := githubBindingKey(request.Binding)
 	now := a.githubTime()
 	a.githubMu.Lock()
 	defer a.githubMu.Unlock()
 	lease, ok := a.githubLeases[key]
-	if !ok || !lease.Info.ExpiresAt.After(now) || lease.Info.App != request.App || lease.AppFingerprint != appFingerprint ||
+	if !ok || !lease.Info.ExpiresAt.After(now) || lease.Info.App != request.App || !sameGitHubEnrollment(lease.Enrollment, enrollment) ||
 		!githubauth.RepositoriesSubset(request.Repositories, lease.Info.Repositories) ||
 		!githubauth.PermissionsSubset(request.Permissions, lease.Info.Permissions) {
-		return "", time.Time{}, false
+		return githubLease{}, false
 	}
-	return lease.Token, lease.Info.ExpiresAt, true
+	return lease, true
+}
+
+func (a *App) discardGitHubLease(binding githubauth.Binding, token string) bool {
+	key := githubBindingKey(binding)
+	a.githubMu.Lock()
+	defer a.githubMu.Unlock()
+	lease, ok := a.githubLeases[key]
+	if !ok || lease.Token != token {
+		return false
+	}
+	delete(a.githubLeases, key)
+	return true
+}
+
+func (a *App) reloadMatchingGitHubEnrollment(expected githubauth.App) (githubauth.App, error) {
+	if a.GitHubVault == nil {
+		return githubauth.App{}, fmt.Errorf("GitHub App capabilities are unavailable")
+	}
+	if err := a.GitHubVault.Reload(); err != nil {
+		return githubauth.App{}, fmt.Errorf("reload GitHub App vault: %w", err)
+	}
+	current, found := a.GitHubVault.Get(expected.Alias)
+	if !found {
+		return githubauth.App{}, fmt.Errorf("GitHub App %q is no longer enrolled", expected.Alias)
+	}
+	if !sameGitHubEnrollment(current, expected) {
+		return githubauth.App{}, fmt.Errorf("GitHub App %q enrollment changed", expected.Alias)
+	}
+	return current, nil
+}
+
+func sameGitHubEnrollment(left, right githubauth.App) bool {
+	return left.Alias == right.Alias &&
+		left.AppID == right.AppID &&
+		left.InstallationID == right.InstallationID &&
+		left.TelegramUnlock == right.TelegramUnlock &&
+		left.PublicFingerprint == right.PublicFingerprint &&
+		left.CreatedAt.Equal(right.CreatedAt)
 }
 
 func (a *App) storeGitHubLease(lease githubLease) []string {

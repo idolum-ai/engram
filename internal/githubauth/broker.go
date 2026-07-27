@@ -24,6 +24,12 @@ type BrokerServer struct {
 	listener *net.UnixListener
 	handler  Handler
 	clients  sync.WaitGroup
+	socket   socketIdentity
+}
+
+type socketIdentity struct {
+	device uint64
+	inode  uint64
 }
 
 func Listen(path string, handler Handler) (*BrokerServer, error) {
@@ -48,12 +54,21 @@ func Listen(path string, handler Handler) (*BrokerServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listen on GitHub broker socket: %w", err)
 	}
+	// Close must not unlink a newer listener that replaced this pathname.
+	// Socket removal is handled below only after comparing filesystem identity.
+	listener.SetUnlinkOnClose(false)
 	if err := os.Chmod(path, 0o600); err != nil {
 		_ = listener.Close()
 		_ = os.Remove(path)
 		return nil, fmt.Errorf("protect GitHub broker socket: %w", err)
 	}
-	return &BrokerServer{path: path, listener: listener, handler: handler}, nil
+	socket, err := identifySocket(path)
+	if err != nil {
+		_ = listener.Close()
+		_ = os.Remove(path)
+		return nil, err
+	}
+	return &BrokerServer{path: path, listener: listener, handler: handler, socket: socket}, nil
 }
 
 func (s *BrokerServer) Serve(ctx context.Context) error {
@@ -90,7 +105,7 @@ func (s *BrokerServer) Close() error {
 		errs = append(errs, s.listener.Close())
 	}
 	if s.path != "" {
-		if err := os.Remove(s.path); err != nil && !os.IsNotExist(err) {
+		if err := removeSocketIfSame(s.path, s.socket); err != nil && !os.IsNotExist(err) {
 			errs = append(errs, err)
 		}
 	}
@@ -234,10 +249,42 @@ func removeStaleSocket(path string) error {
 	if info.Mode()&os.ModeSocket == 0 || !ownerOK || int(stat.Uid) != os.Geteuid() {
 		return fmt.Errorf("refusing to replace non-private GitHub broker path")
 	}
-	if err := os.Remove(path); err != nil {
+	inspected := socketIdentity{device: uint64(stat.Dev), inode: uint64(stat.Ino)}
+	connection, dialErr := net.DialTimeout("unix", path, 100*time.Millisecond)
+	if dialErr == nil {
+		_ = connection.Close()
+		return fmt.Errorf("GitHub broker socket is already active")
+	}
+	if !errors.Is(dialErr, syscall.ECONNREFUSED) && !errors.Is(dialErr, os.ErrNotExist) {
+		return fmt.Errorf("refusing to replace GitHub broker socket that could not be proven stale: %w", dialErr)
+	}
+	if err := removeSocketIfSame(path, inspected); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove stale GitHub broker socket: %w", err)
 	}
 	return nil
+}
+
+func identifySocket(path string) (socketIdentity, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return socketIdentity{}, fmt.Errorf("inspect GitHub broker socket: %w", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if info.Mode()&os.ModeSocket == 0 || !ok {
+		return socketIdentity{}, fmt.Errorf("GitHub broker path is not a socket")
+	}
+	return socketIdentity{device: uint64(stat.Dev), inode: uint64(stat.Ino)}, nil
+}
+
+func removeSocketIfSame(path string, expected socketIdentity) error {
+	current, err := identifySocket(path)
+	if err != nil {
+		return err
+	}
+	if current != expected {
+		return nil
+	}
+	return os.Remove(path)
 }
 
 func unixSocketPathLimit() int {

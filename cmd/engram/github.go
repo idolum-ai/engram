@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
@@ -459,7 +460,7 @@ func parsePermissionFlags(values []string) (map[string]string, error) {
 
 func readPrivateKeyFile(path string) ([]byte, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open private key: %w", err)
 	}
@@ -468,8 +469,9 @@ func readPrivateKeyFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat private key: %w", err)
 	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("private key path must be a regular file")
+	stat, ownerOK := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || !ownerOK || int(stat.Uid) != os.Geteuid() {
+		return nil, fmt.Errorf("private key must be a private regular file owned by uid %d", os.Geteuid())
 	}
 	data, err := io.ReadAll(io.LimitReader(file, (128<<10)+1))
 	if err != nil {

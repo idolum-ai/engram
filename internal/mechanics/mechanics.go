@@ -138,8 +138,8 @@ func (c Controller) CaptureVisibleRaw(ctx context.Context, binding Binding) (tmu
 	return pane, text, nil
 }
 
-func (c Controller) AdvertiseEngram(ctx context.Context, binding Binding, watchID int) error {
-	return c.tmux.AdvertiseEngramIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, watchID)
+func (c Controller) AdvertiseEngram(ctx context.Context, binding Binding, watchID int, githubAvailable bool) error {
+	return c.tmux.AdvertiseEngramIfBindingMatches(ctx, binding.PaneID, binding.WindowID, binding.ServerID, watchID, githubAvailable)
 }
 
 func (c Controller) ClearEngramAdvertisement(ctx context.Context, binding Binding) error {

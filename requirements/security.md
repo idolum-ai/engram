@@ -204,11 +204,16 @@ privacy model must stay small and explicit.
   with mode `0700`; startup must reject preexisting symlinks, non-directories,
   unsafe permissions, and foreign ownership.
 - The GitHub broker socket must be owner-only in Engram's validated private
-  runtime directory. Its bounded protocol must stay connected through the
-  approval handshake so requester exit cancels pending authority.
+  runtime directory and namespaced by a non-secret digest of the Engram home
+  and Telegram identity. Startup must not displace a live listener, and an
+  older broker must not remove a replacement socket while closing. Its bounded
+  protocol must stay connected through the approval handshake so requester exit
+  cancels pending authority.
 - GitHub capability approvals are process-local, random, single-use, expire
   within three minutes, and bind the authorized Telegram identity and message
-  to one current immutable tmux server/window/pane identity.
+  to one current immutable tmux server/window/pane identity and one exact
+  enrolled GitHub App identity. Removing or replacing that enrollment while an
+  approval is pending cancels the request.
 - GitHub capability approval must disclose the complete shell-quoted child
   command. If the full repositories, permissions, and command do not fit safely
   in the approval message, Engram must reject the request rather than truncate
@@ -220,13 +225,21 @@ privacy model must stay small and explicit.
   accepted passphrase replies and prompts must be deleted immediately and
   their text must not enter state, audit, or error output.
 - Active GitHub leases are process-local and pane-bound. A reused request must
-  be a repository and permission subset of the lease. Pane loss, replacement,
-  unwatch, expiry, explicit revocation, or restart removes authority; broader
+  be a repository and permission subset of the lease and must match the complete
+  enrollment identity that minted it, including App ID, installation ID, public
+  fingerprint, unlock mode, and enrollment generation. Pane identity, watch
+  state, and enrollment identity must be checked again immediately before a
+  reused token is returned. Pane loss, replacement, unwatch, expiry, explicit
+  revocation, enrollment replacement, or restart removes authority; broader
   requests require a new approval. Engram must attempt remote token revocation
   when a live lease is explicitly revoked, invalidated, or discarded during an
-  orderly shutdown. It must also revoke a newly minted token before returning
-  any effective-scope validation failure or post-mint cancellation/binding
-  invalidation error.
+  orderly shutdown. It must also revalidate the exact enrollment after minting
+  and revoke a newly minted token before returning any effective-scope,
+  post-mint cancellation/binding, or enrollment-identity failure.
+- Source GitHub App PEM files must be regular, non-symlink files owned by the
+  process UID with no group or other permission bits. A malformed optional
+  GitHub App vault must disable and disclose only that capability; it must not
+  prevent the Telegram/tmux core from starting.
 - `engram github exec` replaces ambient `GH_TOKEN` and `GITHUB_TOKEN` values
   and gives the scoped installation token only to the requested child
   environment. The child remains trusted with that authority and can
