@@ -361,6 +361,11 @@ capability only in Engram memory, bound to the exact watched pane, enrollment,
 repository ceiling, permission ceiling, and expiry. Later `github exec`
 requests inside that envelope mint or reuse one ordinary short-lived
 installation token at the approved grant ceiling without another approval.
+Engram does not infer or preflight that envelope: the requesting program must
+declare its repositories, permissions, duration, and purpose. Commands run
+through `gh` consume the injected `GH_TOKEN` directly; plain `git push`
+requires an explicit credential adapter because Git does not universally
+interpret `GH_TOKEN`.
 Giving each child the displayed ceiling keeps overlapping commands from
 invalidating each other's token. The token is reused until its upstream expiry,
 then replaced serially. The default configurable grant ceiling is eight hours
