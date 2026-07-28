@@ -325,6 +325,75 @@ func TestBrokerRollsBackTokenWhenRequesterDisconnectsBeforeCommit(t *testing.T) 
 	}
 }
 
+func TestBrokerShutdownRollsBackClientWithholdingDeliveryAcknowledgment(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "eg-shutdown-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	finalized := make(chan bool, 1)
+	server, err := Listen(path, func(ctx context.Context, _ BrokerRequest) BrokerResponse {
+		if err := RegisterDeliveryFinalizer(ctx, func(delivered bool) error {
+			finalized <- delivered
+			return nil
+		}); err != nil {
+			return BrokerResponse{Error: err.Error()}
+		}
+		return BrokerResponse{OK: true, Token: "provisional-token"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+
+	connection, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestPayload, err := json.Marshal(brokerExecTestRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRawBrokerFrame(connection, requestPayload); err != nil {
+		t.Fatal(err)
+	}
+	responsePayload, err := readBrokerFrame(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response BrokerResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.DeliveryPending || response.Token == "" {
+		t.Fatalf("pre-commit response = %#v", response)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		_ = connection.Close()
+		<-done
+		t.Fatal("broker shutdown waited for a client withholding delivery acknowledgment")
+	}
+	select {
+	case delivered := <-finalized:
+		if delivered {
+			t.Fatal("shutdown committed a provisional token")
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("shutdown did not roll back the provisional token")
+	}
+	_ = connection.Close()
+}
+
 func brokerExecTestRequest() BrokerRequest {
 	return BrokerRequest{
 		Version:      ProtocolVersion,

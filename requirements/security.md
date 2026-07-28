@@ -255,11 +255,13 @@ privacy model must stay small and explicit.
   approval. Minting is serialized per pane, reuses that ceiling token through
   its upstream lifetime so overlapping subset children are not invalidated,
   and revokes any minted token whose requester disconnects or whose authority
-  changes before transactional delivery commits. Creation, explicit revoke,
-  and token delivery are linearized per pane. Status enumerates the ceilings,
-  and cards distinguish grant lifetime from token lifetime; audits record safe
-  grant identity, requested subset, command basename, token generation, and
-  outcome without purpose text or credentials.
+  changes before transactional delivery commits. Broker shutdown closes every
+  accepted client connection so a requester withholding its delivery
+  acknowledgment cannot delay rollback until the request deadline. Creation,
+  explicit revoke, and token delivery are linearized per pane. Status
+  enumerates the ceilings, and cards distinguish grant lifetime from token
+  lifetime; audits record safe grant identity, requested subset, command
+  basename, token generation, and outcome without purpose text or credentials.
   Failed remote revocations remove local authority but retain the undisclosed
   token in a bounded in-memory retry queue until revocation succeeds, the token
   expires, or the process exits; `/status` exposes only the pending count.

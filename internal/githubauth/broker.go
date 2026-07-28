@@ -61,11 +61,16 @@ func (r *deliveryRegistration) take() func(bool) error {
 }
 
 type BrokerServer struct {
-	path     string
-	listener *net.UnixListener
-	handler  Handler
-	clients  sync.WaitGroup
-	socket   socketIdentity
+	path          string
+	listener      *net.UnixListener
+	handler       Handler
+	clients       sync.WaitGroup
+	connectionsMu sync.Mutex
+	connections   map[*net.UnixConn]struct{}
+	stopping      bool
+	shutdownOnce  sync.Once
+	shutdownErr   error
+	socket        socketIdentity
 }
 
 type socketIdentity struct {
@@ -109,17 +114,34 @@ func Listen(path string, handler Handler) (*BrokerServer, error) {
 		_ = os.Remove(path)
 		return nil, err
 	}
-	return &BrokerServer{path: path, listener: listener, handler: handler, socket: socket}, nil
+	return &BrokerServer{
+		path:        path,
+		listener:    listener,
+		handler:     handler,
+		connections: map[*net.UnixConn]struct{}{},
+		socket:      socket,
+	}, nil
 }
 
 func (s *BrokerServer) Serve(ctx context.Context) error {
 	if s == nil || s.listener == nil {
 		return fmt.Errorf("GitHub broker is not listening")
 	}
-	defer s.clients.Wait()
+	serveDone := make(chan struct{})
+	shutdownWatcherDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		_ = s.listener.Close()
+		defer close(shutdownWatcherDone)
+		select {
+		case <-ctx.Done():
+			s.shutdownTransport()
+		case <-serveDone:
+		}
+	}()
+	defer func() {
+		s.shutdownTransport()
+		close(serveDone)
+		<-shutdownWatcherDone
+		s.clients.Wait()
 	}()
 	for {
 		connection, err := s.listener.AcceptUnix()
@@ -129,9 +151,12 @@ func (s *BrokerServer) Serve(ctx context.Context) error {
 			}
 			return fmt.Errorf("accept GitHub broker request: %w", err)
 		}
-		s.clients.Add(1)
+		if !s.registerConnection(connection) {
+			_ = connection.Close()
+			continue
+		}
 		go func() {
-			defer s.clients.Done()
+			defer s.unregisterConnection(connection)
 			s.handleConnection(ctx, connection)
 		}()
 	}
@@ -142,8 +167,9 @@ func (s *BrokerServer) Close() error {
 		return nil
 	}
 	var errs []error
-	if s.listener != nil {
-		errs = append(errs, s.listener.Close())
+	s.shutdownTransport()
+	if s.shutdownErr != nil {
+		errs = append(errs, s.shutdownErr)
 	}
 	if s.path != "" {
 		if err := removeSocketIfSame(s.path, s.socket); err != nil && !os.IsNotExist(err) {
@@ -151,6 +177,45 @@ func (s *BrokerServer) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (s *BrokerServer) registerConnection(connection *net.UnixConn) bool {
+	s.connectionsMu.Lock()
+	defer s.connectionsMu.Unlock()
+	if s.stopping {
+		return false
+	}
+	s.connections[connection] = struct{}{}
+	s.clients.Add(1)
+	return true
+}
+
+func (s *BrokerServer) unregisterConnection(connection *net.UnixConn) {
+	s.connectionsMu.Lock()
+	delete(s.connections, connection)
+	s.connectionsMu.Unlock()
+	s.clients.Done()
+}
+
+func (s *BrokerServer) shutdownTransport() {
+	s.shutdownOnce.Do(func() {
+		s.connectionsMu.Lock()
+		s.stopping = true
+		connections := make([]*net.UnixConn, 0, len(s.connections))
+		for connection := range s.connections {
+			connections = append(connections, connection)
+		}
+		s.connectionsMu.Unlock()
+
+		if s.listener != nil {
+			if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				s.shutdownErr = err
+			}
+		}
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	})
 }
 
 func (s *BrokerServer) handleConnection(serverContext context.Context, connection *net.UnixConn) {
