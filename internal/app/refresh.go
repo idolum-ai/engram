@@ -745,6 +745,7 @@ func (a *App) scheduler(ctx context.Context) {
 			now := time.Now()
 			a.reconcileDueTerminalCapabilities(ctx, now)
 			a.expireGitHubLeases(now)
+			a.retryGitHubRevocations(now)
 			a.reconcileCollapsedShelf(ctx)
 			for _, ts := range st.TerminalSessions {
 				if ts.AnchorMessageID != 0 && !ts.Collapsed {

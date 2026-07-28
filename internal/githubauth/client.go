@@ -87,15 +87,12 @@ func (c *Client) Mint(ctx context.Context, app App, privateKeyPEM []byte, reposi
 	if err != nil {
 		return Token{}, err
 	}
-	if !PermissionsSubset(permissions, installation.Permissions) {
-		return Token{}, fmt.Errorf("requested permissions exceed the GitHub App installation")
+	if err := ValidateInstallationScope(installation, repositories, permissions); err != nil {
+		return Token{}, err
 	}
 	repositoryNames := make([]string, 0, len(repositories))
 	for _, repository := range repositories {
 		parts := strings.Split(repository, "/")
-		if len(parts) != 2 || !strings.EqualFold(parts[0], installation.Account.Login) {
-			return Token{}, fmt.Errorf("repository %q does not belong to installation account %q", repository, installation.Account.Login)
-		}
 		repositoryNames = append(repositoryNames, parts[1])
 	}
 	jwt, err := c.appJWT(app.AppID, privateKeyPEM)
@@ -124,6 +121,19 @@ func (c *Client) Mint(ctx context.Context, app App, privateKeyPEM []byte, reposi
 		return Token{}, err
 	}
 	return token, nil
+}
+
+func ValidateInstallationScope(installation Installation, repositories []string, permissions map[string]string) error {
+	if !PermissionsSubset(permissions, installation.Permissions) {
+		return fmt.Errorf("requested permissions exceed the GitHub App installation")
+	}
+	for _, repository := range repositories {
+		parts := strings.Split(repository, "/")
+		if len(parts) != 2 || !strings.EqualFold(parts[0], installation.Account.Login) {
+			return fmt.Errorf("repository %q does not belong to installation account %q", repository, installation.Account.Login)
+		}
+	}
+	return nil
 }
 
 func (c *Client) Revoke(ctx context.Context, token string) error {

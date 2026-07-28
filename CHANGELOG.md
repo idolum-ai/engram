@@ -4,6 +4,15 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### GitHub capabilities
+
+- Add bounded renewable, pane-scoped work-session grants. One explicit
+  Telegram approval can authorize subset commands for a configured maximum of
+  eight hours while Engram rotates ordinary short-lived GitHub installation
+  tokens in memory. Grants fail closed on pane, watch, enrollment, process,
+  expiry, or explicit-revocation changes and remain visibly distinct from the
+  current token lease.
+
 ## [v0.7.0] - 2026-07-27
 
 ### Attention

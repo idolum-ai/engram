@@ -1,13 +1,14 @@
 # Pane-scoped GitHub App capabilities
 
 This guide walks through enrolling a GitHub App, requesting a narrowly scoped
-installation token from a watched tmux pane, approving that request in
-Telegram, verifying the pane lease, and revoking it.
+installation token or bounded renewable work-session grant from a watched tmux
+pane, approving it in Telegram, inspecting its authority, and revoking it.
 
-Engram does not turn a GitHub App into ambient shell authority. Each request
-names the repositories, permissions, pane, and complete child command that the
-user is being asked to approve. Engram gives the minted token only to that child
-process and never prints or persists it.
+Engram does not turn a GitHub App into ambient shell authority. Exact-command
+requests name the repositories, permissions, pane, and complete child command.
+Renewable grants instead name an explicit pane, App, repository, permission,
+purpose, and time envelope. Engram gives minted tokens only to child processes
+and never prints or persists them.
 
 ## What you need
 
@@ -216,7 +217,8 @@ Continue only when:
 - `TMUX_PANE` is nonempty;
 - `@engram` contains Engram's versioned capability marker;
 - `@engram_watch_id` identifies the current watched session; and
-- `@engram_github` advertises the GitHub capability command.
+- `@engram_github` advertises both exact execution and renewable-grant command
+  shapes.
 
 Empty metadata usually means the pane is not currently watched or the running
 Engram version does not include this feature. It can also mean the optional
@@ -263,7 +265,60 @@ GitHub installation tokens expire after approximately one hour. GitHub's
 [installation-token documentation](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app)
 describes the upstream lifetime and repository/permission constraints.
 
-## Inspect the pane lease
+## Choose an authority lifetime
+
+Engram exposes three progressively broader, visibly distinct modes:
+
+| Mode | Approval | Bound | Ends |
+| --- | --- | --- | --- |
+| Exact command | One approval for the full displayed command | Pane, App, repositories, permissions, command | After that request |
+| Token lease reuse | No repeat approval for subsets | Same pane, enrollment, repositories, permissions | Upstream token expiry, about one hour |
+| Renewable work-session grant | One explicit grant approval | Same pane, enrollment, repositories, permissions, purpose, time | Requested/configured expiry or any invalidation |
+
+A renewable grant reduces interruptions during a known multi-hour workflow. It
+does not increase the GitHub App installation's authority, create a permanent
+credential, or extend an individual GitHub token.
+
+From the watched pane:
+
+```sh
+engram github grant \
+  --app "$APP_ALIAS" \
+  --repo "$OWNER/$REPOSITORY" \
+  --permission actions=read \
+  --permission contents=write \
+  --permission pull_requests=write \
+  --for 6h \
+  --purpose "Complete and review the current pull request"
+```
+
+Before approving, verify the exact enrollment identifiers and fingerprint,
+tmux server/window/pane binding, repositories, maximum permissions, requested
+duration and absolute expiry, and purpose. The approval explicitly warns that
+later commands from the same pane may consume any subset without another
+approval, that token renewal is unattended, and that the unlocked signing
+capability remains in Engram memory until the grant ends.
+
+The requested duration must be at least 15 minutes. The instance ceiling
+defaults to eight hours and can be lowered (or raised up to the hard 24-hour
+ceiling) in `.env`:
+
+```dotenv
+ENGRAM_GITHUB_GRANT_MAX_DURATION=8h
+```
+
+Write access to administration, Actions execution, workflows, deployments,
+deploy keys, environments, organization membership or tokens, hooks, secrets,
+and variables is ineligible for renewable grants. Use an exact `github exec`
+approval when such a permission is genuinely necessary.
+
+After approval, run ordinary subset commands with `engram github exec`. Engram
+reuses the current token while it has more than five minutes remaining and
+otherwise serializes rotation, revokes the superseded token, and mints a
+narrowly scoped replacement. A broader repository or permission request
+requires a new approval.
+
+## Inspect pane authority
 
 In the same pane:
 
@@ -271,12 +326,12 @@ In the same pane:
 engram github status
 ```
 
-The output lists the App alias, remaining lifetime, repositories, and
-permissions without exposing the token. The Telegram card gains a compact line
-such as:
+The output distinguishes the renewable work-session grant from the current
+short-lived token lease and reports both expiries without exposing credentials.
+The Telegram card shows the broader authority:
 
 ```text
-GH example-app · read-only · 1 repo · 42m
+GH grant example-app · 1R 2W · 1 repo · 5h42m
 ```
 
 Run `engram github status` from another watched pane. It should not see the
@@ -327,7 +382,7 @@ approval, but no passphrase reply is requested there.
 If an existing lease already covers the request, revoke it first to exercise
 the complete unlock and approval path.
 
-## Revoke a pane lease
+## Revoke all pane GitHub authority
 
 From the pane that owns the lease:
 
@@ -336,10 +391,14 @@ engram github revoke
 engram github status
 ```
 
-Engram removes the lease, updates the card, and asks GitHub to revoke the
-installation token. Pane loss, replacement, unwatch, expiry, and orderly
-service shutdown also remove authority; Engram attempts remote revocation where
-a live token still exists.
+Engram removes both the grant and token lease, erases the retained in-memory
+signing capability, updates the card, and asks GitHub to revoke the installation
+token. Pane loss, replacement, unwatch, grant expiry, enrollment mutation or
+removal, and orderly service shutdown do the same. A daemon restart never
+recovers a prior grant. If GitHub cannot confirm revocation, local authority is
+still removed, the CLI reports the failure, and Engram keeps the token only in
+an in-memory retry queue. `/status` reports the number of pending revocations
+without exposing token values.
 
 ## Remove an enrollment
 

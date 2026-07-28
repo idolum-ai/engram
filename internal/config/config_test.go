@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestArtifactDirPrefersPrivateXDGRunTimeDir(t *testing.T) {
@@ -313,6 +314,9 @@ ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", 
 	if cfg.Home == "" || cfg.Workdir == "" || cfg.AttachmentSoftMaxBytes != DefaultSoftMaxSize {
 		t.Fatalf("defaults not applied: %#v", cfg)
 	}
+	if cfg.EffectiveGitHubGrantMaxDuration() != DefaultGitHubGrantMaxDuration {
+		t.Fatalf("GitHub grant maximum = %s", cfg.EffectiveGitHubGrantMaxDuration())
+	}
 	if cfg.TmuxSession != "main" {
 		t.Fatalf("TmuxSession = %q, want main", cfg.TmuxSession)
 	}
@@ -330,6 +334,34 @@ ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", 
 	}
 	if cfg.EffectiveVoiceInputMode() != VoiceInputModePath || cfg.VoiceTranscriptionConfigured() {
 		t.Fatalf("voice defaults = mode:%q transcription:%v", cfg.EffectiveVoiceInputMode(), cfg.VoiceTranscriptionConfigured())
+	}
+}
+
+func TestLoadBoundsRenewableGitHubGrantMaximum(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		valid bool
+	}{
+		{value: "4h", valid: true},
+		{value: "0s"},
+		{value: "25h"},
+		{value: "forever"},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			env := filepath.Join(t.TempDir(), ".env")
+			body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_GITHUB_GRANT_MAX_DURATION=" + test.value + "\n"
+			if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(env)
+			if test.valid {
+				if err != nil || cfg.EffectiveGitHubGrantMaxDuration() != 4*time.Hour {
+					t.Fatalf("Load duration=%s error=%v", cfg.EffectiveGitHubGrantMaxDuration(), err)
+				}
+			} else if err == nil {
+				t.Fatal("invalid grant maximum was accepted")
+			}
+		})
 	}
 }
 

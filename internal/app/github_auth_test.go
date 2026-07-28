@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -837,10 +838,21 @@ type fakeGitHubMinter struct {
 	expiresAt    time.Time
 	mintStarted  chan struct{}
 	mintRelease  chan struct{}
+	revokeErr    error
 }
 
 func (m *fakeGitHubMinter) InspectInstallation(context.Context, githubauth.App, []byte) (githubauth.Installation, error) {
-	return githubauth.Installation{}, nil
+	installation := githubauth.Installation{
+		ID: 456,
+		Permissions: map[string]string{
+			"actions":       "read",
+			"contents":      "write",
+			"issues":        "write",
+			"pull_requests": "write",
+		},
+	}
+	installation.Account.Login = "idolum-ai"
+	return installation, nil
 }
 
 func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey []byte, repositories []string, permissions map[string]string) (githubauth.Token, error) {
@@ -856,14 +868,19 @@ func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey 
 		return githubauth.Token{}, io.ErrUnexpectedEOF
 	}
 	m.mintCalls++
+	mintNumber := m.mintCalls
 	m.repositories = append([]string(nil), repositories...)
 	m.permissions = copyStringMap(permissions)
 	expiresAt := m.expiresAt
 	if expiresAt.IsZero() {
 		expiresAt = time.Now().Add(time.Hour)
 	}
+	tokenValue := "ghs_fake_token"
+	if mintNumber > 1 {
+		tokenValue = fmt.Sprintf("ghs_fake_token_%d", mintNumber)
+	}
 	token := githubauth.Token{
-		Value:       "ghs_fake_token",
+		Value:       tokenValue,
 		ExpiresAt:   expiresAt,
 		Permissions: copyStringMap(permissions),
 	}
@@ -878,8 +895,9 @@ func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey 
 func (m *fakeGitHubMinter) Revoke(context.Context, string) error {
 	m.mu.Lock()
 	m.revokeCalls++
+	err := m.revokeErr
 	m.mu.Unlock()
-	return nil
+	return err
 }
 
 func (m *fakeGitHubMinter) mintCount() int {
