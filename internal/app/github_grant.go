@@ -9,8 +9,6 @@ import (
 	"github.com/idolum-ai/engram/internal/state"
 )
 
-const githubGrantRotationWindow = 5 * time.Minute
-
 type githubGrant struct {
 	SessionID        int
 	SessionCreatedAt time.Time
@@ -29,6 +27,9 @@ func (a *App) createGitHubGrant(
 	enrollment githubauth.App,
 	privateKey []byte,
 ) githubauth.BrokerResponse {
+	handle := a.githubGrantLocks.handle(session.ID)
+	handle.Lock()
+	defer handle.Unlock()
 	maximum := a.Config.EffectiveGitHubGrantMaxDuration()
 	if request.GrantFor > maximum {
 		a.completeGitHubApprovalMessage(pending, "Denied: the requested duration exceeds this Engram instance's renewable-grant ceiling.")
@@ -58,6 +59,10 @@ func (a *App) createGitHubGrant(
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
 	now := a.githubTime()
+	if !pending.GrantExpiresAt.After(now) {
+		a.completeGitHubApprovalMessage(pending, "Expired: the approved work-session boundary elapsed before the grant could be stored.")
+		return githubauth.BrokerResponse{Error: "renewable GitHub grant expired before it could be stored"}
+	}
 	grant := githubGrant{
 		SessionID:        session.ID,
 		SessionCreatedAt: session.CreatedAt,
@@ -70,7 +75,7 @@ func (a *App) createGitHubGrant(
 			Permissions:  copyStringMap(request.Permissions),
 			Purpose:      request.Purpose,
 			CreatedAt:    now,
-			ExpiresAt:    now.Add(request.GrantFor),
+			ExpiresAt:    pending.GrantExpiresAt,
 		},
 		PrivateKey: append([]byte(nil), privateKey...),
 	}
@@ -101,10 +106,47 @@ func (a *App) consumeGitHubGrant(
 	githubauth.Zero(candidate.PrivateKey)
 	handle := a.githubGrantLocks.handle(session.ID)
 	handle.Lock()
-	defer handle.Unlock()
+	lockOwned := true
+	defer func() {
+		if lockOwned {
+			handle.Unlock()
+		}
+	}()
 
 	if lease, ok := a.reusableGitHubLease(request, enrollment); ok {
-		_ = a.audit("github.grant.consume", "lease_reused", githubGrantAuditRequest(session.ID, request, lease.Info.GrantID, lease.Info.Generation))
+		finalize := func(delivered bool) error {
+			defer handle.Unlock()
+			if !delivered {
+				return nil
+			}
+			if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
+				return err
+			}
+			if _, err := a.reloadMatchingGitHubEnrollment(enrollment); err != nil {
+				return err
+			}
+			a.githubMu.Lock()
+			currentGrant, grantActive := a.githubGrants[githubBindingKey(request.Binding)]
+			currentLease, leaseActive := a.githubLeases[githubBindingKey(request.Binding)]
+			valid := grantActive && leaseActive &&
+				currentGrant.Info.ID == lease.Info.GrantID &&
+				currentLease.Token == lease.Token &&
+				currentGrant.Info.ExpiresAt.After(a.githubTime())
+			a.githubMu.Unlock()
+			if !valid {
+				return fmt.Errorf("renewable GitHub grant changed before token delivery")
+			}
+			_ = a.audit("github.grant.consume", "lease_reused", githubGrantAuditRequest(session.ID, request, lease.Info.GrantID, lease.Info.Generation))
+			return nil
+		}
+		if err := githubauth.RegisterDeliveryFinalizer(ctx, finalize); err == nil {
+			lockOwned = false
+		} else {
+			lockOwned = false
+			if err := finalize(true); err != nil {
+				return githubauth.BrokerResponse{Error: err.Error()}, true
+			}
+		}
 		return githubauth.BrokerResponse{OK: true, Token: lease.Token, ExpiresAt: lease.Info.ExpiresAt}, true
 	}
 	grant, ok := a.matchingGitHubGrant(request, enrollment, session)
@@ -122,18 +164,14 @@ func (a *App) consumeGitHubGrant(
 	}
 
 	if current, found := a.currentGitHubLease(request.Binding); found {
-		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-		err := a.GitHubMinter.Revoke(revokeCtx, current.Token)
-		cancel()
-		if err != nil {
-			_ = a.audit("github.grant.consume", "revoke_failed", githubGrantAuditRequest(session.ID, request, grant.Info.ID, grant.Generation))
-			return githubauth.BrokerResponse{Error: "revoke superseded GitHub token: " + err.Error()}, true
+		if current.Info.ExpiresAt.After(a.githubTime()) {
+			return githubauth.BrokerResponse{Error: "active grant token did not cover an approved subset"}, true
 		}
 		a.discardGitHubLease(request.Binding, current.Token)
 	}
 
 	mintCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	token, err := a.GitHubMinter.Mint(mintCtx, grant.Enrollment, grant.PrivateKey, request.Repositories, request.Permissions)
+	token, err := a.GitHubMinter.Mint(mintCtx, grant.Enrollment, grant.PrivateKey, grant.Info.Repositories, grant.Info.Permissions)
 	cancel()
 	if err != nil {
 		_ = a.audit("github.grant.consume", "mint_failed", githubGrantAuditRequest(session.ID, request, grant.Info.ID, grant.Generation))
@@ -146,38 +184,60 @@ func (a *App) consumeGitHubGrant(
 		return githubauth.BrokerResponse{Error: a.revokeDiscardedGitHubToken(ctx, token.Value, err).Error()}, true
 	}
 
-	a.githubMu.Lock()
-	current, active := a.githubGrants[githubBindingKey(request.Binding)]
-	if !active || current.Info.ID != grant.Info.ID || !current.Info.ExpiresAt.After(a.githubTime()) ||
-		!sameGitHubEnrollment(current.Enrollment, grant.Enrollment) {
+	finalize := func(delivered bool) error {
+		defer handle.Unlock()
+		if !delivered {
+			err := a.revokeDiscardedGitHubToken(context.Background(), token.Value, fmt.Errorf("requester disconnected before GitHub token delivery"))
+			_ = a.audit("github.grant.consume", "delivery_rolled_back", githubGrantAuditRequest(session.ID, request, grant.Info.ID, grant.Generation))
+			return err
+		}
+		if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
+			return a.revokeDiscardedGitHubToken(context.Background(), token.Value, err)
+		}
+		if _, err := a.reloadMatchingGitHubEnrollment(grant.Enrollment); err != nil {
+			return a.revokeDiscardedGitHubToken(context.Background(), token.Value, err)
+		}
+		a.githubMu.Lock()
+		current, active := a.githubGrants[githubBindingKey(request.Binding)]
+		if !active || current.Info.ID != grant.Info.ID || !current.Info.ExpiresAt.After(a.githubTime()) ||
+			!sameGitHubEnrollment(current.Enrollment, grant.Enrollment) {
+			a.githubMu.Unlock()
+			return a.revokeDiscardedGitHubToken(context.Background(), token.Value, fmt.Errorf("renewable GitHub grant changed during token delivery"))
+		}
+		current.Generation++
+		a.githubGrants[githubBindingKey(request.Binding)] = current
+		generation := current.Generation
+		a.githubLeases[githubBindingKey(request.Binding)] = githubLease{
+			SessionID:  session.ID,
+			Binding:    request.Binding,
+			Enrollment: grant.Enrollment,
+			Info: githubauth.LeaseInfo{
+				App:          request.App,
+				Repositories: append([]string(nil), grant.Info.Repositories...),
+				Permissions:  copyStringMap(grant.Info.Permissions),
+				ExpiresAt:    token.ExpiresAt,
+				GrantID:      grant.Info.ID,
+				Generation:   generation,
+			},
+			Token: token.Value,
+		}
 		a.githubMu.Unlock()
-		err := a.revokeDiscardedGitHubToken(ctx, token.Value, fmt.Errorf("renewable GitHub grant changed during token mint"))
-		return githubauth.BrokerResponse{Error: err.Error()}, true
+		a.queueManualRefresh(session.ID)
+		outcome := "minted"
+		if generation > 1 {
+			outcome = "rotated"
+		}
+		_ = a.audit("github.grant.consume", outcome, githubGrantAuditRequest(session.ID, request, grant.Info.ID, generation))
+		return nil
 	}
-	current.Generation++
-	a.githubGrants[githubBindingKey(request.Binding)] = current
-	generation := current.Generation
-	a.githubLeases[githubBindingKey(request.Binding)] = githubLease{
-		SessionID:  session.ID,
-		Binding:    request.Binding,
-		Enrollment: grant.Enrollment,
-		Info: githubauth.LeaseInfo{
-			App:          request.App,
-			Repositories: append([]string(nil), request.Repositories...),
-			Permissions:  copyStringMap(request.Permissions),
-			ExpiresAt:    token.ExpiresAt,
-			GrantID:      grant.Info.ID,
-			Generation:   generation,
-		},
-		Token: token.Value,
+	if err := githubauth.RegisterDeliveryFinalizer(ctx, finalize); err == nil {
+		lockOwned = false
+	} else {
+		lockOwned = false
+		if err := finalize(true); err != nil {
+			return githubauth.BrokerResponse{Error: err.Error()}, true
+		}
 	}
-	a.githubMu.Unlock()
-	a.queueManualRefresh(session.ID)
-	outcome := "minted"
-	if generation > 1 {
-		outcome = "rotated"
-	}
-	_ = a.audit("github.grant.consume", outcome, githubGrantAuditRequest(session.ID, request, grant.Info.ID, generation))
 	return githubauth.BrokerResponse{OK: true, Token: token.Value, ExpiresAt: token.ExpiresAt}, true
 }
 

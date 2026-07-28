@@ -293,7 +293,7 @@ func runGitHubExec(args []string) int {
 		Binding:      binding,
 		LocalUnlock:  *localUnlock,
 	}
-	fmt.Fprintln(os.Stderr, "Waiting for GitHub capability approval in Telegram (expires in 3m)...")
+	fmt.Fprintln(os.Stderr, "Requesting GitHub capability from Engram...")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+30*time.Second)
 	response, err := requestGitHubCapability(ctx, cfg, request)
 	cancel()
@@ -358,7 +358,7 @@ func runGitHubGrant(args []string) int {
 		fmt.Fprintln(os.Stderr, "github grant:", err)
 		return 2
 	}
-	fmt.Fprintln(os.Stderr, "Waiting for renewable GitHub work-session approval in Telegram (expires in 3m)...")
+	fmt.Fprintln(os.Stderr, "Requesting renewable GitHub work-session authority from Engram...")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+30*time.Second)
 	response, err := requestGitHubCapability(ctx, cfg, request)
 	cancel()
@@ -428,15 +428,31 @@ func runGitHubStatus(args []string) int {
 		fmt.Fprintln(os.Stdout, "No active GitHub capability authority for this pane.")
 		return 0
 	}
+	writeGitHubStatus(os.Stdout, response, time.Now())
+	return 0
+}
+
+func writeGitHubStatus(writer io.Writer, response githubauth.BrokerResponse, now time.Time) {
 	for _, grant := range response.Grants {
-		fmt.Fprintln(os.Stdout, "Work-session grant:", githubauth.CompactGrantLine(grant, time.Now()))
-		fmt.Fprintln(os.Stdout, "  purpose:", grant.Purpose)
-		fmt.Fprintln(os.Stdout, "  expires:", grant.ExpiresAt.Local().Format(time.RFC3339))
+		fmt.Fprintln(writer, "Work-session grant:", githubauth.CompactGrantLine(grant, now))
+		fmt.Fprintln(writer, "  purpose:", grant.Purpose)
+		fmt.Fprintln(writer, "  expires:", grant.ExpiresAt.Local().Format(time.RFC3339))
+		for _, repository := range grant.Repositories {
+			fmt.Fprintln(writer, "  repo ceiling:", repository)
+		}
+		names := make([]string, 0, len(grant.Permissions))
+		for name := range grant.Permissions {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(writer, "  permission ceiling: %s=%s\n", name, grant.Permissions[name])
+		}
 	}
 	for _, lease := range response.Leases {
-		fmt.Fprintln(os.Stdout, "Current token lease:", githubauth.CompactLeaseLine(lease, time.Now()))
+		fmt.Fprintln(writer, "Current token lease:", githubauth.CompactLeaseLine(lease, now))
 		for _, repository := range lease.Repositories {
-			fmt.Fprintln(os.Stdout, "  repo:", repository)
+			fmt.Fprintln(writer, "  repo:", repository)
 		}
 		names := make([]string, 0, len(lease.Permissions))
 		for name := range lease.Permissions {
@@ -444,10 +460,9 @@ func runGitHubStatus(args []string) int {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			fmt.Fprintf(os.Stdout, "  permission: %s=%s\n", name, lease.Permissions[name])
+			fmt.Fprintf(writer, "  permission: %s=%s\n", name, lease.Permissions[name])
 		}
 	}
-	return 0
 }
 
 func runGitHubRevoke(args []string) int {

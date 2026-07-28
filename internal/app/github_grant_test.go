@@ -2,7 +2,13 @@ package app
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,7 +20,8 @@ import (
 )
 
 func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
+	expectedExpiry := now.Add(6 * time.Hour)
 	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
 	app.githubGrants = map[string]githubGrant{}
 	app.githubNow = func() time.Time { return now }
@@ -31,9 +38,11 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	approvalMessage := <-transport.sent
 	if !strings.Contains(approvalMessage.text, "Renewable GitHub work-session grant") ||
 		!strings.Contains(approvalMessage.text, "unattended short-lived token rotation") ||
-		!strings.Contains(approvalMessage.text, request.Purpose) {
+		!strings.Contains(approvalMessage.text, request.Purpose) ||
+		!strings.Contains(approvalMessage.text, expectedExpiry.Local().Format("2006-01-02 15:04 MST")) {
 		t.Fatalf("approval text = %q", approvalMessage.text)
 	}
+	now = now.Add(2 * time.Minute)
 	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
 		ID: "approve", Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
 	}, true, requestID); status != "callback_ok" {
@@ -43,8 +52,66 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	if !response.OK || len(response.Grants) != 1 || response.Token != "" {
 		t.Fatalf("grant response = %#v", response)
 	}
+	if !response.Grants[0].ExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("grant expiry = %s, want approval boundary %s", response.Grants[0].ExpiresAt, expectedExpiry)
+	}
 	if len(app.githubGrants) != 1 || len(app.githubLeases) != 0 {
 		t.Fatalf("stored grants=%d leases=%d", len(app.githubGrants), len(app.githubLeases))
+	}
+}
+
+func TestGitHubGrantRevokeWaitsForBlockedInspectionThenRemovesGrant(t *testing.T) {
+	now := time.Now().UTC()
+	expectedExpiry := now.Add(time.Hour)
+	minter := &fakeGitHubMinter{
+		inspectStart: make(chan struct{}),
+		inspectWait:  make(chan struct{}),
+	}
+	app, transport, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+	app.githubGrants = map[string]githubGrant{}
+	app.githubNow = func() time.Time { return now }
+	request := testLocalGitHubBrokerRequest()
+	request.Action = githubauth.ActionGrant
+	request.Command = nil
+	request.GrantFor = time.Hour
+	request.Purpose = "Review"
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() {
+		responses <- app.handleGitHubBrokerRequest(context.Background(), request)
+	}()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "approve", Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	<-minter.inspectStart
+	now = now.Add(5 * time.Minute)
+
+	revoked := make(chan error, 1)
+	go func() {
+		revoked <- app.revokeGitHubBindingAuthority(context.Background(), sessionID, request.Binding)
+	}()
+	select {
+	case err := <-revoked:
+		t.Fatalf("revoke crossed an in-flight installation inspection: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(minter.inspectWait)
+	response := <-responses
+	if !response.OK || len(response.Grants) != 1 {
+		t.Fatalf("grant response = %#v", response)
+	}
+	if !response.Grants[0].ExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("post-inspection expiry = %s, want approval boundary %s", response.Grants[0].ExpiresAt, expectedExpiry)
+	}
+	if err := <-revoked; err != nil {
+		t.Fatalf("serialized revoke = %v", err)
+	}
+	if len(app.githubGrants) != 0 || len(app.githubLeases) != 0 {
+		t.Fatalf("revoke returned with grants=%d leases=%d", len(app.githubGrants), len(app.githubLeases))
 	}
 }
 
@@ -116,18 +183,90 @@ func TestGitHubGrantConsumesSubsetsAndRotatesOneToken(t *testing.T) {
 	if !first.OK || first.Token == "" || minter.mintCount() != 1 {
 		t.Fatalf("first grant consumption = %#v, mints=%d", first, minter.mintCount())
 	}
+	if len(minter.repositories) != 2 || minter.permissions["contents"] != "write" ||
+		minter.permissions["pull_requests"] != "write" {
+		t.Fatalf("mint did not use approved grant ceiling: repos=%v permissions=%v", minter.repositories, minter.permissions)
+	}
 	second := app.handleGitHubBrokerRequest(context.Background(), request)
 	if !second.OK || second.Token != first.Token || minter.mintCount() != 1 {
 		t.Fatalf("lease reuse = %#v, mints=%d", second, minter.mintCount())
 	}
 
 	now = now.Add(56 * time.Minute)
+	stillActive := app.handleGitHubBrokerRequest(context.Background(), request)
+	if !stillActive.OK || stillActive.Token != first.Token || minter.mintCount() != 1 || minter.revokeCount() != 0 {
+		t.Fatalf("active lease was rotated: %#v, mints=%d revokes=%d", stillActive, minter.mintCount(), minter.revokeCount())
+	}
+
+	now = now.Add(5 * time.Minute)
 	minter.mu.Lock()
 	minter.expiresAt = now.Add(time.Hour)
 	minter.mu.Unlock()
 	rotated := app.handleGitHubBrokerRequest(context.Background(), request)
-	if !rotated.OK || rotated.Token == first.Token || minter.mintCount() != 2 || minter.revokeCount() != 1 {
+	if !rotated.OK || rotated.Token == first.Token || minter.mintCount() != 2 || minter.revokeCount() != 0 {
 		t.Fatalf("rotation = %#v, mints=%d revokes=%d", rotated, minter.mintCount(), minter.revokeCount())
+	}
+}
+
+func TestGitHubGrantDifferentSubsetsShareCeilingTokenWithoutRevocation(t *testing.T) {
+	now := time.Now()
+	minter := &fakeGitHubMinter{expiresAt: now.Add(time.Hour)}
+	app, _, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+	app.githubGrants = map[string]githubGrant{}
+	request := testLocalGitHubBrokerRequest()
+	request.Passphrase = nil
+	privateKey, enrollment, err := app.GitHubVault.Unlock("idolum", []byte("correct horse battery staple"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories := []string{"idolum-ai/engram", "idolum-ai/agent-commons"}
+	permissions := map[string]string{"contents": "write", "pull_requests": "write"}
+	app.storeGitHubGrant(githubGrant{
+		SessionID: sessionID, SessionCreatedAt: testGitHubSessionCreatedAt(app, sessionID),
+		Binding: request.Binding, Enrollment: enrollment,
+		Info: githubauth.GrantInfo{
+			ID: "grant-one", App: "idolum", Repositories: repositories,
+			Permissions: permissions, Purpose: "Review", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		},
+		PrivateKey: privateKey,
+	})
+
+	firstRequest := request
+	firstRequest.Repositories = []string{"idolum-ai/engram"}
+	firstRequest.Permissions = map[string]string{"contents": "read"}
+	secondRequest := request
+	secondRequest.Repositories = []string{"idolum-ai/agent-commons"}
+	secondRequest.Permissions = map[string]string{"pull_requests": "read"}
+
+	responses := make(chan githubauth.BrokerResponse, 2)
+	var wait sync.WaitGroup
+	for _, subset := range []githubauth.BrokerRequest{firstRequest, secondRequest} {
+		subset := subset
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			responses <- app.handleGitHubBrokerRequest(context.Background(), subset)
+		}()
+	}
+	wait.Wait()
+	close(responses)
+	var token string
+	for response := range responses {
+		if !response.OK || response.Token == "" {
+			t.Fatalf("subset response = %#v", response)
+		}
+		if token == "" {
+			token = response.Token
+		} else if response.Token != token {
+			t.Fatalf("different subsets received different tokens: %q and %q", token, response.Token)
+		}
+	}
+	if minter.mintCount() != 1 || minter.revokeCount() != 0 {
+		t.Fatalf("different subsets mints=%d revokes=%d", minter.mintCount(), minter.revokeCount())
+	}
+	if len(minter.repositories) != 2 || minter.permissions["contents"] != "write" ||
+		minter.permissions["pull_requests"] != "write" {
+		t.Fatalf("minted scope repos=%v permissions=%v", minter.repositories, minter.permissions)
 	}
 }
 
@@ -229,7 +368,7 @@ func TestGitHubGrantConcurrentRotationProducesOneAuthoritativeLease(t *testing.T
 		SessionID: sessionID, Binding: request.Binding, Enrollment: enrollment,
 		Info: githubauth.LeaseInfo{
 			App: "idolum", Repositories: request.Repositories, Permissions: request.Permissions,
-			ExpiresAt: now.Add(time.Minute), GrantID: "grant-one", Generation: 1,
+			ExpiresAt: now.Add(-time.Second), GrantID: "grant-one", Generation: 1,
 		},
 		Token: "old-token",
 	}
@@ -255,7 +394,7 @@ func TestGitHubGrantConcurrentRotationProducesOneAuthoritativeLease(t *testing.T
 			t.Fatalf("concurrent rotation returned two tokens: %q and %q", authoritative, response.Token)
 		}
 	}
-	if minter.mintCount() != 1 || minter.revokeCount() != 1 {
+	if minter.mintCount() != 1 || minter.revokeCount() != 0 {
 		t.Fatalf("concurrent rotation mints=%d revokes=%d", minter.mintCount(), minter.revokeCount())
 	}
 }
@@ -398,7 +537,7 @@ func TestGitHubGrantRejectsSameBindingAfterSessionReplacement(t *testing.T) {
 	}
 }
 
-func TestGitHubGrantInvalidatedDuringMintRevokesDiscardedToken(t *testing.T) {
+func TestGitHubGrantRevokeSerializesWithMintAndRemovesCommittedToken(t *testing.T) {
 	now := time.Now()
 	minter := &fakeGitHubMinter{
 		expiresAt:   now.Add(time.Hour),
@@ -425,18 +564,97 @@ func TestGitHubGrantInvalidatedDuringMintRevokesDiscardedToken(t *testing.T) {
 	responses := make(chan githubauth.BrokerResponse, 1)
 	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
 	<-minter.mintStarted
-	app.revokeGitHubBindingAuthority(context.Background(), sessionID, request.Binding)
+	revoked := make(chan error, 1)
+	go func() {
+		revoked <- app.revokeGitHubBindingAuthority(context.Background(), sessionID, request.Binding)
+	}()
+	select {
+	case err := <-revoked:
+		t.Fatalf("revoke crossed an in-flight mint: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 	close(minter.mintRelease)
 	response := <-responses
-	if response.OK || !strings.Contains(response.Error, "grant changed") {
-		t.Fatalf("post-mint invalidation response = %#v", response)
+	if !response.OK || response.Token == "" {
+		t.Fatalf("serialized mint response = %#v", response)
 	}
-	if len(app.githubLeases) != 0 || minter.revokeCount() != 1 {
-		t.Fatalf("discarded lease count=%d revokes=%d", len(app.githubLeases), minter.revokeCount())
+	if err := <-revoked; err != nil {
+		t.Fatalf("serialized revoke = %v", err)
+	}
+	if len(app.githubGrants) != 0 || len(app.githubLeases) != 0 || minter.revokeCount() != 1 {
+		t.Fatalf("post-revoke grants=%d leases=%d revokes=%d", len(app.githubGrants), len(app.githubLeases), minter.revokeCount())
 	}
 }
 
-func TestGitHubGrantRotationRevocationFailureKeepsOldLeaseTracked(t *testing.T) {
+func TestGitHubGrantRequesterDisconnectRollsBackMintedToken(t *testing.T) {
+	now := time.Now()
+	minter := &fakeGitHubMinter{expiresAt: now.Add(time.Hour)}
+	app, _, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+	app.githubGrants = map[string]githubGrant{}
+	request := testLocalGitHubBrokerRequest()
+	request.Passphrase = nil
+	privateKey, enrollment, err := app.GitHubVault.Unlock("idolum", []byte("correct horse battery staple"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.storeGitHubGrant(githubGrant{
+		SessionID: sessionID, SessionCreatedAt: testGitHubSessionCreatedAt(app, sessionID),
+		Binding: request.Binding, Enrollment: enrollment,
+		Info: githubauth.GrantInfo{
+			ID: "grant-one", App: "idolum", Repositories: request.Repositories,
+			Permissions: request.Permissions, Purpose: "Review", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		},
+		PrivateKey: privateKey,
+	})
+
+	dir, err := os.MkdirTemp("/tmp", "eg-app-delivery-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "github.sock")
+	server, err := githubauth.Listen(socketPath, app.handleGitHubBrokerRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(serverCtx) }()
+
+	connection, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeGitHubGrantTestFrame(connection, request); err != nil {
+		t.Fatal(err)
+	}
+	var response githubauth.BrokerResponse
+	if err := readGitHubGrantTestFrame(connection, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || !response.DeliveryPending || response.Token == "" {
+		t.Fatalf("pre-commit response = %#v", response)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for minter.revokeCount() != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if minter.revokeCount() != 1 {
+		t.Fatal("disconnected requester token was not revoked")
+	}
+	if _, found := app.currentGitHubLease(request.Binding); found {
+		t.Fatal("disconnected requester stored a GitHub lease")
+	}
+	stopServer()
+	if err := <-serverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGitHubGrantKeepsActiveLeaseUntilNaturalExpiry(t *testing.T) {
 	now := time.Now()
 	minter := &fakeGitHubMinter{expiresAt: now.Add(time.Hour), revokeErr: errors.New("network down")}
 	app, _, sessionID := newLocalGitHubApprovalTestApp(t, minter)
@@ -465,8 +683,8 @@ func TestGitHubGrantRotationRevocationFailureKeepsOldLeaseTracked(t *testing.T) 
 		Token: "old-token",
 	}
 	response := app.handleGitHubBrokerRequest(context.Background(), request)
-	if response.OK || !strings.Contains(response.Error, "revoke superseded") || minter.mintCount() != 0 {
-		t.Fatalf("revocation failure response=%#v mints=%d", response, minter.mintCount())
+	if !response.OK || response.Token != "old-token" || minter.mintCount() != 0 || minter.revokeCount() != 0 {
+		t.Fatalf("active lease response=%#v mints=%d revokes=%d", response, minter.mintCount(), minter.revokeCount())
 	}
 	if lease, found := app.currentGitHubLease(request.Binding); !found || lease.Token != "old-token" {
 		t.Fatal("failed revocation lost track of the old token")
@@ -573,4 +791,30 @@ func testGitHubSessionCreatedAt(app *App, sessionID int) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func writeGitHubGrantTestFrame(writer io.Writer, value any) error {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	var header [4]byte
+	binary.BigEndian.PutUint32(header[:], uint32(len(payload)))
+	if _, err := writer.Write(header[:]); err != nil {
+		return err
+	}
+	_, err = writer.Write(payload)
+	return err
+}
+
+func readGitHubGrantTestFrame(reader io.Reader, value any) error {
+	var header [4]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return err
+	}
+	payload := make([]byte, binary.BigEndian.Uint32(header[:]))
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return err
+	}
+	return json.Unmarshal(payload, value)
 }

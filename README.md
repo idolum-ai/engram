@@ -359,12 +359,17 @@ engram github grant \
 The grant is not a long-lived bearer token. It keeps the unlocked App signing
 capability only in Engram memory, bound to the exact watched pane, enrollment,
 repository ceiling, permission ceiling, and expiry. Later `github exec`
-requests inside that envelope mint or reuse ordinary short-lived installation
-tokens without another approval. The default configurable grant ceiling is
-eight hours (`ENGRAM_GITHUB_GRANT_MAX_DURATION`), with an absolute 24-hour
-limit. Administrative, workflow-execution, deployment, hook, secret, and
-variable write permissions remain ineligible; use exact-command approval for
-those.
+requests inside that envelope mint or reuse one ordinary short-lived
+installation token at the approved grant ceiling without another approval.
+Giving each child the displayed ceiling keeps overlapping commands from
+invalidating each other's token. The token is reused until its upstream expiry,
+then replaced serially. The default configurable grant ceiling is eight hours
+(`ENGRAM_GITHUB_GRANT_MAX_DURATION`), with an absolute 24-hour limit.
+
+Renewable write authority fails closed: only `checks`, `contents`,
+`discussions`, `issues`, `pull_requests`, `repository_projects`, and `statuses`
+may be requested at `write`. Evolving permission names remain eligible at
+`read`; every other write permission requires exact-command approval.
 
 The card remains compact:
 
@@ -386,6 +391,10 @@ Inspect or revoke the current pane's lease with:
 engram github status
 engram github revoke
 ```
+
+Human-readable `github status` output enumerates the grant's repository and
+permission ceilings so the broader authority is visible without exposing the
+token.
 
 List or remove enrolled apps with:
 

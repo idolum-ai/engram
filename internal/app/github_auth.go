@@ -38,6 +38,7 @@ type githubPendingRequest struct {
 	State             string
 	Result            chan githubApproval
 	Enrollment        githubauth.App
+	GrantExpiresAt    time.Time
 }
 
 type githubLease struct {
@@ -302,7 +303,12 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 	if request.Action == githubauth.ActionGrant && a.redactText(request.Purpose) != request.Purpose {
 		return nil, fmt.Errorf("renewable GitHub grant purpose contains secret material that cannot be disclosed safely")
 	}
-	text := a.githubApprovalText(session, request, app)
+	now := a.githubTime()
+	grantExpiresAt := time.Time{}
+	if request.Action == githubauth.ActionGrant {
+		grantExpiresAt = now.Add(request.GrantFor)
+	}
+	text := a.githubApprovalText(session, request, app, grantExpiresAt)
 	if len(text) > 3500 {
 		return nil, fmt.Errorf("GitHub capability request is too large to present safely in Telegram")
 	}
@@ -314,11 +320,12 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 		BindingKey:      githubBindingKey(request.Binding),
 		Request:         pendingRequest,
 		LocalPassphrase: append([]byte(nil), request.Passphrase...),
-		ExpiresAt:       a.githubTime().Add(githubApprovalTTL),
+		ExpiresAt:       now.Add(githubApprovalTTL),
 		ApprovalText:    text,
 		State:           "pending",
 		Result:          make(chan githubApproval, 1),
 		Enrollment:      app,
+		GrantExpiresAt:  grantExpiresAt,
 	}
 	a.githubMu.Lock()
 	for _, existing := range a.githubPending {
@@ -345,7 +352,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 	return pending, nil
 }
 
-func (a *App) githubApprovalText(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App) string {
+func (a *App) githubApprovalText(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App, grantExpiresAt time.Time) string {
 	var text strings.Builder
 	if request.Action == githubauth.ActionGrant {
 		text.WriteString("Renewable GitHub work-session grant requested\n\n")
@@ -375,10 +382,9 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 		fmt.Fprintf(&text, "  %s: %s\n", name, request.Permissions[name])
 	}
 	if request.Action == githubauth.ActionGrant {
-		expiresAt := a.githubTime().Add(request.GrantFor)
-		fmt.Fprintf(&text, "Duration: %s (until %s)\n", request.GrantFor, expiresAt.Local().Format("2006-01-02 15:04 MST"))
+		fmt.Fprintf(&text, "Duration: %s (until %s)\n", request.GrantFor, grantExpiresAt.Local().Format("2006-01-02 15:04 MST"))
 		fmt.Fprintf(&text, "Purpose: %s\n", request.Purpose)
-		text.WriteString("Scope: later commands from this exact pane may use any subset without another approval.\n")
+		text.WriteString("Scope: later commands from this exact pane may use any subset without another approval; each child receives a token at this displayed ceiling.\n")
 		text.WriteString("Renewal: unattended short-lived token rotation is enabled.\n")
 		text.WriteString("Memory: the unlocked signing capability remains only in Engram memory until this grant ends.\n")
 	} else {
@@ -626,9 +632,6 @@ func (a *App) reusableGitHubLease(request githubauth.BrokerRequest, enrollment g
 		!githubauth.PermissionsSubset(request.Permissions, lease.Info.Permissions) {
 		return githubLease{}, false
 	}
-	if lease.Info.GrantID != "" && !lease.Info.ExpiresAt.After(now.Add(githubGrantRotationWindow)) {
-		return githubLease{}, false
-	}
 	return lease, true
 }
 
@@ -743,6 +746,9 @@ func (a *App) revokeGitHubBindingLeases(ctx context.Context, sessionID int, bind
 }
 
 func (a *App) revokeGitHubBindingAuthority(ctx context.Context, sessionID int, binding githubauth.Binding) error {
+	handle := a.githubGrantLocks.handle(sessionID)
+	handle.Lock()
+	defer handle.Unlock()
 	key := githubBindingKey(binding)
 	a.githubMu.Lock()
 	grant, granted := a.githubGrants[key]

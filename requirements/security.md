@@ -246,15 +246,20 @@ privacy model must stay small and explicit.
   never serialized. They are bound to the complete enrollment and immutable
   pane identity and are erased on expiry, pane loss or replacement, unwatch,
   enrollment mutation or removal, explicit revoke, and shutdown. Every mint
-  and token delivery revalidates those identities. Especially sensitive write
-  permissions are ineligible for renewable grants and continue to require
-  exact-command approval.
+  and token delivery revalidates those identities. The absolute expiry shown
+  for approval is immutable across approval, inspection, and storage.
+  Renewable write permissions use an explicit collaboration allowlist; all
+  other writes continue to require exact-command approval.
 - A grant may satisfy only equal or narrower repository and permission
-  requests. Token rotation is serialized per pane, revokes a superseded live
-  token before replacement, and revokes any minted token discarded after a
-  concurrent invalidation. Status and cards distinguish grant lifetime from
-  token lifetime; audits record safe grant identity, requested subset, command
-  basename, token generation, and outcome without purpose text or credentials.
+  requests. Each child receives a token at the complete ceiling shown during
+  approval. Minting is serialized per pane, reuses that ceiling token through
+  its upstream lifetime so overlapping subset children are not invalidated,
+  and revokes any minted token whose requester disconnects or whose authority
+  changes before transactional delivery commits. Creation, explicit revoke,
+  and token delivery are linearized per pane. Status enumerates the ceilings,
+  and cards distinguish grant lifetime from token lifetime; audits record safe
+  grant identity, requested subset, command basename, token generation, and
+  outcome without purpose text or credentials.
   Failed remote revocations remove local authority but retain the undisclosed
   token in a bounded in-memory retry queue until revocation succeeds, the token
   expires, or the process exits; `/status` exposes only the pending count.

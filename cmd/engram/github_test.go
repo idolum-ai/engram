@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/idolum-ai/engram/internal/githubauth"
 )
 
 func TestParsePermissionFlagsRejectsAmbiguousOrConflictingAuthority(t *testing.T) {
@@ -50,6 +54,34 @@ func TestSplitGitHubCommandRequiresExplicitBoundary(t *testing.T) {
 	if !ok || !reflect.DeepEqual(flags, []string{"--app", "idolum"}) ||
 		!reflect.DeepEqual(command, []string{"gh", "pr", "view"}) {
 		t.Fatalf("split = %#v %#v %t", flags, command, ok)
+	}
+}
+
+func TestGitHubStatusEnumeratesGrantCeilings(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	var output bytes.Buffer
+	writeGitHubStatus(&output, githubauth.BrokerResponse{
+		Grants: []githubauth.GrantInfo{{
+			App:          "idolum",
+			Repositories: []string{"idolum-ai/engram", "idolum-ai/agent-commons"},
+			Permissions:  map[string]string{"pull_requests": "write", "contents": "read"},
+			Purpose:      "Review the release",
+			ExpiresAt:    now.Add(6 * time.Hour),
+		}},
+	}, now)
+	text := output.String()
+	for _, want := range []string{
+		"repo ceiling: idolum-ai/engram",
+		"repo ceiling: idolum-ai/agent-commons",
+		"permission ceiling: contents=read",
+		"permission ceiling: pull_requests=write",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status output %q does not contain %q", text, want)
+		}
+	}
+	if strings.Index(text, "contents=read") > strings.Index(text, "pull_requests=write") {
+		t.Fatalf("permission ceilings are not sorted: %q", text)
 	}
 }
 

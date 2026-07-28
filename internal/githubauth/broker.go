@@ -19,6 +19,47 @@ import (
 
 type Handler func(context.Context, BrokerRequest) BrokerResponse
 
+type deliveryRegistration struct {
+	mu        sync.Mutex
+	finalizer func(bool) error
+}
+
+type deliveryRegistrationKey struct{}
+
+type deliveryAck struct {
+	Commit bool `json:"commit"`
+}
+
+type deliveryResult struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+func RegisterDeliveryFinalizer(ctx context.Context, finalizer func(bool) error) error {
+	registration, ok := ctx.Value(deliveryRegistrationKey{}).(*deliveryRegistration)
+	if !ok || registration == nil {
+		return fmt.Errorf("GitHub broker delivery finalizer is unavailable")
+	}
+	if finalizer == nil {
+		return fmt.Errorf("GitHub broker delivery finalizer is required")
+	}
+	registration.mu.Lock()
+	defer registration.mu.Unlock()
+	if registration.finalizer != nil {
+		return fmt.Errorf("GitHub broker delivery finalizer is already registered")
+	}
+	registration.finalizer = finalizer
+	return nil
+}
+
+func (r *deliveryRegistration) take() func(bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	finalizer := r.finalizer
+	r.finalizer = nil
+	return finalizer
+}
+
 type BrokerServer struct {
 	path     string
 	listener *net.UnixListener
@@ -132,22 +173,51 @@ func (s *BrokerServer) handleConnection(serverContext context.Context, connectio
 	}
 	requestContext, cancel := context.WithCancel(serverContext)
 	defer cancel()
-	peerGone := make(chan struct{})
-	go func() {
-		var sentinel [1]byte
-		_, _ = connection.Read(sentinel[:])
-		cancel()
-		close(peerGone)
-	}()
-	response := s.handler(requestContext, request)
+	stopPeerMonitor := make(chan struct{})
+	peerMonitorDone := make(chan struct{})
+	go monitorGitHubBrokerPeer(connection, cancel, stopPeerMonitor, peerMonitorDone)
+	registration := &deliveryRegistration{}
+	handlerContext := context.WithValue(requestContext, deliveryRegistrationKey{}, registration)
+	response := s.handler(handlerContext, request)
+	close(stopPeerMonitor)
+	<-peerMonitorDone
 	if response.OK {
 		response.Error = ""
 	} else if response.Error == "" {
 		response.Error = "GitHub capability request failed"
 	}
-	_ = writeBrokerFrame(connection, response)
+	finalizer := registration.take()
+	if !response.OK || finalizer == nil {
+		if finalizer != nil {
+			_ = finalizer(false)
+		}
+		_ = writeBrokerFrame(connection, response)
+		_ = connection.Close()
+		return
+	}
+	response.DeliveryPending = true
+	if err := writeBrokerFrame(connection, response); err != nil {
+		_ = finalizer(false)
+		_ = connection.Close()
+		return
+	}
+	var acknowledgment deliveryAck
+	payload, err := readBrokerFrame(connection)
+	if err == nil {
+		err = json.Unmarshal(payload, &acknowledgment)
+	}
+	if err != nil || !acknowledgment.Commit {
+		_ = finalizer(false)
+		_ = connection.Close()
+		return
+	}
+	if err := finalizer(true); err != nil {
+		_ = writeBrokerFrame(connection, deliveryResult{Error: err.Error()})
+		_ = connection.Close()
+		return
+	}
+	_ = writeBrokerFrame(connection, deliveryResult{OK: true})
 	_ = connection.Close()
-	<-peerGone
 }
 
 func Request(ctx context.Context, path string, request BrokerRequest) (BrokerResponse, error) {
@@ -197,10 +267,67 @@ func Request(ctx context.Context, path string, request BrokerRequest) (BrokerRes
 	if !response.OK {
 		return response, errors.New(firstNonEmpty(response.Error, "GitHub capability request failed"))
 	}
+	if response.DeliveryPending {
+		if err := writeBrokerFrame(connection, deliveryAck{Commit: true}); err != nil {
+			response.Token = ""
+			return response, fmt.Errorf("acknowledge GitHub token delivery: %w", err)
+		}
+		payload, err := readBrokerFrame(connection)
+		if err != nil {
+			response.Token = ""
+			return response, fmt.Errorf("confirm GitHub token delivery: %w", err)
+		}
+		var result deliveryResult
+		if err := json.Unmarshal(payload, &result); err != nil {
+			response.Token = ""
+			return response, fmt.Errorf("decode GitHub token delivery result: %w", err)
+		}
+		if !result.OK {
+			response.Token = ""
+			return response, errors.New(firstNonEmpty(result.Error, "GitHub token delivery was rolled back"))
+		}
+		response.DeliveryPending = false
+	}
 	return response, nil
 }
 
-func writeBrokerFrame(writer io.Writer, value BrokerResponse) error {
+func monitorGitHubBrokerPeer(connection *net.UnixConn, cancel context.CancelFunc, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if githubBrokerPeerClosed(connection) {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func githubBrokerPeerClosed(connection *net.UnixConn) bool {
+	raw, err := connection.SyscallConn()
+	if err != nil {
+		return true
+	}
+	closed := false
+	controlErr := raw.Control(func(fd uintptr) {
+		var sentinel [1]byte
+		n, _, recvErr := syscall.Recvfrom(int(fd), sentinel[:], syscall.MSG_PEEK|syscall.MSG_DONTWAIT)
+		switch {
+		case recvErr == nil && n == 0:
+			closed = true
+		case recvErr != nil && !errors.Is(recvErr, syscall.EAGAIN) && !errors.Is(recvErr, syscall.EWOULDBLOCK):
+			closed = true
+		}
+	})
+	return controlErr != nil || closed
+}
+
+func writeBrokerFrame(writer io.Writer, value any) error {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -60,19 +61,19 @@ type GrantInfo struct {
 }
 
 type BrokerResponse struct {
-	OK        bool        `json:"ok"`
-	Error     string      `json:"error,omitempty"`
-	ErrorCode string      `json:"error_code,omitempty"`
-	Token     string      `json:"token,omitempty"`
-	ExpiresAt time.Time   `json:"expires_at,omitempty"`
-	Leases    []LeaseInfo `json:"leases,omitempty"`
-	Grants    []GrantInfo `json:"grants,omitempty"`
+	OK              bool        `json:"ok"`
+	Error           string      `json:"error,omitempty"`
+	ErrorCode       string      `json:"error_code,omitempty"`
+	Token           string      `json:"token,omitempty"`
+	ExpiresAt       time.Time   `json:"expires_at,omitempty"`
+	Leases          []LeaseInfo `json:"leases,omitempty"`
+	Grants          []GrantInfo `json:"grants,omitempty"`
+	DeliveryPending bool        `json:"delivery_pending,omitempty"`
 }
 
 func (r *BrokerRequest) Normalize() {
 	r.App = strings.TrimSpace(r.App)
 	r.Action = strings.TrimSpace(r.Action)
-	r.Purpose = strings.Join(strings.Fields(r.Purpose), " ")
 	r.Repositories = normalizeRepositories(r.Repositories)
 	normalizedPermissions := make(map[string]string, len(r.Permissions))
 	for name, level := range r.Permissions {
@@ -124,8 +125,14 @@ func (r BrokerRequest) Validate() error {
 		if r.GrantFor < MinGrantDuration || r.GrantFor > AbsoluteMaxGrantDuration {
 			return fmt.Errorf("renewable grant duration must be between %s and %s", MinGrantDuration, AbsoluteMaxGrantDuration)
 		}
-		if len(r.Purpose) == 0 || len(r.Purpose) > 200 {
+		if len(r.Purpose) == 0 || len(r.Purpose) > 200 || strings.TrimSpace(r.Purpose) == "" {
 			return fmt.Errorf("renewable grant purpose must be between 1 and 200 bytes")
+		}
+		for _, character := range r.Purpose {
+			if unicode.Is(unicode.Cc, character) || unicode.Is(unicode.Cf, character) ||
+				unicode.Is(unicode.Zl, character) || unicode.Is(unicode.Zp, character) {
+				return fmt.Errorf("renewable grant purpose contains an unsafe Unicode control")
+			}
 		}
 		if err := ValidateRenewablePermissions(r.Permissions); err != nil {
 			return err
@@ -154,29 +161,22 @@ func (r BrokerRequest) Validate() error {
 	return nil
 }
 
-// ValidateRenewablePermissions excludes installation-administration surfaces
-// from unattended renewal. Exact-command approval remains available for them.
+// ValidateRenewablePermissions fails closed for renewable write authority.
+// Evolving read-only permissions remain eligible, while writes are limited to
+// collaboration surfaces whose unattended risk is explicit and reviewable.
 func ValidateRenewablePermissions(permissions map[string]string) error {
-	deniedWrites := map[string]bool{
-		"actions":                     true,
-		"administration":              true,
-		"deployments":                 true,
-		"deploy_keys":                 true,
-		"environments":                true,
-		"members":                     true,
-		"organization_administration": true,
-		"organization_hooks":          true,
-		"organization_personal_access_token_requests": true,
-		"organization_personal_access_tokens":         true,
-		"workflows":                                   true,
+	allowedWrites := map[string]bool{
+		"checks":              true,
+		"contents":            true,
+		"discussions":         true,
+		"issues":              true,
+		"pull_requests":       true,
+		"repository_projects": true,
+		"statuses":            true,
 	}
 	for name, level := range permissions {
-		sensitiveClass := deniedWrites[name] ||
-			strings.Contains(name, "secret") ||
-			strings.Contains(name, "hook") ||
-			strings.Contains(name, "variable")
-		if level == "write" && sensitiveClass {
-			return fmt.Errorf("permission %s=write is ineligible for renewable grants; use exact-command approval", name)
+		if level == "write" && !allowedWrites[name] {
+			return fmt.Errorf("permission %s=write is not on the renewable collaboration allowlist; use exact-command approval", name)
 		}
 	}
 	return nil

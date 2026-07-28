@@ -3,6 +3,7 @@ package githubauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -177,6 +178,162 @@ func TestBrokerCancelsApprovalWhenRequesterDisconnects(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBrokerCommitsTokenOnlyAfterRequesterAcknowledgesDelivery(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "eg-delivery-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	finalized := make(chan bool, 1)
+	server, err := Listen(path, func(ctx context.Context, _ BrokerRequest) BrokerResponse {
+		if err := RegisterDeliveryFinalizer(ctx, func(delivered bool) error {
+			finalized <- delivered
+			return nil
+		}); err != nil {
+			return BrokerResponse{Error: err.Error()}
+		}
+		return BrokerResponse{OK: true, Token: "short-lived-token", ExpiresAt: time.Now().Add(time.Hour)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+
+	response, err := Request(context.Background(), path, brokerExecTestRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Token != "short-lived-token" || response.DeliveryPending {
+		t.Fatalf("response = %#v", response)
+	}
+	select {
+	case delivered := <-finalized:
+		if !delivered {
+			t.Fatal("successful requester delivery was rolled back")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delivery finalizer was not called")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBrokerClearsTokenWhenDeliveryCommitFails(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "eg-commit-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	server, err := Listen(path, func(ctx context.Context, _ BrokerRequest) BrokerResponse {
+		if err := RegisterDeliveryFinalizer(ctx, func(bool) error {
+			return errors.New("binding was revoked before delivery")
+		}); err != nil {
+			return BrokerResponse{Error: err.Error()}
+		}
+		return BrokerResponse{OK: true, Token: "must-not-escape"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+
+	response, err := Request(context.Background(), path, brokerExecTestRequest())
+	if err == nil || !strings.Contains(err.Error(), "revoked before delivery") {
+		t.Fatalf("delivery error = %v", err)
+	}
+	if response.Token != "" {
+		t.Fatalf("failed delivery exposed token %q", response.Token)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBrokerRollsBackTokenWhenRequesterDisconnectsBeforeCommit(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "eg-rollback-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	finalized := make(chan bool, 1)
+	server, err := Listen(path, func(ctx context.Context, _ BrokerRequest) BrokerResponse {
+		if err := RegisterDeliveryFinalizer(ctx, func(delivered bool) error {
+			finalized <- delivered
+			return nil
+		}); err != nil {
+			return BrokerResponse{Error: err.Error()}
+		}
+		return BrokerResponse{OK: true, Token: "must-be-revoked"}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+
+	connection, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := brokerExecTestRequest()
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRawBrokerFrame(connection, payload); err != nil {
+		t.Fatal(err)
+	}
+	responsePayload, err := readBrokerFrame(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response BrokerResponse
+	if err := json.Unmarshal(responsePayload, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.DeliveryPending || response.Token == "" {
+		t.Fatalf("pre-commit response = %#v", response)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case delivered := <-finalized:
+		if delivered {
+			t.Fatal("disconnected requester committed token delivery")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("disconnected delivery was not rolled back")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func brokerExecTestRequest() BrokerRequest {
+	return BrokerRequest{
+		Version:      ProtocolVersion,
+		Action:       ActionExec,
+		App:          "idolum",
+		Repositories: []string{"idolum-ai/engram"},
+		Permissions:  map[string]string{"contents": "read"},
+		Command:      []string{"gh", "repo", "view"},
+		Binding:      Binding{ServerID: "server", WindowID: "@2", PaneID: "%3"},
 	}
 }
 

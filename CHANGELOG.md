@@ -11,7 +11,10 @@ Notable user-visible and operational changes are recorded here.
   eight hours while Engram rotates ordinary short-lived GitHub installation
   tokens in memory. Grants fail closed on pane, watch, enrollment, process,
   expiry, or explicit-revocation changes and remain visibly distinct from the
-  current token lease.
+  current token lease. The approved expiry is immutable, token delivery is
+  committed transactionally, concurrent subset children share one token at the
+  displayed ceiling, and renewable writes use an explicit collaboration
+  allowlist.
 
 ## [v0.7.0] - 2026-07-27
 

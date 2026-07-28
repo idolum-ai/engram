@@ -296,7 +296,8 @@ Before approving, verify the exact enrollment identifiers and fingerprint,
 tmux server/window/pane binding, repositories, maximum permissions, requested
 duration and absolute expiry, and purpose. The approval explicitly warns that
 later commands from the same pane may consume any subset without another
-approval, that token renewal is unattended, and that the unlocked signing
+approval, that each child receives a token at the complete displayed grant
+ceiling, that token renewal is unattended, and that the unlocked signing
 capability remains in Engram memory until the grant ends.
 
 The requested duration must be at least 15 minutes. The instance ceiling
@@ -307,16 +308,20 @@ ceiling) in `.env`:
 ENGRAM_GITHUB_GRANT_MAX_DURATION=8h
 ```
 
-Write access to administration, Actions execution, workflows, deployments,
-deploy keys, environments, organization membership or tokens, hooks, secrets,
-and variables is ineligible for renewable grants. Use an exact `github exec`
-approval when such a permission is genuinely necessary.
+Renewable write authority uses a fail-closed allowlist. Only `checks`,
+`contents`, `discussions`, `issues`, `pull_requests`, `repository_projects`,
+and `statuses` may be requested at `write`. Evolving permission names remain
+eligible at `read`; every other write permission requires an exact `github
+exec` approval.
 
 After approval, run ordinary subset commands with `engram github exec`. Engram
-reuses the current token while it has more than five minutes remaining and
-otherwise serializes rotation, revokes the superseded token, and mints a
-narrowly scoped replacement. A broader repository or permission request
-requires a new approval.
+mints the first token at the approved grant ceiling and reuses it through its
+upstream lifetime, even when concurrent children request different subsets.
+This intentionally gives each child the complete ceiling displayed during
+approval, preventing a later subset command from revoking a token that an
+earlier child is still using. After natural expiry, Engram serializes minting a
+replacement at the same ceiling. A request outside the ceiling requires a new
+approval.
 
 ## Inspect pane authority
 
@@ -327,7 +332,8 @@ engram github status
 ```
 
 The output distinguishes the renewable work-session grant from the current
-short-lived token lease and reports both expiries without exposing credentials.
+short-lived token lease, enumerates the repository and permission ceilings,
+and reports both expiries without exposing credentials.
 The Telegram card shows the broader authority:
 
 ```text

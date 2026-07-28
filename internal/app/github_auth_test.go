@@ -651,7 +651,7 @@ func TestGitHubApprovalLabelsLocalUnlockOverrideTruthfully(t *testing.T) {
 		t.Fatal("session not found")
 	}
 	request := testLocalGitHubBrokerRequest()
-	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true})
+	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true}, time.Time{})
 	if !strings.Contains(text, "Unlock: local passphrase") || strings.Contains(text, "Telegram reply") {
 		t.Fatalf("approval text = %q", text)
 	}
@@ -836,12 +836,25 @@ type fakeGitHubMinter struct {
 	repositories []string
 	permissions  map[string]string
 	expiresAt    time.Time
+	inspectOnce  sync.Once
+	inspectStart chan struct{}
+	inspectWait  chan struct{}
 	mintStarted  chan struct{}
 	mintRelease  chan struct{}
 	revokeErr    error
 }
 
-func (m *fakeGitHubMinter) InspectInstallation(context.Context, githubauth.App, []byte) (githubauth.Installation, error) {
+func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, _ githubauth.App, _ []byte) (githubauth.Installation, error) {
+	if m.inspectStart != nil {
+		m.inspectOnce.Do(func() { close(m.inspectStart) })
+	}
+	if m.inspectWait != nil {
+		select {
+		case <-m.inspectWait:
+		case <-ctx.Done():
+			return githubauth.Installation{}, ctx.Err()
+		}
+	}
 	installation := githubauth.Installation{
 		ID: 456,
 		Permissions: map[string]string{
