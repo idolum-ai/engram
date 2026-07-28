@@ -170,6 +170,16 @@ func (a *App) consumeGitHubGrant(
 		a.discardGitHubLease(request.Binding, current.Token)
 	}
 
+	if err := a.reserveGitHubTokenSlot(); err != nil {
+		_ = a.audit("github.grant.consume", "capacity_rejected", githubGrantAuditRequest(session.ID, request, grant.Info.ID, grant.Generation))
+		return githubauth.BrokerResponse{Error: err.Error()}, true
+	}
+	tokenSlotOwned := true
+	defer func() {
+		if tokenSlotOwned {
+			a.releaseGitHubTokenSlot()
+		}
+	}()
 	mintCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	token, err := a.GitHubMinter.Mint(mintCtx, grant.Enrollment, grant.PrivateKey, grant.Info.Repositories, grant.Info.Permissions)
 	cancel()
@@ -186,6 +196,7 @@ func (a *App) consumeGitHubGrant(
 
 	finalize := func(delivered bool) error {
 		defer handle.Unlock()
+		defer a.releaseGitHubTokenSlot()
 		if !delivered {
 			err := a.revokeDiscardedGitHubToken(context.Background(), token.Value, fmt.Errorf("requester disconnected before GitHub token delivery"))
 			_ = a.audit("github.grant.consume", "delivery_rolled_back", githubGrantAuditRequest(session.ID, request, grant.Info.ID, grant.Generation))
@@ -232,8 +243,10 @@ func (a *App) consumeGitHubGrant(
 	}
 	if err := githubauth.RegisterDeliveryFinalizer(ctx, finalize); err == nil {
 		lockOwned = false
+		tokenSlotOwned = false
 	} else {
 		lockOwned = false
+		tokenSlotOwned = false
 		if err := finalize(true); err != nil {
 			return githubauth.BrokerResponse{Error: err.Error()}, true
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -82,6 +83,28 @@ func TestGitHubStatusEnumeratesGrantCeilings(t *testing.T) {
 	}
 	if strings.Index(text, "contents=read") > strings.Index(text, "pull_requests=write") {
 		t.Fatalf("permission ceilings are not sorted: %q", text)
+	}
+}
+
+func TestGitHubStatusJSONUsesDocumentedAuthorityObject(t *testing.T) {
+	var output bytes.Buffer
+	response := githubauth.BrokerResponse{
+		Grants: []githubauth.GrantInfo{{ID: "grant-one", App: "idolum"}},
+		Leases: []githubauth.LeaseInfo{{App: "idolum"}},
+	}
+	if err := writeGitHubStatusJSON(&output, response); err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Grants []githubauth.GrantInfo `json:"grants"`
+		Leases []githubauth.LeaseInfo `json:"leases"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Grants) != 1 || document.Grants[0].ID != "grant-one" ||
+		len(document.Leases) != 1 || document.Leases[0].App != "idolum" {
+		t.Fatalf("status JSON = %#v", document)
 	}
 }
 

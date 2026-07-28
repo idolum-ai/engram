@@ -124,6 +124,7 @@ type App struct {
 	githubLeases                  map[string]githubLease
 	githubGrants                  map[string]githubGrant
 	githubRevocations             map[string]githubRevocation
+	githubTokenReservations       int
 	githubGrantLocks              keyedMutexSet
 	githubUnlockTombstones        map[int]time.Time
 	githubBroker                  *githubauth.BrokerServer
@@ -137,6 +138,7 @@ const maxConcurrentGuideRequests = 2
 const maxConcurrentSnapshotRenders = 2
 const maxConcurrentTransfers = 2
 const maxQueuedTransfers = 8
+const maxTrackedGitHubTokens = 256
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {

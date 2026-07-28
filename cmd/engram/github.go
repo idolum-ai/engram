@@ -418,10 +418,7 @@ func runGitHubStatus(args []string) int {
 		return 1
 	}
 	if *jsonOutput {
-		_ = json.NewEncoder(os.Stdout).Encode(struct {
-			Grants []githubauth.GrantInfo `json:"grants"`
-			Leases []githubauth.LeaseInfo `json:"leases"`
-		}{Grants: response.Grants, Leases: response.Leases})
+		_ = writeGitHubStatusJSON(os.Stdout, response)
 		return 0
 	}
 	if len(response.Grants) == 0 && len(response.Leases) == 0 {
@@ -430,6 +427,13 @@ func runGitHubStatus(args []string) int {
 	}
 	writeGitHubStatus(os.Stdout, response, time.Now())
 	return 0
+}
+
+func writeGitHubStatusJSON(writer io.Writer, response githubauth.BrokerResponse) error {
+	return json.NewEncoder(writer).Encode(struct {
+		Grants []githubauth.GrantInfo `json:"grants"`
+		Leases []githubauth.LeaseInfo `json:"leases"`
+	}{Grants: response.Grants, Leases: response.Leases})
 }
 
 func writeGitHubStatus(writer io.Writer, response githubauth.BrokerResponse, now time.Time) {

@@ -186,6 +186,12 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if request.Action == githubauth.ActionGrant {
 		return a.createGitHubGrant(ctx, session, pending, request, unlockedApp, privateKey)
 	}
+	if err := a.reserveGitHubTokenSlot(); err != nil {
+		a.completeGitHubApprovalMessage(pending, "Failed: Engram's bounded GitHub token budget is full.")
+		_ = a.audit("github.mint", "capacity_rejected", githubAuditRequest(session.ID, request))
+		return githubauth.BrokerResponse{Error: err.Error()}
+	}
+	defer a.releaseGitHubTokenSlot()
 	mintCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	token, err := a.GitHubMinter.Mint(mintCtx, unlockedApp, privateKey, request.Repositories, request.Permissions)
 	cancel()
@@ -795,11 +801,11 @@ func (a *App) expireGitHubLeases(now time.Time) {
 		}
 	}
 	a.githubMu.Lock()
-	hasGrants := len(a.githubGrants) != 0
+	hasAuthority := len(a.githubGrants) != 0 || len(a.githubLeases) != 0
 	a.githubMu.Unlock()
 	enrollments := map[string]githubauth.App{}
-	enrollmentsValid := !hasGrants || a.GitHubVault != nil
-	if hasGrants && enrollmentsValid {
+	enrollmentsValid := !hasAuthority || a.GitHubVault != nil
+	if hasAuthority && enrollmentsValid {
 		if err := a.GitHubVault.Reload(); err != nil {
 			enrollmentsValid = false
 		} else {
@@ -833,10 +839,12 @@ func (a *App) expireGitHubLeases(now time.Time) {
 		}
 	}
 	for key, lease := range a.githubLeases {
+		current, enrolled := enrollments[lease.Enrollment.Alias]
+		enrollmentInvalid := !enrollmentsValid || !enrolled || !sameGitHubEnrollment(current, lease.Enrollment)
 		if !lease.Info.ExpiresAt.After(now) {
 			expired = append(expired, lease)
 			delete(a.githubLeases, key)
-		} else if _, active := activeBindings[key]; !active {
+		} else if _, active := activeBindings[key]; !active || enrollmentInvalid {
 			invalidated = append(invalidated, lease)
 			delete(a.githubLeases, key)
 		}
@@ -887,23 +895,40 @@ func (a *App) revokeGitHubTokens(tokens []string) {
 	if len(tokens) == 0 || a.GitHubMinter == nil {
 		return
 	}
+	toRevoke := make([]string, 0, len(tokens))
+	seen := make(map[string]bool, len(tokens))
+	for _, token := range tokens {
+		if token == "" || seen[token] {
+			continue
+		}
+		seen[token] = true
+		a.trackGitHubRevocation(token, 0, "", a.githubTime().Add(time.Hour))
+		toRevoke = append(toRevoke, token)
+	}
+	if len(toRevoke) == 0 {
+		return
+	}
 	a.transferWG.Add(1)
 	go func() {
 		defer a.transferWG.Done()
-		for _, token := range tokens {
+		for _, token := range toRevoke {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			err := a.GitHubMinter.Revoke(ctx, token)
 			cancel()
-			if err != nil {
+			if err == nil {
+				a.githubMu.Lock()
+				delete(a.githubRevocations, token)
+				a.githubMu.Unlock()
+			} else {
 				a.trackGitHubRevocation(token, 0, "", a.githubTime().Add(time.Hour))
 			}
 		}
 	}()
 }
 
-func (a *App) trackGitHubRevocation(token string, sessionID int, app string, expiresAt time.Time) {
+func (a *App) trackGitHubRevocation(token string, sessionID int, app string, expiresAt time.Time) bool {
 	if token == "" {
-		return
+		return false
 	}
 	if !expiresAt.After(a.githubTime()) {
 		expiresAt = a.githubTime().Add(time.Hour)
@@ -912,7 +937,15 @@ func (a *App) trackGitHubRevocation(token string, sessionID int, app string, exp
 	if a.githubRevocations == nil {
 		a.githubRevocations = map[string]githubRevocation{}
 	}
-	pending := a.githubRevocations[token]
+	pending, exists := a.githubRevocations[token]
+	if !exists && len(a.githubRevocations) >= maxTrackedGitHubTokens {
+		a.githubMu.Unlock()
+		_ = a.audit("github.revocation", "capacity_exhausted", map[string]any{
+			"session_id": sessionID,
+			"app":        app,
+		})
+		return false
+	}
 	pending.Token = token
 	pending.SessionID = sessionID
 	pending.App = app
@@ -921,6 +954,32 @@ func (a *App) trackGitHubRevocation(token string, sessionID int, app string, exp
 	pending.NextAttempt = a.githubTime().Add(min(time.Duration(pending.Attempts)*5*time.Second, time.Minute))
 	a.githubRevocations[token] = pending
 	a.githubMu.Unlock()
+	return true
+}
+
+func (a *App) reserveGitHubTokenSlot() error {
+	now := a.githubTime()
+	a.githubMu.Lock()
+	defer a.githubMu.Unlock()
+	for token, pending := range a.githubRevocations {
+		if !pending.ExpiresAt.After(now) {
+			delete(a.githubRevocations, token)
+		}
+	}
+	tracked := len(a.githubLeases) + len(a.githubRevocations) + a.githubTokenReservations
+	if tracked >= maxTrackedGitHubTokens {
+		return fmt.Errorf("GitHub token capacity of %d is full; wait for pending revocations or leases to expire", maxTrackedGitHubTokens)
+	}
+	a.githubTokenReservations++
+	return nil
+}
+
+func (a *App) releaseGitHubTokenSlot() {
+	a.githubMu.Lock()
+	defer a.githubMu.Unlock()
+	if a.githubTokenReservations > 0 {
+		a.githubTokenReservations--
+	}
 }
 
 func (a *App) retryGitHubRevocations(now time.Time) {

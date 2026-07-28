@@ -264,7 +264,10 @@ privacy model must stay small and explicit.
   basename, token generation, and outcome without purpose text or credentials.
   Failed remote revocations remove local authority but retain the undisclosed
   token in a bounded in-memory retry queue until revocation succeeds, the token
-  expires, or the process exits; `/status` exposes only the pending count.
+  expires, or the process exits. The combined live-lease, in-flight-mint, and
+  pending-revocation budget is 256 tokens; Engram must refuse another mint when
+  that budget is full rather than lose track of a bearer token. `/status`
+  exposes only the pending count.
 - Source GitHub App PEM files must be regular, non-symlink files owned by the
   process UID with no group or other permission bits. A malformed optional
   GitHub App vault must disable and disclose only that capability; it must not

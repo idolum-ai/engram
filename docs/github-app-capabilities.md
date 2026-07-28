@@ -404,7 +404,9 @@ removal, and orderly service shutdown do the same. A daemon restart never
 recovers a prior grant. If GitHub cannot confirm revocation, local authority is
 still removed, the CLI reports the failure, and Engram keeps the token only in
 an in-memory retry queue. `/status` reports the number of pending revocations
-without exposing token values.
+without exposing token values. Engram bounds the combined live, in-flight, and
+pending token set at 256 and refuses new token issuance while that budget is
+full.
 
 ## Remove an enrollment
 

@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	ActionExec      = "exec"
 	ActionGrant     = "grant"
 	ActionStatus    = "status"

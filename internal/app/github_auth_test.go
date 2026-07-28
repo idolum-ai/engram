@@ -422,6 +422,46 @@ func TestGitHubCapabilityRejectsEnrollmentRemovedDuringMint(t *testing.T) {
 	}
 }
 
+func TestGitHubCapabilityEnrollmentRemovalSweepsExactLease(t *testing.T) {
+	now := time.Now()
+	minter := &fakeGitHubMinter{}
+	app, _, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+	request := testLocalGitHubBrokerRequest()
+	enrollment, found := app.GitHubVault.Get(request.App)
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
+	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
+		SessionID:  sessionID,
+		Binding:    request.Binding,
+		Enrollment: enrollment,
+		Info: githubauth.LeaseInfo{
+			App:          request.App,
+			Repositories: request.Repositories,
+			Permissions:  request.Permissions,
+			ExpiresAt:    now.Add(time.Hour),
+		},
+		Token: "exact-lease-token",
+	}
+	external, err := githubauth.OpenVault(app.GitHubVault.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := external.Remove(request.App); err != nil || !removed {
+		t.Fatalf("remove enrollment = %t, %v", removed, err)
+	}
+
+	app.expireGitHubLeases(now.Add(time.Second))
+	app.transferWG.Wait()
+
+	if len(app.githubLeases) != 0 {
+		t.Fatal("enrollment removal retained exact-command lease")
+	}
+	if minter.revokeCount() != 1 {
+		t.Fatalf("revocations = %d, want 1", minter.revokeCount())
+	}
+}
+
 func TestGitHubCapabilityRejectsSameKeyInstallationRetargetBeforeLeaseReuse(t *testing.T) {
 	app, runner, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
 	app.GitHubVault = testGitHubVault(t, false)

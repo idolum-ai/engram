@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -735,6 +736,27 @@ func TestGitHubGrantExplicitRevokeFailureRemovesAuthorityAndTracksRetry(t *testi
 	app.transferWG.Wait()
 	if app.githubRevocationCount() != 0 || minter.revokeCount() != 2 {
 		t.Fatalf("recovered revocation pending=%d calls=%d", app.githubRevocationCount(), minter.revokeCount())
+	}
+}
+
+func TestGitHubRevocationQueueAndTokenAdmissionAreBounded(t *testing.T) {
+	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.githubRevocations = map[string]githubRevocation{}
+	expiresAt := app.githubTime().Add(time.Hour)
+	for index := 0; index < maxTrackedGitHubTokens; index++ {
+		token := fmt.Sprintf("pending-token-%03d", index)
+		if !app.trackGitHubRevocation(token, 1, "idolum", expiresAt) {
+			t.Fatalf("token %d was rejected before capacity", index)
+		}
+	}
+	if app.trackGitHubRevocation("overflow-token", 1, "idolum", expiresAt) {
+		t.Fatal("revocation queue accepted a token beyond its bound")
+	}
+	if got := app.githubRevocationCount(); got != maxTrackedGitHubTokens {
+		t.Fatalf("pending revocations = %d, want %d", got, maxTrackedGitHubTokens)
+	}
+	if err := app.reserveGitHubTokenSlot(); err == nil || !strings.Contains(err.Error(), "token capacity") {
+		t.Fatalf("full token budget reservation error = %v", err)
 	}
 }
 

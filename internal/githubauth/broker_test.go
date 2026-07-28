@@ -131,6 +131,14 @@ func TestRequestValidationRejectsImplicitAuthority(t *testing.T) {
 	}
 }
 
+func TestTransactionalDeliveryRejectsLegacyProtocolClient(t *testing.T) {
+	request := brokerExecTestRequest()
+	request.Version = ProtocolVersion - 1
+	if err := request.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported GitHub broker protocol version") {
+		t.Fatalf("legacy protocol validation error = %v", err)
+	}
+}
+
 func TestBrokerCancelsApprovalWhenRequesterDisconnects(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "engram-github-cancel-")
 	if err != nil {
