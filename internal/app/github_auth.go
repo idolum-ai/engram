@@ -105,7 +105,7 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		return githubauth.BrokerResponse{Error: fmt.Sprintf("GitHub App %q is not enrolled", request.App)}
 	}
 	if request.Action == githubauth.ActionExec {
-		if lease, ok := a.reusableGitHubLease(request, app); ok {
+		if lease, ok := a.reusableGitHubLease(request, app); ok && lease.Info.GrantID == "" {
 			if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
 				if a.discardGitHubLease(request.Binding, lease.Token) {
 					err = a.revokeDiscardedGitHubToken(ctx, lease.Token, err)

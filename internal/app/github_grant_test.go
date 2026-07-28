@@ -300,6 +300,37 @@ func TestGitHubGrantExpiryErasesSigningCapabilityAndRevokesLease(t *testing.T) {
 	}
 }
 
+func TestGitHubGrantDerivedLeaseCannotOutliveGrantBetweenSweeps(t *testing.T) {
+	now := time.Now()
+	app, _, sessionID := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.githubGrants = map[string]githubGrant{}
+	request := testLocalGitHubBrokerRequest()
+	request.Passphrase = nil
+	enrollment, _ := app.GitHubVault.Get("idolum")
+	app.githubGrants[githubBindingKey(request.Binding)] = githubGrant{
+		SessionID: sessionID, SessionCreatedAt: testGitHubSessionCreatedAt(app, sessionID),
+		Binding: request.Binding, Enrollment: enrollment,
+		Info: githubauth.GrantInfo{
+			ID: "grant-one", App: "idolum", Repositories: request.Repositories,
+			Permissions: request.Permissions, Purpose: "Review",
+			CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(-time.Second),
+		},
+		PrivateKey: []byte("decrypted signing capability"),
+	}
+	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
+		SessionID: sessionID, Binding: request.Binding, Enrollment: enrollment,
+		Info: githubauth.LeaseInfo{
+			App: "idolum", Repositories: request.Repositories, Permissions: request.Permissions,
+			ExpiresAt: now.Add(time.Hour), GrantID: "grant-one", Generation: 1,
+		},
+		Token: "token-secret",
+	}
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || response.Token != "" || response.ErrorCode != githubauth.ErrorCodeLocalPassphraseRequired {
+		t.Fatalf("expired grant lease response = %#v", response)
+	}
+}
+
 func TestGitHubGrantEnrollmentRemovalErasesAuthority(t *testing.T) {
 	now := time.Now()
 	minter := &fakeGitHubMinter{}
