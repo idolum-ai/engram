@@ -4,6 +4,25 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### GitHub capabilities
+
+- Add bounded renewable, pane-scoped work-session grants. One explicit
+  Telegram approval can authorize subset commands for a configured maximum of
+  eight hours while Engram rotates ordinary short-lived GitHub installation
+  tokens in memory. Grants fail closed on pane, watch, enrollment, process,
+  expiry, or explicit-revocation changes and remain visibly distinct from the
+  current token lease. The approved expiry is immutable, token delivery is
+  committed transactionally, concurrent subset children share one token at the
+  displayed ceiling, and renewable writes use an explicit collaboration
+  allowlist.
+- Compatibility: the local GitHub broker protocol is now version 2 so mixed
+  old/new CLI and daemon processes fail closed instead of exposing a
+  provisional token during transactional delivery. Upgrade the CLI and daemon
+  together.
+- Compatibility: `engram github status --json` now emits an object with
+  `grants` and `leases` arrays instead of the previous bare lease array. Update
+  consumers to read the `leases` field.
+
 ## [v0.7.0] - 2026-07-27
 
 ### Attention

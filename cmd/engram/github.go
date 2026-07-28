@@ -41,6 +41,8 @@ func runGitHub(args []string) int {
 		return runGitHubApp(args[1:])
 	case "exec":
 		return runGitHubExec(args[1:])
+	case "grant":
+		return runGitHubGrant(args[1:])
 	case "status":
 		return runGitHubStatus(args[1:])
 	case "revoke":
@@ -276,25 +278,6 @@ func runGitHubExec(args []string) int {
 		fmt.Fprintln(os.Stderr, "config:", err)
 		return 1
 	}
-	vault, err := githubauth.OpenVault(cfg.GitHubVaultPath())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "github exec:", err)
-		return 1
-	}
-	app, found := vault.Get(strings.TrimSpace(*appAlias))
-	if !found {
-		fmt.Fprintf(os.Stderr, "github exec: GitHub App %q is not enrolled\n", strings.TrimSpace(*appAlias))
-		return 1
-	}
-	var passphrase []byte
-	if !app.TelegramUnlock || *localUnlock {
-		passphrase, err = promptSecret("GitHub App passphrase: ")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "github exec:", err)
-			return 1
-		}
-		defer githubauth.Zero(passphrase)
-	}
 	binding, err := currentGitHubBinding()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "github exec:", err)
@@ -308,11 +291,11 @@ func runGitHubExec(args []string) int {
 		Permissions:  permissionMap,
 		Command:      command,
 		Binding:      binding,
-		Passphrase:   passphrase,
+		LocalUnlock:  *localUnlock,
 	}
-	fmt.Fprintln(os.Stderr, "Waiting for GitHub capability approval in Telegram (expires in 3m)...")
+	fmt.Fprintln(os.Stderr, "Requesting GitHub capability from Engram...")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+30*time.Second)
-	response, err := githubauth.Request(ctx, cfg.GitHubBrokerSocketPath(), request)
+	response, err := requestGitHubCapability(ctx, cfg, request)
 	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "github exec:", err)
@@ -323,6 +306,86 @@ func runGitHubExec(args []string) int {
 		return 1
 	}
 	return runAuthenticatedChild(command, response.Token)
+}
+
+func runGitHubGrant(args []string) int {
+	fs := flag.NewFlagSet("github grant", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	envPath := fs.String("env", config.DefaultEnvPath(), "path to .env")
+	appAlias := fs.String("app", "", "enrolled GitHub App alias")
+	localUnlock := fs.Bool("local-unlock", false, "enter the passphrase locally even when Telegram unlock is enabled")
+	duration := fs.Duration("for", 0, "bounded renewable grant duration")
+	purpose := fs.String("purpose", "", "human-readable work-session purpose")
+	var repositories repeatedFlag
+	var permissions repeatedFlag
+	fs.Var(&repositories, "repo", "repository in owner/name form; repeatable")
+	fs.Var(&permissions, "permission", "GitHub App permission as name=read|write; repeatable")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(*appAlias) == "" {
+		fmt.Fprintln(os.Stderr, "usage: engram github grant --app ALIAS --repo OWNER/NAME --permission NAME=read|write --for DURATION --purpose TEXT")
+		return 2
+	}
+	permissionMap, err := parsePermissionFlags(permissions)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "github grant:", err)
+		return 2
+	}
+	cfg, err := loadGitHubConfig(*envPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		return 1
+	}
+	binding, err := currentGitHubBinding()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "github grant:", err)
+		return 1
+	}
+	request := githubauth.BrokerRequest{
+		Version:      githubauth.ProtocolVersion,
+		Action:       githubauth.ActionGrant,
+		App:          strings.TrimSpace(*appAlias),
+		Repositories: repositories,
+		Permissions:  permissionMap,
+		Binding:      binding,
+		LocalUnlock:  *localUnlock,
+		GrantFor:     *duration,
+		Purpose:      *purpose,
+	}
+	request.Normalize()
+	if err := request.Validate(); err != nil {
+		fmt.Fprintln(os.Stderr, "github grant:", err)
+		return 2
+	}
+	fmt.Fprintln(os.Stderr, "Requesting renewable GitHub work-session authority from Engram...")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+30*time.Second)
+	response, err := requestGitHubCapability(ctx, cfg, request)
+	cancel()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "github grant:", err)
+		return 1
+	}
+	if len(response.Grants) != 1 {
+		fmt.Fprintln(os.Stderr, "github grant: Engram returned no renewable grant")
+		return 1
+	}
+	fmt.Fprintln(os.Stdout, githubauth.CompactGrantLine(response.Grants[0], time.Now()))
+	return 0
+}
+
+func requestGitHubCapability(ctx context.Context, cfg config.Config, request githubauth.BrokerRequest) (githubauth.BrokerResponse, error) {
+	response, err := githubauth.Request(ctx, cfg.GitHubBrokerSocketPath(), request)
+	if err == nil || response.ErrorCode != githubauth.ErrorCodeLocalPassphraseRequired {
+		return response, err
+	}
+	passphrase, promptErr := promptSecret("GitHub App passphrase: ")
+	if promptErr != nil {
+		return githubauth.BrokerResponse{}, promptErr
+	}
+	defer githubauth.Zero(passphrase)
+	request.Passphrase = passphrase
+	return githubauth.Request(ctx, cfg.GitHubBrokerSocketPath(), request)
 }
 
 func runGitHubStatus(args []string) int {
@@ -355,17 +418,45 @@ func runGitHubStatus(args []string) int {
 		return 1
 	}
 	if *jsonOutput {
-		_ = json.NewEncoder(os.Stdout).Encode(response.Leases)
+		_ = writeGitHubStatusJSON(os.Stdout, response)
 		return 0
 	}
-	if len(response.Leases) == 0 {
-		fmt.Fprintln(os.Stdout, "No active GitHub capability lease for this pane.")
+	if len(response.Grants) == 0 && len(response.Leases) == 0 {
+		fmt.Fprintln(os.Stdout, "No active GitHub capability authority for this pane.")
 		return 0
+	}
+	writeGitHubStatus(os.Stdout, response, time.Now())
+	return 0
+}
+
+func writeGitHubStatusJSON(writer io.Writer, response githubauth.BrokerResponse) error {
+	return json.NewEncoder(writer).Encode(struct {
+		Grants []githubauth.GrantInfo `json:"grants"`
+		Leases []githubauth.LeaseInfo `json:"leases"`
+	}{Grants: response.Grants, Leases: response.Leases})
+}
+
+func writeGitHubStatus(writer io.Writer, response githubauth.BrokerResponse, now time.Time) {
+	for _, grant := range response.Grants {
+		fmt.Fprintln(writer, "Work-session grant:", githubauth.CompactGrantLine(grant, now))
+		fmt.Fprintln(writer, "  purpose:", grant.Purpose)
+		fmt.Fprintln(writer, "  expires:", grant.ExpiresAt.Local().Format(time.RFC3339))
+		for _, repository := range grant.Repositories {
+			fmt.Fprintln(writer, "  repo ceiling:", repository)
+		}
+		names := make([]string, 0, len(grant.Permissions))
+		for name := range grant.Permissions {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			fmt.Fprintf(writer, "  permission ceiling: %s=%s\n", name, grant.Permissions[name])
+		}
 	}
 	for _, lease := range response.Leases {
-		fmt.Fprintln(os.Stdout, githubauth.CompactLeaseLine(lease, time.Now()))
+		fmt.Fprintln(writer, "Current token lease:", githubauth.CompactLeaseLine(lease, now))
 		for _, repository := range lease.Repositories {
-			fmt.Fprintln(os.Stdout, "  repo:", repository)
+			fmt.Fprintln(writer, "  repo:", repository)
 		}
 		names := make([]string, 0, len(lease.Permissions))
 		for name := range lease.Permissions {
@@ -373,10 +464,9 @@ func runGitHubStatus(args []string) int {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			fmt.Fprintf(os.Stdout, "  permission: %s=%s\n", name, lease.Permissions[name])
+			fmt.Fprintf(writer, "  permission: %s=%s\n", name, lease.Permissions[name])
 		}
 	}
-	return 0
 }
 
 func runGitHubRevoke(args []string) int {
@@ -407,7 +497,7 @@ func runGitHubRevoke(args []string) int {
 		fmt.Fprintln(os.Stderr, "github revoke:", err)
 		return 1
 	}
-	fmt.Fprintln(os.Stdout, "GitHub capability lease revoked for this pane.")
+	fmt.Fprintln(os.Stdout, "GitHub capability grant and token lease revoked for this pane.")
 	return 0
 }
 
@@ -568,6 +658,7 @@ func printGitHubHelp(output io.Writer) {
   engram github app add <alias> --app-id ID --installation-id ID --pem PATH [--telegram-unlock]
   engram github app list [--json]
   engram github app remove <alias> --yes
+  engram github grant --app ALIAS --repo OWNER/NAME --permission NAME=read|write --for DURATION --purpose TEXT
   engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND [ARGS...]
   engram github status [--json]
   engram github revoke

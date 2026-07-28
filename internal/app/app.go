@@ -122,6 +122,10 @@ type App struct {
 	githubMu                      sync.Mutex
 	githubPending                 map[string]*githubPendingRequest
 	githubLeases                  map[string]githubLease
+	githubGrants                  map[string]githubGrant
+	githubRevocations             map[string]githubRevocation
+	githubTokenReservations       int
+	githubGrantLocks              keyedMutexSet
 	githubUnlockTombstones        map[int]time.Time
 	githubBroker                  *githubauth.BrokerServer
 	githubNow                     func() time.Time
@@ -134,6 +138,7 @@ const maxConcurrentGuideRequests = 2
 const maxConcurrentSnapshotRenders = 2
 const maxConcurrentTransfers = 2
 const maxQueuedTransfers = 8
+const maxTrackedGitHubTokens = 256
 
 func New(cfg config.Config) (*App, error) {
 	if err := config.EnsureDirs(cfg); err != nil {
@@ -281,6 +286,8 @@ func New(cfg config.Config) (*App, error) {
 		pendingRecoveryPlanNextPage:   stateSnapshot.PendingRecoveryPlanNextPage,
 		githubPending:                 map[string]*githubPendingRequest{},
 		githubLeases:                  map[string]githubLease{},
+		githubGrants:                  map[string]githubGrant{},
+		githubRevocations:             map[string]githubRevocation{},
 		githubUnlockTombstones:        map[int]time.Time{},
 		githubNow:                     time.Now,
 		githubVaultError:              githubVaultError,
@@ -921,7 +928,7 @@ func (a *App) statusText() string {
 	if a.Config.EffectiveVoiceInputMode() == config.VoiceInputModeTranscribe {
 		voiceStatus = "transcribe, configured but not probed (openai/" + a.Config.OpenAITranscriptionModel + ")"
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\ngithub apps: %s\ngithub leases: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\ngithub apps: %s\ngithub grants: %d\ngithub leases: %d\ngithub revocations pending: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
@@ -932,7 +939,9 @@ func (a *App) statusText() string {
 		templateCount,
 		a.Config.TemplatePath(),
 		githubApps,
+		a.githubGrantCount(),
 		a.githubLeaseCount(),
+		a.githubRevocationCount(),
 		a.Config.StatePath(),
 		a.Config.AuditPath(),
 		a.Config.AttachmentDir(),

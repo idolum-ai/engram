@@ -236,6 +236,38 @@ privacy model must stay small and explicit.
   orderly shutdown. It must also revalidate the exact enrollment after minting
   and revoke a newly minted token before returning any effective-scope,
   post-mint cancellation/binding, or enrollment-identity failure.
+- Renewable GitHub work-session grants are a separate, conspicuous authority
+  class. They require one informed Telegram approval that shows the exact App
+  enrollment, tmux binding, repository and permission ceiling, purpose,
+  duration, absolute expiry, subset semantics, unattended token rotation, and
+  in-memory signing-capability retention. The configured maximum defaults to
+  eight hours and may never exceed the hard 24-hour ceiling.
+- Renewable grants and decrypted signing capability are process-local and
+  never serialized. They are bound to the complete enrollment and immutable
+  pane identity and are erased on expiry, pane loss or replacement, unwatch,
+  enrollment mutation or removal, explicit revoke, and shutdown. Every mint
+  and token delivery revalidates those identities. The absolute expiry shown
+  for approval is immutable across approval, inspection, and storage.
+  Renewable write permissions use an explicit collaboration allowlist; all
+  other writes continue to require exact-command approval.
+- A grant may satisfy only equal or narrower repository and permission
+  requests. Each child receives a token at the complete ceiling shown during
+  approval. Minting is serialized per pane, reuses that ceiling token through
+  its upstream lifetime so overlapping subset children are not invalidated,
+  and revokes any minted token whose requester disconnects or whose authority
+  changes before transactional delivery commits. Broker shutdown closes every
+  accepted client connection so a requester withholding its delivery
+  acknowledgment cannot delay rollback until the request deadline. Creation,
+  explicit revoke, and token delivery are linearized per pane. Status
+  enumerates the ceilings, and cards distinguish grant lifetime from token
+  lifetime; audits record safe grant identity, requested subset, command
+  basename, token generation, and outcome without purpose text or credentials.
+  Failed remote revocations remove local authority but retain the undisclosed
+  token in a bounded in-memory retry queue until revocation succeeds, the token
+  expires, or the process exits. The combined live-lease, in-flight-mint, and
+  pending-revocation budget is 256 tokens; Engram must refuse another mint when
+  that budget is full rather than lose track of a bearer token. `/status`
+  exposes only the pending count.
 - Source GitHub App PEM files must be regular, non-symlink files owned by the
   process UID with no group or other permission bits. A malformed optional
   GitHub App vault must disable and disclose only that capability; it must not

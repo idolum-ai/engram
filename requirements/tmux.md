@@ -111,10 +111,15 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   auxiliary options unless the marker is present and its watch ID agrees with
   `@engram_watch_id`. The versioned summary advertises the remote surface; the
   other options give a human-readable notification command, the standard OSC 8
-  artifact sequence, and, when available, the pane-scoped GitHub capability
-  command. Startup repairs metadata for persisted running watches; normal
-  unwatch or attached-pane untracking removes it without changing the pane
-  program, environment, title, or other options.
+  artifact sequence, and, when available, the pane-scoped GitHub exact-exec and
+  renewable-grant command shapes. Startup repairs metadata for persisted
+  running watches; normal unwatch or attached-pane untracking removes it
+  without changing the pane program, environment, title, or other options.
+- A pane with an active renewable GitHub work-session grant shows one compact
+  status line containing the App alias, read/write permission counts,
+  repository count, and remaining grant lifetime. This grant line takes
+  presentation priority over its shorter current token lease so unattended
+  authority remains conspicuous without expanding the card.
 - Deterministic reference extraction uses the joined logical-text view after
   terminal-authored upstream records have been removed. Unmatched closing
   wrappers are removed; other terminal punctuation is retained. URL candidates

@@ -342,12 +342,64 @@ GH idolum · read-only · 1 repo · 42m
 GH idolum · 1R 1W · 1 repo · 42m
 ```
 
+For a longer but still bounded workflow, authorize a renewable work-session
+envelope once:
+
+```sh
+engram github grant \
+  --app idolum \
+  --repo idolum-ai/engram \
+  --permission actions=read \
+  --permission contents=write \
+  --permission pull_requests=write \
+  --for 6h \
+  --purpose "Complete and review the current pull request"
+```
+
+The grant is not a long-lived bearer token. It keeps the unlocked App signing
+capability only in Engram memory, bound to the exact watched pane, enrollment,
+repository ceiling, permission ceiling, and expiry. Later `github exec`
+requests inside that envelope mint or reuse one ordinary short-lived
+installation token at the approved grant ceiling without another approval.
+Engram does not infer or preflight that envelope: the requesting program must
+declare its repositories, permissions, duration, and purpose. Commands run
+through `gh` consume the injected `GH_TOKEN` directly; plain `git push`
+requires an explicit credential adapter because Git does not universally
+interpret `GH_TOKEN`.
+Giving each child the displayed ceiling keeps overlapping commands from
+invalidating each other's token. The token is reused until its upstream expiry,
+then replaced serially. The default configurable grant ceiling is eight hours
+(`ENGRAM_GITHUB_GRANT_MAX_DURATION`), with an absolute 24-hour limit.
+
+Renewable write authority fails closed: only `checks`, `contents`,
+`discussions`, `issues`, `pull_requests`, `repository_projects`, and `statuses`
+may be requested at `write`. Evolving permission names remain eligible at
+`read`; every other write permission requires exact-command approval.
+
+The card remains compact:
+
+```text
+GH grant idolum · 1R 2W · 1 repo · 5h42m
+```
+
+The three authority modes are intentionally different:
+
+| Mode | Human approval | Lifetime | Command boundary |
+| --- | --- | --- | --- |
+| New exact command | Required | One request | Full command shown |
+| Active token lease | Not repeated for subsets | About one hour | Repository and permission subset |
+| Renewable work-session grant | Required once | Configured bound, at most 24h | Pane, App, repositories, permissions, and time |
+
 Inspect or revoke the current pane's lease with:
 
 ```sh
 engram github status
 engram github revoke
 ```
+
+Human-readable `github status` output enumerates the grant's repository and
+permission ceilings so the broader authority is visible without exposing the
+token.
 
 List or remove enrolled apps with:
 
@@ -356,12 +408,12 @@ engram github app list
 engram github app remove idolum --yes
 ```
 
-Leases live only in Engram's memory. They are removed when they expire, the
-terminal binding disappears, the user revokes them, or Engram restarts.
-Engram attempts to revoke every live installation token during invalidation,
-explicit revocation, and orderly shutdown. Removing an enrolled app prevents
-new use but does not by itself revoke an existing in-memory lease; revoke the
-affected panes or restart Engram as part of credential removal.
+Leases and renewable grants live only in Engram's memory. They are removed
+when they expire, the terminal binding disappears or is unwatched, the user
+revokes them, the enrollment changes or disappears, or Engram restarts.
+Engram erases retained grant signing material and attempts to revoke every live
+installation token during invalidation, explicit revocation, and orderly
+shutdown.
 Engram's broker socket is owner-only and lives in its private runtime
 directory. These controls protect against credentials resting in plaintext and
 against accidental agent overreach; they do not isolate secrets from root or

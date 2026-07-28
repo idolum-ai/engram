@@ -852,6 +852,7 @@ func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunne
 }
 
 type safetyRunner struct {
+	mu              sync.Mutex
 	calls           [][]string
 	identityWindow  string
 	identityErr     error
@@ -921,7 +922,9 @@ func (r *newSessionRunner) Run(_ context.Context, args ...string) (string, error
 }
 
 func (r *safetyRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.mu.Lock()
 	r.calls = append(r.calls, append([]string(nil), args...))
+	r.mu.Unlock()
 	if len(args) > 0 && args[0] == "if-shell" && r.capabilityErr != nil {
 		return "", r.capabilityErr
 	}

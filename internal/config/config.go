@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -26,6 +27,8 @@ const (
 	AnchorModeSnapshot              = "snapshot"
 	VoiceInputModePath              = "path"
 	VoiceInputModeTranscribe        = "transcribe"
+	DefaultGitHubGrantMaxDuration   = 8 * time.Hour
+	AbsoluteGitHubGrantMaxDuration  = 24 * time.Hour
 )
 
 type Config struct {
@@ -50,6 +53,7 @@ type Config struct {
 	SnapshotStatusCommand      string
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
+	GitHubGrantMaxDuration     time.Duration
 }
 
 type ModeCapabilities struct {
@@ -82,6 +86,16 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	grantMaxDuration := DefaultGitHubGrantMaxDuration
+	if value := strings.TrimSpace(values["ENGRAM_GITHUB_GRANT_MAX_DURATION"]); value != "" {
+		grantMaxDuration, err = time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("ENGRAM_GITHUB_GRANT_MAX_DURATION: %w", err)
+		}
+		if grantMaxDuration <= 0 || grantMaxDuration > AbsoluteGitHubGrantMaxDuration {
+			return Config{}, fmt.Errorf("ENGRAM_GITHUB_GRANT_MAX_DURATION must be positive and no greater than %s", AbsoluteGitHubGrantMaxDuration)
+		}
+	}
 	cfg := Config{
 		EnvPath:                    path,
 		TelegramBotToken:           values["TELEGRAM_BOT_TOKEN"],
@@ -102,6 +116,7 @@ func Load(path string) (Config, error) {
 		SnapshotStatusCommand:      strings.TrimSpace(values["ENGRAM_SNAPSHOT_STATUS_COMMAND"]),
 		AttachmentSoftMaxBytes:     softMax,
 		TelegramPollTimeoutSeconds: int(pollTimeout),
+		GitHubGrantMaxDuration:     grantMaxDuration,
 	}
 	if cfg.TelegramAllowedUserID, err = parseOptionalInt64(values["TELEGRAM_ALLOWED_USER_ID"], "TELEGRAM_ALLOWED_USER_ID"); err != nil {
 		return Config{}, err
@@ -171,6 +186,9 @@ func (c Config) Validate() error {
 	}
 	if c.TelegramPollTimeoutSeconds <= 0 {
 		return fmt.Errorf("TELEGRAM_POLL_TIMEOUT_SECONDS must be positive")
+	}
+	if c.EffectiveGitHubGrantMaxDuration() <= 0 || c.EffectiveGitHubGrantMaxDuration() > AbsoluteGitHubGrantMaxDuration {
+		return fmt.Errorf("ENGRAM_GITHUB_GRANT_MAX_DURATION must be positive and no greater than %s", AbsoluteGitHubGrantMaxDuration)
 	}
 	if strings.ContainsAny(strings.TrimSpace(c.TmuxSession), ":.") {
 		return fmt.Errorf("ENGRAM_TMUX_SESSION must not contain ':' or '.'")
@@ -243,6 +261,13 @@ func (c Config) GuideModel() string {
 
 func (c Config) EffectiveVoiceInputMode() string {
 	return strings.ToLower(firstNonEmpty(strings.TrimSpace(c.VoiceInputMode), VoiceInputModePath))
+}
+
+func (c Config) EffectiveGitHubGrantMaxDuration() time.Duration {
+	if c.GitHubGrantMaxDuration <= 0 {
+		return DefaultGitHubGrantMaxDuration
+	}
+	return c.GitHubGrantMaxDuration
 }
 
 func (c Config) VoiceTranscriptionConfigured() bool {

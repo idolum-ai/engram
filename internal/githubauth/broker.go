@@ -19,12 +19,58 @@ import (
 
 type Handler func(context.Context, BrokerRequest) BrokerResponse
 
+type deliveryRegistration struct {
+	mu        sync.Mutex
+	finalizer func(bool) error
+}
+
+type deliveryRegistrationKey struct{}
+
+type deliveryAck struct {
+	Commit bool `json:"commit"`
+}
+
+type deliveryResult struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+func RegisterDeliveryFinalizer(ctx context.Context, finalizer func(bool) error) error {
+	registration, ok := ctx.Value(deliveryRegistrationKey{}).(*deliveryRegistration)
+	if !ok || registration == nil {
+		return fmt.Errorf("GitHub broker delivery finalizer is unavailable")
+	}
+	if finalizer == nil {
+		return fmt.Errorf("GitHub broker delivery finalizer is required")
+	}
+	registration.mu.Lock()
+	defer registration.mu.Unlock()
+	if registration.finalizer != nil {
+		return fmt.Errorf("GitHub broker delivery finalizer is already registered")
+	}
+	registration.finalizer = finalizer
+	return nil
+}
+
+func (r *deliveryRegistration) take() func(bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	finalizer := r.finalizer
+	r.finalizer = nil
+	return finalizer
+}
+
 type BrokerServer struct {
-	path     string
-	listener *net.UnixListener
-	handler  Handler
-	clients  sync.WaitGroup
-	socket   socketIdentity
+	path          string
+	listener      *net.UnixListener
+	handler       Handler
+	clients       sync.WaitGroup
+	connectionsMu sync.Mutex
+	connections   map[*net.UnixConn]struct{}
+	stopping      bool
+	shutdownOnce  sync.Once
+	shutdownErr   error
+	socket        socketIdentity
 }
 
 type socketIdentity struct {
@@ -68,17 +114,34 @@ func Listen(path string, handler Handler) (*BrokerServer, error) {
 		_ = os.Remove(path)
 		return nil, err
 	}
-	return &BrokerServer{path: path, listener: listener, handler: handler, socket: socket}, nil
+	return &BrokerServer{
+		path:        path,
+		listener:    listener,
+		handler:     handler,
+		connections: map[*net.UnixConn]struct{}{},
+		socket:      socket,
+	}, nil
 }
 
 func (s *BrokerServer) Serve(ctx context.Context) error {
 	if s == nil || s.listener == nil {
 		return fmt.Errorf("GitHub broker is not listening")
 	}
-	defer s.clients.Wait()
+	serveDone := make(chan struct{})
+	shutdownWatcherDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		_ = s.listener.Close()
+		defer close(shutdownWatcherDone)
+		select {
+		case <-ctx.Done():
+			s.shutdownTransport()
+		case <-serveDone:
+		}
+	}()
+	defer func() {
+		s.shutdownTransport()
+		close(serveDone)
+		<-shutdownWatcherDone
+		s.clients.Wait()
 	}()
 	for {
 		connection, err := s.listener.AcceptUnix()
@@ -88,9 +151,12 @@ func (s *BrokerServer) Serve(ctx context.Context) error {
 			}
 			return fmt.Errorf("accept GitHub broker request: %w", err)
 		}
-		s.clients.Add(1)
+		if !s.registerConnection(connection) {
+			_ = connection.Close()
+			continue
+		}
 		go func() {
-			defer s.clients.Done()
+			defer s.unregisterConnection(connection)
 			s.handleConnection(ctx, connection)
 		}()
 	}
@@ -101,8 +167,9 @@ func (s *BrokerServer) Close() error {
 		return nil
 	}
 	var errs []error
-	if s.listener != nil {
-		errs = append(errs, s.listener.Close())
+	s.shutdownTransport()
+	if s.shutdownErr != nil {
+		errs = append(errs, s.shutdownErr)
 	}
 	if s.path != "" {
 		if err := removeSocketIfSame(s.path, s.socket); err != nil && !os.IsNotExist(err) {
@@ -110,6 +177,45 @@ func (s *BrokerServer) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (s *BrokerServer) registerConnection(connection *net.UnixConn) bool {
+	s.connectionsMu.Lock()
+	defer s.connectionsMu.Unlock()
+	if s.stopping {
+		return false
+	}
+	s.connections[connection] = struct{}{}
+	s.clients.Add(1)
+	return true
+}
+
+func (s *BrokerServer) unregisterConnection(connection *net.UnixConn) {
+	s.connectionsMu.Lock()
+	delete(s.connections, connection)
+	s.connectionsMu.Unlock()
+	s.clients.Done()
+}
+
+func (s *BrokerServer) shutdownTransport() {
+	s.shutdownOnce.Do(func() {
+		s.connectionsMu.Lock()
+		s.stopping = true
+		connections := make([]*net.UnixConn, 0, len(s.connections))
+		for connection := range s.connections {
+			connections = append(connections, connection)
+		}
+		s.connectionsMu.Unlock()
+
+		if s.listener != nil {
+			if err := s.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				s.shutdownErr = err
+			}
+		}
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	})
 }
 
 func (s *BrokerServer) handleConnection(serverContext context.Context, connection *net.UnixConn) {
@@ -132,22 +238,51 @@ func (s *BrokerServer) handleConnection(serverContext context.Context, connectio
 	}
 	requestContext, cancel := context.WithCancel(serverContext)
 	defer cancel()
-	peerGone := make(chan struct{})
-	go func() {
-		var sentinel [1]byte
-		_, _ = connection.Read(sentinel[:])
-		cancel()
-		close(peerGone)
-	}()
-	response := s.handler(requestContext, request)
+	stopPeerMonitor := make(chan struct{})
+	peerMonitorDone := make(chan struct{})
+	go monitorGitHubBrokerPeer(connection, cancel, stopPeerMonitor, peerMonitorDone)
+	registration := &deliveryRegistration{}
+	handlerContext := context.WithValue(requestContext, deliveryRegistrationKey{}, registration)
+	response := s.handler(handlerContext, request)
+	close(stopPeerMonitor)
+	<-peerMonitorDone
 	if response.OK {
 		response.Error = ""
 	} else if response.Error == "" {
 		response.Error = "GitHub capability request failed"
 	}
-	_ = writeBrokerFrame(connection, response)
+	finalizer := registration.take()
+	if !response.OK || finalizer == nil {
+		if finalizer != nil {
+			_ = finalizer(false)
+		}
+		_ = writeBrokerFrame(connection, response)
+		_ = connection.Close()
+		return
+	}
+	response.DeliveryPending = true
+	if err := writeBrokerFrame(connection, response); err != nil {
+		_ = finalizer(false)
+		_ = connection.Close()
+		return
+	}
+	var acknowledgment deliveryAck
+	payload, err := readBrokerFrame(connection)
+	if err == nil {
+		err = json.Unmarshal(payload, &acknowledgment)
+	}
+	if err != nil || !acknowledgment.Commit {
+		_ = finalizer(false)
+		_ = connection.Close()
+		return
+	}
+	if err := finalizer(true); err != nil {
+		_ = writeBrokerFrame(connection, deliveryResult{Error: err.Error()})
+		_ = connection.Close()
+		return
+	}
+	_ = writeBrokerFrame(connection, deliveryResult{OK: true})
 	_ = connection.Close()
-	<-peerGone
 }
 
 func Request(ctx context.Context, path string, request BrokerRequest) (BrokerResponse, error) {
@@ -197,10 +332,67 @@ func Request(ctx context.Context, path string, request BrokerRequest) (BrokerRes
 	if !response.OK {
 		return response, errors.New(firstNonEmpty(response.Error, "GitHub capability request failed"))
 	}
+	if response.DeliveryPending {
+		if err := writeBrokerFrame(connection, deliveryAck{Commit: true}); err != nil {
+			response.Token = ""
+			return response, fmt.Errorf("acknowledge GitHub token delivery: %w", err)
+		}
+		payload, err := readBrokerFrame(connection)
+		if err != nil {
+			response.Token = ""
+			return response, fmt.Errorf("confirm GitHub token delivery: %w", err)
+		}
+		var result deliveryResult
+		if err := json.Unmarshal(payload, &result); err != nil {
+			response.Token = ""
+			return response, fmt.Errorf("decode GitHub token delivery result: %w", err)
+		}
+		if !result.OK {
+			response.Token = ""
+			return response, errors.New(firstNonEmpty(result.Error, "GitHub token delivery was rolled back"))
+		}
+		response.DeliveryPending = false
+	}
 	return response, nil
 }
 
-func writeBrokerFrame(writer io.Writer, value BrokerResponse) error {
+func monitorGitHubBrokerPeer(connection *net.UnixConn, cancel context.CancelFunc, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if githubBrokerPeerClosed(connection) {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+func githubBrokerPeerClosed(connection *net.UnixConn) bool {
+	raw, err := connection.SyscallConn()
+	if err != nil {
+		return true
+	}
+	closed := false
+	controlErr := raw.Control(func(fd uintptr) {
+		var sentinel [1]byte
+		n, _, recvErr := syscall.Recvfrom(int(fd), sentinel[:], syscall.MSG_PEEK|syscall.MSG_DONTWAIT)
+		switch {
+		case recvErr == nil && n == 0:
+			closed = true
+		case recvErr != nil && !errors.Is(recvErr, syscall.EAGAIN) && !errors.Is(recvErr, syscall.EWOULDBLOCK):
+			closed = true
+		}
+	})
+	return controlErr != nil || closed
+}
+
+func writeBrokerFrame(writer io.Writer, value any) error {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err

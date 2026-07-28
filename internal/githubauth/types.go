@@ -5,14 +5,20 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	ActionExec      = "exec"
+	ActionGrant     = "grant"
 	ActionStatus    = "status"
 	ActionRevoke    = "revoke"
 	MaxRequestBytes = 64 << 10
+
+	ErrorCodeLocalPassphraseRequired = "local_passphrase_required"
+	MinGrantDuration                 = 15 * time.Minute
+	AbsoluteMaxGrantDuration         = 24 * time.Hour
 )
 
 type Binding struct {
@@ -30,6 +36,9 @@ type BrokerRequest struct {
 	Command      []string          `json:"command,omitempty"`
 	Binding      Binding           `json:"binding"`
 	Passphrase   []byte            `json:"passphrase,omitempty"`
+	LocalUnlock  bool              `json:"local_unlock,omitempty"`
+	GrantFor     time.Duration     `json:"grant_for,omitempty"`
+	Purpose      string            `json:"purpose,omitempty"`
 }
 
 type LeaseInfo struct {
@@ -37,14 +46,29 @@ type LeaseInfo struct {
 	Repositories []string          `json:"repositories"`
 	Permissions  map[string]string `json:"permissions"`
 	ExpiresAt    time.Time         `json:"expires_at"`
+	GrantID      string            `json:"grant_id,omitempty"`
+	Generation   uint64            `json:"generation,omitempty"`
+}
+
+type GrantInfo struct {
+	ID           string            `json:"id"`
+	App          string            `json:"app"`
+	Repositories []string          `json:"repositories"`
+	Permissions  map[string]string `json:"permissions"`
+	Purpose      string            `json:"purpose"`
+	CreatedAt    time.Time         `json:"created_at"`
+	ExpiresAt    time.Time         `json:"expires_at"`
 }
 
 type BrokerResponse struct {
-	OK        bool        `json:"ok"`
-	Error     string      `json:"error,omitempty"`
-	Token     string      `json:"token,omitempty"`
-	ExpiresAt time.Time   `json:"expires_at,omitempty"`
-	Leases    []LeaseInfo `json:"leases,omitempty"`
+	OK              bool        `json:"ok"`
+	Error           string      `json:"error,omitempty"`
+	ErrorCode       string      `json:"error_code,omitempty"`
+	Token           string      `json:"token,omitempty"`
+	ExpiresAt       time.Time   `json:"expires_at,omitempty"`
+	Leases          []LeaseInfo `json:"leases,omitempty"`
+	Grants          []GrantInfo `json:"grants,omitempty"`
+	DeliveryPending bool        `json:"delivery_pending,omitempty"`
 }
 
 func (r *BrokerRequest) Normalize() {
@@ -68,7 +92,7 @@ func (r BrokerRequest) Validate() error {
 	switch r.Action {
 	case ActionStatus, ActionRevoke:
 		return nil
-	case ActionExec:
+	case ActionExec, ActionGrant:
 	default:
 		return fmt.Errorf("unknown GitHub broker action")
 	}
@@ -97,6 +121,27 @@ func (r BrokerRequest) Validate() error {
 			return err
 		}
 	}
+	if r.Action == ActionGrant {
+		if r.GrantFor < MinGrantDuration || r.GrantFor > AbsoluteMaxGrantDuration {
+			return fmt.Errorf("renewable grant duration must be between %s and %s", MinGrantDuration, AbsoluteMaxGrantDuration)
+		}
+		if len(r.Purpose) == 0 || len(r.Purpose) > 200 || strings.TrimSpace(r.Purpose) == "" {
+			return fmt.Errorf("renewable grant purpose must be between 1 and 200 bytes")
+		}
+		for _, character := range r.Purpose {
+			if unicode.Is(unicode.Cc, character) || unicode.Is(unicode.Cf, character) ||
+				unicode.Is(unicode.Zl, character) || unicode.Is(unicode.Zp, character) {
+				return fmt.Errorf("renewable grant purpose contains an unsafe Unicode control")
+			}
+		}
+		if err := ValidateRenewablePermissions(r.Permissions); err != nil {
+			return err
+		}
+		if len(r.Command) != 0 {
+			return fmt.Errorf("renewable grant requests cannot include a child command")
+		}
+		return nil
+	}
 	if len(r.Command) == 0 || strings.TrimSpace(r.Command[0]) == "" {
 		return fmt.Errorf("a child command is required")
 	}
@@ -112,6 +157,27 @@ func (r BrokerRequest) Validate() error {
 	}
 	if total > 32*1024 {
 		return fmt.Errorf("child command exceeds 32768 bytes")
+	}
+	return nil
+}
+
+// ValidateRenewablePermissions fails closed for renewable write authority.
+// Evolving read-only permissions remain eligible, while writes are limited to
+// collaboration surfaces whose unattended risk is explicit and reviewable.
+func ValidateRenewablePermissions(permissions map[string]string) error {
+	allowedWrites := map[string]bool{
+		"checks":              true,
+		"contents":            true,
+		"discussions":         true,
+		"issues":              true,
+		"pull_requests":       true,
+		"repository_projects": true,
+		"statuses":            true,
+	}
+	for name, level := range permissions {
+		if level == "write" && !allowedWrites[name] {
+			return fmt.Errorf("permission %s=write is not on the renewable collaboration allowlist; use exact-command approval", name)
+		}
 	}
 	return nil
 }
@@ -231,6 +297,34 @@ func CompactLeaseLine(lease LeaseInfo, now time.Time) string {
 		authority = "read-only"
 	}
 	return fmt.Sprintf("GH %s · %s · %s · %s", lease.App, authority, repositoryLabel, compactDuration(remaining))
+}
+
+func CompactGrantLine(grant GrantInfo, now time.Time) string {
+	if !grant.ExpiresAt.After(now) {
+		return ""
+	}
+	readCount, writeCount := 0, 0
+	for _, level := range grant.Permissions {
+		switch level {
+		case "read":
+			readCount++
+		case "write":
+			writeCount++
+		}
+	}
+	repositoryLabel := fmt.Sprintf("%d repos", len(grant.Repositories))
+	if len(grant.Repositories) == 1 {
+		repositoryLabel = "1 repo"
+	}
+	authority := fmt.Sprintf("%dR %dW", readCount, writeCount)
+	if writeCount == 0 {
+		authority = "read-only"
+	}
+	remaining := grant.ExpiresAt.Sub(now).Round(time.Minute)
+	if remaining < time.Minute {
+		remaining = time.Minute
+	}
+	return fmt.Sprintf("GH grant %s · %s · %s · %s", grant.App, authority, repositoryLabel, compactDuration(remaining))
 }
 
 func compactDuration(duration time.Duration) string {

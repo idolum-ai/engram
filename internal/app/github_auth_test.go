@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -421,6 +422,46 @@ func TestGitHubCapabilityRejectsEnrollmentRemovedDuringMint(t *testing.T) {
 	}
 }
 
+func TestGitHubCapabilityEnrollmentRemovalSweepsExactLease(t *testing.T) {
+	now := time.Now()
+	minter := &fakeGitHubMinter{}
+	app, _, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+	request := testLocalGitHubBrokerRequest()
+	enrollment, found := app.GitHubVault.Get(request.App)
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
+	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
+		SessionID:  sessionID,
+		Binding:    request.Binding,
+		Enrollment: enrollment,
+		Info: githubauth.LeaseInfo{
+			App:          request.App,
+			Repositories: request.Repositories,
+			Permissions:  request.Permissions,
+			ExpiresAt:    now.Add(time.Hour),
+		},
+		Token: "exact-lease-token",
+	}
+	external, err := githubauth.OpenVault(app.GitHubVault.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := external.Remove(request.App); err != nil || !removed {
+		t.Fatalf("remove enrollment = %t, %v", removed, err)
+	}
+
+	app.expireGitHubLeases(now.Add(time.Second))
+	app.transferWG.Wait()
+
+	if len(app.githubLeases) != 0 {
+		t.Fatal("enrollment removal retained exact-command lease")
+	}
+	if minter.revokeCount() != 1 {
+		t.Fatalf("revocations = %d, want 1", minter.revokeCount())
+	}
+}
+
 func TestGitHubCapabilityRejectsSameKeyInstallationRetargetBeforeLeaseReuse(t *testing.T) {
 	app, runner, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
 	app.GitHubVault = testGitHubVault(t, false)
@@ -650,7 +691,7 @@ func TestGitHubApprovalLabelsLocalUnlockOverrideTruthfully(t *testing.T) {
 		t.Fatal("session not found")
 	}
 	request := testLocalGitHubBrokerRequest()
-	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true})
+	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true}, time.Time{})
 	if !strings.Contains(text, "Unlock: local passphrase") || strings.Contains(text, "Telegram reply") {
 		t.Fatalf("approval text = %q", text)
 	}
@@ -835,12 +876,36 @@ type fakeGitHubMinter struct {
 	repositories []string
 	permissions  map[string]string
 	expiresAt    time.Time
+	inspectOnce  sync.Once
+	inspectStart chan struct{}
+	inspectWait  chan struct{}
 	mintStarted  chan struct{}
 	mintRelease  chan struct{}
+	revokeErr    error
 }
 
-func (m *fakeGitHubMinter) InspectInstallation(context.Context, githubauth.App, []byte) (githubauth.Installation, error) {
-	return githubauth.Installation{}, nil
+func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, _ githubauth.App, _ []byte) (githubauth.Installation, error) {
+	if m.inspectStart != nil {
+		m.inspectOnce.Do(func() { close(m.inspectStart) })
+	}
+	if m.inspectWait != nil {
+		select {
+		case <-m.inspectWait:
+		case <-ctx.Done():
+			return githubauth.Installation{}, ctx.Err()
+		}
+	}
+	installation := githubauth.Installation{
+		ID: 456,
+		Permissions: map[string]string{
+			"actions":       "read",
+			"contents":      "write",
+			"issues":        "write",
+			"pull_requests": "write",
+		},
+	}
+	installation.Account.Login = "idolum-ai"
+	return installation, nil
 }
 
 func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey []byte, repositories []string, permissions map[string]string) (githubauth.Token, error) {
@@ -856,14 +921,19 @@ func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey 
 		return githubauth.Token{}, io.ErrUnexpectedEOF
 	}
 	m.mintCalls++
+	mintNumber := m.mintCalls
 	m.repositories = append([]string(nil), repositories...)
 	m.permissions = copyStringMap(permissions)
 	expiresAt := m.expiresAt
 	if expiresAt.IsZero() {
 		expiresAt = time.Now().Add(time.Hour)
 	}
+	tokenValue := "ghs_fake_token"
+	if mintNumber > 1 {
+		tokenValue = fmt.Sprintf("ghs_fake_token_%d", mintNumber)
+	}
 	token := githubauth.Token{
-		Value:       "ghs_fake_token",
+		Value:       tokenValue,
 		ExpiresAt:   expiresAt,
 		Permissions: copyStringMap(permissions),
 	}
@@ -878,8 +948,9 @@ func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey 
 func (m *fakeGitHubMinter) Revoke(context.Context, string) error {
 	m.mu.Lock()
 	m.revokeCalls++
+	err := m.revokeErr
 	m.mu.Unlock()
-	return nil
+	return err
 }
 
 func (m *fakeGitHubMinter) mintCount() int {
