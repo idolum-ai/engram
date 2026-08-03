@@ -31,6 +31,7 @@ type conversationFrame struct {
 	visibleRows  int
 	text         string
 	physicalText string
+	contextHash  string
 }
 
 type conversationEpoch struct {
@@ -81,7 +82,11 @@ func (a *App) releaseConversationGate(id int, gate *conversationGate) {
 	}
 }
 
-func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmux.StyledCapture, text string) conversationTurn {
+func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmux.StyledCapture, text string, contexts ...codexContextSnapshot) conversationTurn {
+	historical := codexContextSnapshot{}
+	if len(contexts) > 0 {
+		historical = contexts[0]
+	}
 	if a.Store != nil {
 		a.pruneConversationEpochs(a.Store.Snapshot().TerminalSessions)
 	}
@@ -96,6 +101,7 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 		visibleRows:  capture.VisibleRows,
 		text:         text,
 		physicalText: capture.Text,
+		contextHash:  historical.fingerprint,
 	}
 	a.conversationMu.Lock()
 	defer a.conversationMu.Unlock()
@@ -109,8 +115,9 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 		frame:         frame,
 		resetRevision: epoch.resetRevision,
 		input: guide.Input{
-			SessionID:   session.ID,
-			VisibleText: text,
+			SessionID:         session.ID,
+			VisibleText:       text,
+			HistoricalContext: historical.prompt,
 		},
 	}
 	changed, removed, stable, ok := alignedConversationDelta(epoch.frame, frame)
@@ -210,7 +217,7 @@ func alignedConversationDelta(previous, current conversationFrame) (changed, rem
 		previous.serverID == "" || previous.serverID != current.serverID || previous.windowID == "" || previous.windowID != current.windowID ||
 		previous.paneID != current.paneID || previous.command == "" || previous.command != current.command ||
 		previous.alternateOn != current.alternateOn || previous.paneInMode != current.paneInMode ||
-		previous.columns != current.columns || previous.visibleRows != current.visibleRows {
+		previous.columns != current.columns || previous.visibleRows != current.visibleRows || previous.contextHash != current.contextHash {
 		return "", "", "", false
 	}
 	oldLines := conversationLines(previous.text)

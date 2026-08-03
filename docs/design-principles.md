@@ -168,6 +168,14 @@ the hints. Continuity advances only after the canonical Telegram rendering is
 accepted, never crosses windows, and is never persisted. One-off alternate
 views do not alter it.
 
+An explicit Codex-context opt-in may add a few prior user-visible messages from
+the exact active Codex session. This does not widen the observation boundary:
+the transcript supplies historical topic and intent only, while the current
+tmux frame remains the sole authority for state, effects, files, references,
+and screenshots. Provenance is pane-, hook-, UUID-, and process-incarnation
+bound and revalidated after the read; recency or shared-directory heuristics are
+never substitutes. Process replacement and ambiguity erase the derived context.
+
 Snapshot mode renders the frame's ANSI styling locally through Chromium. It is
 literal and deterministic, at the cost of greater visual density and local
 rendering work.
@@ -187,6 +195,13 @@ styled rows cannot be delivered safely, the bounded tail is redacted and
 rendered without styling. A truly empty terminal receives a quiet guide-only
 frame rather than a warning that competes with the summary. The canonical
 message identity, pin, controls, and reply route remain stable.
+
+A deterministic diagram detector may copy one bounded box/arrow block from
+opted-in Codex context into a visually separate, explicitly labeled guide-card
+inset. A unique match against current semantic terminal text permits the
+stronger `reconstructed` label; every other admitted inset says it is prior
+Codex context and not the current terminal. Ordinary snapshots remain literal,
+and no model invents, repairs, or selects diagram pixels.
 
 When a guide is configured and Chromium has passed its local probe, `/mode` may
 begin switching the canonical presentation without changing the underlying

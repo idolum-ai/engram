@@ -4,6 +4,8 @@ package codexui
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,6 +25,10 @@ type Runtime struct {
 	Detected  bool
 	Version   string
 	Supported bool
+	// Identity changes when the running Codex process is replaced, even when
+	// its PID or executable path is reused.
+	Identity  string
+	StartedAt time.Time
 }
 
 type CommandRunner interface {
@@ -86,11 +92,26 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 	if d.Versions == nil {
 		return Runtime{Detected: true}, fmt.Errorf("Codex version resolver is unavailable")
 	}
-	version, err := d.Versions.Resolve(executables[0])
+	candidate := executables[0]
+	version, err := d.Versions.Resolve(candidate.path)
 	if err != nil {
 		return Runtime{Detected: true}, err
 	}
-	runtime := Runtime{Detected: true, Version: version, Supported: supportedVersion(version)}
+	startedRaw, err := d.Runner.Run(probeCtx, "ps", "-o", "lstart=", "-p", strconv.Itoa(candidate.pid))
+	if err != nil || strings.TrimSpace(startedRaw) == "" {
+		// Process-incarnation proof is required for transcript context, not for
+		// the existing versioned visible-screen adapter. Preserve that literal
+		// compatibility boundary when this optional identity probe is unavailable.
+		return Runtime{Detected: true, Version: version, Supported: supportedVersion(version)}, nil
+	}
+	started, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", strings.TrimSpace(startedRaw), time.Local)
+	if err != nil {
+		return Runtime{Detected: true, Version: version, Supported: supportedVersion(version)}, nil
+	}
+	runtime := Runtime{
+		Detected: true, Version: version, Supported: supportedVersion(version), StartedAt: started,
+		Identity: runtimeIdentity(candidate.pid, candidate.path, version, strings.TrimSpace(startedRaw)),
+	}
 	return runtime, nil
 }
 
@@ -132,7 +153,13 @@ func parseProcesses(out string) []process {
 	return processes
 }
 
-func nearestDescendantCodexExecutables(processes []process, root int) []string {
+type executableCandidate struct {
+	pid   int
+	path  string
+	depth int
+}
+
+func nearestDescendantCodexExecutables(processes []process, root int) []executableCandidate {
 	depths := map[int]int{root: 0}
 	for changed := true; changed; {
 		changed = false
@@ -145,11 +172,7 @@ func nearestDescendantCodexExecutables(processes []process, root int) []string {
 			}
 		}
 	}
-	type candidate struct {
-		path  string
-		depth int
-	}
-	byPath := make(map[string]int)
+	byPID := make(map[int]executableCandidate)
 	for _, process := range processes {
 		depth, descendant := depths[process.pid]
 		if !descendant {
@@ -159,13 +182,13 @@ func nearestDescendantCodexExecutables(processes []process, root int) []string {
 		if executable == "" {
 			continue
 		}
-		if previous, exists := byPath[executable]; !exists || depth < previous {
-			byPath[executable] = depth
+		if previous, exists := byPID[process.pid]; !exists || depth < previous.depth {
+			byPID[process.pid] = executableCandidate{pid: process.pid, path: executable, depth: depth}
 		}
 	}
-	candidates := make([]candidate, 0, len(byPath))
-	for path, depth := range byPath {
-		candidates = append(candidates, candidate{path: path, depth: depth})
+	candidates := make([]executableCandidate, 0, len(byPID))
+	for _, candidate := range byPID {
+		candidates = append(candidates, candidate)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].depth != candidates[j].depth {
@@ -181,11 +204,7 @@ func nearestDescendantCodexExecutables(processes []process, root int) []string {
 			nearest++
 		}
 	}
-	executables := make([]string, nearest)
-	for index, candidate := range candidates[:nearest] {
-		executables[index] = candidate.path
-	}
-	return executables
+	return candidates[:nearest]
 }
 
 func codexExecutable(process process) string {
@@ -239,4 +258,9 @@ func (PackageVersionResolver) Resolve(executable string) (string, error) {
 		dir = parent
 	}
 	return "", fmt.Errorf("@openai/codex package metadata not found")
+}
+
+func runtimeIdentity(pid int, path, version, started string) string {
+	sum := sha256.Sum256([]byte(strconv.Itoa(pid) + "\x00" + path + "\x00" + version + "\x00" + started))
+	return hex.EncodeToString(sum[:])
 }

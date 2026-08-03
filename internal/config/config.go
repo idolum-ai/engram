@@ -29,6 +29,7 @@ const (
 	VoiceInputModeTranscribe        = "transcribe"
 	DefaultGitHubGrantMaxDuration   = 8 * time.Hour
 	AbsoluteGitHubGrantMaxDuration  = 24 * time.Hour
+	MaxCodexContextTurns            = 8
 )
 
 type Config struct {
@@ -54,6 +55,7 @@ type Config struct {
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
 	GitHubGrantMaxDuration     time.Duration
+	CodexContextTurns          int
 }
 
 type ModeCapabilities struct {
@@ -83,6 +85,10 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	pollTimeout, err := parseInt64Default(values["TELEGRAM_POLL_TIMEOUT_SECONDS"], "TELEGRAM_POLL_TIMEOUT_SECONDS", 50)
+	if err != nil {
+		return Config{}, err
+	}
+	codexContextTurns, err := parseInt64Default(values["ENGRAM_CODEX_CONTEXT_TURNS"], "ENGRAM_CODEX_CONTEXT_TURNS", 0)
 	if err != nil {
 		return Config{}, err
 	}
@@ -117,6 +123,7 @@ func Load(path string) (Config, error) {
 		AttachmentSoftMaxBytes:     softMax,
 		TelegramPollTimeoutSeconds: int(pollTimeout),
 		GitHubGrantMaxDuration:     grantMaxDuration,
+		CodexContextTurns:          int(codexContextTurns),
 	}
 	if cfg.TelegramAllowedUserID, err = parseOptionalInt64(values["TELEGRAM_ALLOWED_USER_ID"], "TELEGRAM_ALLOWED_USER_ID"); err != nil {
 		return Config{}, err
@@ -178,6 +185,9 @@ func (c Config) Validate() error {
 	}
 	if c.AttachmentSoftMaxBytes <= 0 {
 		return fmt.Errorf("ENGRAM_ATTACHMENT_SOFT_MAX_BYTES must be positive")
+	}
+	if c.CodexContextTurns < 0 || c.CodexContextTurns > MaxCodexContextTurns {
+		return fmt.Errorf("ENGRAM_CODEX_CONTEXT_TURNS must be between 0 and %d", MaxCodexContextTurns)
 	}
 	switch c.SnapshotTheme {
 	case "terminal", "contrast-dark", "contrast-light":

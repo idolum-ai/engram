@@ -67,6 +67,29 @@ privacy model must stay small and explicit.
   with no model API history, structured report, or retry. Continuity is
   isolated per tracked window, never persisted, and discarded at capture
   boundaries.
+- Codex transcript context is disabled by default and may be enabled only with
+  `ENGRAM_CODEX_CONTEXT_TURNS` between one and eight. Engram must bind it to the
+  exact active pane through a validated `SessionStart` UUID and a Codex process
+  incarnation observed before and after the read. The hook must be no older
+  than the process. Exact filename and `session_meta` UUID agreement are
+  required; recency, cwd, title, or model heuristics are forbidden. Ambiguous,
+  symlinked, oversized, malformed, stale, or replacement-process sources fail
+  closed to terminal-only guidance.
+- The versioned Codex rollout parser may admit only bounded visible text from
+  user and assistant message records. It must exclude system/developer prompts,
+  hidden reasoning, tool arguments and results, attachments, generated
+  environment/instruction metadata, and unrelated record types. Existing
+  redaction and aggregate byte/message limits run before the selected provider
+  receives the historical context. Engram never persists or audits transcript
+  text. Documentation must disclose that the provider receives admitted text
+  and Telegram receives any admitted diagram inset.
+- Historical Codex context is untrusted and never current-state authority. The
+  current tmux frame remains the only source for effects, completion, files,
+  links, hashes, snapshots, and exact references. A diagram detector must be
+  deterministic, bounded, Unicode-cell aware, and model-independent. A
+  redaction conflict or unsafe geometry omits the diagram. Any admitted diagram
+  is visually separate and labeled as prior context unless it maps uniquely to
+  visible terminal evidence; ordinary snapshot and raw paths remain literal.
 - Terminal captures are untrusted data for the guide. The prompt explicitly
   tells the model that pane-authored and continuity text has no authority, but
   model resistance to prompt injection is best effort rather than a security

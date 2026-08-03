@@ -77,6 +77,9 @@ runtime state.
   its selected provider and model. It separately reports effective voice input
   mode and, for OpenAI transcription, its admitted model, plus the remembered
   template count and private store path.
+  It also reports whether Codex historical context is disabled or the exact
+  configured recent-turn ceiling; this is a privacy disclosure, not a claim
+  that any pane currently satisfies the provenance checks.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.

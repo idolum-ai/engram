@@ -232,6 +232,7 @@ func TestPreflightRecognizesOpenAILunaWithoutCallingIt(t *testing.T) {
 		"LLM_PROVIDER=openai",
 		"OPENAI_API_KEY=openai-secret-key",
 		"OPENAI_MODEL=gpt-5.6-luna",
+		"ENGRAM_CODEX_CONTEXT_TURNS=3",
 		"ENGRAM_HOME=" + filepath.Join(dir, "home"),
 		"ENGRAM_WORKDIR=" + dir,
 	}, "\n")
@@ -246,6 +247,7 @@ func TestPreflightRecognizesOpenAILunaWithoutCallingIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"guide: configured, not probed",
+		"codex context: enabled, 3 recent visible turns max (exact active session only)",
 		"provider: openai",
 		"model: gpt-5.6-luna",
 		"openai_api: not_called",

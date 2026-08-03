@@ -240,6 +240,12 @@ exports a bounded recent tail, not an unbounded full audit file.
   process-local file bindings through a caption-only media edit. A change to
   ANSI styling, pane width, visible height, command, tmux title, Engram title,
   or working directory changes the guide capture fingerprint.
+  When Codex context is enabled, the exact admitted historical-context
+  fingerprint and process incarnation also participate in the guide capture
+  and continuity boundary. A transcript update may refresh an otherwise stable
+  terminal; loss, ambiguity, pane movement, stale hooks, or process replacement
+  removes the context and rebases continuity rather than reusing it across
+  identities. Transcript text itself is never persisted.
   Disabling watch invalidates an in-flight guide turn before it may publish or
   advance continuity.
 - Snapshot refreshes hash styled capture, metadata, and the derived caption

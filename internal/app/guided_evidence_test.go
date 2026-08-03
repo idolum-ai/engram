@@ -36,6 +36,18 @@ func TestBuildGuidedEvidenceCropMatchesWrappedRowsAndRejectsAmbiguity(t *testing
 	}
 }
 
+func TestGuidedContextDiagramLabelsLiteralMappingAndHistoricalFallback(t *testing.T) {
+	diagram := "┌───┐\n│ A │\n└───┘"
+	mapped := withGuidedContextDiagram(terminalshot.Input{}, diagram, "before\n"+diagram+"\nafter")
+	if mapped.ContextLabel != "Codex context · reconstructed from visible terminal text" {
+		t.Fatalf("mapped label = %q", mapped.ContextLabel)
+	}
+	ambiguous := withGuidedContextDiagram(terminalshot.Input{}, diagram, diagram+"\n"+diagram)
+	if ambiguous.ContextLabel != "Codex context · prior visible message, not current terminal" {
+		t.Fatalf("ambiguous label = %q", ambiguous.ContextLabel)
+	}
+}
+
 func TestBuildGuidedEvidenceCropRejectsWidelySeparatedEvidence(t *testing.T) {
 	rows := make([]string, 24)
 	for i := range rows {
@@ -136,12 +148,16 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 		Snapshots: renderer, mode: "guide", snapshotReady: true, renderSlots: make(chan struct{}, 1),
 	}
 	first := tmux.StyledCapture{Text: "context\ntests passed successfully\nprompt", ANSI: "context\n\x1b[32mtests passed successfully\x1b[0m\nprompt", JoinedText: "older full View row\ncontext\ntests passed successfully\nprompt", Columns: 71, VisibleRows: 37, BufferRows: 4, CurrentPath: "/tmp"}
-	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, conversationFrame{}, first.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
+	diagram := "┌──────┐\n│ queue│\n└──────┘"
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, first, conversationFrame{}, first.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, diagram, true, nil, nil) {
 		t.Fatal("guided anchor was not updated")
 	}
 	current, _ := store.FindSession(session.ID)
 	if current.AnchorMessageID != 77 || current.AnchorFormat != anchorFormatGuideEvidence || current.LastRenderHash == "" || renderer.renders != 1 || !renderer.input.Compact {
 		t.Fatalf("first evidence state=%#v renderer=%#v", current, renderer)
+	}
+	if renderer.input.ContextInset != diagram || renderer.input.ContextLabel != "Codex context · prior visible message, not current terminal" {
+		t.Fatalf("diagram inset = %#v", renderer.input)
 	}
 	if routed, targetState, ok := store.FindReplyTarget(100, 77); !ok || targetState != state.ReplyTargetCurrent || routed.ID != session.ID {
 		t.Fatalf("evidence reply target = %#v %q ok=%v", routed, targetState, ok)
@@ -155,7 +171,7 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 	second.Text = "context\nnew decisive result\nprompt"
 	second.ANSI = second.Text
 	second.JoinedText = "older full View row\n" + second.Text
-	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, conversationFrame{}, second.Text, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, true, nil, nil) {
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), current, second, conversationFrame{}, second.Text, "A result needs inspection.", visibleReferences{}, []string{"missing fabricated evidence"}, "", true, nil, nil) {
 		t.Fatal("fallback anchor was not updated")
 	}
 	fallback, _ := store.FindSession(session.ID)
@@ -166,7 +182,7 @@ func TestGuidedEvidenceConvertsCanonicalAnchorInPlaceAndUsesTailFallback(t *test
 	third.Text = "context\nfinal visible result\nprompt"
 	third.ANSI = third.Text
 	third.JoinedText = "older full View row\n" + third.Text
-	if a.updateGuidedAnchorWithEvidence(context.Background(), fallback, third, conversationFrame{}, third.Text, "Final result.", visibleReferences{}, []string{"final visible result"}, true, nil, func() bool { return false }) {
+	if a.updateGuidedAnchorWithEvidence(context.Background(), fallback, third, conversationFrame{}, third.Text, "Final result.", visibleReferences{}, []string{"final visible result"}, "", true, nil, func() bool { return false }) {
 		t.Fatal("failed acceptance reported success")
 	}
 	frame, frameOK = a.snapshotTextFrame(fallback)
@@ -341,7 +357,7 @@ func TestUnwatchSupersedesBlockedGuidedRender(t *testing.T) {
 	capture := tmux.StyledCapture{Text: "tests passed", ANSI: "tests passed", Columns: 71, VisibleRows: 37, BufferRows: 1}
 	done := make(chan bool, 1)
 	go func() {
-		done <- a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed"}, true, nil, nil)
+		done <- a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed"}, "", true, nil, nil)
 	}()
 	<-renderer.started
 	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) { current.WatchEnabled = false }); err != nil {
@@ -395,7 +411,7 @@ func TestGuidedEvidenceReplacesUnavailableAnchorAndDeletesMediaPredecessor(t *te
 		Snapshots: renderer, mode: "guide", snapshotReady: true, footerStatusRunner: &recordingSnapshotFooterStatusRunner{output: "disk 47G free"},
 	}
 	capture := tmux.StyledCapture{Text: "tests passed successfully", ANSI: "\x1b[32mtests passed successfully", Columns: 71, VisibleRows: 37, BufferRows: 1, CurrentPath: "/tmp"}
-	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, nil) {
+	if !a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, "", true, nil, nil) {
 		t.Fatal("replacement guided anchor was not accepted")
 	}
 	if renderer.input.Status != "disk 47G free" {
@@ -451,7 +467,7 @@ func TestGuidedEvidenceReplacementKeepsRawWhenAcceptanceLosesRace(t *testing.T) 
 		Snapshots: &fakeSnapshotRenderer{}, mode: "guide", snapshotReady: true,
 	}
 	capture := tmux.StyledCapture{Text: "tests passed successfully", ANSI: "tests passed successfully", Columns: 71, VisibleRows: 37, BufferRows: 1, CurrentPath: "/tmp"}
-	if a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, true, nil, func() bool { return false }) {
+	if a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed successfully"}, "", true, nil, func() bool { return false }) {
 		t.Fatal("lost acceptance race reported success")
 	}
 	got, _ := store.FindSession(session.ID)
@@ -563,7 +579,7 @@ func TestUnwatchWaitsForInFlightTelegramPublication(t *testing.T) {
 	capture := tmux.StyledCapture{Text: "tests passed", ANSI: "tests passed", Columns: 71, VisibleRows: 37, BufferRows: 1}
 	refreshDone := make(chan bool, 1)
 	go func() {
-		refreshDone <- a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed"}, true, nil, nil)
+		refreshDone <- a.updateGuidedAnchorWithEvidence(context.Background(), session, capture, conversationFrame{}, capture.Text, "Tests passed.", visibleReferences{}, []string{"tests passed"}, "", true, nil, nil)
 	}()
 	<-started
 	unwatchDone := make(chan error, 1)

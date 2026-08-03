@@ -178,6 +178,15 @@ Telegram is Engram's only user interface.
   delivered safely, Engram renders the bounded tail as redacted plain text; a
   truly empty terminal receives a quiet guide-only frame. Engram never preserves
   stale pixels, delegates pixel selection to the model, or creates a second message.
+- With explicit Codex context enabled, the guide-evidence image may append one
+  deterministic, bounded box/arrow diagram copied from the exact active
+  session's admitted visible messages. It is rendered as a separate `Codex
+  context` inset, never inside the terminal crop. A unique exact mapping to
+  current semantic terminal text is labeled reconstructed; otherwise the inset
+  states that it is a prior message and not the current terminal. Redaction
+  conflicts, weak detection, unsafe Unicode/control content, overflow, or
+  ambiguity omit the inset. Snapshot-mode images, `🖼️ View`, `/raw`, and `/dump`
+  remain literal and never contain transcript-derived pixels.
 - Obsolete media predecessors are deleted when Telegram permits it. If deletion
   fails, Engram replaces their media with a locally generated neutral image,
   clears controls, applies a redacted inactive label, and unpins them. If

@@ -77,6 +77,51 @@ pair of separators enclosing Claude's composer. Exact completed elapsed rows,
 the low-band composer/status controls, and Claude's `/clear` token-saving hint
 are omitted from guide evidence only inside this versioned boundary.
 
+## Exact Codex session context
+
+`ENGRAM_CODEX_CONTEXT_TURNS` is a separate, disabled-by-default privacy surface.
+When enabled, it admits up to eight recent user turns and their visible assistant messages as
+historical guide context only after all of these independent checks succeed:
+
+- the watched tmux server, window, and pane binding validates around the
+  pane-local recovery option;
+- a `SessionStart` hook provides one syntactically valid Codex UUID;
+- the active pane process tree contains one proven Codex executable and yields
+  a PID/path/version/start-time incarnation fingerprint;
+- the hook observation is not older than that process incarnation;
+- exactly one regular, bounded, non-symlink rollout filename carries the UUID,
+  and its `session_meta.id` repeats it; and
+- the same process incarnation and tracked tmux binding still exist after the
+  rollout read.
+
+There is no newest-session, working-directory, title, or model-based fallback.
+The parser contract is explicitly named `codex-rollout-v1`. It ignores unknown
+record types and admits text only from `response_item` records whose payload is
+a `message`, whose role is `user` or `assistant`, and whose content type matches
+`input_text` or `output_text`. System/developer roles, hidden reasoning, tool
+arguments/results, attachments, and generated environment/instruction metadata
+are excluded. Unrecognized structure in a recognized message fails closed.
+Messages, individual text, rollout files, JSON lines, and aggregate prompt text
+all have independent bounds. The ordinary Engram redactor runs before provider
+delivery, and transcript text is never added to state or audit output.
+
+The guide prompt labels this field `historical_session_context`. It may clarify
+past topic and intent, but `terminal_text` remains the only current-state truth.
+The transcript fingerprint participates in guide capture and continuity hashes,
+so new context can refresh an otherwise stable pane and replacement or loss
+rebases continuity.
+
+One deterministic diagram detector examines only those admitted visible
+messages. It requires a bounded multi-row box or arrow structure, measures
+Unicode terminal-cell width, rejects controls, tabs, oversized candidates,
+ordinary prose, source-code-shaped blocks, and weak single arrows, and selects
+the latest qualifying block without a model. A redaction conflict removes the
+diagram rather than drawing placeholders into it. Guide-evidence images render
+the copied text in a distinct `Codex context` inset. Exact unique terminal
+mapping is labeled reconstructed; otherwise the label explicitly says the text
+is a prior message and not the current terminal. Literal snapshot and raw paths
+do not accept this field.
+
 ## Fail-closed behavior
 
 Frames longer than 64 rows, unknown model identities, weak shell-like

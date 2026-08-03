@@ -189,6 +189,26 @@ use the ordinary terminal path unchanged; raw views and snapshots always remain
 literal. When Codex reports its tested fast mode, the deterministic line retains
 that state as `Codex · gpt-5.6-sol · high · fast · working`.
 
+An additional Codex-session context path is available only as an explicit
+privacy opt-in. Set `ENGRAM_CODEX_CONTEXT_TURNS` to `1` through `8` to let guide
+requests include that many recent user turns and their user-visible assistant messages from
+the exact active Codex session. Engram requires the pane-local `SessionStart`
+hook UUID, a proven Codex process incarnation newer than that hook record, an
+unambiguous rollout filename carrying the same UUID, and matching
+`session_meta`. It validates the process again after reading. A missing hook,
+stale or replacement process, ambiguous file, or unfamiliar message record
+fails closed to terminal-only guidance; Engram never selects a transcript
+because it is newest or shares a working directory.
+
+Historical session text can clarify the prior topic but never establishes the
+current terminal state. Raw tmux capture remains the only authority for current
+facts, files, references, hashes, and screenshots. Only bounded text from
+visible `user` and `assistant` messages is admitted; system/developer messages,
+hidden reasoning, tool calls and results, generated environment metadata, and
+attachments are excluded. The normal secret redactor and fixed message/byte
+ceilings run before the selected guide provider sees this context. Engram does
+not persist transcript text.
+
 ## Configuration
 
 `.env.example` is the complete configuration surface. The env file is a simple
@@ -202,6 +222,7 @@ that state as `Codex · gpt-5.6-sol · high · fast · working`.
 | `TELEGRAM_CHAT_ID` | allowed user ID | no | The one allowed chat. Leave empty for a private DM; group operation is unsupported. |
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
 | `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: conversational `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v9. |
+| `ENGRAM_CODEX_CONTEXT_TURNS` | `0` | no | Privacy opt-in (`0` disables; maximum `8`) for recent user turns and their visible assistant messages from an exactly identified active Codex session. This text is redacted and bounded before it is added as historical—not current-state—guide context. |
 | `LLM_PROVIDER` | `anthropic` | when enabling a guide | `anthropic` for Haiku 4.5 or `openai` for Luna. Only the selected provider is used. Changing it requires a restart. |
 | `ANTHROPIC_API_KEY` | none | when selecting Anthropic, secret | Credential for one-pass Haiku rendering. |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
@@ -505,6 +526,15 @@ the bot channel and must be revoked immediately.
   snapshot frame or the complete unwrapped selected guide rows as a bounded plain UTF-8 text attachment for
   screen readers or exact inspection. It does not recapture a newer terminal
   state on click.
+  With Codex context enabled, a conservative box/arrow detector may append one
+  bounded diagram copied from those same visible session messages. The diagram
+  is always a visually separate inset labeled `Codex context`; it is labeled as
+  reconstructed only when its exact text maps uniquely to current semantic tmux
+  evidence, otherwise it explicitly says it is a prior message and not the
+  current terminal. Detection is local, Unicode-width aware, phone-bounded, and
+  does not ask the guide model to select or repair pixels. Sensitive, oversized,
+  ambiguous, code-like, or weak candidates are omitted. Ordinary snapshot and
+  raw paths never include this inset.
 - **Conversational guide:** Guide anchors start from the same frame as Chromium
   and send its joined logical text, capped at 64 rows, in one non-streaming request.
   Recognized upstream records, the trailing model-status footer, and a small
@@ -512,8 +542,11 @@ the bot channel and must be revoked immediately.
   but remain in screenshots and raw captures. Every request contains the
   complete current semantic evidence;
   aligned requests may also carry prior prose and deterministic changed,
-  removed, and neighboring lines as attention hints. There is no model history,
-  no second request, and no prior Telegram input supplied as model context. A
+  removed, and neighboring lines as attention hints. When the explicit Codex
+  context opt-in is nonzero, the same request can also carry bounded, redacted
+  prior visible messages from the exactly identified active Codex session.
+  They are historical topic context, never current evidence. There is no model
+  API history, no second request, and no prior Telegram input supplied as model context. A
   private evidence trailer is removed before delivery and can only select a
   uniquely matched compact Chromium crop; it is never accepted as terminal
   truth.
@@ -536,6 +569,13 @@ the bot channel and must be revoked immediately.
   transcription to path delivery after an error. After successful delivery,
   Engram replies with the normalized transcript so the user can verify what
   reached the pane.
+- **Local Codex session store:** When `ENGRAM_CODEX_CONTEXT_TURNS` is nonzero,
+  Engram reads the exact UUID-named rollout under `~/.codex/sessions` after
+  binding it to the active pane and process. The selected provider receives the
+  bounded, redacted historical text. A diagram inset, when admitted, is sent to
+  Telegram with the guide-evidence card. Engram does not persist transcript
+  text, but the provider and Telegram receive these opt-in disclosures under
+  their normal data-retention policies.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`,
   `templates.json`, `audit.jsonl`, one rotated `audit.jsonl.1`, and lock files.
   `templates.json` stores exact user-authored input bodies in plaintext with

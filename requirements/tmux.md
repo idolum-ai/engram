@@ -272,6 +272,12 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   inherited immutable `TMUX_PANE`. It publishes bounded provider metadata to a
   pane-local tmux option. The service accepts that metadata only between two
   validations of the persisted pane, window, and server incarnation.
+- Optional Codex historical context may use that UUID only while a proven
+  descendant Codex process incarnation is active in the same pane and the hook
+  observation is no older than the process start. Engram rechecks the process
+  incarnation and tracked binding after reading the exact UUID-named rollout.
+  Process replacement, pane/window/server movement, a stale hook, or more than
+  one matching rollout invalidates context; cwd and recency never select one.
 - A shell command becomes process-observed only when a prompt, bounded later
   validation sees its expected executable as the pane foreground process.
   That evidence remains advisory and is never automatically replayed. A

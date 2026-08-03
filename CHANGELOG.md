@@ -4,6 +4,15 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Conversational guide
+
+- Add a disabled-by-default Codex historical-context path. Exact pane-local
+  `SessionStart` UUID and process-incarnation proof can supply a bounded number
+  of recent visible user/assistant messages to the guide without making them
+  current terminal truth. A deterministic, Unicode-width-aware detector may
+  render one copied box/arrow diagram as a separately labeled Codex-context
+  inset; literal snapshots and raw captures remain unchanged.
+
 ### GitHub capabilities
 
 - Add bounded renewable, pane-scoped work-session grants. One explicit

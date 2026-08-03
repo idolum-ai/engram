@@ -122,6 +122,22 @@ func TestConversationTurnAlwaysCarriesFullCurrentTruth(t *testing.T) {
 	}
 }
 
+func TestConversationContextFingerprintIsAContinuityBoundary(t *testing.T) {
+	app, session := conversationEpochTestApp(t, 3)
+	capture := testStyledCapture("codex", "project\nbranch\ntests running\napp pending\nstatus\ncwd\nready")
+	first := app.prepareConversationTurn(session, capture, capture.JoinedText, codexContextSnapshot{prompt: "User:\nfirst", fingerprint: "context-a"})
+	if !app.commitConversationTurn(session, first, "We are running tests.") {
+		t.Fatal("first turn did not commit")
+	}
+	second := app.prepareConversationTurn(session, capture, capture.JoinedText, codexContextSnapshot{prompt: "User:\nsecond", fingerprint: "context-b"})
+	if second.input.PreviousRendering != "" || second.previousFrame.text != "" || second.input.HistoricalContext != "User:\nsecond" {
+		t.Fatalf("context replacement retained continuity: %#v", second)
+	}
+	if guideCaptureHash(capture.JoinedText, session, capture, "context-a") == guideCaptureHash(capture.JoinedText, session, capture, "context-b") {
+		t.Fatal("historical context did not participate in guide capture hash")
+	}
+}
+
 func TestConversationResetRejectsInFlightCommit(t *testing.T) {
 	app, session := conversationEpochTestApp(t, 2)
 	capture := testStyledCapture("codex", "project\nbranch\nworking\nstatus\ncwd\nready")

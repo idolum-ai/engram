@@ -61,7 +61,11 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	summary, err := a.snapshotConversationalSummary(ctx, current, requested.AnchorMessageID, presentationText)
+	if latest, found := a.Store.FindSession(current.ID); found && sameTerminalBinding(latest, current) {
+		current = latest
+	}
+	historical := a.codexContextForCapture(ctx, current, capture)
+	summary, err := a.snapshotConversationalSummary(ctx, current, requested.AnchorMessageID, presentationText, historical)
 	if err != nil {
 		if errors.Is(err, errConversationTurnSuperseded) {
 			_ = a.audit("terminal.conversation", "superseded", map[string]any{"session_id": current.ID})

@@ -96,6 +96,14 @@ client is downloaded by the Go test itself. The checked-in replay corpus under
 `internal/agentui/testdata` remains part of ordinary `make check` and is the
 fast regression gate.
 
+The opt-in Codex historical-context path has an additional ordinary hermetic
+contract in `internal/e2e/codex_context_contract_test.go`. It creates a private
+synthetic UUID-named rollout, composes the versioned visible-message parser,
+guide prompt, deterministic diagram detector, and labeled compact renderer,
+and proves the ordinary literal render does not acquire transcript pixels. It
+runs in `make check` on Linux and in both Darwin compile lanes. It never reads
+`~/.codex`, launches a real client, or includes user transcript evidence.
+
 On macOS, PNG evidence requires a dedicated `chrome-headless-shell`,
 `chromium-headless-shell`, or `headless_shell` executable. Unset
 `ENGRAM_SNAPSHOT_BROWSER` to run only the semantic assertions. The harness

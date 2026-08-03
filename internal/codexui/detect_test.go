@@ -10,16 +10,38 @@ import (
 )
 
 type fakeCommandRunner struct {
-	ps    string
-	calls [][]string
+	ps        string
+	lstart    string
+	lstartErr error
+	calls     [][]string
 }
 
 func (f *fakeCommandRunner) Run(_ context.Context, name string, args ...string) (string, error) {
 	f.calls = append(f.calls, append([]string{name}, args...))
 	if name == "ps" {
+		if len(args) > 0 && args[0] == "-o" {
+			if f.lstartErr != nil {
+				return "", f.lstartErr
+			}
+			if f.lstart == "" {
+				return "Sun Aug  3 12:34:56 2026\n", nil
+			}
+			return f.lstart, nil
+		}
 		return f.ps, nil
 	}
 	return "", fmt.Errorf("unexpected command %s %v", name, args)
+}
+
+func TestDetectorKeepsScreenAdapterWhenOptionalIncarnationProbeFails(t *testing.T) {
+	runner := &fakeCommandRunner{
+		ps:        stringsJoinLines("100 1 node node", "110 100 node node /opt/codex/bin/codex"),
+		lstartErr: fmt.Errorf("unsupported ps field"),
+	}
+	got, err := (&Detector{Runner: runner, Versions: &fakeVersionResolver{version: SupportedVersion}}).Detect(context.Background(), 100, "node")
+	if err != nil || !got.Detected || !got.Supported || got.Identity != "" || !got.StartedAt.IsZero() {
+		t.Fatalf("optional incarnation probe changed screen detection: %#v err=%v", got, err)
+	}
 }
 
 type fakeVersionResolver struct {
@@ -146,6 +168,19 @@ func TestDetectorFailsClosedForAmbiguousNearestLaunchersRegardlessOfPathOrder(t 
 	}
 }
 
+func TestDetectorFailsClosedForTwoNearestProcessesAtSameExecutable(t *testing.T) {
+	runner := &fakeCommandRunner{ps: stringsJoinLines(
+		"100 1 node node",
+		"110 100 node node /opt/codex/bin/codex",
+		"120 100 node node /opt/codex/bin/codex",
+	)}
+	versions := &fakeVersionResolver{version: SupportedVersion}
+	got, err := (&Detector{Runner: runner, Versions: versions}).Detect(context.Background(), 100, "node")
+	if err != nil || !got.Detected || got.Identity != "" || len(versions.calls) != 0 {
+		t.Fatalf("ambiguous same-path processes = %#v err=%v calls=%#v", got, err, versions.calls)
+	}
+}
+
 func TestDetectorFailsClosedWhenNearestCandidateHasNoPackageMetadata(t *testing.T) {
 	const (
 		unresolved = "/opt/custom/bin/codex"
@@ -224,6 +259,9 @@ func TestDetectorRejectsUnsupportedRelaunchAtSameExecutable(t *testing.T) {
 	second, err := detector.Detect(context.Background(), 100, "node")
 	if err != nil || !second.Detected || second.Supported || second.Version != "0.145.0" {
 		t.Fatalf("replacement runtime = %#v, err=%v", second, err)
+	}
+	if first.Identity == "" || second.Identity == "" || first.Identity == second.Identity || first.StartedAt.IsZero() || second.StartedAt.IsZero() {
+		t.Fatalf("process incarnation did not change: first=%#v second=%#v", first, second)
 	}
 	if len(versions.calls) != 2 {
 		t.Fatalf("version resolver calls = %#v", versions.calls)
