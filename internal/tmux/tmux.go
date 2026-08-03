@@ -582,7 +582,7 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 	if githubAvailable {
 		options = append(options, capabilityOption{
 			EngramGitHubOption,
-			"run: engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND; renewable: engram github grant ... --for DURATION --purpose TEXT",
+			"run: engram github exec --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write -- COMMAND; renewable: engram github grant ... [--installation-id ID] --for DURATION --purpose TEXT",
 		})
 	} else {
 		commands = append(commands, "set-option -p -q -u -t "+paneID+" "+EngramGitHubOption)

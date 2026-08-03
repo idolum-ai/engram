@@ -64,16 +64,20 @@ func NewClient() *Client {
 }
 
 func (c *Client) InspectInstallation(ctx context.Context, app App, privateKeyPEM []byte) (Installation, error) {
+	installationID := app.EffectiveInstallationID()
+	if installationID <= 0 {
+		return Installation{}, fmt.Errorf("GitHub App request is not bound to an installation")
+	}
 	jwt, err := c.appJWT(app.AppID, privateKeyPEM)
 	if err != nil {
 		return Installation{}, err
 	}
 	var installation Installation
-	path := fmt.Sprintf("/app/installations/%d", app.InstallationID)
+	path := fmt.Sprintf("/app/installations/%d", installationID)
 	if err := c.request(ctx, http.MethodGet, path, jwt, nil, &installation); err != nil {
-		return Installation{}, err
+		return Installation{}, fmt.Errorf("inspect GitHub App installation %d: %w", installationID, err)
 	}
-	if installation.ID != app.InstallationID || strings.TrimSpace(installation.Account.Login) == "" {
+	if installation.ID != installationID || strings.TrimSpace(installation.Account.Login) == "" {
 		return Installation{}, fmt.Errorf("GitHub returned an unexpected installation identity")
 	}
 	if installation.SuspendedAt != nil {
@@ -83,6 +87,10 @@ func (c *Client) InspectInstallation(ctx context.Context, app App, privateKeyPEM
 }
 
 func (c *Client) Mint(ctx context.Context, app App, privateKeyPEM []byte, repositories []string, permissions map[string]string) (Token, error) {
+	installationID := app.EffectiveInstallationID()
+	if installationID <= 0 {
+		return Token{}, fmt.Errorf("GitHub App request is not bound to an installation")
+	}
 	installation, err := c.InspectInstallation(ctx, app, privateKeyPEM)
 	if err != nil {
 		return Token{}, err
@@ -107,9 +115,9 @@ func (c *Client) Mint(ctx context.Context, app App, privateKeyPEM []byte, reposi
 		Permissions:  permissions,
 	}
 	var token Token
-	path := fmt.Sprintf("/app/installations/%d/access_tokens", app.InstallationID)
+	path := fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
 	if err := c.request(ctx, http.MethodPost, path, jwt, payload, &token); err != nil {
-		return Token{}, err
+		return Token{}, fmt.Errorf("GitHub rejected the token request for installation %d; verify that this installation alone covers every requested repository and permission: %w", installationID, err)
 	}
 	if err := ValidateToken(token, repositories, permissions, c.now()); err != nil {
 		revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)

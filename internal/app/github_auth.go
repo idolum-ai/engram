@@ -105,6 +105,11 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if !found {
 		return githubauth.BrokerResponse{Error: fmt.Sprintf("GitHub App %q is not enrolled", request.App)}
 	}
+	app, err = app.SelectInstallation(request.InstallationID)
+	if err != nil {
+		return githubauth.BrokerResponse{Error: err.Error()}
+	}
+	request.InstallationID = app.EffectiveInstallationID()
 	if request.Action == githubauth.ActionExec {
 		if lease, ok := a.reusableGitHubLease(request, app); ok && lease.Info.GrantID == "" {
 			if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
@@ -180,6 +185,11 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		return githubauth.BrokerResponse{Error: githubauth.ErrUnlock.Error()}
 	}
 	defer githubauth.Zero(privateKey)
+	unlockedApp, err = unlockedApp.SelectInstallation(request.InstallationID)
+	if err != nil {
+		a.completeGitHubApprovalMessage(pending, "Canceled: the selected GitHub App installation changed during approval.")
+		return githubauth.BrokerResponse{Error: err.Error()}
+	}
 	if a.GitHubMinter == nil {
 		return githubauth.BrokerResponse{Error: "GitHub token minting is unavailable"}
 	}
@@ -209,10 +219,11 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		Binding:    request.Binding,
 		Enrollment: unlockedApp,
 		Info: githubauth.LeaseInfo{
-			App:          request.App,
-			Repositories: append([]string(nil), request.Repositories...),
-			Permissions:  copyStringMap(request.Permissions),
-			ExpiresAt:    token.ExpiresAt,
+			App:            request.App,
+			InstallationID: request.InstallationID,
+			Repositories:   append([]string(nil), request.Repositories...),
+			Permissions:    copyStringMap(request.Permissions),
+			ExpiresAt:      token.ExpiresAt,
 		},
 		Token: token.Value,
 	}
@@ -368,7 +379,7 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 	fmt.Fprintf(&text, "Window: %s\n", sessionLabel(session))
 	fmt.Fprintf(&text, "tmux binding: %s / %s / %s\n", request.Binding.ServerID, request.Binding.WindowID, request.Binding.PaneID)
 	fmt.Fprintf(&text, "App: %s (App ID %d, installation %d, fingerprint %s)\n",
-		request.App, app.AppID, app.InstallationID, app.PublicFingerprint)
+		request.App, app.AppID, app.EffectiveInstallationID(), app.PublicFingerprint)
 	if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
 		text.WriteString("Unlock: Telegram reply (not end-to-end encrypted)\n")
 	} else {
@@ -664,19 +675,40 @@ func (a *App) reloadMatchingGitHubEnrollment(expected githubauth.App) (githubaut
 	if !found {
 		return githubauth.App{}, fmt.Errorf("GitHub App %q is no longer enrolled", expected.Alias)
 	}
-	if !sameGitHubEnrollment(current, expected) {
+	current, matches := matchingCurrentGitHubEnrollment(current, expected)
+	if !matches {
 		return githubauth.App{}, fmt.Errorf("GitHub App %q enrollment changed", expected.Alias)
 	}
 	return current, nil
+}
+
+func matchingCurrentGitHubEnrollment(current, expected githubauth.App) (githubauth.App, bool) {
+	selected, err := current.SelectInstallation(expected.EffectiveInstallationID())
+	return selected, err == nil && sameGitHubEnrollment(selected, expected)
 }
 
 func sameGitHubEnrollment(left, right githubauth.App) bool {
 	return left.Alias == right.Alias &&
 		left.AppID == right.AppID &&
 		left.InstallationID == right.InstallationID &&
+		left.EffectiveInstallationID() == right.EffectiveInstallationID() &&
+		sameInt64Set(left.Installations(), right.Installations()) &&
+		left.CredentialIdentityVersion == right.CredentialIdentityVersion &&
 		left.TelegramUnlock == right.TelegramUnlock &&
 		left.PublicFingerprint == right.PublicFingerprint &&
 		left.CreatedAt.Equal(right.CreatedAt)
+}
+
+func sameInt64Set(left, right []int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) storeGitHubLease(lease githubLease) []string {
@@ -747,7 +779,7 @@ func (a *App) revokeGitHubBindingLeases(ctx context.Context, sessionID int, bind
 		}
 		cancel()
 		a.queueManualRefresh(sessionID)
-		_ = a.audit("github.lease", "revoked", map[string]any{"session_id": sessionID, "app": lease.Info.App})
+		_ = a.audit("github.lease", "revoked", map[string]any{"session_id": sessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID})
 	}
 }
 
@@ -771,7 +803,7 @@ func (a *App) revokeGitHubBindingAuthority(ctx context.Context, sessionID int, b
 		a.queueManualRefresh(sessionID)
 	}
 	if granted {
-		_ = a.audit("github.grant", "revoked", map[string]any{"session_id": sessionID, "app": grant.Info.App, "grant_id": grant.Info.ID})
+		_ = a.audit("github.grant", "revoked", map[string]any{"session_id": sessionID, "app": grant.Info.App, "installation_id": grant.Info.InstallationID, "grant_id": grant.Info.ID})
 	}
 	if leased && a.GitHubMinter != nil {
 		revokeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -779,12 +811,12 @@ func (a *App) revokeGitHubBindingAuthority(ctx context.Context, sessionID int, b
 		cancel()
 		if err != nil {
 			a.trackGitHubRevocation(lease.Token, sessionID, lease.Info.App, lease.Info.ExpiresAt)
-			_ = a.audit("github.lease", "revoke_failed", map[string]any{"session_id": sessionID, "app": lease.Info.App, "error": err.Error()})
+			_ = a.audit("github.lease", "revoke_failed", map[string]any{"session_id": sessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID, "error": err.Error()})
 			return fmt.Errorf("GitHub authority was removed locally, but remote token revocation is pending: %w", err)
 		}
 	}
 	if leased {
-		_ = a.audit("github.lease", "revoked", map[string]any{"session_id": sessionID, "app": lease.Info.App})
+		_ = a.audit("github.lease", "revoked", map[string]any{"session_id": sessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID})
 	}
 	return nil
 }
@@ -820,8 +852,9 @@ func (a *App) expireGitHubLeases(now time.Time) {
 	for key, grant := range a.githubGrants {
 		current, enrolled := enrollments[grant.Enrollment.Alias]
 		active, bound := activeBindings[key]
+		_, enrollmentMatches := matchingCurrentGitHubEnrollment(current, grant.Enrollment)
 		reasonInvalid := !bound || active.ID != grant.SessionID || !active.CreatedAt.Equal(grant.SessionCreatedAt) ||
-			!enrollmentsValid || !enrolled || !sameGitHubEnrollment(current, grant.Enrollment)
+			!enrollmentsValid || !enrolled || !enrollmentMatches
 		if !grant.Info.ExpiresAt.After(now) {
 			githubauth.Zero(grant.PrivateKey)
 			expiredGrants = append(expiredGrants, grant)
@@ -840,7 +873,8 @@ func (a *App) expireGitHubLeases(now time.Time) {
 	}
 	for key, lease := range a.githubLeases {
 		current, enrolled := enrollments[lease.Enrollment.Alias]
-		enrollmentInvalid := !enrollmentsValid || !enrolled || !sameGitHubEnrollment(current, lease.Enrollment)
+		_, enrollmentMatches := matchingCurrentGitHubEnrollment(current, lease.Enrollment)
+		enrollmentInvalid := !enrollmentsValid || !enrolled || !enrollmentMatches
 		if !lease.Info.ExpiresAt.After(now) {
 			expired = append(expired, lease)
 			delete(a.githubLeases, key)
@@ -852,21 +886,21 @@ func (a *App) expireGitHubLeases(now time.Time) {
 	a.githubMu.Unlock()
 	for _, grant := range expiredGrants {
 		a.queueManualRefresh(grant.SessionID)
-		_ = a.audit("github.grant", "expired", map[string]any{"session_id": grant.SessionID, "app": grant.Info.App, "grant_id": grant.Info.ID})
+		_ = a.audit("github.grant", "expired", map[string]any{"session_id": grant.SessionID, "app": grant.Info.App, "installation_id": grant.Info.InstallationID, "grant_id": grant.Info.ID})
 	}
 	for _, grant := range invalidatedGrants {
 		a.queueManualRefresh(grant.SessionID)
-		_ = a.audit("github.grant", "invalidated", map[string]any{"session_id": grant.SessionID, "app": grant.Info.App, "grant_id": grant.Info.ID})
+		_ = a.audit("github.grant", "invalidated", map[string]any{"session_id": grant.SessionID, "app": grant.Info.App, "installation_id": grant.Info.InstallationID, "grant_id": grant.Info.ID})
 	}
 	for _, lease := range expired {
 		a.queueManualRefresh(lease.SessionID)
-		_ = a.audit("github.lease", "expired", map[string]any{"session_id": lease.SessionID, "app": lease.Info.App})
+		_ = a.audit("github.lease", "expired", map[string]any{"session_id": lease.SessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID})
 	}
 	var tokens []string
 	for _, lease := range invalidated {
 		tokens = append(tokens, lease.Token)
 		a.queueManualRefresh(lease.SessionID)
-		_ = a.audit("github.lease", "invalidated", map[string]any{"session_id": lease.SessionID, "app": lease.Info.App})
+		_ = a.audit("github.lease", "invalidated", map[string]any{"session_id": lease.SessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID})
 	}
 	a.revokeGitHubTokens(tokens)
 }
@@ -1061,10 +1095,11 @@ func githubBindingKey(binding githubauth.Binding) string {
 
 func githubAuditRequest(sessionID int, request githubauth.BrokerRequest) map[string]any {
 	fields := map[string]any{
-		"session_id":   sessionID,
-		"app":          request.App,
-		"repositories": append([]string(nil), request.Repositories...),
-		"permissions":  copyStringMap(request.Permissions),
+		"session_id":      sessionID,
+		"app":             request.App,
+		"installation_id": request.InstallationID,
+		"repositories":    append([]string(nil), request.Repositories...),
+		"permissions":     copyStringMap(request.Permissions),
 	}
 	if len(request.Command) != 0 {
 		fields["command"] = filepath.Base(request.Command[0])

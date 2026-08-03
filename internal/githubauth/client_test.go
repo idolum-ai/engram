@@ -69,6 +69,56 @@ func TestClientMintsExactlyScopedInstallationToken(t *testing.T) {
 	}
 }
 
+func TestClientUsesOnlyTheSelectedInstallationFromMultiInstallationEnrollment(t *testing.T) {
+	privateKeyPEM, privateKey := testPrivateKey(t)
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifyTestJWT(t, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), privateKey, 123, now)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations/789":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": 789, "app_slug": "shared-app",
+				"account":     map[string]any{"login": "other-owner"},
+				"permissions": map[string]string{"contents": "read"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/789/access_tokens":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token": "ghs_selected", "expires_at": now.Add(time.Hour),
+				"permissions":  map[string]string{"contents": "read", "metadata": "read"},
+				"repositories": []map[string]string{{"full_name": "other-owner/project"}},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	enrollment := App{Alias: "shared", AppID: 123, InstallationID: 456, InstallationIDs: []int64{456, 789}}
+	selected, err := enrollment.SelectInstallation(789)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient()
+	client.BaseURL = server.URL
+	client.HTTPClient = server.Client()
+	client.Now = func() time.Time { return now }
+	token, err := client.Mint(context.Background(), selected, privateKeyPEM,
+		[]string{"other-owner/project"}, map[string]string{"contents": "read"})
+	if err != nil || token.Value != "ghs_selected" {
+		t.Fatalf("token = %#v, error = %v", token, err)
+	}
+}
+
+func TestInstallationScopeRejectsRequestSpanningAccounts(t *testing.T) {
+	installation := Installation{ID: 456, Permissions: map[string]string{"contents": "read"}}
+	installation.Account.Login = "idolum-ai"
+	err := ValidateInstallationScope(installation,
+		[]string{"idolum-ai/engram", "other-owner/project"},
+		map[string]string{"contents": "read"})
+	if err == nil || !strings.Contains(err.Error(), "does not belong to installation account") {
+		t.Fatalf("cross-installation scope error = %v", err)
+	}
+}
+
 func TestClientRevokesMintedTokenWhenEffectiveScopeDoesNotMatch(t *testing.T) {
 	privateKeyPEM, privateKey := testPrivateKey(t)
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)

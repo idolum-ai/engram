@@ -52,6 +52,40 @@ func TestBrokerRoundTripNeverRequiresTokenOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerRoundTripPreservesSelectedInstallationIdentity(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "engram-github-installation-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	server, err := Listen(path, func(_ context.Context, request BrokerRequest) BrokerResponse {
+		if request.InstallationID != 789 {
+			t.Fatalf("selected installation = %d", request.InstallationID)
+		}
+		return BrokerResponse{OK: true, Token: "provisional-test-token", ExpiresAt: time.Now().Add(time.Hour)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+	response, err := Request(context.Background(), path, BrokerRequest{
+		Version: ProtocolVersion, Action: ActionExec, App: "shared", InstallationID: 789,
+		Repositories: []string{"other-owner/project"}, Permissions: map[string]string{"contents": "read"},
+		Command: []string{"gh", "repo", "view"},
+		Binding: Binding{ServerID: "server", WindowID: "@2", PaneID: "%3"},
+	})
+	if err != nil || response.Token != "provisional-test-token" {
+		t.Fatalf("response = %#v, error = %v", response, err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestListenRefusesToReplaceLiveBroker(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "engram-github-live-")
 	if err != nil {

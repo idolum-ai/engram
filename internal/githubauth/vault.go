@@ -26,12 +26,13 @@ import (
 )
 
 const (
-	vaultVersion      = 1
-	maxVaultBytes     = 2 << 20
-	maxPrivateKeySize = 128 << 10
-	minPassphraseSize = 12
-	pbkdf2Iterations  = 600_000
-	pbkdf2KeyBytes    = 32
+	vaultVersion              = 2
+	credentialIdentityVersion = 2
+	maxVaultBytes             = 2 << 20
+	maxPrivateKeySize         = 128 << 10
+	minPassphraseSize         = 12
+	pbkdf2Iterations          = 600_000
+	pbkdf2KeyBytes            = 32
 )
 
 var ErrUnlock = errors.New("GitHub App credential could not be unlocked")
@@ -50,13 +51,16 @@ type EncryptedPrivateKey struct {
 }
 
 type App struct {
-	Alias             string              `json:"alias"`
-	AppID             int64               `json:"app_id"`
-	InstallationID    int64               `json:"installation_id"`
-	TelegramUnlock    bool                `json:"telegram_unlock,omitempty"`
-	PublicFingerprint string              `json:"public_fingerprint"`
-	CreatedAt         time.Time           `json:"created_at"`
-	PrivateKey        EncryptedPrivateKey `json:"private_key"`
+	Alias                     string              `json:"alias"`
+	AppID                     int64               `json:"app_id"`
+	InstallationID            int64               `json:"installation_id"`
+	InstallationIDs           []int64             `json:"installation_ids,omitempty"`
+	CredentialIdentityVersion int                 `json:"credential_identity_version,omitempty"`
+	TelegramUnlock            bool                `json:"telegram_unlock,omitempty"`
+	PublicFingerprint         string              `json:"public_fingerprint"`
+	CreatedAt                 time.Time           `json:"created_at"`
+	PrivateKey                EncryptedPrivateKey `json:"private_key"`
+	selectedInstallationID    int64               `json:"-"`
 }
 
 type persistedVault struct {
@@ -179,6 +183,7 @@ func (v *Vault) List() []App {
 	copy(apps, v.state.Apps)
 	for i := range apps {
 		apps[i].PrivateKey = EncryptedPrivateKey{}
+		apps[i].InstallationIDs = apps[i].Installations()
 	}
 	sort.Slice(apps, func(i, j int) bool { return apps[i].Alias < apps[j].Alias })
 	return apps
@@ -193,6 +198,7 @@ func (v *Vault) Get(alias string) (App, bool) {
 	for _, app := range v.state.Apps {
 		if app.Alias == alias {
 			app.PrivateKey = EncryptedPrivateKey{}
+			app.InstallationIDs = app.Installations()
 			return app, true
 		}
 	}
@@ -200,12 +206,24 @@ func (v *Vault) Get(alias string) (App, bool) {
 }
 
 func (v *Vault) Add(alias string, appID, installationID int64, privateKeyPEM, passphrase []byte, telegramUnlock bool) (App, bool, error) {
+	return v.AddInstallations(alias, appID, []int64{installationID}, privateKeyPEM, passphrase, telegramUnlock)
+}
+
+// AddInstallations atomically enrolls or replaces one App credential and the
+// complete set of installation IDs that may use it. New ciphertext binds the
+// complete set as authenticated metadata. Version-1 entries remain readable
+// without being rewritten until the operator explicitly re-enrolls them.
+func (v *Vault) AddInstallations(alias string, appID int64, installationIDs []int64, privateKeyPEM, passphrase []byte, telegramUnlock bool) (App, bool, error) {
 	alias = strings.TrimSpace(alias)
 	if err := validateAlias(alias); err != nil {
 		return App{}, false, err
 	}
-	if appID <= 0 || installationID <= 0 {
-		return App{}, false, fmt.Errorf("app ID and installation ID must be positive")
+	installationIDs, err := normalizeInstallationIDs(installationIDs)
+	if appID <= 0 || err != nil {
+		if err != nil {
+			return App{}, false, err
+		}
+		return App{}, false, fmt.Errorf("app ID must be positive")
 	}
 	if len(privateKeyPEM) == 0 || len(privateKeyPEM) > maxPrivateKeySize {
 		return App{}, false, fmt.Errorf("GitHub App private key must be between 1 and %d bytes", maxPrivateKeySize)
@@ -221,18 +239,21 @@ func (v *Vault) Add(alias string, appID, installationID int64, privateKeyPEM, pa
 	if err != nil {
 		return App{}, false, err
 	}
-	encrypted, err := encryptPrivateKey(alias, appID, installationID, privateKeyPEM, passphrase)
+	credentialInstallationID := installationIDs[0]
+	encrypted, err := encryptPrivateKeyForInstallations(alias, appID, installationIDs, privateKeyPEM, passphrase)
 	if err != nil {
 		return App{}, false, err
 	}
 	item := App{
-		Alias:             alias,
-		AppID:             appID,
-		InstallationID:    installationID,
-		TelegramUnlock:    telegramUnlock,
-		PublicFingerprint: fingerprint,
-		CreatedAt:         time.Now().UTC(),
-		PrivateKey:        encrypted,
+		Alias:                     alias,
+		AppID:                     appID,
+		InstallationID:            credentialInstallationID,
+		InstallationIDs:           append([]int64(nil), installationIDs...),
+		CredentialIdentityVersion: credentialIdentityVersion,
+		TelegramUnlock:            telegramUnlock,
+		PublicFingerprint:         fingerprint,
+		CreatedAt:                 time.Now().UTC(),
+		PrivateKey:                encrypted,
 	}
 
 	v.mu.Lock()
@@ -262,6 +283,51 @@ func (v *Vault) Add(alias string, appID, installationID int64, privateKeyPEM, pa
 	}
 	item.PrivateKey = EncryptedPrivateKey{}
 	return item, created, nil
+}
+
+// Installations returns the canonical installation set. A missing plural field
+// is the version-1 single-installation representation and is migrated in memory
+// without rewriting the encrypted vault.
+func (a App) Installations() []int64 {
+	if len(a.InstallationIDs) == 0 {
+		if a.InstallationID <= 0 {
+			return nil
+		}
+		return []int64{a.InstallationID}
+	}
+	out := append([]int64(nil), a.InstallationIDs...)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// EffectiveInstallationID is the one installation bound to this request,
+// grant, lease, or mint. App credentials may contain several installations,
+// but a token never does.
+func (a App) EffectiveInstallationID() int64 {
+	if a.selectedInstallationID > 0 {
+		return a.selectedInstallationID
+	}
+	return a.InstallationID
+}
+
+// SelectInstallation binds a public enrollment value to exactly one enrolled
+// installation without changing the credential ciphertext identity.
+func (a App) SelectInstallation(installationID int64) (App, error) {
+	installations := a.Installations()
+	if installationID == 0 {
+		if len(installations) != 1 {
+			return App{}, fmt.Errorf("GitHub App %q has %d installations (%s); pass --installation-id to select exactly one", a.Alias, len(installations), formatInstallationIDs(installations))
+		}
+		installationID = installations[0]
+	}
+	for _, candidate := range installations {
+		if candidate == installationID {
+			a.InstallationIDs = installations
+			a.selectedInstallationID = installationID
+			return a, nil
+		}
+	}
+	return App{}, fmt.Errorf("GitHub App %q does not enroll installation %d; enrolled installations: %s", a.Alias, installationID, formatInstallationIDs(installations))
 }
 
 func (v *Vault) Remove(alias string) (bool, error) {
@@ -316,6 +382,7 @@ func (v *Vault) Unlock(alias string, passphrase []byte) ([]byte, App, error) {
 	}
 	public := stored
 	public.PrivateKey = EncryptedPrivateKey{}
+	public.InstallationIDs = public.Installations()
 	return plaintext, public, nil
 }
 
@@ -361,6 +428,14 @@ func PublicFingerprint(key *rsa.PrivateKey) (string, error) {
 }
 
 func encryptPrivateKey(alias string, appID, installationID int64, plaintext, passphrase []byte) (EncryptedPrivateKey, error) {
+	return encryptPrivateKeyWithAAD(credentialAAD(alias, appID, installationID), plaintext, passphrase)
+}
+
+func encryptPrivateKeyForInstallations(alias string, appID int64, installationIDs []int64, plaintext, passphrase []byte) (EncryptedPrivateKey, error) {
+	return encryptPrivateKeyWithAAD(credentialInstallationSetAAD(alias, appID, installationIDs), plaintext, passphrase)
+}
+
+func encryptPrivateKeyWithAAD(aad, plaintext, passphrase []byte) (EncryptedPrivateKey, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return EncryptedPrivateKey{}, fmt.Errorf("generate credential salt: %w", err)
@@ -385,7 +460,7 @@ func encryptPrivateKey(alias string, appID, installationID int64, plaintext, pas
 	if _, err := rand.Read(nonce); err != nil {
 		return EncryptedPrivateKey{}, fmt.Errorf("generate credential nonce: %w", err)
 	}
-	ciphertext := gcm.Seal(nil, nonce, plaintext, credentialAAD(alias, appID, installationID))
+	ciphertext := gcm.Seal(nil, nonce, plaintext, aad)
 	return EncryptedPrivateKey{
 		Ciphertext: base64.RawStdEncoding.EncodeToString(ciphertext),
 		Nonce:      base64.RawStdEncoding.EncodeToString(nonce),
@@ -422,7 +497,11 @@ func decryptPrivateKey(app App, passphrase []byte) ([]byte, error) {
 	if err != nil || len(nonce) != gcm.NonceSize() {
 		return nil, ErrUnlock
 	}
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, credentialAAD(app.Alias, app.AppID, app.InstallationID))
+	aad := credentialAAD(app.Alias, app.AppID, app.InstallationID)
+	if app.CredentialIdentityVersion == credentialIdentityVersion {
+		aad = credentialInstallationSetAAD(app.Alias, app.AppID, app.Installations())
+	}
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
 		return nil, ErrUnlock
 	}
@@ -430,7 +509,11 @@ func decryptPrivateKey(app App, passphrase []byte) ([]byte, error) {
 }
 
 func credentialAAD(alias string, appID, installationID int64) []byte {
-	return []byte(fmt.Sprintf("engram-github-app-v%d\x00%s\x00%d\x00%d", vaultVersion, alias, appID, installationID))
+	return []byte(fmt.Sprintf("engram-github-app-v1\x00%s\x00%d\x00%d", alias, appID, installationID))
+}
+
+func credentialInstallationSetAAD(alias string, appID int64, installationIDs []int64) []byte {
+	return []byte(fmt.Sprintf("engram-github-app-v2\x00%s\x00%d\x00%s", alias, appID, formatInstallationIDs(installationIDs)))
 }
 
 func validateVault(state persistedVault) error {
@@ -443,7 +526,28 @@ func validateVault(state persistedVault) error {
 			return fmt.Errorf("invalid GitHub credential vault: duplicate alias %q", app.Alias)
 		}
 		seen[app.Alias] = true
-		if app.AppID <= 0 || app.InstallationID <= 0 || strings.TrimSpace(app.PublicFingerprint) == "" ||
+		installations, err := normalizeInstallationIDs(app.Installations())
+		if err != nil {
+			return fmt.Errorf("invalid GitHub credential vault entry %q: %w", app.Alias, err)
+		}
+		anchorFound := false
+		for _, installationID := range installations {
+			if installationID == app.InstallationID {
+				anchorFound = true
+				break
+			}
+		}
+		if app.CredentialIdentityVersion != 0 && app.CredentialIdentityVersion != credentialIdentityVersion {
+			return fmt.Errorf("invalid GitHub credential vault entry %q: unsupported credential identity version", app.Alias)
+		}
+		if app.CredentialIdentityVersion == 0 && len(app.InstallationIDs) != 0 &&
+			(len(app.InstallationIDs) != 1 || app.InstallationIDs[0] != app.InstallationID) {
+			return fmt.Errorf("invalid GitHub credential vault entry %q: legacy credential cannot enroll additional installations without re-enrollment", app.Alias)
+		}
+		if app.CredentialIdentityVersion == credentialIdentityVersion && len(app.InstallationIDs) == 0 {
+			return fmt.Errorf("invalid GitHub credential vault entry %q: missing authenticated installation set", app.Alias)
+		}
+		if app.AppID <= 0 || app.InstallationID <= 0 || !anchorFound || strings.TrimSpace(app.PublicFingerprint) == "" ||
 			strings.TrimSpace(app.PrivateKey.Ciphertext) == "" || strings.TrimSpace(app.PrivateKey.Nonce) == "" {
 			return fmt.Errorf("invalid GitHub credential vault entry %q", app.Alias)
 		}
@@ -495,7 +599,40 @@ func (v *Vault) saveLocked() error {
 func cloneVault(state persistedVault) persistedVault {
 	out := state
 	out.Apps = append([]App(nil), state.Apps...)
+	for index := range out.Apps {
+		out.Apps[index].InstallationIDs = append([]int64(nil), out.Apps[index].InstallationIDs...)
+	}
 	return out
+}
+
+func normalizeInstallationIDs(values []int64) ([]int64, error) {
+	if len(values) == 0 {
+		return nil, fmt.Errorf("at least one GitHub App installation ID is required")
+	}
+	if len(values) > 100 {
+		return nil, fmt.Errorf("at most 100 GitHub App installation IDs may be enrolled under one alias")
+	}
+	seen := make(map[int64]bool, len(values))
+	out := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			return nil, fmt.Errorf("GitHub App installation IDs must be positive")
+		}
+		if !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
+func formatInstallationIDs(values []int64) string {
+	parts := make([]string, len(values))
+	for index, value := range values {
+		parts[index] = fmt.Sprintf("%d", value)
+	}
+	return strings.Join(parts, ", ")
 }
 
 func zeroBytes(data []byte) {

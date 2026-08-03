@@ -61,6 +61,67 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	}
 }
 
+func TestGitHubGrantAndRenewedLeaseStayBoundToSelectedInstallation(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(time.Hour)}
+	app, transport, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+	app.GitHubVault = testGitHubVaultWithInstallations(t, false, 456, 789)
+	app.githubGrants = map[string]githubGrant{}
+	request := testLocalGitHubBrokerRequest()
+	request.Action = githubauth.ActionGrant
+	request.InstallationID = 789
+	request.Command = nil
+	request.GrantFor = time.Hour
+	request.Purpose = "Review installation-scoped changes"
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID:      "approve-installation-grant",
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	grantResponse := <-responses
+	if !grantResponse.OK || len(grantResponse.Grants) != 1 || grantResponse.Grants[0].InstallationID != 789 {
+		t.Fatalf("grant response = %#v", grantResponse)
+	}
+	app.expireGitHubLeases(time.Now())
+	if len(app.githubGrants) != 1 {
+		t.Fatal("background enrollment validation invalidated a non-primary installation grant")
+	}
+
+	execRequest := testLocalGitHubBrokerRequest()
+	execRequest.InstallationID = 789
+	execResponse := app.handleGitHubBrokerRequest(context.Background(), execRequest)
+	if !execResponse.OK || execResponse.Token == "" {
+		t.Fatalf("grant-backed exec response = %#v", execResponse)
+	}
+	leases := app.githubLeaseInfos(execRequest.Binding)
+	if len(leases) != 1 || leases[0].InstallationID != 789 {
+		t.Fatalf("grant-backed leases = %#v", leases)
+	}
+
+	session, ok := app.Store.FindSession(sessionID)
+	if !ok {
+		t.Fatal("session disappeared")
+	}
+	otherEnrollment, ok := app.GitHubVault.Get("idolum")
+	if !ok {
+		t.Fatal("enrollment disappeared")
+	}
+	otherEnrollment, err := otherEnrollment.SelectInstallation(456)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRequest := execRequest
+	otherRequest.InstallationID = 456
+	if _, matched := app.matchingGitHubGrant(otherRequest, otherEnrollment, session); matched {
+		t.Fatal("grant for installation 789 matched installation 456")
+	}
+}
+
 func TestGitHubGrantRevokeWaitsForBlockedInspectionThenRemovesGrant(t *testing.T) {
 	now := time.Now().UTC()
 	expectedExpiry := now.Add(time.Hour)

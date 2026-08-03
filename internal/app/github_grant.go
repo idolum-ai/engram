@@ -69,13 +69,14 @@ func (a *App) createGitHubGrant(
 		Binding:          request.Binding,
 		Enrollment:       enrollment,
 		Info: githubauth.GrantInfo{
-			ID:           grantID,
-			App:          request.App,
-			Repositories: append([]string(nil), request.Repositories...),
-			Permissions:  copyStringMap(request.Permissions),
-			Purpose:      request.Purpose,
-			CreatedAt:    now,
-			ExpiresAt:    pending.GrantExpiresAt,
+			ID:             grantID,
+			App:            request.App,
+			InstallationID: request.InstallationID,
+			Repositories:   append([]string(nil), request.Repositories...),
+			Permissions:    copyStringMap(request.Permissions),
+			Purpose:        request.Purpose,
+			CreatedAt:      now,
+			ExpiresAt:      pending.GrantExpiresAt,
 		},
 		PrivateKey: append([]byte(nil), privateKey...),
 	}
@@ -223,12 +224,13 @@ func (a *App) consumeGitHubGrant(
 			Binding:    request.Binding,
 			Enrollment: grant.Enrollment,
 			Info: githubauth.LeaseInfo{
-				App:          request.App,
-				Repositories: append([]string(nil), grant.Info.Repositories...),
-				Permissions:  copyStringMap(grant.Info.Permissions),
-				ExpiresAt:    token.ExpiresAt,
-				GrantID:      grant.Info.ID,
-				Generation:   generation,
+				App:            request.App,
+				InstallationID: request.InstallationID,
+				Repositories:   append([]string(nil), grant.Info.Repositories...),
+				Permissions:    copyStringMap(grant.Info.Permissions),
+				ExpiresAt:      token.ExpiresAt,
+				GrantID:        grant.Info.ID,
+				Generation:     generation,
 			},
 			Token: token.Value,
 		}
@@ -328,7 +330,7 @@ func (a *App) invalidateGitHubGrant(ctx context.Context, binding githubauth.Bind
 	}
 	if found {
 		a.queueManualRefresh(grant.SessionID)
-		_ = a.audit("github.grant", outcome, map[string]any{"session_id": grant.SessionID, "app": grant.Info.App, "grant_id": grant.Info.ID})
+		_ = a.audit("github.grant", outcome, map[string]any{"session_id": grant.SessionID, "app": grant.Info.App, "installation_id": grant.Info.InstallationID, "grant_id": grant.Info.ID})
 	}
 }
 

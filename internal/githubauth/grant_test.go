@@ -36,6 +36,21 @@ func TestRenewableGrantRequestRequiresBoundedPurposeAndSafePermissions(t *testin
 	}
 }
 
+func TestCapabilityRequestAcceptsAbsentOrPositiveInstallationSelector(t *testing.T) {
+	request := renewableGrantTestRequest()
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	request.InstallationID = 789
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	request.InstallationID = -1
+	if err := request.Validate(); err == nil || !strings.Contains(err.Error(), "installation ID must be positive") {
+		t.Fatalf("negative installation selector error = %v", err)
+	}
+}
+
 func TestRenewableGrantPurposeRejectsInvisibleAndLineBreakingUnicode(t *testing.T) {
 	for name, character := range map[string]string{
 		"control":             "\u0007",
@@ -131,5 +146,17 @@ func TestCompactGrantLineIsDistinctFromTokenLease(t *testing.T) {
 	}, now)
 	if line != "GH grant idolum · 1R 1W · 1 repo · 5h42m" {
 		t.Fatalf("grant line = %q", line)
+	}
+}
+
+func TestCompactAuthorityLinesExposeSelectedInstallation(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	grant := GrantInfo{App: "shared", InstallationID: 789, Repositories: []string{"owner/repo"}, Permissions: map[string]string{"contents": "read"}, ExpiresAt: now.Add(time.Hour)}
+	lease := LeaseInfo{App: "shared", InstallationID: 789, Repositories: []string{"owner/repo"}, Permissions: map[string]string{"contents": "read"}, ExpiresAt: now.Add(time.Hour)}
+	if got := CompactGrantLine(grant, now); !strings.Contains(got, "shared@789") {
+		t.Fatalf("grant line = %q", got)
+	}
+	if got := CompactLeaseLine(lease, now); !strings.Contains(got, "shared@789") {
+		t.Fatalf("lease line = %q", got)
 	}
 }
