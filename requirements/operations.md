@@ -53,6 +53,11 @@ runtime state.
 - Automatic Codex recovery mapping is opt-in operator configuration through a
   trusted `SessionStart` hook that invokes the installed `engram codex-hook`.
   Engram does not edit Codex hook configuration during installation.
+- `engram codex-bind` is an argument-free, one-time migration command for an
+  already active Codex session. It may read only the inherited
+  `CODEX_THREAD_ID`, `TMUX_PANE`, current directory, and current time before
+  publishing the same bounded pane-local metadata used by the hook. It does
+  not restart, clear, or resume Codex.
 - `make uninstall-service` removes the systemd user unit, and `make uninstall`
   removes the binary. Neither operation deletes tmux sessions, configuration,
   state, remembered input templates, logs, or artifacts in Engram's private

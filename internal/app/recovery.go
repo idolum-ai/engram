@@ -142,9 +142,13 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 				return
 			}
 		}
+		validation := "provider_hook"
+		if metadata.Source == "manual" {
+			validation = "provider_manual"
+		}
 		current.RecordRecoveryEvent(state.RecoveryEvent{
 			At: metadata.Observed, Kind: "provider_session", CWD: metadata.CWD,
-			ForegroundAfter: pane.CurrentCmd, Validation: "provider_hook",
+			ForegroundAfter: pane.CurrentCmd, Validation: validation,
 			Program: metadata.Program, ProviderSessionID: metadata.SessionID,
 		})
 	})
@@ -156,6 +160,8 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 	}
 	if metadataErr != nil {
 		_ = a.audit("tmux.recovery_metadata", "rejected", map[string]any{"session_id": expected.ID, "error": metadataErr.Error()})
+	} else if metadataChange {
+		_ = a.audit("tmux.recovery_metadata", "applied", map[string]any{"session_id": expected.ID, "source": metadata.Source})
 	}
 	return metadataErr
 }

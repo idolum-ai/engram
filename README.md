@@ -192,13 +192,14 @@ that state as `Codex · gpt-5.6-sol · high · fast · working`.
 An additional Codex-session context path is available only as an explicit
 privacy opt-in. Set `ENGRAM_CODEX_CONTEXT_TURNS` to `1` through `8` to let guide
 requests include that many recent user turns and their user-visible assistant messages from
-the exact active Codex session. Engram requires the pane-local `SessionStart`
-hook UUID, a proven Codex process incarnation newer than that hook record, an
-unambiguous rollout filename carrying the same UUID, and matching
-`session_meta`. It validates the process again after reading. A missing hook,
-stale or replacement process, ambiguous file, or unfamiliar message record
-fails closed to terminal-only guidance; Engram never selects a transcript
-because it is newest or shares a working directory.
+the exact active Codex session. Engram requires a pane-local UUID published by
+the `SessionStart` hook or explicit `engram codex-bind`, a binding observation
+no older than the proven Codex process incarnation, an unambiguous rollout
+filename carrying the same UUID, and matching `session_meta`. It validates the
+process again after reading. A missing binding, stale or replacement process,
+ambiguous file, or unfamiliar message record fails closed to terminal-only
+guidance; Engram never selects a transcript because it is newest or shares a
+working directory.
 
 Historical session text can clarify the prior topic but never establishes the
 current terminal state. Raw tmux capture remains the only authority for current
@@ -712,8 +713,20 @@ of the same lost watch only needs `/resume 5`. Closing a watch is final and
 clears that recovery mapping. New sessions reuse closed numeric IDs before
 allocating larger ones; running and recoverable watches keep their IDs.
 
-For automatic Codex mapping, install Engram's narrow `SessionStart` hook in
-`~/.codex/hooks.json` after installing the binary:
+An active Codex session that predates the hook can bind itself without a restart
+by running the argument-free command below from inside that exact session:
+
+```sh
+engram codex-bind
+```
+
+It reads Codex's inherited `CODEX_THREAD_ID` and `TMUX_PANE`, prints no UUID,
+and only publishes a candidate binding; the service still proves the active
+process, exact rollout, and immutable tmux identity before using it. Each
+pre-existing session runs it once.
+
+For automatic mapping of future sessions, install Engram's narrow
+`SessionStart` hook in `~/.codex/hooks.json` after installing the binary:
 
 ```json
 {
@@ -738,6 +751,8 @@ Review and trust the hook with Codex's `/hooks` interface. It publishes only
 the exact Codex session UUID, working directory, lifecycle source, and time to
 a pane-local tmux option. Engram validates the persisted pane/window/server
 binding before accepting it, then stores the mapping in its protected state.
+See the [Codex session context guide](docs/codex-session-context.md) for the
+one-time migration, verification, troubleshooting, and disclosure boundaries.
 
 After a host reboot—or whenever Engram starts and discovers that its running
 state no longer matches tmux—the bot sends a deterministic recovery plan with
@@ -875,6 +890,7 @@ tmux show-options -pv @engram
 tmux show-options -pv @engram_watch_id
 tmux show-options -pv @engram_notify
 tmux show-options -pv @engram_artifact
+tmux show-options -pv @engram_codex
 tmux show-options -pv @engram_github
 ```
 
@@ -882,8 +898,8 @@ The versioned `@engram` value is the commit marker and reports the Telegram
 surface and watch ID. Ignore the auxiliary options unless that marker is present
 and its watch ID agrees with `@engram_watch_id`. The auxiliary options state
 the exact terminal-native notification command, the artifact sequence (print a
-visible `file://` URI, optionally as OSC 8, then signal), and the pane-scoped
-GitHub capability command. Because these are
+visible `file://` URI, optionally as OSC 8, then signal), the one-time active
+Codex binding command, and the pane-scoped GitHub capability command. Because these are
 ordinary tmux metadata and terminal standards, an onlooking agent can discover
 and use them without a plugin or `AGENTS.md`. Engram
 removes the options when an attached pane is untracked and restores them for

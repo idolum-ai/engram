@@ -103,16 +103,17 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   caps each target at 2 KiB. Hyperlink controls remain absent from semantic text
   and rendered terminal pixels.
 - A running watched pane publishes `@engram`, `@engram_watch_id`,
-  `@engram_notify`, and `@engram_artifact` tmux pane user options, plus
-  `@engram_github` only while the optional GitHub App vault is available,
+  `@engram_notify`, `@engram_artifact`, and `@engram_codex` tmux pane user
+  options, plus `@engram_github` only while the optional GitHub App vault is available,
   behind the same immutable server/window binding guard used for input.
   `@engram` is the commit marker: Engram clears it before changing auxiliary
   values, publishes it last, and clears it first on removal. Consumers ignore
   auxiliary options unless the marker is present and its watch ID agrees with
   `@engram_watch_id`. The versioned summary advertises the remote surface; the
   other options give a human-readable notification command, the standard OSC 8
-  artifact sequence, and, when available, the pane-scoped GitHub exact-exec and
-  renewable-grant command shapes. Startup repairs metadata for persisted
+  artifact sequence, the argument-free one-time Codex binding command, and,
+  when available, the pane-scoped GitHub exact-exec and renewable-grant command
+  shapes. Startup repairs metadata for persisted
   running watches; normal unwatch or attached-pane untracking removes it
   without changing the pane program, environment, title, or other options.
 - A pane with an active renewable GitHub work-session grant shows one compact
@@ -272,6 +273,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   inherited immutable `TMUX_PANE`. It publishes bounded provider metadata to a
   pane-local tmux option. The service accepts that metadata only between two
   validations of the persisted pane, window, and server incarnation.
+- `engram codex-bind` accepts no arguments and publishes the same bounded
+  metadata using the inherited `CODEX_THREAD_ID` and immutable `TMUX_PANE`.
+  Missing or invalid environment identity fails before tmux is touched. The
+  service applies the same validation as hook-published metadata.
 - Optional Codex historical context may use that UUID only while a proven
   descendant Codex process incarnation is active in the same pane and the hook
   observation is no older than the process start. Engram rechecks the process

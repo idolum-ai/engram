@@ -13,6 +13,7 @@ import (
 
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/lockfile"
+	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
@@ -40,6 +41,56 @@ func TestCodexHookPublishesExactSessionToInheritedPane(t *testing.T) {
 	}
 	if err := runCodexHook(strings.NewReader(`{}`), "", tmux.New(runner), time.Time{}); err == nil {
 		t.Fatal("invalid hook input was accepted")
+	}
+}
+
+func TestCodexBindPublishesInheritedIdentityWithoutUserArguments(t *testing.T) {
+	runner := &hookRunner{}
+	now := time.Date(2026, 8, 3, 6, 30, 0, 0, time.UTC)
+	err := runCodexBind("019f7607-c8b0-74b3-87ca-64a7e6e7ede0", "%7", "/work", tmux.New(runner), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 || len(runner.calls[0]) != 7 || runner.calls[0][0] != "set-option" || runner.calls[0][4] != "%7" {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	metadata, err := recovery.Decode(runner.calls[0][6])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Program != recovery.ProgramCodex || metadata.SessionID != "019f7607-c8b0-74b3-87ca-64a7e6e7ede0" || metadata.CWD != "/work" || metadata.Source != "manual" || !metadata.Observed.Equal(now) {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+
+	for _, test := range []struct {
+		name      string
+		sessionID string
+		paneID    string
+		want      string
+	}{
+		{name: "missing session", paneID: "%7", want: "CODEX_THREAD_ID"},
+		{name: "invalid session", sessionID: "not-a-uuid", paneID: "%7", want: "CODEX_THREAD_ID"},
+		{name: "missing pane", sessionID: "019f7607-c8b0-74b3-87ca-64a7e6e7ede0", want: "TMUX_PANE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := len(runner.calls)
+			err := runCodexBind(test.sessionID, test.paneID, "/work", tmux.New(runner), now)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("runCodexBind() error = %v, want %q", err, test.want)
+			}
+			if len(runner.calls) != before {
+				t.Fatal("invalid binding reached tmux")
+			}
+		})
+	}
+}
+
+func TestCodexBindRejectsArgumentsBeforeInspectingEnvironment(t *testing.T) {
+	_, stderr, code := captureCommand(t, func() int {
+		return run([]string{"codex-bind", "unexpected"})
+	})
+	if code != 2 || !strings.Contains(stderr, "usage: engram codex-bind") {
+		t.Fatalf("codex-bind code=%d stderr=%q", code, stderr)
 	}
 }
 

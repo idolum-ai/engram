@@ -69,15 +69,22 @@ privacy model must stay small and explicit.
   boundaries.
 - Codex transcript context is disabled by default and may be enabled only with
   `ENGRAM_CODEX_CONTEXT_TURNS` between one and eight. Engram must bind it to the
-  exact active pane through a validated `SessionStart` UUID and a Codex process
-  incarnation observed before and after the read. The hook must be no older
-  than the process. Exact filename and `session_meta` UUID agreement are
+  exact active pane through a UUID published by a validated `SessionStart` hook
+  or the explicit argument-free `engram codex-bind` migration command, plus a
+  Codex process incarnation observed before and after the read. The binding
+  observation must be no older than the process. Exact filename and
+  `session_meta` UUID agreement are
   required; recency, cwd, title, or model heuristics are forbidden. For a
   long-lived rollout larger than the fixed read budget, Engram must verify
   `session_meta` from a bounded prefix of that exact file and parse recent
   messages from a bounded tail captured at an observed file size. Ambiguous,
   symlinked, malformed, oversized-record, stale, or replacement-process
   sources fail closed to terminal-only guidance.
+- `engram codex-bind` must accept no caller-supplied UUID or pane argument. It
+  reads `CODEX_THREAD_ID` and `TMUX_PANE` only from its inherited environment,
+  does not print the UUID, and publishes no transcript text. Publishing is not
+  proof of acceptance; the service applies every ordinary process, rollout,
+  and immutable tmux validation before admitting context.
 - The versioned Codex rollout parser may admit only bounded visible text from
   user and assistant message records. It must exclude system/developer prompts,
   hidden reasoning, tool arguments and results, attachments, generated

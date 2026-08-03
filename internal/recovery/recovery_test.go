@@ -55,4 +55,9 @@ func TestEncodeAndDecodeEnforceTheSameMetadataBounds(t *testing.T) {
 			t.Fatalf("Encode accepted invalid cwd of length %d", len(cwd))
 		}
 	}
+	invalidSource := base
+	invalidSource.Source = "caller-controlled"
+	if _, err := Encode(invalidSource); err == nil {
+		t.Fatal("Encode accepted an unknown recovery metadata source")
+	}
 }

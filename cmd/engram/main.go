@@ -117,6 +117,22 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "codex-bind":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "usage: engram codex-bind")
+			return 2
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "codex-bind: resolve current directory:", err)
+			return 1
+		}
+		if err := runCodexBind(os.Getenv("CODEX_THREAD_ID"), os.Getenv("TMUX_PANE"), cwd, tmux.New(tmux.ExecRunner{}), time.Now().UTC()); err != nil {
+			fmt.Fprintln(os.Stderr, "codex-bind:", err)
+			return 1
+		}
+		fmt.Println("Codex session binding published for this tmux pane. Engram will verify the active process and exact rollout before using it.")
+		return 0
 	case "github":
 		return runGitHub(args[1:])
 	case "help", "--help", "-h":
@@ -141,6 +157,7 @@ func printHelp() {
   engram commands
   engram signal [--stdout] <message>
   engram codex-hook
+  engram codex-bind
   engram github help
   engram version
   engram help
@@ -154,6 +171,25 @@ func runCodexHook(input io.Reader, paneID string, manager tmux.Manager, now time
 	}
 	if strings.TrimSpace(paneID) == "" {
 		return errors.New("TMUX_PANE is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return manager.PublishRecoveryMetadata(ctx, paneID, metadata)
+}
+
+func runCodexBind(sessionID, paneID, cwd string, manager tmux.Manager, now time.Time) error {
+	if !recovery.ValidSessionID(sessionID) {
+		return errors.New("CODEX_THREAD_ID is missing or invalid; run this command from inside the intended active Codex session")
+	}
+	if strings.TrimSpace(paneID) == "" {
+		return errors.New("TMUX_PANE is not set; run this command from the Codex session inside its watched tmux pane")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	metadata := recovery.Metadata{
+		Version: 1, Program: recovery.ProgramCodex, SessionID: strings.ToLower(strings.TrimSpace(sessionID)),
+		CWD: cwd, Source: "manual", Observed: now.UTC(),
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

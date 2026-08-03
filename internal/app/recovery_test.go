@@ -212,6 +212,25 @@ func TestRecoveryReconciliationPersistsProviderHookAndProcessObservation(t *test
 	}
 }
 
+func TestRecoveryReconciliationPreservesManualBindingProvenance(t *testing.T) {
+	app, session := recoveryTestApp(t)
+	encoded, err := recovery.Encode(recovery.Metadata{
+		Program: recovery.ProgramCodex, SessionID: recoveryTestSessionID, CWD: "/work",
+		Source: "manual", Observed: time.Date(2026, 8, 3, 6, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encoded})
+	if err := app.reconcileRecoverySession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := app.Store.FindSession(session.ID)
+	if len(current.RecoveryEvents) != 1 || current.RecoveryEvents[0].Validation != "provider_manual" || current.ResumeSessionID != recoveryTestSessionID {
+		t.Fatalf("manual recovery events = %#v", current.RecoveryEvents)
+	}
+}
+
 func TestPendingResumeReconciliationFinalizesObservedProvider(t *testing.T) {
 	app, session := recoveryTestApp(t)
 	runner := &resumeRunner{cwd: "/work", program: recovery.ProgramCodex, resumed: true}
