@@ -6,6 +6,13 @@ Notable user-visible and operational changes are recorded here.
 
 ### GitHub capabilities
 
+- Let one encrypted GitHub App alias enroll a repeatable, authenticated set of
+  installation IDs while keeping every request, approval, grant, lease, token,
+  status line, and audit event bound to exactly one selected installation.
+  Multi-installation requests require an explicit `--installation-id`; Engram
+  refuses ambiguous, unknown, or cross-installation authority instead of
+  guessing or combining tokens. Existing single-installation vaults remain
+  readable without an automatic secret rewrite.
 - Add bounded renewable, pane-scoped work-session grants. One explicit
   Telegram approval can authorize subset commands for a configured maximum of
   eight hours while Engram rotates ordinary short-lived GitHub installation

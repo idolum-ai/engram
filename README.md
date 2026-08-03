@@ -277,6 +277,22 @@ engram github app add idolum \
   --pem ./github-app.private-key.pem
 ```
 
+One App credential may be installed on several accounts. Enroll every
+installation under the same alias by repeating `--installation-id`:
+
+```sh
+engram github app add shared-app \
+  --app-id 123456 \
+  --installation-id 987654 \
+  --installation-id 987655 \
+  --pem ./github-app.private-key.pem
+```
+
+Enrollment is an atomic replacement: when updating an alias, repeat the
+complete installation set and the intended unlock mode. Existing
+single-installation vaults continue to work without an automatic secret
+rewrite.
+
 Engram prompts twice for a passphrase of at least 12 bytes. It stores the PEM
 under `ENGRAM_HOME/github-apps.json` using PBKDF2-HMAC-SHA256 with 600,000
 iterations and authenticated AES-256-GCM encryption. This standard-library-only
@@ -306,6 +322,15 @@ cannot fit safely in one card, Engram refuses the request instead of presenting
 a truncated command. It likewise refuses a command containing material that
 would require redaction in Telegram, because approving a redacted command would
 not be informed approval.
+
+Every token remains scoped to exactly one GitHub App installation. A
+single-installation alias selects it automatically. When an alias has several
+installations, `github exec` and `github grant` require
+`--installation-id ID`; Engram never guesses and never combines repositories
+or permissions across installations. The selected installation is visible in
+the approval, status output, audit-safe fields, and compact card (`idolum@987654`).
+If every requested repository is not available through that one installation,
+the request fails and must be split into separate commands.
 
 By default, the passphrase is entered locally before the Telegram approval.
 This keeps it out of Telegram. A user who explicitly accepts Telegram's cloud
@@ -340,6 +365,7 @@ approval. While active, the Telegram anchor gains one compact line:
 ```text
 GH idolum · read-only · 1 repo · 42m
 GH idolum · 1R 1W · 1 repo · 42m
+GH shared-app@987655 · 1R 1W · 1 repo · 42m
 ```
 
 For a longer but still bounded workflow, authorize a renewable work-session
@@ -354,6 +380,15 @@ engram github grant \
   --permission pull_requests=write \
   --for 6h \
   --purpose "Complete and review the current pull request"
+```
+
+For a multi-installation alias, add the same explicit selector to both the
+grant and every later `github exec` that consumes it:
+
+```sh
+engram github grant --app shared-app --installation-id 987655 \
+  --repo another-owner/project --permission contents=write \
+  --for 2h --purpose "Prepare the project update"
 ```
 
 The grant is not a long-lived bearer token. It keeps the unlocked App signing
@@ -380,6 +415,7 @@ The card remains compact:
 
 ```text
 GH grant idolum · 1R 2W · 1 repo · 5h42m
+GH grant shared-app@987655 · 1R 1W · 1 repo · 1h42m
 ```
 
 The three authority modes are intentionally different:
