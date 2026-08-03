@@ -208,9 +208,10 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if err != nil {
 		a.completeGitHubApprovalMessage(pending, "Failed: GitHub rejected the scoped capability request.")
 		_ = a.audit("github.mint", "failed", map[string]any{
-			"session_id": session.ID,
-			"app":        request.App,
-			"error":      err.Error(),
+			"session_id":      session.ID,
+			"app":             request.App,
+			"installation_id": request.InstallationID,
+			"error":           err.Error(),
 		})
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
@@ -231,9 +232,10 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		cleanupErr := a.revokeDiscardedGitHubToken(ctx, token.Value, err)
 		a.completeGitHubApprovalMessage(pending, "Canceled: the requesting tmux pane changed before the capability could be delivered.")
 		_ = a.audit("github.mint", "discarded", map[string]any{
-			"session_id": session.ID,
-			"app":        request.App,
-			"error":      cleanupErr.Error(),
+			"session_id":      session.ID,
+			"app":             request.App,
+			"installation_id": request.InstallationID,
+			"error":           cleanupErr.Error(),
 		})
 		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
 	}
@@ -241,9 +243,10 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		cleanupErr := a.revokeDiscardedGitHubToken(ctx, token.Value, err)
 		a.completeGitHubApprovalMessage(pending, "Canceled: the GitHub App enrollment changed before the capability could be delivered.")
 		_ = a.audit("github.mint", "discarded", map[string]any{
-			"session_id": session.ID,
-			"app":        request.App,
-			"error":      cleanupErr.Error(),
+			"session_id":      session.ID,
+			"app":             request.App,
+			"installation_id": request.InstallationID,
+			"error":           cleanupErr.Error(),
 		})
 		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
 	}

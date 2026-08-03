@@ -530,6 +530,9 @@ func validateVault(state persistedVault) error {
 		if err != nil {
 			return fmt.Errorf("invalid GitHub credential vault entry %q: %w", app.Alias, err)
 		}
+		if len(app.InstallationIDs) != 0 && len(installations) != len(app.InstallationIDs) {
+			return fmt.Errorf("invalid GitHub credential vault entry %q: duplicate installation ID", app.Alias)
+		}
 		anchorFound := false
 		for _, installationID := range installations {
 			if installationID == app.InstallationID {
