@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -131,8 +132,16 @@ func exactRolloutPath(root, sessionID string) (string, error) {
 }
 
 func parseRollout(path, sessionID string, turnLimit int) (Context, error) {
+	return parseRolloutWithBudget(path, sessionID, turnLimit, maxRolloutBytes)
+}
+
+// parseRolloutWithBudget keeps reading bounded even when a long-lived Codex
+// session has grown beyond the context budget. Identity is proven from the
+// beginning of the exact file, while recent messages are parsed from a fixed
+// tail ending at the size observed when the file was opened.
+func parseRolloutWithBudget(path, sessionID string, turnLimit int, readBudget int64) (Context, error) {
 	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > maxRolloutBytes {
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || readBudget < 1024 {
 		return Context{}, fmt.Errorf("Codex rollout is not a bounded regular file")
 	}
 	file, err := os.Open(path)
@@ -140,10 +149,80 @@ func parseRollout(path, sessionID string, turnLimit int) (Context, error) {
 		return Context{}, fmt.Errorf("open Codex rollout: %w", err)
 	}
 	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) || opened.Size() <= 0 {
+		return Context{}, fmt.Errorf("Codex rollout identity changed")
+	}
 
-	scanner := bufio.NewScanner(file)
+	size := opened.Size()
+	if size <= readBudget {
+		return parseRolloutRecords(io.NewSectionReader(file, 0, size), sessionID, turnLimit, false)
+	}
+
+	identityBudget := min(int64(maxJSONLineBytes), readBudget/16)
+	if err := verifyRolloutIdentity(io.NewSectionReader(file, 0, identityBudget), sessionID); err != nil {
+		return Context{}, err
+	}
+	tailBudget := readBudget - identityBudget
+	tail := bufio.NewReader(io.NewSectionReader(file, size-tailBudget, tailBudget))
+	if err := discardPartialRecord(tail); err != nil {
+		return Context{}, err
+	}
+	return parseRolloutRecords(tail, sessionID, turnLimit, true)
+}
+
+func verifyRolloutIdentity(reader io.Reader, sessionID string) error {
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), maxJSONLineBytes)
-	verified := false
+	for scanner.Scan() {
+		var record struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			return fmt.Errorf("parse %s identity record: %w", ParserVersion, err)
+		}
+		if record.Type != "session_meta" {
+			continue
+		}
+		var metadata struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(record.Payload, &metadata); err != nil || strings.ToLower(metadata.ID) != sessionID {
+			return fmt.Errorf("Codex rollout identity does not match")
+		}
+		return nil
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan Codex rollout identity: %w", err)
+	}
+	return fmt.Errorf("Codex rollout has no matching session metadata in bounded prefix")
+}
+
+func discardPartialRecord(reader *bufio.Reader) error {
+	consumed := 0
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		consumed += len(fragment)
+		if consumed > maxJSONLineBytes {
+			return fmt.Errorf("Codex rollout tail starts inside an oversized record")
+		}
+		switch err {
+		case nil:
+			return nil
+		case bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			return fmt.Errorf("Codex rollout tail contains no complete record")
+		default:
+			return fmt.Errorf("align Codex rollout tail: %w", err)
+		}
+	}
+}
+
+func parseRolloutRecords(reader io.Reader, sessionID string, turnLimit int, verified bool) (Context, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 64<<10), maxJSONLineBytes)
 	messages := make([]Message, 0, min(maxParsedMessages, turnLimit*4))
 	for scanner.Scan() {
 		var record struct {

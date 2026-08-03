@@ -571,11 +571,13 @@ the bot channel and must be revoked immediately.
   reached the pane.
 - **Local Codex session store:** When `ENGRAM_CODEX_CONTEXT_TURNS` is nonzero,
   Engram reads the exact UUID-named rollout under `~/.codex/sessions` after
-  binding it to the active pane and process. The selected provider receives the
-  bounded, redacted historical text. A diagram inset, when admitted, is sent to
-  Telegram with the guide-evidence card. Engram does not persist transcript
-  text, but the provider and Telegram receive these opt-in disclosures under
-  their normal data-retention policies.
+  binding it to the active pane and process. Long-lived rollouts are handled
+  with a fixed total read budget: identity is verified from the file's bounded
+  prefix and recent messages are parsed from a bounded tail. The selected
+  provider receives the bounded, redacted historical text. A diagram inset,
+  when admitted, is sent to Telegram with the guide-evidence card. Engram does
+  not persist transcript text, but the provider and Telegram receive these
+  opt-in disclosures under their normal data-retention policies.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`,
   `templates.json`, `audit.jsonl`, one rotated `audit.jsonl.1`, and lock files.
   `templates.json` stores exact user-authored input bodies in plaintext with

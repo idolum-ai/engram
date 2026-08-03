@@ -89,8 +89,10 @@ historical guide context only after all of these independent checks succeed:
 - the active pane process tree contains one proven Codex executable and yields
   a PID/path/version/start-time incarnation fingerprint;
 - the hook observation is not older than that process incarnation;
-- exactly one regular, bounded, non-symlink rollout filename carries the UUID,
-  and its `session_meta.id` repeats it; and
+- exactly one regular, non-symlink rollout filename carries the UUID, and its
+  `session_meta.id` repeats it in a bounded prefix read; recent records come
+  from either the same bounded full-file read or a bounded tail ending at the
+  file size observed when opened; and
 - the same process incarnation and tracked tmux binding still exist after the
   rollout read.
 
@@ -101,9 +103,10 @@ a `message`, whose role is `user` or `assistant`, and whose content type matches
 `input_text` or `output_text`. System/developer roles, hidden reasoning, tool
 arguments/results, attachments, and generated environment/instruction metadata
 are excluded. Unrecognized structure in a recognized message fails closed.
-Messages, individual text, rollout files, JSON lines, and aggregate prompt text
-all have independent bounds. The ordinary Engram redactor runs before provider
-delivery, and transcript text is never added to state or audit output.
+Messages, individual text, rollout read windows, JSON lines, and aggregate
+prompt text all have independent bounds. The ordinary Engram redactor runs
+before provider delivery, and transcript text is never added to state or audit
+output.
 
 The guide prompt labels this field `historical_session_context`. It may clarify
 past topic and intent, but `terminal_text` remains the only current-state truth.

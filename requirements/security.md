@@ -72,9 +72,12 @@ privacy model must stay small and explicit.
   exact active pane through a validated `SessionStart` UUID and a Codex process
   incarnation observed before and after the read. The hook must be no older
   than the process. Exact filename and `session_meta` UUID agreement are
-  required; recency, cwd, title, or model heuristics are forbidden. Ambiguous,
-  symlinked, oversized, malformed, stale, or replacement-process sources fail
-  closed to terminal-only guidance.
+  required; recency, cwd, title, or model heuristics are forbidden. For a
+  long-lived rollout larger than the fixed read budget, Engram must verify
+  `session_meta` from a bounded prefix of that exact file and parse recent
+  messages from a bounded tail captured at an observed file size. Ambiguous,
+  symlinked, malformed, oversized-record, stale, or replacement-process
+  sources fail closed to terminal-only guidance.
 - The versioned Codex rollout parser may admit only bounded visible text from
   user and assistant message records. It must exclude system/developer prompts,
   hidden reasoning, tool arguments and results, attachments, generated

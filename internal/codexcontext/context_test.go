@@ -112,6 +112,36 @@ func TestReaderTurnLimitKeepsUserTurnAndFollowingAssistantMessages(t *testing.T)
 	}
 }
 
+func TestReaderUsesBoundedTailForLongLivedRollout(t *testing.T) {
+	root := t.TempDir()
+	path := writeFixture(t, root, fixtureSessionID, strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"` + fixtureSessionID + `"}}`,
+		strings.TrimSuffix(strings.Repeat(`{"type":"event_msg","payload":{"type":"token_count","text":"synthetic padding"}}`+"\n", 160), "\n"),
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"recent question"}]}}`,
+		`{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"recent answer"}]}}`,
+	}, "\n")+"\n")
+
+	got, err := parseRolloutWithBudget(path, fixtureSessionID, 1, 8<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 || got.Messages[0].Text != "recent question" || got.Messages[1].Text != "recent answer" {
+		t.Fatalf("bounded tail messages = %#v", got.Messages)
+	}
+}
+
+func TestReaderDoesNotTrustSessionMetadataFoundOnlyInTail(t *testing.T) {
+	root := t.TempDir()
+	path := writeFixture(t, root, fixtureSessionID, strings.Repeat(
+		`{"type":"event_msg","payload":{"type":"token_count","text":"synthetic padding"}}`+"\n", 160)+
+		`{"type":"session_meta","payload":{"id":"`+fixtureSessionID+`"}}`+"\n"+
+		`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"must not be admitted"}]}}`+"\n")
+
+	if _, err := parseRolloutWithBudget(path, fixtureSessionID, 1, 8<<10); err == nil {
+		t.Fatalf("tail-only identity error = %v", err)
+	}
+}
+
 func TestDetectDiagramConservativelyRecognizesBoxesAndFlows(t *testing.T) {
 	tests := []struct {
 		name string
@@ -143,7 +173,7 @@ func TestDetectDiagramCountsUnicodeDisplayWidth(t *testing.T) {
 	}
 }
 
-func writeFixture(t *testing.T, root, sessionID, contents string) {
+func writeFixture(t *testing.T, root, sessionID, contents string) string {
 	t.Helper()
 	dir := filepath.Join(root, "2026", "08", "03")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -153,4 +183,5 @@ func writeFixture(t *testing.T, root, sessionID, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return path
 }
