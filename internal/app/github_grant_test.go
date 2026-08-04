@@ -38,10 +38,12 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	}()
 	requestID, approvalID := pendingGitHubTestIdentity(t, app)
 	approvalMessage := <-transport.sent
-	if !strings.Contains(approvalMessage.text, "Renewable GitHub work-session grant") ||
-		!strings.Contains(approvalMessage.text, "unattended short-lived token rotation") ||
+	if approvalMessage.parseMode != "HTML" ||
+		!strings.Contains(approvalMessage.text, "GitHub access requested") ||
+		!strings.Contains(approvalMessage.text, "<b>For:</b> 6h, renewable") ||
+		!strings.Contains(approvalMessage.text, "<blockquote expandable>") ||
 		!strings.Contains(approvalMessage.text, request.Purpose) ||
-		!strings.Contains(approvalMessage.text, expectedExpiry.Local().Format("2006-01-02 15:04 MST")) {
+		!strings.Contains(approvalMessage.text, expectedExpiry.Local().Format("15:04 MST")) {
 		t.Fatalf("approval text = %q", approvalMessage.text)
 	}
 	now = now.Add(2 * time.Minute)
@@ -59,6 +61,46 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	}
 	if len(app.githubGrants) != 1 || len(app.githubLeases) != 0 {
 		t.Fatalf("stored grants=%d leases=%d", len(app.githubGrants), len(app.githubLeases))
+	}
+	completion := <-transport.edited
+	if completion.parseMode != "HTML" ||
+		!strings.Contains(completion.text, "<b>GitHub grant · "+sessionLabel(app.Store.Snapshot().TerminalSessions[0])+"</b>") ||
+		!strings.Contains(completion.text, "<code>idolum@456</code>") ||
+		!strings.Contains(completion.text, "<b>Read:</b> code") ||
+		!strings.Contains(completion.text, "<b>Why:</b> "+request.Purpose) ||
+		!strings.Contains(completion.text, "✓ Active until "+expectedExpiry.Local().Format("2006-01-02 15:04 MST")) ||
+		strings.Contains(completion.text, "<blockquote expandable>") {
+		t.Fatalf("grant completion = %#v", completion)
+	}
+}
+
+func TestGitHubGrantApprovedAtDeadlineRetainsMinimumUsableLifetime(t *testing.T) {
+	now := time.Now().UTC()
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.githubGrants = map[string]githubGrant{}
+	app.githubNow = func() time.Time { return now }
+	request := testLocalGitHubBrokerRequest()
+	request.Action = githubauth.ActionGrant
+	request.Command = nil
+	request.GrantFor = githubauth.MinGrantDuration
+	request.Purpose = "Review the minimum bounded workflow"
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	now = now.Add(githubauth.ApprovalTimeout)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "approve-at-deadline", Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	response := <-responses
+	if !response.OK || len(response.Grants) != 1 {
+		t.Fatalf("grant response = %#v", response)
+	}
+	if remaining := response.Grants[0].ExpiresAt.Sub(now); remaining < githubauth.MinimumUsableGrantDuration {
+		t.Fatalf("usable grant lifetime = %s, want at least %s", remaining, githubauth.MinimumUsableGrantDuration)
 	}
 }
 
@@ -120,6 +162,10 @@ func TestGitHubGrantAndRenewedLeaseStayBoundToSelectedInstallation(t *testing.T)
 	grantResponse := <-responses
 	if !grantResponse.OK || len(grantResponse.Grants) != 1 || grantResponse.Grants[0].InstallationID != 789 {
 		t.Fatalf("grant response = %#v", grantResponse)
+	}
+	if completion := <-transport.edited; !strings.Contains(completion.text, "<code>idolum@789</code>") ||
+		!strings.Contains(completion.text, "<b>Why:</b> "+request.Purpose) {
+		t.Fatalf("selected-installation grant completion = %#v", completion)
 	}
 	app.expireGitHubLeases(time.Now())
 	if len(app.githubGrants) != 1 {

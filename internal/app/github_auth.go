@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,8 +18,9 @@ import (
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
-const githubApprovalTTL = 3 * time.Minute
+const githubApprovalTTL = githubauth.ApprovalTimeout
 const githubUnlockTombstoneTTL = 10 * time.Minute
+const githubApprovalTimeFormat = "2006-01-02 15:04 MST"
 
 type githubApproval struct {
 	passphrase []byte
@@ -34,6 +36,7 @@ type githubPendingRequest struct {
 	ExpiresAt         time.Time
 	ApprovalMessageID int
 	ApprovalText      string
+	ApprovalSummary   string
 	UnlockMessageID   int
 	State             string
 	Result            chan githubApproval
@@ -157,7 +160,7 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		a.completeGitHubApprovalMessage(pending, "Canceled: Engram stopped before this request completed.")
 		return githubauth.BrokerResponse{Error: "GitHub capability request was canceled"}
 	case <-timer.C:
-		a.completeGitHubApprovalMessage(pending, "Expired: no approval was received within three minutes.")
+		a.completeGitHubApprovalMessage(pending, "Expired: no approval was received within fifteen minutes.")
 		_ = a.audit("github.approval", "expired", githubAuditRequest(session.ID, request))
 		return githubauth.BrokerResponse{Error: "GitHub capability request expired"}
 	case approval = <-pending.Result:
@@ -261,9 +264,7 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	a.revokeGitHubLeases(oldTokens)
 	a.queueManualRefresh(session.ID)
 	a.completeGitHubApprovalMessage(pending, fmt.Sprintf(
-		"Approved: %s now has GitHub access to %d %s until %s.",
-		sessionLabel(session), len(request.Repositories), plural(len(request.Repositories), "repository", "repositories"),
-		token.ExpiresAt.Local().Format("15:04 MST"),
+		"✓ Active until %s.", token.ExpiresAt.Local().Format(githubApprovalTimeFormat),
 	))
 	_ = a.audit("github.lease", "granted", githubAuditRequest(session.ID, request))
 	return githubauth.BrokerResponse{OK: true, Token: token.Value, ExpiresAt: token.ExpiresAt}
@@ -356,6 +357,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 		LocalPassphrase: append([]byte(nil), request.Passphrase...),
 		ExpiresAt:       now.Add(githubApprovalTTL),
 		ApprovalText:    text,
+		ApprovalSummary: githubApprovalCompletionSummary(session, request, app),
 		State:           "pending",
 		Result:          make(chan githubApproval, 1),
 		Enrollment:      app,
@@ -371,7 +373,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 	a.githubPending[pending.ID] = pending
 	a.githubMu.Unlock()
 
-	message, err := a.Telegram.SendMessage(ctx, a.Config.TelegramChatID, text, session.AnchorMessageID, telegram.GitHubApprovalMarkup(requestID))
+	message, err := a.Telegram.SendHTMLMessage(ctx, a.Config.TelegramChatID, text, session.AnchorMessageID, telegram.GitHubApprovalMarkup(requestID))
 	if err != nil {
 		a.finishGitHubPending(pending)
 		return nil, fmt.Errorf("send GitHub approval request: %w", err)
@@ -388,23 +390,36 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 
 func (a *App) githubApprovalText(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App, grantExpiresAt time.Time) string {
 	var text strings.Builder
+	text.WriteString(githubApprovalRequestSummary(session, request))
+	text.WriteString("\n\n")
+	text.WriteString(compactGitHubPermissionLines(request.Permissions))
 	if request.Action == githubauth.ActionGrant {
-		text.WriteString("Renewable GitHub work-session grant requested\n\n")
+		fmt.Fprintf(&text, "\n<b>For:</b> %s, renewable · until %s", compactGitHubDuration(request.GrantFor),
+			html.EscapeString(grantExpiresAt.Local().Format(githubApprovalTimeFormat)))
+		fmt.Fprintf(&text, "\n<b>Why:</b> %s", html.EscapeString(request.Purpose))
 	} else {
-		text.WriteString("GitHub capability requested\n\n")
+		fmt.Fprintf(&text, "\n<b>Run:</b> <code>%s</code>", html.EscapeString(a.redactText(compactGitHubCommand(request.Command))))
 	}
-	fmt.Fprintf(&text, "Window: %s\n", sessionLabel(session))
-	fmt.Fprintf(&text, "tmux binding: %s / %s / %s\n", request.Binding.ServerID, request.Binding.WindowID, request.Binding.PaneID)
-	fmt.Fprintf(&text, "App: %s (App ID %d, installation %d, fingerprint %s)\n",
-		request.App, app.AppID, app.EffectiveInstallationID(), app.PublicFingerprint)
+	text.WriteString("\n\nApprove within 15 minutes.")
 	if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
-		text.WriteString("Unlock: Telegram reply (not end-to-end encrypted)\n")
+		text.WriteString(" The password reply is not end-to-end encrypted.")
+	} else {
+		text.WriteString(" Unlock happens locally.")
+	}
+
+	text.WriteString("\n\n<blockquote expandable><b>Details</b>\n")
+	fmt.Fprintf(&text, "Binding: %s / %s / %s\n", html.EscapeString(request.Binding.ServerID),
+		html.EscapeString(request.Binding.WindowID), html.EscapeString(request.Binding.PaneID))
+	fmt.Fprintf(&text, "App ID: %d\nInstallation: %d\nFingerprint: %s\n",
+		app.AppID, app.EffectiveInstallationID(), html.EscapeString(app.PublicFingerprint))
+	if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
+		text.WriteString("Unlock: Telegram reply\n")
 	} else {
 		text.WriteString("Unlock: local passphrase\n")
 	}
 	text.WriteString("Repositories:\n")
 	for _, repository := range request.Repositories {
-		fmt.Fprintf(&text, "  %s\n", repository)
+		fmt.Fprintf(&text, "  %s\n", html.EscapeString(repository))
 	}
 	text.WriteString("Permissions:\n")
 	names := make([]string, 0, len(request.Permissions))
@@ -413,19 +428,91 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		fmt.Fprintf(&text, "  %s: %s\n", name, request.Permissions[name])
+		fmt.Fprintf(&text, "  %s: %s\n", html.EscapeString(name), html.EscapeString(request.Permissions[name]))
 	}
 	if request.Action == githubauth.ActionGrant {
-		fmt.Fprintf(&text, "Duration: %s (until %s)\n", request.GrantFor, grantExpiresAt.Local().Format("2006-01-02 15:04 MST"))
-		fmt.Fprintf(&text, "Purpose: %s\n", request.Purpose)
-		text.WriteString("Scope: later commands from this exact pane may use any subset without another approval; each child receives a token at this displayed ceiling.\n")
-		text.WriteString("Renewal: unattended short-lived token rotation is enabled.\n")
-		text.WriteString("Memory: the unlocked signing capability remains only in Engram memory until this grant ends.\n")
-	} else {
-		fmt.Fprintf(&text, "Command: %s\n", a.redactText(compactGitHubCommand(request.Command)))
+		text.WriteString("Scope: Later commands from this pane may use any subset; each child receives a token at this complete ceiling.\n")
+		text.WriteString("Renewal: Short-lived tokens may rotate unattended.\n")
+		text.WriteString("Memory: The signing capability remains only in Engram memory until this grant ends.\n")
 	}
-	text.WriteString("Expires unanswered: 03:00")
+	text.WriteString("Expires unanswered: 15:00</blockquote>")
 	return text.String()
+}
+
+func githubApprovalRequestSummary(session state.TerminalSession, request githubauth.BrokerRequest) string {
+	heading := "GitHub access requested · " + sessionLabel(session)
+	return fmt.Sprintf("<b>%s</b>\n\n%s", html.EscapeString(heading), githubApprovalTargetHTML(request.App, request.Repositories))
+}
+
+func githubApprovalCompletionSummary(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App) string {
+	authority := "GitHub lease"
+	if request.Action == githubauth.ActionGrant {
+		authority = "GitHub grant"
+	}
+	heading := authority + " · " + sessionLabel(session)
+	appLabel := fmt.Sprintf("%s@%d", request.App, app.EffectiveInstallationID())
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "<b>%s</b>\n\n%s\n\n%s", html.EscapeString(heading),
+		githubApprovalTargetHTML(appLabel, request.Repositories), compactGitHubPermissionLines(request.Permissions))
+	if request.Action == githubauth.ActionGrant {
+		fmt.Fprintf(&summary, "\n<b>Why:</b> %s", html.EscapeString(request.Purpose))
+	}
+	return summary.String()
+}
+
+func githubApprovalTargetHTML(appLabel string, repositories []string) string {
+	var targets strings.Builder
+	fmt.Fprintf(&targets, "<code>%s</code> → ", html.EscapeString(appLabel))
+	for index, repository := range repositories {
+		if index > 0 {
+			targets.WriteString(", ")
+		}
+		fmt.Fprintf(&targets, "<code>%s</code>", html.EscapeString(repository))
+	}
+	return targets.String()
+}
+
+func compactGitHubPermissionLines(permissions map[string]string) string {
+	labelsByLevel := map[string][]string{"write": {}, "read": {}}
+	for name, level := range permissions {
+		labelsByLevel[level] = append(labelsByLevel[level], friendlyGitHubPermissionName(name))
+	}
+	var lines []string
+	for _, level := range []string{"write", "read"} {
+		labels := labelsByLevel[level]
+		if len(labels) == 0 {
+			continue
+		}
+		sort.Strings(labels)
+		label := strings.ToUpper(level[:1]) + level[1:]
+		lines = append(lines, fmt.Sprintf("<b>%s:</b> %s", label, html.EscapeString(strings.Join(labels, ", "))))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func friendlyGitHubPermissionName(name string) string {
+	switch name {
+	case "contents":
+		return "code"
+	case "pull_requests":
+		return "pull requests"
+	case "repository_projects":
+		return "repository projects"
+	case "statuses":
+		return "commit statuses"
+	default:
+		return strings.ReplaceAll(name, "_", " ")
+	}
+}
+
+func compactGitHubDuration(duration time.Duration) string {
+	if duration%time.Hour == 0 {
+		return fmt.Sprintf("%dh", int64(duration/time.Hour))
+	}
+	if duration%time.Minute == 0 {
+		return strings.TrimSuffix(duration.String(), "0s")
+	}
+	return duration.String()
 }
 
 func (a *App) handleGitHubApprovalCallback(ctx context.Context, cb telegram.CallbackQuery, approve bool, requestID string) string {
@@ -643,16 +730,21 @@ func (a *App) completeGitHubApprovalMessage(pending *githubPendingRequest, text 
 	a.githubMu.Lock()
 	messageID := pending.ApprovalMessageID
 	approvalText := pending.ApprovalText
+	approvalSummary := pending.ApprovalSummary
 	a.githubMu.Unlock()
 	if messageID == 0 {
 		return
 	}
 	editCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if approvalText != "" {
-		text = approvalText + "\n\n" + text
+	if approvalSummary != "" {
+		text = approvalSummary + "\n\n" + html.EscapeString(text)
+	} else if approvalText != "" {
+		text = approvalText + "\n\n" + html.EscapeString(text)
+	} else {
+		text = html.EscapeString(text)
 	}
-	_, _ = a.Telegram.EditMessage(editCtx, a.Config.TelegramChatID, messageID, text, telegram.ClearMarkup())
+	_, _ = a.Telegram.EditHTMLMessage(editCtx, a.Config.TelegramChatID, messageID, text, telegram.ClearMarkup())
 }
 
 func (a *App) reusableGitHubLease(request githubauth.BrokerRequest, enrollment githubauth.App) (githubLease, bool) {
@@ -1147,13 +1239,6 @@ func compactGitHubCommand(command []string) string {
 func sessionLabel(session state.TerminalSession) string {
 	title := strings.Join(strings.Fields(firstNonEmpty(session.Title, "terminal")), " ")
 	return fmt.Sprintf("[%d] %s", session.ID, title)
-}
-
-func plural(count int, singular, plural string) string {
-	if count == 1 {
-		return singular
-	}
-	return plural
 }
 
 func copyStringMap(input map[string]string) map[string]string {

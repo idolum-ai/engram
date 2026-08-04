@@ -59,8 +59,10 @@ func TestGitHubCapabilityRemoteApprovalMintsLeaseAndDeletesPassphraseReply(t *te
 	}()
 
 	approvalMessage := <-transport.sent
-	if approvalMessage.id != 77 || !strings.Contains(approvalMessage.text, "pull_requests: write") ||
-		!strings.Contains(approvalMessage.text, "not end-to-end encrypted") {
+	if approvalMessage.id != 77 || approvalMessage.parseMode != "HTML" ||
+		!strings.Contains(approvalMessage.text, "<b>Write:</b> pull requests") ||
+		!strings.Contains(approvalMessage.text, "not end-to-end encrypted") ||
+		!strings.Contains(approvalMessage.text, "<blockquote expandable>") {
 		t.Fatalf("approval message = %#v", approvalMessage)
 	}
 	requestID, approvalID := pendingGitHubTestIdentity(t, app)
@@ -112,6 +114,18 @@ func TestGitHubCapabilityRemoteApprovalMintsLeaseAndDeletesPassphraseReply(t *te
 	if got := app.githubStatusLine(session); !strings.Contains(got, "GH idolum@456 · 1R 1W · 1 repo") {
 		t.Fatalf("capability line = %q", got)
 	}
+	completion := <-transport.edited
+	for _, want := range []string{
+		"<b>GitHub lease · [1] shell</b>",
+		"<code>idolum@456</code>",
+		"<b>Write:</b> pull requests",
+		"<b>Read:</b> code",
+		"✓ Active until " + minter.expiresAt.Local().Format("2006-01-02 15:04 MST"),
+	} {
+		if !strings.Contains(completion.text, want) {
+			t.Fatalf("lease completion omitted %q: %#v", want, completion)
+		}
+	}
 }
 
 func TestGitHubCapabilityRequiresExplicitInstallationForMultiInstallationApp(t *testing.T) {
@@ -147,7 +161,7 @@ func TestGitHubCapabilityBindsApprovalMintAndLeaseToSelectedInstallation(t *test
 	responses := make(chan githubauth.BrokerResponse, 1)
 	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
 	approval := <-transport.sent
-	if !strings.Contains(approval.text, "installation 789") {
+	if !strings.Contains(approval.text, "Installation: 789") {
 		t.Fatalf("approval text = %q", approval.text)
 	}
 	requestID, approvalID := pendingGitHubTestIdentity(t, app)
@@ -801,8 +815,106 @@ func TestGitHubApprovalLabelsLocalUnlockOverrideTruthfully(t *testing.T) {
 	}
 	request := testLocalGitHubBrokerRequest()
 	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true}, time.Time{})
-	if !strings.Contains(text, "Unlock: local passphrase") || strings.Contains(text, "Telegram reply") {
+	if !strings.Contains(text, "Unlock: local passphrase") || strings.Contains(text, "password reply is not end-to-end encrypted") {
 		t.Fatalf("approval text = %q", text)
+	}
+}
+
+func TestGitHubGrantApprovalKeepsDecisionCopyCompactAndDetailsExpandable(t *testing.T) {
+	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
+	session, found := app.Store.FindSession(sessionID)
+	if !found {
+		t.Fatal("session not found")
+	}
+	request := testLocalGitHubBrokerRequest()
+	request.App = "sadasant-ghost"
+	request.Action = githubauth.ActionGrant
+	request.Command = nil
+	request.Passphrase = nil
+	request.Repositories = []string{"idolum-ai/engram"}
+	request.Permissions = map[string]string{
+		"actions":       "read",
+		"checks":        "read",
+		"contents":      "write",
+		"pull_requests": "write",
+	}
+	request.GrantFor = 2 * time.Hour
+	request.Purpose = "Push <PR #59> & verify CI"
+	expiresAt := time.Date(2026, time.August, 5, 3, 0, 0, 0, time.Local)
+	text := app.githubApprovalText(session, request, githubauth.App{
+		AppID:             4357398,
+		InstallationID:    148080021,
+		PublicFingerprint: "sha256:fingerprint",
+		TelegramUnlock:    true,
+	}, expiresAt)
+
+	parts := strings.SplitN(text, "<blockquote expandable>", 2)
+	if len(parts) != 2 {
+		t.Fatalf("approval text omitted expandable details:\n%s", text)
+	}
+	compact, details := parts[0], parts[1]
+	for _, want := range []string{
+		"<b>GitHub access requested · " + sessionLabel(session) + "</b>",
+		"<code>sadasant-ghost</code>",
+		"<code>idolum-ai/engram</code>",
+		"<b>Write:</b> code, pull requests",
+		"<b>Read:</b> actions, checks",
+		"<b>For:</b> 2h, renewable · until " + expiresAt.Local().Format("2006-01-02 15:04 MST"),
+		"<b>Why:</b> Push &lt;PR #59&gt; &amp; verify CI",
+		"Approve within 15 minutes",
+		"password reply is not end-to-end encrypted",
+	} {
+		if !strings.Contains(compact, want) {
+			t.Fatalf("compact approval omitted %q:\n%s", want, compact)
+		}
+	}
+	for _, forbidden := range []string{"tmux binding", "App ID", "fingerprint", "each child receives", "signing capability"} {
+		if strings.Contains(compact, forbidden) {
+			t.Fatalf("compact approval contains diagnostic %q:\n%s", forbidden, compact)
+		}
+	}
+	for _, want := range []string{
+		"App ID: 4357398",
+		"Installation: 148080021",
+		"Fingerprint: sha256:fingerprint",
+		"Binding: " + appTestServerID + " / @1 / %1",
+		"contents: write",
+		"pull_requests: write",
+		"each child receives a token at this complete ceiling",
+		"signing capability remains only in Engram memory",
+		"Expires unanswered: 15:00",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("approval details omitted %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestGitHubApprovalUsesSharedFifteenMinuteDeadline(t *testing.T) {
+	app, transport, sessionID := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	now := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
+	app.githubNow = func() time.Time { return now }
+	session, found := app.Store.FindSession(sessionID)
+	if !found {
+		t.Fatal("session not found")
+	}
+	enrollment, found := app.GitHubVault.Get("idolum")
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
+	pending, err := app.beginGitHubApproval(context.Background(), session, testLocalGitHubBrokerRequest(), enrollment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.finishGitHubPending(pending)
+	message := <-transport.sent
+	if !pending.ExpiresAt.Equal(now.Add(githubauth.ApprovalTimeout)) ||
+		githubauth.ApprovalTimeout != 15*time.Minute ||
+		githubauth.BrokerExchangeTimeout <= githubauth.ApprovalTimeout ||
+		!strings.Contains(message.text, "Approve within 15 minutes") ||
+		!strings.Contains(message.text, "Expires unanswered: 15:00") {
+		t.Fatalf("pending expiry=%s approval=%s exchange=%s message=%q",
+			pending.ExpiresAt, githubauth.ApprovalTimeout, githubauth.BrokerExchangeTimeout, message.text)
 	}
 }
 
@@ -1127,6 +1239,7 @@ type githubTelegramMessage struct {
 	id         int
 	text       string
 	forceReply bool
+	parseMode  string
 }
 
 type githubTelegramTransport struct {
@@ -1134,10 +1247,15 @@ type githubTelegramTransport struct {
 	nextID  int
 	sent    chan githubTelegramMessage
 	deleted []int
+	edited  chan githubTelegramMessage
 }
 
 func newGitHubTelegramTransport() *githubTelegramTransport {
-	return &githubTelegramTransport{nextID: 77, sent: make(chan githubTelegramMessage, 8)}
+	return &githubTelegramTransport{
+		nextID: 77,
+		sent:   make(chan githubTelegramMessage, 8),
+		edited: make(chan githubTelegramMessage, 8),
+	}
 }
 
 func (t *githubTelegramTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -1157,10 +1275,17 @@ func (t *githubTelegramTransport) RoundTrip(request *http.Request) (*http.Respon
 		if markup, ok := body["reply_markup"].(map[string]any); ok {
 			forceReply, _ = markup["force_reply"].(bool)
 		}
-		message := githubTelegramMessage{id: messageID, text: stringValue(body["text"]), forceReply: forceReply}
+		message := githubTelegramMessage{
+			id: messageID, text: stringValue(body["text"]), forceReply: forceReply,
+			parseMode: stringValue(body["parse_mode"]),
+		}
 		t.sent <- message
 		result = map[string]any{"message_id": messageID, "chat": map[string]any{"id": 100}}
 	case "editMessageText":
+		t.edited <- githubTelegramMessage{
+			id: intValue(body["message_id"]), text: stringValue(body["text"]),
+			parseMode: stringValue(body["parse_mode"]),
+		}
 		result = map[string]any{"message_id": intValue(body["message_id"]), "chat": map[string]any{"id": 100}}
 	case "deleteMessage":
 		t.mu.Lock()

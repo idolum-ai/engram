@@ -74,6 +74,15 @@ func TestSplitGitHubCommandRequiresExplicitBoundary(t *testing.T) {
 	}
 }
 
+func TestGitHubBrokerWaitBudgetIncludesFullPostApprovalExchange(t *testing.T) {
+	if githubBrokerRequestTimeout != githubauth.BrokerExchangeTimeout {
+		t.Fatalf("CLI broker timeout = %s, want shared %s", githubBrokerRequestTimeout, githubauth.BrokerExchangeTimeout)
+	}
+	if reserve := githubBrokerRequestTimeout - githubauth.ApprovalTimeout; reserve < 2*time.Minute {
+		t.Fatalf("post-approval exchange reserve = %s, want at least 2m", reserve)
+	}
+}
+
 func TestGitHubStatusEnumeratesGrantCeilings(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	var output bytes.Buffer

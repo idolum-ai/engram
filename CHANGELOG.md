@@ -21,6 +21,15 @@ Notable user-visible and operational changes are recorded here.
 
 ### GitHub capabilities
 
+- Replace dense GitHub approval walls with a compact decision summary and a
+  native expandable details section. Friendly read/write groups make the
+  effective authority scannable while exact enrollment, binding, raw scope,
+  renewal, and in-memory-key facts remain available before approval. Completed
+  requests now collapse to a concise result, and the approval window increases
+  from three to fifteen minutes. Client and broker deadlines retain a two-minute
+  post-approval reserve; renewable grants now require 30 minutes so even a
+  deadline approval has 15 usable minutes. Dated expiries and compact active
+  receipts preserve the authority class, installation, ceiling, and purpose.
 - Let one encrypted GitHub App alias enroll a repeatable, authenticated set of
   installation IDs while keeping every request, approval, grant, lease, token,
   status line, and audit event bound to exactly one selected installation.
