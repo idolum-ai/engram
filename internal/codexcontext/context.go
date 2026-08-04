@@ -39,8 +39,9 @@ const (
 )
 
 type Message struct {
-	Role Role
-	Text string
+	Role     Role
+	Text     string
+	Redacted bool
 }
 
 type Context struct {
@@ -62,7 +63,7 @@ func DefaultSessionsRoot() string {
 	return filepath.Join(home, ".codex", "sessions")
 }
 
-func (r Reader) Load(sessionID string, turnLimit int) (Context, error) {
+func (r Reader) Load(sessionID string, turnLimit int, transforms ...func(string) string) (Context, error) {
 	if !validSessionID(sessionID) {
 		return Context{}, fmt.Errorf("invalid Codex session identity")
 	}
@@ -77,7 +78,7 @@ func (r Reader) Load(sessionID string, turnLimit int) (Context, error) {
 	if err != nil {
 		return Context{}, err
 	}
-	return parseRollout(path, strings.ToLower(sessionID), turnLimit)
+	return parseRollout(path, strings.ToLower(sessionID), turnLimit, transforms...)
 }
 
 func exactRolloutPath(root, sessionID string) (string, error) {
@@ -131,15 +132,15 @@ func exactRolloutPath(root, sessionID string) (string, error) {
 	return candidates[0], nil
 }
 
-func parseRollout(path, sessionID string, turnLimit int) (Context, error) {
-	return parseRolloutWithBudget(path, sessionID, turnLimit, maxRolloutBytes)
+func parseRollout(path, sessionID string, turnLimit int, transforms ...func(string) string) (Context, error) {
+	return parseRolloutWithBudget(path, sessionID, turnLimit, maxRolloutBytes, transforms...)
 }
 
 // parseRolloutWithBudget keeps reading bounded even when a long-lived Codex
 // session has grown beyond the context budget. Identity is proven from the
 // beginning of the exact file, while recent messages are parsed from a fixed
 // tail ending at the size observed when the file was opened.
-func parseRolloutWithBudget(path, sessionID string, turnLimit int, readBudget int64) (Context, error) {
+func parseRolloutWithBudget(path, sessionID string, turnLimit int, readBudget int64, transforms ...func(string) string) (Context, error) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || readBudget < 1024 {
 		return Context{}, fmt.Errorf("Codex rollout is not a bounded regular file")
@@ -156,7 +157,7 @@ func parseRolloutWithBudget(path, sessionID string, turnLimit int, readBudget in
 
 	size := opened.Size()
 	if size <= readBudget {
-		return parseRolloutRecords(io.NewSectionReader(file, 0, size), sessionID, turnLimit, false)
+		return parseRolloutRecords(io.NewSectionReader(file, 0, size), sessionID, turnLimit, false, transforms...)
 	}
 
 	identityBudget := min(int64(maxJSONLineBytes), readBudget/16)
@@ -168,7 +169,7 @@ func parseRolloutWithBudget(path, sessionID string, turnLimit int, readBudget in
 	if err := discardPartialRecord(tail); err != nil {
 		return Context{}, err
 	}
-	return parseRolloutRecords(tail, sessionID, turnLimit, true)
+	return parseRolloutRecords(tail, sessionID, turnLimit, true, transforms...)
 }
 
 func verifyRolloutIdentity(reader io.Reader, sessionID string) error {
@@ -220,7 +221,7 @@ func discardPartialRecord(reader *bufio.Reader) error {
 	}
 }
 
-func parseRolloutRecords(reader io.Reader, sessionID string, turnLimit int, verified bool) (Context, error) {
+func parseRolloutRecords(reader io.Reader, sessionID string, turnLimit int, verified bool, transforms ...func(string) string) (Context, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), maxJSONLineBytes)
 	messages := make([]Message, 0, min(maxParsedMessages, turnLimit*4))
@@ -245,7 +246,7 @@ func parseRolloutRecords(reader io.Reader, sessionID string, turnLimit int, veri
 			if !verified {
 				continue
 			}
-			message, ok, err := parseVisibleMessage(record.Payload)
+			message, ok, err := parseVisibleMessage(record.Payload, transforms...)
 			if err != nil {
 				return Context{}, err
 			}
@@ -289,7 +290,7 @@ func recentTurns(messages []Message, limit int) []Message {
 	return messages[start:]
 }
 
-func parseVisibleMessage(raw json.RawMessage) (Message, bool, error) {
+func parseVisibleMessage(raw json.RawMessage, transforms ...func(string) string) (Message, bool, error) {
 	var item struct {
 		Type    string `json:"type"`
 		Role    string `json:"role"`
@@ -327,7 +328,13 @@ func parseVisibleMessage(raw json.RawMessage) (Message, bool, error) {
 	if text == "" {
 		return Message{}, false, nil
 	}
-	return Message{Role: role, Text: headUTF8(text, MaxMessageBytes)}, true, nil
+	redacted := false
+	if len(transforms) > 0 && transforms[0] != nil {
+		transformed := transforms[0](text)
+		redacted = transformed != text
+		text = transformed
+	}
+	return Message{Role: role, Text: headUTF8(text, MaxMessageBytes), Redacted: redacted}, true, nil
 }
 
 func generatedMetadata(text string) bool {
@@ -385,7 +392,7 @@ type Diagram struct {
 // asks a model to select or repair transcript text.
 func DetectDiagram(messages []Message) (Diagram, bool) {
 	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
-		blocks := candidateBlocks(messages[messageIndex].Text)
+		blocks := candidateDiagramExtents(messages[messageIndex].Text)
 		for blockIndex := len(blocks) - 1; blockIndex >= 0; blockIndex-- {
 			text := strings.Trim(blocks[blockIndex], "\n")
 			if diagramBlock(text) {
@@ -394,6 +401,29 @@ func DetectDiagram(messages []Message) (Diagram, bool) {
 		}
 	}
 	return Diagram{}, false
+}
+
+func candidateDiagramExtents(text string) []string {
+	blocks := candidateBlocks(text)
+	extents := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		var rows []string
+		flush := func() {
+			if len(rows) >= 3 {
+				extents = append(extents, strings.Join(rows, "\n"))
+			}
+			rows = nil
+		}
+		for _, line := range strings.Split(block, "\n") {
+			if diagramStructuralLine(line) {
+				rows = append(rows, line)
+				continue
+			}
+			flush()
+		}
+		flush()
+	}
+	return extents
 }
 
 func candidateBlocks(text string) []string {
@@ -450,6 +480,9 @@ func diagramBlock(text string) bool {
 		if strings.Contains(line, "->") || strings.Contains(line, "<-") || strings.Contains(line, "=>") {
 			lineStructural = true
 		}
+		if !lineStructural {
+			return false
+		}
 		if lineStructural {
 			structural++
 		}
@@ -457,6 +490,25 @@ func diagramBlock(text string) bool {
 	box := boxCorners >= 2 && horizontal >= 2 && vertical >= 2 && structural >= 3
 	flow := arrows >= 2 && structural >= 2 && (vertical >= 1 || horizontal >= 4)
 	return box || flow
+}
+
+func diagramStructuralLine(line string) bool {
+	for _, r := range line {
+		if strings.ContainsRune("┌┐└┘╭╮╰╯┏┓┗┛─━═│┃║→←↑↓↔↕⇒⇐⇄⇆", r) {
+			return true
+		}
+	}
+	if strings.Contains(line, "->") || strings.Contains(line, "<-") || strings.Contains(line, "=>") {
+		return true
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "|" {
+		return true
+	}
+	pipes := strings.Count(trimmed, "|")
+	pluses := strings.Count(trimmed, "+")
+	hyphens := strings.Count(trimmed, "-")
+	return pipes >= 2 || pluses >= 2 && hyphens >= 2
 }
 
 func terminalCells(text string) int {

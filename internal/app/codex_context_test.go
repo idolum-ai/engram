@@ -21,9 +21,37 @@ type fixedCodexContextReader struct {
 	limit     int
 }
 
-func (reader *fixedCodexContextReader) Load(sessionID string, limit int) (codexcontext.Context, error) {
+func (reader *fixedCodexContextReader) Load(sessionID string, limit int, transforms ...func(string) string) (codexcontext.Context, error) {
 	reader.sessionID, reader.limit = sessionID, limit
-	return reader.context, reader.err
+	result := reader.context
+	if len(transforms) > 0 && transforms[0] != nil {
+		result.Messages = append([]codexcontext.Message(nil), result.Messages...)
+		for index := range result.Messages {
+			transformed := transforms[0](result.Messages[index].Text)
+			result.Messages[index].Redacted = transformed != result.Messages[index].Text
+			result.Messages[index].Text = transformed
+		}
+	}
+	return result, reader.err
+}
+
+type mutatingCodexContextReader struct {
+	context codexcontext.Context
+	mutate  func()
+}
+
+func (reader *mutatingCodexContextReader) Load(_ string, _ int, transforms ...func(string) string) (codexcontext.Context, error) {
+	reader.mutate()
+	result := reader.context
+	if len(transforms) > 0 && transforms[0] != nil {
+		result.Messages = append([]codexcontext.Message(nil), result.Messages...)
+		for index := range result.Messages {
+			transformed := transforms[0](result.Messages[index].Text)
+			result.Messages[index].Redacted = transformed != result.Messages[index].Text
+			result.Messages[index].Text = transformed
+		}
+	}
+	return result, nil
 }
 
 type sequenceCodexDetector struct {
@@ -83,6 +111,23 @@ func TestCodexContextRejectsStaleHookFromPreviousProcess(t *testing.T) {
 	}
 }
 
+func TestCodexContextRejectsSameSecondBindingBeforePreciseProcessStart(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config.CodexContextTurns = 2
+	session, _ := app.Store.FindSession(id)
+	second := time.Date(2026, 8, 3, 17, 0, 2, 0, time.UTC)
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encodedCodexContextMetadata(t, second.Add(800*time.Millisecond))})
+	app.CodexDetector = &sequenceCodexDetector{runtimes: []codexui.Runtime{{
+		Detected: true, Identity: strings.Repeat("c", 64), StartedAt: second.Add(900 * time.Millisecond),
+	}}}
+	reader := &fixedCodexContextReader{context: codexcontext.Context{Parser: codexcontext.ParserVersion, Messages: []codexcontext.Message{{Role: codexcontext.RoleUser, Text: "old same-second binding"}}}}
+	app.CodexContext = reader
+
+	if got := app.codexContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "codex"}); got.prompt != "" || reader.sessionID != "" {
+		t.Fatalf("same-second stale hook reached transcript: got=%#v reader=%#v", got, reader)
+	}
+}
+
 func TestCodexContextDoesNotCrossTmuxBindings(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	app.Config.CodexContextTurns = 2
@@ -96,6 +141,52 @@ func TestCodexContextDoesNotCrossTmuxBindings(t *testing.T) {
 	session.TmuxPaneID = "%2"
 	if got := app.codexContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "codex"}); got.prompt != "" || reader.sessionID != "" {
 		t.Fatalf("cross-binding transcript was read: got=%#v reader=%#v", got, reader)
+	}
+}
+
+func TestCodexContextRejectsRecoveryBindingChangedDuringRolloutRead(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config.CodexContextTurns = 2
+	session, _ := app.Store.FindSession(id)
+	observed := time.Date(2026, 8, 3, 17, 0, 2, 0, time.UTC)
+	runner := &recoveryMetadataRunner{metadata: encodedCodexContextMetadata(t, observed)}
+	app.Tmux = tmux.New(runner)
+	runtime := codexui.Runtime{Detected: true, Identity: strings.Repeat("e", 64), StartedAt: observed.Add(-time.Second)}
+	app.CodexDetector = &sequenceCodexDetector{runtimes: []codexui.Runtime{runtime, runtime}}
+	app.CodexContext = &mutatingCodexContextReader{
+		context: codexcontext.Context{Parser: codexcontext.ParserVersion, Messages: []codexcontext.Message{{Role: codexcontext.RoleUser, Text: "session A"}}},
+		mutate: func() {
+			runner.metadata = encodedCodexContextMetadataForSession(t, "019f7607-c8b0-74b3-87ca-64a7e6e7ede1", observed.Add(time.Second))
+		},
+	}
+
+	if got := app.codexContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "codex"}); got.prompt != "" {
+		t.Fatalf("changed recovery binding retained context: %#v", got)
+	}
+}
+
+func TestConversationTurnRejectsRecoveryBindingChangedBeforePublication(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config.CodexContextTurns = 2
+	session, _ := app.Store.FindSession(id)
+	observed := time.Date(2026, 8, 3, 17, 0, 2, 0, time.UTC)
+	runner := &recoveryMetadataRunner{metadata: encodedCodexContextMetadata(t, observed)}
+	app.Tmux = tmux.New(runner)
+	runtime := codexui.Runtime{Detected: true, Identity: strings.Repeat("f", 64), StartedAt: observed.Add(-time.Second)}
+	app.CodexDetector = &sequenceCodexDetector{runtimes: []codexui.Runtime{runtime, runtime, runtime}}
+	app.CodexContext = &fixedCodexContextReader{context: codexcontext.Context{
+		Parser: codexcontext.ParserVersion, Messages: []codexcontext.Message{{Role: codexcontext.RoleUser, Text: "session A"}},
+	}}
+	capture := testStyledCapture("codex", "active terminal")
+	capture.PanePID = 4242
+	historical := app.codexContextForCapture(context.Background(), session, capture)
+	if historical.prompt == "" {
+		t.Fatal("fixture context was not accepted")
+	}
+	turn := app.prepareConversationTurn(session, capture, capture.JoinedText, historical)
+	runner.metadata = encodedCodexContextMetadataForSession(t, "019f7607-c8b0-74b3-87ca-64a7e6e7ede1", observed.Add(time.Second))
+	if app.conversationTurnCurrent(session, turn) {
+		t.Fatal("rebound provider session remained current at publication guard")
 	}
 }
 
@@ -120,9 +211,13 @@ func TestCodexContextRedactsBeforeProviderAndOmitsSensitiveDiagram(t *testing.T)
 }
 
 func encodedCodexContextMetadata(t *testing.T, observed time.Time) string {
+	return encodedCodexContextMetadataForSession(t, recoveryTestSessionID, observed)
+}
+
+func encodedCodexContextMetadataForSession(t *testing.T, sessionID string, observed time.Time) string {
 	t.Helper()
 	encoded, err := recovery.Encode(recovery.Metadata{
-		Program: recovery.ProgramCodex, SessionID: recoveryTestSessionID,
+		Program: recovery.ProgramCodex, SessionID: sessionID,
 		Observed: observed, Source: "startup", CWD: "/synthetic",
 	})
 	if err != nil {

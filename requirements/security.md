@@ -71,15 +71,20 @@ privacy model must stay small and explicit.
   `ENGRAM_CODEX_CONTEXT_TURNS` between one and eight. Engram must bind it to the
   exact active pane through a UUID published by a validated `SessionStart` hook
   or the explicit argument-free `engram codex-bind` migration command, plus a
-  Codex process incarnation observed before and after the read. The binding
-  observation must be no older than the process. Exact filename and
+  Codex process incarnation in the terminal foreground process group observed
+  before and after the read. Incarnation identity must use a precise kernel
+  process-start discriminator; a whole-second timestamp is insufficient. The
+  binding observation must be no older than the process. Exact filename and
   `session_meta` UUID agreement are
   required; recency, cwd, title, or model heuristics are forbidden. For a
   long-lived rollout larger than the fixed read budget, Engram must verify
   `session_meta` from a bounded prefix of that exact file and parse recent
   messages from a bounded tail captured at an observed file size. Ambiguous,
   symlinked, malformed, oversized-record, stale, or replacement-process
-  sources fail closed to terminal-only guidance.
+  sources fail closed to terminal-only guidance. Engram must revalidate both
+  the process incarnation and pane-local provider-session metadata at the final
+  publication guard, and a provider-session rebind must invalidate the prior
+  conversation epoch.
 - `engram codex-bind` must accept no caller-supplied UUID or pane argument. It
   reads `CODEX_THREAD_ID` and `TMUX_PANE` only from its inherited environment,
   does not print the UUID, and publishes no transcript text. Publishing is not
@@ -90,16 +95,19 @@ privacy model must stay small and explicit.
   hidden reasoning, tool arguments and results, attachments, generated
   environment/instruction metadata, and unrelated record types. Existing
   redaction and aggregate byte/message limits run before the selected provider
-  receives the historical context. Engram never persists or audits transcript
+  receives the historical context. Complete decoded messages must be redacted
+  before per-message truncation. Engram never persists or audits transcript
   text. Documentation must disclose that the provider receives admitted text
   and Telegram receives any admitted diagram inset.
 - Historical Codex context is untrusted and never current-state authority. The
   current tmux frame remains the only source for effects, completion, files,
   links, hashes, snapshots, and exact references. A diagram detector must be
   deterministic, bounded, Unicode-cell aware, and model-independent. A
-  redaction conflict or unsafe geometry omits the diagram. Any admitted diagram
-  is visually separate and labeled as prior context unless it maps uniquely to
-  visible terminal evidence; ordinary snapshot and raw paths remain literal.
+  candidate must be cropped to its exact contiguous structural rows; adjacent
+  prose is not diagram evidence. A redaction conflict or unsafe geometry omits
+  the diagram. Any admitted diagram is visually separate and labeled as prior
+  context unless it maps uniquely to visible terminal evidence; ordinary
+  snapshot and raw paths remain literal.
 - Terminal captures are untrusted data for the guide. The prompt explicitly
   tells the model that pane-authored and continuity text has no authority, but
   model resistance to prompt injection is best effort rather than a security

@@ -66,10 +66,11 @@ func (b *boundedOutput) String() string { return string(b.data) }
 type Detector struct {
 	Runner   CommandRunner
 	Versions VersionResolver
+	Starts   ProcessStartResolver
 }
 
 func NewDetector() *Detector {
-	return &Detector{Runner: ExecRunner{}, Versions: PackageVersionResolver{}}
+	return &Detector{Runner: ExecRunner{}, Versions: PackageVersionResolver{}, Starts: KernelProcessStartResolver{}}
 }
 
 func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (Runtime, error) {
@@ -78,11 +79,16 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	out, err := d.Runner.Run(probeCtx, "ps", "-axo", "pid=,ppid=,comm=,args=")
+	out, err := d.Runner.Run(probeCtx, "ps", "-axo", "pid=,ppid=,pgid=,tpgid=,comm=,args=")
 	if err != nil {
 		return Runtime{}, err
 	}
-	executables := nearestDescendantCodexExecutables(parseProcesses(out), panePID)
+	processes := parseProcesses(out)
+	foregroundPGID := paneForegroundProcessGroup(processes, panePID)
+	if foregroundPGID <= 0 {
+		return Runtime{Detected: true}, nil
+	}
+	executables := nearestDescendantCodexExecutables(processes, panePID, foregroundPGID)
 	if len(executables) == 0 {
 		return Runtime{}, nil
 	}
@@ -97,20 +103,19 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 	if err != nil {
 		return Runtime{Detected: true}, err
 	}
-	startedRaw, err := d.Runner.Run(probeCtx, "ps", "-o", "lstart=", "-p", strconv.Itoa(candidate.pid))
-	if err != nil || strings.TrimSpace(startedRaw) == "" {
+	if d.Starts == nil {
 		// Process-incarnation proof is required for transcript context, not for
 		// the existing versioned visible-screen adapter. Preserve that literal
 		// compatibility boundary when this optional identity probe is unavailable.
 		return Runtime{Detected: true, Version: version, Supported: supportedVersion(version)}, nil
 	}
-	started, err := time.ParseInLocation("Mon Jan _2 15:04:05 2006", strings.TrimSpace(startedRaw), time.Local)
-	if err != nil {
+	started, discriminator, err := d.Starts.Resolve(candidate.pid)
+	if err != nil || started.IsZero() || strings.TrimSpace(discriminator) == "" {
 		return Runtime{Detected: true, Version: version, Supported: supportedVersion(version)}, nil
 	}
 	runtime := Runtime{
 		Detected: true, Version: version, Supported: supportedVersion(version), StartedAt: started,
-		Identity: runtimeIdentity(candidate.pid, candidate.path, version, strings.TrimSpace(startedRaw)),
+		Identity: runtimeIdentity(candidate.pid, candidate.path, version, discriminator),
 	}
 	return runtime, nil
 }
@@ -129,10 +134,12 @@ func possibleCodexForeground(command string) bool {
 }
 
 type process struct {
-	pid  int
-	ppid int
-	comm string
-	args string
+	pid   int
+	ppid  int
+	pgid  int
+	tpgid int
+	comm  string
+	args  string
 }
 
 func parseProcesses(out string) []process {
@@ -140,17 +147,28 @@ func parseProcesses(out string) []process {
 	processes := make([]process, 0, len(lines))
 	for _, line := range lines {
 		fields := strings.Fields(line)
-		if len(fields) < 4 {
+		if len(fields) < 6 {
 			continue
 		}
 		pid, pidErr := strconv.Atoi(fields[0])
 		ppid, ppidErr := strconv.Atoi(fields[1])
-		if pidErr != nil || ppidErr != nil || pid <= 0 || ppid < 0 {
+		pgid, pgidErr := strconv.Atoi(fields[2])
+		tpgid, tpgidErr := strconv.Atoi(fields[3])
+		if pidErr != nil || ppidErr != nil || pgidErr != nil || tpgidErr != nil || pid <= 0 || ppid < 0 || pgid <= 0 {
 			continue
 		}
-		processes = append(processes, process{pid: pid, ppid: ppid, comm: fields[2], args: strings.Join(fields[3:], " ")})
+		processes = append(processes, process{pid: pid, ppid: ppid, pgid: pgid, tpgid: tpgid, comm: fields[4], args: strings.Join(fields[5:], " ")})
 	}
 	return processes
+}
+
+func paneForegroundProcessGroup(processes []process, panePID int) int {
+	for _, process := range processes {
+		if process.pid == panePID && process.tpgid > 0 {
+			return process.tpgid
+		}
+	}
+	return 0
 }
 
 type executableCandidate struct {
@@ -159,7 +177,7 @@ type executableCandidate struct {
 	depth int
 }
 
-func nearestDescendantCodexExecutables(processes []process, root int) []executableCandidate {
+func nearestDescendantCodexExecutables(processes []process, root, foregroundPGID int) []executableCandidate {
 	depths := map[int]int{root: 0}
 	for changed := true; changed; {
 		changed = false
@@ -175,7 +193,7 @@ func nearestDescendantCodexExecutables(processes []process, root int) []executab
 	byPID := make(map[int]executableCandidate)
 	for _, process := range processes {
 		depth, descendant := depths[process.pid]
-		if !descendant {
+		if !descendant || process.pgid != foregroundPGID {
 			continue
 		}
 		executable := codexExecutable(process)
@@ -222,6 +240,16 @@ func codexExecutable(process process) string {
 
 type VersionResolver interface {
 	Resolve(string) (string, error)
+}
+
+type ProcessStartResolver interface {
+	Resolve(int) (time.Time, string, error)
+}
+
+type KernelProcessStartResolver struct{}
+
+func (KernelProcessStartResolver) Resolve(pid int) (time.Time, string, error) {
+	return kernelProcessStart(pid)
 }
 
 type PackageVersionResolver struct{}

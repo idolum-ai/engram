@@ -278,11 +278,13 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   Missing or invalid environment identity fails before tmux is touched. The
   service applies the same validation as hook-published metadata.
 - Optional Codex historical context may use that UUID only while a proven
-  descendant Codex process incarnation is active in the same pane and the hook
-  observation is no older than the process start. Engram rechecks the process
-  incarnation and tracked binding after reading the exact UUID-named rollout.
-  Process replacement, pane/window/server movement, a stale hook, or more than
-  one matching rollout invalidates context; cwd and recency never select one.
+  descendant Codex process incarnation is active in the pane's foreground
+  process group and the hook observation is no older than the precise kernel
+  process start. Engram rechecks the process incarnation, pane-local provider
+  session, and tracked binding after reading the exact UUID-named rollout and
+  at derived-output publication. Process replacement, provider-session rebind,
+  pane/window/server movement, a stale hook, or more than one matching rollout
+  invalidates context; cwd and recency never select one.
 - A shell command becomes process-observed only when a prompt, bounded later
   validation sees its expected executable as the pane foreground process.
   That evidence remains advisory and is never automatically replayed. A

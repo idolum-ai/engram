@@ -87,15 +87,17 @@ historical guide context only after all of these independent checks succeed:
   pane-local recovery option;
 - a `SessionStart` hook or explicit argument-free `engram codex-bind` provides
   one syntactically valid Codex UUID from the session's inherited environment;
-- the active pane process tree contains one proven Codex executable and yields
-  a PID/path/version/start-time incarnation fingerprint;
+- the active pane process tree contains one proven Codex executable in the
+  terminal's foreground process group and yields a
+  PID/path/version/precise-kernel-start incarnation fingerprint;
 - the binding observation is not older than that process incarnation;
 - exactly one regular, non-symlink rollout filename carries the UUID, and its
   `session_meta.id` repeats it in a bounded prefix read; recent records come
   from either the same bounded full-file read or a bounded tail ending at the
   file size observed when opened; and
-- the same process incarnation and tracked tmux binding still exist after the
-  rollout read.
+- the same process incarnation, pane-local provider-session metadata, and
+  tracked tmux binding still exist after the rollout read and at the final
+  publication guard.
 
 There is no newest-session, working-directory, title, or model-based fallback.
 The parser contract is explicitly named `codex-rollout-v1`. It ignores unknown
@@ -105,9 +107,11 @@ a `message`, whose role is `user` or `assistant`, and whose content type matches
 arguments/results, attachments, and generated environment/instruction metadata
 are excluded. Unrecognized structure in a recognized message fails closed.
 Messages, individual text, rollout read windows, JSON lines, and aggregate
-prompt text all have independent bounds. The ordinary Engram redactor runs
+prompt text all have independent bounds. The ordinary Engram redactor runs on
+each complete decoded message before its per-message truncation and again
 before provider delivery, and transcript text is never added to state or audit
-output.
+output. A provider-session rebind resets conversational continuity before an
+in-flight result can publish.
 
 The guide prompt labels this field `historical_session_context`. It may clarify
 past topic and intent, but `terminal_text` remains the only current-state truth.
@@ -119,7 +123,8 @@ One deterministic diagram detector examines only those admitted visible
 messages. It requires a bounded multi-row box or arrow structure, measures
 Unicode terminal-cell width, rejects controls, tabs, oversized candidates,
 ordinary prose, source-code-shaped blocks, and weak single arrows, and selects
-the latest qualifying block without a model. A redaction conflict removes the
+the latest qualifying block without a model. It crops the exact contiguous
+structural rows, excluding adjacent prose. A redaction conflict removes the
 diagram rather than drawing placeholders into it. Guide-evidence images render
 the copied text in a distinct `Codex context` inset. Exact unique terminal
 mapping is labeled reconstructed; otherwise the label explicitly says the text

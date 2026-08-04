@@ -7,7 +7,10 @@ privacy opt-in. Literal snapshots and raw captures remain terminal-only.
 Engram never selects a Codex rollout because it is newest or shares a working
 directory. It requires an exact session UUID bound to the watched tmux pane,
 then independently verifies the active Codex process, exact rollout filename,
-matching `session_meta`, and unchanged pane/process identity around the read.
+matching `session_meta`, and unchanged pane/process/session identity around the
+read and again before derived output is published. Process proof is restricted
+to the pane's foreground process group and uses a precise kernel process-start
+identity rather than a second-resolution timestamp.
 
 ## Existing active sessions
 
@@ -74,7 +77,9 @@ tail -n 100 "$HOME/.engram/audit.jsonl" |
 `session_identity_unproven` means the pane lacks a usable binding or the active
 process cannot be proven. `rollout_unavailable` means the exact file was absent,
 ambiguous, malformed, or outside another bounded parser contract. Engram falls
-back to terminal-only guidance in every unavailable case.
+back to terminal-only guidance in every unavailable case. A provider-session
+rebinding resets the pane's conversational continuity so an in-flight result
+from the prior session cannot publish.
 
 Long-lived rollout files may exceed Engram's fixed read budget. Engram verifies
 their identity from a bounded prefix and reads recent messages from a bounded
@@ -86,6 +91,8 @@ bounded.
 Only visible `user` and `assistant` message text is eligible. System and
 developer instructions, hidden reasoning, tool calls and results, attachments,
 and generated environment metadata are excluded. Text is bounded and redacted
-before it is sent to the configured guide provider. An admitted ASCII or
-Unicode diagram may also be sent to Telegram as a separately labelled guide
-evidence inset. Engram never persists transcript text.
+before it is sent to the configured guide provider; each complete message is
+redacted before per-message truncation. An admitted ASCII or Unicode diagram
+may also be sent to Telegram as a separately labelled guide evidence inset.
+Only its exact contiguous structural rows are copied, not adjacent prose.
+Engram never persists transcript text.

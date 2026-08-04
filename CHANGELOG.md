@@ -12,8 +12,11 @@ Notable user-visible and operational changes are recorded here.
   terminal truth. Future sessions bind through the `SessionStart` hook;
   existing active sessions can run the argument-free `engram codex-bind`
   command without restarting. Long-lived rollouts use bounded prefix identity
-  and recent-tail reads. A deterministic, Unicode-width-aware detector may
-  render one copied box/arrow diagram as a separately labeled Codex-context
+  and recent-tail reads. Foreground-process-group and precise kernel-start proof
+  prevent stale or background runtimes from supplying context; provider-session
+  bindings are revalidated through publication. Full messages are redacted
+  before truncation. A deterministic, Unicode-width-aware detector may render
+  one exactly cropped box/arrow diagram as a separately labeled Codex-context
   inset; literal snapshots and raw captures remain unchanged.
 
 ### GitHub capabilities

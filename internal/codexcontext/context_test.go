@@ -1,10 +1,13 @@
 package codexcontext
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/idolum-ai/engram/internal/redact"
 )
 
 const fixtureSessionID = "123e4567-e89b-12d3-a456-426614174000"
@@ -93,6 +96,59 @@ func TestReaderBoundsRecentMessagesBeforeReturn(t *testing.T) {
 	}
 }
 
+func TestReaderTransformsCompleteMessageBeforePerMessageTruncation(t *testing.T) {
+	configuredSecret := "fixture-secret-" + strings.Repeat("z", 96)
+	privateKeyHeader := "-----BEGIN PRIVATE KEY-----\n"
+	tests := []struct {
+		name      string
+		message   string
+		forbidden []string
+	}{
+		{
+			name:      "configured secret crosses truncation boundary",
+			message:   strings.Repeat("x", MaxMessageBytes-len(configuredSecret)/2) + configuredSecret + " visible suffix",
+			forbidden: []string{configuredSecret, "fixture-secret-"},
+		},
+		{
+			name: "private key terminator follows truncation boundary",
+			message: strings.Repeat("x", MaxMessageBytes-len(privateKeyHeader)-64) + privateKeyHeader +
+				strings.Repeat("A", 256) + "\n-----END PRIVATE KEY----- visible suffix",
+			forbidden: []string{"BEGIN PRIVATE KEY", strings.Repeat("A", 32)},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			record, err := json.Marshal(map[string]any{
+				"type": "response_item",
+				"payload": map[string]any{
+					"type": "message", "role": "user",
+					"content": []map[string]string{{"type": "input_text", "text": test.message}},
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFixture(t, root, fixtureSessionID, `{"type":"session_meta","payload":{"id":"`+fixtureSessionID+`"}}`+"\n"+string(record)+"\n")
+
+			got, err := (Reader{SessionsRoot: root}).Load(fixtureSessionID, 1, func(text string) string {
+				return redact.Secrets(text, configuredSecret)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Messages) != 1 || len(got.Messages[0].Text) > MaxMessageBytes || !got.Messages[0].Redacted {
+				t.Fatalf("bounded transformed message = %#v", got.Messages)
+			}
+			for _, forbidden := range test.forbidden {
+				if strings.Contains(got.Messages[0].Text, forbidden) {
+					t.Fatalf("transformed message exposed %q: %q", forbidden, got.Messages[0].Text)
+				}
+			}
+		})
+	}
+}
+
 func TestReaderTurnLimitKeepsUserTurnAndFollowingAssistantMessages(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, fixtureSessionID, strings.Join([]string{
@@ -169,6 +225,15 @@ func TestDetectDiagramCountsUnicodeDisplayWidth(t *testing.T) {
 	text := "┌──┐\n│界│\n└──┘"
 	diagram, ok := DetectDiagram([]Message{{Role: RoleAssistant, Text: text}})
 	if !ok || diagram.Text != text {
+		t.Fatalf("diagram = %#v, %v", diagram, ok)
+	}
+}
+
+func TestDetectDiagramCropsAdjacentNonStructuralProse(t *testing.T) {
+	diagramText := "┌──────┐\n│ pane │\n└──────┘"
+	message := "private pre-flight prose before\n" + diagramText + "\nprivate C++ prose after"
+	diagram, ok := DetectDiagram([]Message{{Role: RoleAssistant, Text: message}})
+	if !ok || diagram.Text != diagramText {
 		t.Fatalf("diagram = %#v, %v", diagram, ok)
 	}
 }

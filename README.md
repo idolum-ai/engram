@@ -196,10 +196,12 @@ the exact active Codex session. Engram requires a pane-local UUID published by
 the `SessionStart` hook or explicit `engram codex-bind`, a binding observation
 no older than the proven Codex process incarnation, an unambiguous rollout
 filename carrying the same UUID, and matching `session_meta`. It validates the
-process again after reading. A missing binding, stale or replacement process,
-ambiguous file, or unfamiliar message record fails closed to terminal-only
-guidance; Engram never selects a transcript because it is newest or shares a
-working directory.
+foreground process group and precise kernel process incarnation again after
+reading, and revalidates both the pane-local session binding and process before
+publishing derived output. A missing or changed binding, background or
+replacement process, ambiguous file, or unfamiliar message record fails closed
+to terminal-only guidance; Engram never selects a transcript because it is
+newest or shares a working directory.
 
 Historical session text can clarify the prior topic but never establishes the
 current terminal state. Raw tmux capture remains the only authority for current
@@ -207,8 +209,10 @@ facts, files, references, hashes, and screenshots. Only bounded text from
 visible `user` and `assistant` messages is admitted; system/developer messages,
 hidden reasoning, tool calls and results, generated environment metadata, and
 attachments are excluded. The normal secret redactor and fixed message/byte
-ceilings run before the selected guide provider sees this context. Engram does
-not persist transcript text.
+ceilings run before the selected guide provider sees this context. Each full
+message is redacted before its per-message byte ceiling is applied, so a secret
+spanning that boundary is not partially exposed. Engram does not persist
+transcript text.
 
 ## Configuration
 

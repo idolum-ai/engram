@@ -114,6 +114,7 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 		}
 		return metadataErr
 	}
+	providerSessionChanged := false
 	_, found, applied, updateErr := a.updateSessionIfCurrent(expected, func(current *state.TerminalSession) {
 		for index := len(current.RecoveryEvents) - 1; index >= 0; index-- {
 			event := &current.RecoveryEvents[index]
@@ -131,6 +132,7 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 		if metadataErr != nil || metadata.SessionID == "" {
 			return
 		}
+		providerSessionChanged = current.ResumeProgram != metadata.Program || current.ResumeSessionID != metadata.SessionID
 		current.ResumeProgram = metadata.Program
 		current.ResumeSessionID = metadata.SessionID
 		if metadata.CWD != "" {
@@ -157,6 +159,9 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 	}
 	if !found || !applied {
 		return fmt.Errorf("session changed while reconciling recovery metadata")
+	}
+	if providerSessionChanged {
+		a.resetConversationEpoch(expected.ID)
 	}
 	if metadataErr != nil {
 		_ = a.audit("tmux.recovery_metadata", "rejected", map[string]any{"session_id": expected.ID, "error": metadataErr.Error()})
