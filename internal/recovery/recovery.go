@@ -102,8 +102,12 @@ func Decode(value string) (Metadata, error) {
 func validateMetadata(metadata Metadata) (Metadata, error) {
 	metadata.Program = strings.ToLower(strings.TrimSpace(metadata.Program))
 	metadata.SessionID = strings.ToLower(strings.TrimSpace(metadata.SessionID))
+	metadata.Source = strings.ToLower(strings.TrimSpace(metadata.Source))
 	if metadata.Version != 1 || !ValidProgram(metadata.Program) || !ValidSessionID(metadata.SessionID) {
 		return Metadata{}, fmt.Errorf("invalid recovery metadata")
+	}
+	if metadata.Source != "" && metadata.Source != "startup" && metadata.Source != "resume" && metadata.Source != "clear" && metadata.Source != "compact" && metadata.Source != "manual" {
+		return Metadata{}, fmt.Errorf("invalid recovery metadata source")
 	}
 	if len(metadata.CWD) > 4096 || strings.ContainsRune(metadata.CWD, '\x00') {
 		return Metadata{}, fmt.Errorf("invalid recovery working directory")

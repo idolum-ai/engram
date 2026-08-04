@@ -60,6 +60,11 @@ type Input struct {
 	HighlightRows []int
 	Footer        string
 	Status        string
+	// ContextInset is historical, non-terminal text shown only when a caller
+	// explicitly supplies a provenance label. Ordinary literal snapshots leave
+	// both fields empty and retain their existing pixels and dimensions.
+	ContextInset string
+	ContextLabel string
 }
 
 type CommandRunner interface {
@@ -330,6 +335,16 @@ func RenderHTML(input Input, themeName string) string {
 	if status != "" {
 		statusHTML = fmt.Sprintf(`<span class="status">%s</span>`, html.EscapeString(status))
 	}
+	contextHTML := ""
+	contextCSS := ""
+	if input.ContextInset != "" {
+		contextRows := strings.Count(input.ContextInset, "\n") + 1
+		contextColumns := maxTerminalCells(input.ContextInset)
+		contextFont := min(9.0, terminalWidth/(float64(max(contextColumns, 1))*terminalCharRatio))
+		contextFont = max(contextFont, 6.5)
+		contextHTML = fmt.Sprintf(`<aside class="context"><div class="context-label">%s</div><pre class="context-diagram">%s</pre></aside>`, html.EscapeString(input.ContextLabel), html.EscapeString(input.ContextInset))
+		contextCSS = fmt.Sprintf(`.context{position:relative;z-index:2;margin-top:12px;padding:8px 10px;border:1px solid %s;border-left:3px solid %s;border-radius:5px;background:%s}.context-label{margin-bottom:7px;color:%s;font:600 9px/1.2 system-ui,sans-serif}.context-diagram{position:static;width:auto;height:%.1fpx;color:%s;font-size:%.2fpx;line-height:11.5px;white-space:pre;overflow:hidden;overflow-wrap:normal;word-break:normal}`, theme.subtleBorder, theme.highlightBorder, theme.bar, theme.muted, float64(contextRows)*11.5, theme.text, contextFont)
+	}
 	dimensions := fmt.Sprintf("%dx%d visible", input.Columns, input.VisibleRows)
 	if input.Compact {
 		dimensions = fmt.Sprintf("%d-col source", input.Columns)
@@ -339,11 +354,11 @@ func RenderHTML(input Input, themeName string) string {
 	}
 	return fmt.Sprintf(`<!doctype html>
 <html><head><meta charset="utf-8"><style>
-:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:%dpx;height:%dpx;overflow:hidden;background:%s}.bar{width:100%%;height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;overflow:hidden;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100%%;height:calc(100%% - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:%s;overflow-wrap:%s;word-break:%s}.foot{width:100%%;height:22px;display:flex;align-items:center;justify-content:space-between;gap:%dpx;padding:0 12px;overflow:hidden;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}.foot span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.provenance{flex:1 1 auto}.status{flex:0 1 %dch;max-width:%dch;text-align:right;font-family:"SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace}.dimensions{flex:0 0 auto;text-align:right}
-</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre></section><footer class="foot"><span class="provenance">%s</span>%s<span class="dimensions">%s</span></footer></main></body></html>`,
+:root{color-scheme:%s}*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:%s}body{color:%s;font-synthesis:none}.window{width:%dpx;height:%dpx;overflow:hidden;background:%s}.bar{width:100%%;height:44px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 12px;overflow:hidden;border-bottom:1px solid %s;background:%s}.title{flex:0 1 58%%;min-width:0;overflow:hidden;color:%s;font:600 12px/1 system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap}.location{flex:1;min-width:0;overflow:hidden;color:%s;font:11px/1 system-ui,sans-serif;text-align:right;text-overflow:ellipsis;white-space:nowrap}.screen{position:relative;width:100%%;height:calc(100%% - 66px);padding:10px 12px 0;overflow:hidden;background:%s}.evidence-mark{position:absolute;left:8px;right:8px;z-index:0;border-left:3px solid %s;background:%s}pre{position:relative;z-index:1;width:%dch;height:%.2fpx;margin:0;overflow:hidden;color:%s;background:transparent;font:%.2fpx/%spx "JetBrains Mono","Cascadia Mono","SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace;font-variant-ligatures:none;letter-spacing:0;tab-size:8;white-space:%s;overflow-wrap:%s;word-break:%s}%s.foot{width:100%%;height:22px;display:flex;align-items:center;justify-content:space-between;gap:%dpx;padding:0 12px;overflow:hidden;border-top:1px solid %s;color:%s;background:%s;font:9px/1 system-ui,sans-serif}.foot span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.provenance{flex:1 1 auto}.status{flex:0 1 %dch;max-width:%dch;text-align:right;font-family:"SFMono-Regular",Menlo,Consolas,"DejaVu Sans Mono",monospace}.dimensions{flex:0 0 auto;text-align:right}
+</style></head><body><main class="window"><header class="bar"><div class="title">%s · tmux %s</div><div class="location">%s</div></header><section class="screen">%s<pre>%s</pre>%s</section><footer class="foot"><span class="provenance">%s</span>%s<span class="dimensions">%s</span></footer></main></body></html>`,
 		theme.colorScheme, theme.canvas, theme.text, logicalWidth, logicalHeight, theme.screen, theme.border, theme.bar, theme.title, theme.muted, theme.screen,
-		theme.highlightBorder, theme.highlight, renderColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, wordBreak, footerGapPixels, theme.subtleBorder, theme.muted, theme.foot, statusBudget, statusBudget,
-		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme),
+		theme.highlightBorder, theme.highlight, renderColumns, float64(visualRows)*lineHeight, theme.text, fontSize, lineHeightCSS, whiteSpace, overflowWrap, wordBreak, contextCSS, footerGapPixels, theme.subtleBorder, theme.muted, theme.foot, statusBudget, statusBudget,
+		html.EscapeString(firstNonEmpty(input.Title, "terminal")), html.EscapeString(input.Target), html.EscapeString(input.CWD), highlights, ansiHTML(input.ANSI, theme), contextHTML,
 		html.EscapeString(footer), statusHTML, html.EscapeString(dimensions))
 }
 
@@ -451,6 +466,12 @@ func renderHeight(input Input) int {
 		visualRows = snapshotVisualRows(input.ANSI, input.BufferRows, renderColumns)
 	}
 	height := 86 + int(math.Ceil(float64(visualRows)*lineHeight))
+	if input.ContextInset != "" {
+		// Reserve margin, border, padding, provenance label, and every diagram
+		// row. Keep this slightly above the CSS total so Chromium never clips the
+		// final row at device-scale rounding boundaries.
+		height += 50 + (strings.Count(input.ContextInset, "\n")+1)*12
+	}
 	if height < 180 {
 		return 180
 	}
@@ -613,12 +634,37 @@ func validateInput(input Input) error {
 	if len(input.Status) > maxStatusBytes {
 		return fmt.Errorf("snapshot status exceeds %d bytes", maxStatusBytes)
 	}
+	if input.ContextInset != "" {
+		if strings.TrimSpace(input.ContextLabel) == "" {
+			return fmt.Errorf("snapshot context inset requires a provenance label")
+		}
+		if len(input.ContextInset) > 8<<10 || strings.Count(input.ContextInset, "\n")+1 > 16 || maxTerminalCells(input.ContextInset) > 80 {
+			return fmt.Errorf("snapshot context inset exceeds its mobile bound")
+		}
+		if cleanText(input.ContextInset) != input.ContextInset || strings.ContainsRune(input.ContextInset, '\t') {
+			return fmt.Errorf("snapshot context inset contains unsupported controls")
+		}
+	} else if input.ContextLabel != "" {
+		return fmt.Errorf("snapshot context label has no inset")
+	}
 	for _, row := range input.HighlightRows {
 		if row < 0 || row >= input.BufferRows {
 			return fmt.Errorf("snapshot highlight row %d is outside the capture", row)
 		}
 	}
 	return nil
+}
+
+func maxTerminalCells(text string) int {
+	maximum := 0
+	for _, line := range strings.Split(text, "\n") {
+		cells := 0
+		for _, r := range line {
+			cells += terminalRuneWidth(r, cells)
+		}
+		maximum = max(maximum, cells)
+	}
+	return maximum
 }
 
 func browserPath(configured string) (string, error) {

@@ -212,6 +212,54 @@ func TestRecoveryReconciliationPersistsProviderHookAndProcessObservation(t *test
 	}
 }
 
+func TestRecoveryReconciliationResetsConversationEpochWhenProviderSessionChanges(t *testing.T) {
+	app, session := recoveryTestApp(t)
+	const previousSessionID = "019f7607-c8b0-74b3-87ca-64a7e6e7ede1"
+	var err error
+	session, _, err = app.Store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.ResumeProgram = recovery.ProgramCodex
+		current.ResumeSessionID = previousSessionID
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.prepareConversationTurn(session, testStyledCapture("codex", "active work"), "active work")
+	stale := app.prepareConversationTurn(session, testStyledCapture("codex", "active work"), "active work")
+	encoded, err := recovery.Encode(recovery.Metadata{
+		Program: recovery.ProgramCodex, SessionID: recoveryTestSessionID, CWD: "/work",
+		Source: "clear", Observed: time.Date(2026, 8, 3, 17, 0, 2, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encoded})
+	if err := app.reconcileRecoverySession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if app.commitConversationTurn(session, stale, "must not survive provider rebinding") {
+		t.Fatal("provider-session change retained the previous conversation epoch")
+	}
+}
+
+func TestRecoveryReconciliationPreservesManualBindingProvenance(t *testing.T) {
+	app, session := recoveryTestApp(t)
+	encoded, err := recovery.Encode(recovery.Metadata{
+		Program: recovery.ProgramCodex, SessionID: recoveryTestSessionID, CWD: "/work",
+		Source: "manual", Observed: time.Date(2026, 8, 3, 6, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encoded})
+	if err := app.reconcileRecoverySession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := app.Store.FindSession(session.ID)
+	if len(current.RecoveryEvents) != 1 || current.RecoveryEvents[0].Validation != "provider_manual" || current.ResumeSessionID != recoveryTestSessionID {
+		t.Fatalf("manual recovery events = %#v", current.RecoveryEvents)
+	}
+}
+
 func TestPendingResumeReconciliationFinalizesObservedProvider(t *testing.T) {
 	app, session := recoveryTestApp(t)
 	runner := &resumeRunner{cwd: "/work", program: recovery.ProgramCodex, resumed: true}

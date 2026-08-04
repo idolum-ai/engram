@@ -97,7 +97,7 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 		return presentationText
 	}
 	presentation := codexui.Present(runtime, presentationText)
-	a.recordCodexPresentation(observed, presentation)
+	a.recordCodexPresentation(observed, runtime, presentation)
 	if presentation.Applied {
 		a.recordPresentationDecision(observed, "codex", presentation.Version, "applied", "runtime_and_layout_verified", presentation.Model != "", presentation.Activity)
 	} else {
@@ -187,6 +187,7 @@ func (a *App) clearAgentFrame(sessionID int) {
 	defer a.agentFrameMu.Unlock()
 	delete(a.agentFrames, sessionID)
 	a.presentationDiagnostics.Delete(sessionID)
+	a.codexContextDiagnostics.Delete(sessionID)
 }
 
 func (a *App) recordAgentPresentation(observed state.TerminalSession, analysis agentui.Analysis) {
@@ -205,12 +206,14 @@ func (a *App) recordClaudePresentation(observed state.TerminalSession, runtime c
 	})
 }
 
-func (a *App) recordCodexPresentation(observed state.TerminalSession, presentation codexui.Presentation) {
+func (a *App) recordCodexPresentation(observed state.TerminalSession, runtime codexui.Runtime, presentation codexui.Presentation) {
 	program := ""
+	runtimeID := ""
 	if presentation.Applied {
 		program = "codex"
+		runtimeID = runtime.Identity
 	}
-	a.recordPresentation(observed, program, "", presentation)
+	a.recordPresentation(observed, program, runtimeID, presentation)
 }
 
 func (a *App) clearPresentation(observed state.TerminalSession, reason string) {

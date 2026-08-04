@@ -297,6 +297,7 @@ ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ENGRAM_TMUX_SESSION=main
 ENGRAM_SNAPSHOT_BROWSER=/opt/chromium
 ENGRAM_SNAPSHOT_THEME=contrast-dark
+ENGRAM_CODEX_CONTEXT_TURNS=4
 ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", $4 / 1048576}'
 `), 0o600); err != nil {
 		t.Fatal(err)
@@ -326,6 +327,9 @@ ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", 
 	if cfg.SnapshotTheme != "contrast-dark" {
 		t.Fatalf("SnapshotTheme = %q, want contrast-dark", cfg.SnapshotTheme)
 	}
+	if cfg.CodexContextTurns != 4 {
+		t.Fatalf("CodexContextTurns = %d, want 4", cfg.CodexContextTurns)
+	}
 	if cfg.SnapshotStatusCommand != `df -kP . | awk 'END {printf "disk %.1fG free\n", $4 / 1048576}'` {
 		t.Fatalf("SnapshotStatusCommand = %q", cfg.SnapshotStatusCommand)
 	}
@@ -334,6 +338,22 @@ ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", 
 	}
 	if cfg.EffectiveVoiceInputMode() != VoiceInputModePath || cfg.VoiceTranscriptionConfigured() {
 		t.Fatalf("voice defaults = mode:%q transcription:%v", cfg.EffectiveVoiceInputMode(), cfg.VoiceTranscriptionConfigured())
+	}
+}
+
+func TestLoadBoundsCodexContextOptIn(t *testing.T) {
+	for _, value := range []string{"-1", "9", "not-a-number"} {
+		t.Run(value, func(t *testing.T) {
+			dir := t.TempDir()
+			env := filepath.Join(dir, ".env")
+			body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_CODEX_CONTEXT_TURNS=" + value + "\n"
+			if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(env); err == nil {
+				t.Fatalf("Load accepted ENGRAM_CODEX_CONTEXT_TURNS=%s", value)
+			}
+		})
 	}
 }
 

@@ -80,11 +80,15 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 	return updated
 }
 
-func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, refs visibleReferences, excerpts []string, force bool, guard, accepted func() bool) bool {
+func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, refs visibleReferences, excerpts []string, contextDiagram string, force bool, guard, accepted func() bool) bool {
 	if !a.snapshotAvailable() || a.Snapshots == nil || a.snapshotAnchors() {
 		return false
 	}
 	crop := a.selectGuidedEvidenceCrop(expected, capture, previous, semanticText, summary, excerpts)
+	if contextDiagram != "" {
+		crop.input = withGuidedContextDiagram(crop.input, contextDiagram, semanticText)
+		crop.hash = guidedCropHash(crop.input, a.Config.SnapshotTheme, crop.source)
+	}
 	if !acquireSlot(ctx, a.renderSlots) {
 		return false
 	}
@@ -229,6 +233,15 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 	}
 	_ = a.audit("terminal.guided_evidence", "updated", map[string]any{"session_id": latest.ID, "source": crop.source, "rows": crop.input.BufferRows})
 	return finish()
+}
+
+func withGuidedContextDiagram(input terminalshot.Input, diagram, semanticText string) terminalshot.Input {
+	input.ContextInset = diagram
+	input.ContextLabel = "Codex context · prior visible message, not current terminal"
+	if strings.Count(semanticText, diagram) == 1 {
+		input.ContextLabel = "Codex context · reconstructed from visible terminal text"
+	}
+	return input
 }
 
 func (a *App) guidedEvidenceCaption(session state.TerminalSession, summary string, refs visibleReferences) (string, []string) {
@@ -585,7 +598,7 @@ func buildGuidedRangeCrop(session state.TerminalSession, capture tmux.StyledCapt
 }
 
 func guidedCropHash(input terminalshot.Input, theme, source string) string {
-	return sha(strings.Join([]string{input.ANSI, fmt.Sprint(input.HighlightRows), fmt.Sprint(input.Columns), fmt.Sprint(input.VisibleRows), fmt.Sprint(input.BufferRows), input.Title, input.CWD, input.Footer, theme, source}, "\x00"))
+	return sha(strings.Join([]string{input.ANSI, fmt.Sprint(input.HighlightRows), fmt.Sprint(input.Columns), fmt.Sprint(input.VisibleRows), fmt.Sprint(input.BufferRows), input.Title, input.CWD, input.Footer, input.ContextInset, input.ContextLabel, theme, source}, "\x00"))
 }
 
 func trimPassiveCapture(capture tmux.StyledCapture) tmux.StyledCapture {
