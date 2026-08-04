@@ -441,7 +441,15 @@ repositories, friendly read/write permission groups, duration, expiry, and
 purpose. Exact enrollment IDs, fingerprint, tmux binding, raw permission names,
 and renewal/key-lifetime semantics remain available before approval inside the
 message's native expandable **Details** section. Completed requests collapse to
-a short active, denied, failed, or canceled summary.
+a short active, denied, failed, or canceled summary. An active receipt retains
+the lease/grant class, selected installation, repositories, friendly permission
+ceiling, and grant purpose. Expiries include the calendar date.
+
+The Telegram decision remains open for 15 minutes. The CLI and broker reserve
+two additional minutes for post-approval inspection, minting, validation, and
+transactional delivery, so a decision accepted at the boundary can still
+complete safely. Renewable grants must request at least 30 minutes: the
+15-minute decision window plus at least 15 minutes of usable authority.
 
 Renewable write authority fails closed: only `checks`, `contents`,
 `discussions`, `issues`, `pull_requests`, `repository_projects`, and `statuses`

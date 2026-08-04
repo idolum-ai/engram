@@ -18,8 +18,10 @@ const (
 
 	ErrorCodeLocalPassphraseRequired = "local_passphrase_required"
 	ApprovalTimeout                  = 15 * time.Minute
-	BrokerExchangeTimeout            = ApprovalTimeout + time.Minute
-	MinGrantDuration                 = 15 * time.Minute
+	PostApprovalExchangeTimeout      = 2 * time.Minute
+	BrokerExchangeTimeout            = ApprovalTimeout + PostApprovalExchangeTimeout
+	MinimumUsableGrantDuration       = 15 * time.Minute
+	MinGrantDuration                 = ApprovalTimeout + MinimumUsableGrantDuration
 	AbsoluteMaxGrantDuration         = 24 * time.Hour
 )
 

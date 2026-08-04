@@ -20,6 +20,7 @@ import (
 
 const githubApprovalTTL = githubauth.ApprovalTimeout
 const githubUnlockTombstoneTTL = 10 * time.Minute
+const githubApprovalTimeFormat = "2006-01-02 15:04 MST"
 
 type githubApproval struct {
 	passphrase []byte
@@ -263,7 +264,7 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	a.revokeGitHubLeases(oldTokens)
 	a.queueManualRefresh(session.ID)
 	a.completeGitHubApprovalMessage(pending, fmt.Sprintf(
-		"✓ Active until %s.", token.ExpiresAt.Local().Format("15:04 MST"),
+		"✓ Active until %s.", token.ExpiresAt.Local().Format(githubApprovalTimeFormat),
 	))
 	_ = a.audit("github.lease", "granted", githubAuditRequest(session.ID, request))
 	return githubauth.BrokerResponse{OK: true, Token: token.Value, ExpiresAt: token.ExpiresAt}
@@ -356,7 +357,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 		LocalPassphrase: append([]byte(nil), request.Passphrase...),
 		ExpiresAt:       now.Add(githubApprovalTTL),
 		ApprovalText:    text,
-		ApprovalSummary: githubApprovalSummary(session, request, false),
+		ApprovalSummary: githubApprovalCompletionSummary(session, request, app),
 		State:           "pending",
 		Result:          make(chan githubApproval, 1),
 		Enrollment:      app,
@@ -389,12 +390,12 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 
 func (a *App) githubApprovalText(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App, grantExpiresAt time.Time) string {
 	var text strings.Builder
-	text.WriteString(githubApprovalSummary(session, request, true))
+	text.WriteString(githubApprovalRequestSummary(session, request))
 	text.WriteString("\n\n")
 	text.WriteString(compactGitHubPermissionLines(request.Permissions))
 	if request.Action == githubauth.ActionGrant {
 		fmt.Fprintf(&text, "\n<b>For:</b> %s, renewable · until %s", compactGitHubDuration(request.GrantFor),
-			html.EscapeString(grantExpiresAt.Local().Format("15:04 MST")))
+			html.EscapeString(grantExpiresAt.Local().Format(githubApprovalTimeFormat)))
 		fmt.Fprintf(&text, "\n<b>Why:</b> %s", html.EscapeString(request.Purpose))
 	} else {
 		fmt.Fprintf(&text, "\n<b>Run:</b> <code>%s</code>", html.EscapeString(a.redactText(compactGitHubCommand(request.Command))))
@@ -438,20 +439,37 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 	return text.String()
 }
 
-func githubApprovalSummary(session state.TerminalSession, request githubauth.BrokerRequest, requested bool) string {
-	heading := "GitHub access · " + sessionLabel(session)
-	if requested {
-		heading = "GitHub access requested · " + sessionLabel(session)
+func githubApprovalRequestSummary(session state.TerminalSession, request githubauth.BrokerRequest) string {
+	heading := "GitHub access requested · " + sessionLabel(session)
+	return fmt.Sprintf("<b>%s</b>\n\n%s", html.EscapeString(heading), githubApprovalTargetHTML(request.App, request.Repositories))
+}
+
+func githubApprovalCompletionSummary(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App) string {
+	authority := "GitHub lease"
+	if request.Action == githubauth.ActionGrant {
+		authority = "GitHub grant"
 	}
+	heading := authority + " · " + sessionLabel(session)
+	appLabel := fmt.Sprintf("%s@%d", request.App, app.EffectiveInstallationID())
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "<b>%s</b>\n\n%s\n\n%s", html.EscapeString(heading),
+		githubApprovalTargetHTML(appLabel, request.Repositories), compactGitHubPermissionLines(request.Permissions))
+	if request.Action == githubauth.ActionGrant {
+		fmt.Fprintf(&summary, "\n<b>Why:</b> %s", html.EscapeString(request.Purpose))
+	}
+	return summary.String()
+}
+
+func githubApprovalTargetHTML(appLabel string, repositories []string) string {
 	var targets strings.Builder
-	fmt.Fprintf(&targets, "<code>%s</code> → ", html.EscapeString(request.App))
-	for index, repository := range request.Repositories {
+	fmt.Fprintf(&targets, "<code>%s</code> → ", html.EscapeString(appLabel))
+	for index, repository := range repositories {
 		if index > 0 {
 			targets.WriteString(", ")
 		}
 		fmt.Fprintf(&targets, "<code>%s</code>", html.EscapeString(repository))
 	}
-	return fmt.Sprintf("<b>%s</b>\n\n%s", html.EscapeString(heading), targets.String())
+	return targets.String()
 }
 
 func compactGitHubPermissionLines(permissions map[string]string) string {

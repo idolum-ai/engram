@@ -114,6 +114,18 @@ func TestGitHubCapabilityRemoteApprovalMintsLeaseAndDeletesPassphraseReply(t *te
 	if got := app.githubStatusLine(session); !strings.Contains(got, "GH idolum@456 · 1R 1W · 1 repo") {
 		t.Fatalf("capability line = %q", got)
 	}
+	completion := <-transport.edited
+	for _, want := range []string{
+		"<b>GitHub lease · [1] shell</b>",
+		"<code>idolum@456</code>",
+		"<b>Write:</b> pull requests",
+		"<b>Read:</b> code",
+		"✓ Active until " + minter.expiresAt.Local().Format("2006-01-02 15:04 MST"),
+	} {
+		if !strings.Contains(completion.text, want) {
+			t.Fatalf("lease completion omitted %q: %#v", want, completion)
+		}
+	}
 }
 
 func TestGitHubCapabilityRequiresExplicitInstallationForMultiInstallationApp(t *testing.T) {
@@ -828,7 +840,7 @@ func TestGitHubGrantApprovalKeepsDecisionCopyCompactAndDetailsExpandable(t *test
 	}
 	request.GrantFor = 2 * time.Hour
 	request.Purpose = "Push <PR #59> & verify CI"
-	expiresAt := time.Date(2026, time.August, 4, 9, 36, 0, 0, time.Local)
+	expiresAt := time.Date(2026, time.August, 5, 3, 0, 0, 0, time.Local)
 	text := app.githubApprovalText(session, request, githubauth.App{
 		AppID:             4357398,
 		InstallationID:    148080021,
@@ -847,7 +859,7 @@ func TestGitHubGrantApprovalKeepsDecisionCopyCompactAndDetailsExpandable(t *test
 		"<code>idolum-ai/engram</code>",
 		"<b>Write:</b> code, pull requests",
 		"<b>Read:</b> actions, checks",
-		"<b>For:</b> 2h, renewable · until " + expiresAt.Local().Format("15:04 MST"),
+		"<b>For:</b> 2h, renewable · until " + expiresAt.Local().Format("2006-01-02 15:04 MST"),
 		"<b>Why:</b> Push &lt;PR #59&gt; &amp; verify CI",
 		"Approve within 15 minutes",
 		"password reply is not end-to-end encrypted",

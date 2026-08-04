@@ -254,7 +254,9 @@ privacy model must stay small and explicit.
   within fifteen minutes, and bind the authorized Telegram identity and message
   to one current immutable tmux server/window/pane identity and one exact
   enrolled GitHub App identity. Removing or replacing that enrollment while an
-  approval is pending cancels the request.
+  approval is pending cancels the request. Client and broker transport deadlines
+  must retain a bounded two-minute post-approval reserve for upstream inspection,
+  minting, validation, transactional delivery, and rollback.
 - One encrypted GitHub App enrollment may name several installation IDs, and
   new-format ciphertext must authenticate that complete set. Existing
   single-installation vault entries remain readable without an automatic
@@ -303,6 +305,12 @@ privacy model must stay small and explicit.
   for approval is immutable across approval, inspection, and storage.
   Renewable write permissions use an explicit collaboration allowlist; all
   other writes continue to require exact-command approval.
+- Renewable-grant expiry is fixed when the approval is presented. The minimum
+  requested duration must therefore include the full approval window plus at
+  least fifteen minutes of usable authority. Approval and completion displays
+  include a calendar date in the absolute expiry. While authority remains live,
+  its compact completion receipt retains its lease/grant class, selected
+  installation, repository and permission ceiling, and grant purpose.
 - A grant may satisfy only equal or narrower repository and permission
   requests. Each child receives a token at the complete ceiling shown during
   approval. Minting is serialized per pane, reuses that ceiling token through

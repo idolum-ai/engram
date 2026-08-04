@@ -295,7 +295,10 @@ normalized repository list in deterministic order and stores no authority
 unless GitHub confirms that every repository belongs to that exact
 installation.
 
-The CLI blocks for at most fifteen minutes while Telegram presents the request.
+Telegram presents the request for at most fifteen minutes. The CLI and broker
+reserve another two minutes for post-approval inspection, minting, validation,
+and transactional delivery, so a decision accepted at the deadline does not
+race the waiting client.
 
 Before approving, verify every field:
 
@@ -371,16 +374,18 @@ sadasant-ghost → idolum-ai/engram
 
 Write: code, pull requests
 Read: actions, checks
-For: 2h, renewable · until 09:36 EDT
+For: 2h, renewable · until 2026-08-04 09:36 EDT
 Why: Push the review fixes and verify CI
 
 Approve within 15 minutes. The password reply is not end-to-end encrypted.
 Details …
 ```
 
-The requested duration must be at least 15 minutes. The instance ceiling
-defaults to eight hours and can be lowered (or raised up to the hard 24-hour
-ceiling) in `.env`:
+The requested duration must be at least 30 minutes. Grant expiry is fixed when
+the approval request is shown, so this minimum combines the 15-minute approval
+window with at least 15 minutes of usable renewable authority even when approval
+arrives at the deadline. The instance ceiling defaults to eight hours and can
+be lowered (or raised up to the hard 24-hour ceiling) in `.env`:
 
 ```dotenv
 ENGRAM_GITHUB_GRANT_MAX_DURATION=8h
@@ -561,7 +566,8 @@ revoked before the error returns.
 
 ### Approval expired or the requester exited
 
-Approvals expire after fifteen minutes. Requester disconnect, cancellation, or
+Approvals expire after fifteen minutes. The connected CLI and broker keep a
+separate two-minute post-approval reserve. Requester disconnect, cancellation, or
 pane invalidation abandons the request. Late Telegram passphrase replies are
 consumed and deleted rather than falling through to terminal input.
 
