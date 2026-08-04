@@ -930,19 +930,21 @@ func testGitHubVaultWithInstallations(t *testing.T, telegramUnlock bool, install
 }
 
 type fakeGitHubMinter struct {
-	mu              sync.Mutex
-	mintCalls       int
-	revokeCalls     int
-	installationIDs []int64
-	repositories    []string
-	permissions     map[string]string
-	expiresAt       time.Time
-	inspectOnce     sync.Once
-	inspectStart    chan struct{}
-	inspectWait     chan struct{}
-	mintStarted     chan struct{}
-	mintRelease     chan struct{}
-	revokeErr       error
+	mu                 sync.Mutex
+	mintCalls          int
+	revokeCalls        int
+	installationIDs    []int64
+	repositoryChecks   []string
+	repositoryScopeErr error
+	repositories       []string
+	permissions        map[string]string
+	expiresAt          time.Time
+	inspectOnce        sync.Once
+	inspectStart       chan struct{}
+	inspectWait        chan struct{}
+	mintStarted        chan struct{}
+	mintRelease        chan struct{}
+	revokeErr          error
 }
 
 func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, app githubauth.App, _ []byte) (githubauth.Installation, error) {
@@ -967,6 +969,14 @@ func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, app githubau
 	}
 	installation.Account.Login = "idolum-ai"
 	return installation, nil
+}
+
+func (m *fakeGitHubMinter) ValidateInstallationRepositories(_ context.Context, _ githubauth.App, _ []byte, _ githubauth.Installation, repositories []string) error {
+	m.mu.Lock()
+	m.repositoryChecks = append(m.repositoryChecks, repositories...)
+	err := m.repositoryScopeErr
+	m.mu.Unlock()
+	return err
 }
 
 func (m *fakeGitHubMinter) Mint(_ context.Context, app githubauth.App, privateKey []byte, repositories []string, permissions map[string]string) (githubauth.Token, error) {

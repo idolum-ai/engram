@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -58,6 +59,39 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	}
 	if len(app.githubGrants) != 1 || len(app.githubLeases) != 0 {
 		t.Fatalf("stored grants=%d leases=%d", len(app.githubGrants), len(app.githubLeases))
+	}
+}
+
+func TestGitHubGrantRejectsSelectedRepositoryOutsideInstallationBeforeStorage(t *testing.T) {
+	minter := &fakeGitHubMinter{repositoryScopeErr: fmt.Errorf("repository %q is not available to installation 456", "idolum-ai/not-installed")}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	app.githubGrants = map[string]githubGrant{}
+	request := testLocalGitHubBrokerRequest()
+	request.Action = githubauth.ActionGrant
+	request.Command = nil
+	request.Repositories = []string{"idolum-ai/not-installed"}
+	request.GrantFor = time.Hour
+	request.Purpose = "Review a restricted repository"
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID:      "approve-restricted-repository",
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	response := <-responses
+	if response.OK || !strings.Contains(response.Error, "not available to installation 456") {
+		t.Fatalf("grant response = %#v", response)
+	}
+	if len(app.githubGrants) != 0 {
+		t.Fatal("unusable selected-repository authority was stored as an active grant")
+	}
+	if len(minter.repositoryChecks) != 1 || minter.repositoryChecks[0] != "idolum-ai/not-installed" {
+		t.Fatalf("repository preflight checks = %#v", minter.repositoryChecks)
 	}
 }
 
@@ -757,16 +791,24 @@ func TestGitHubGrantExplicitRevokeFailureRemovesAuthorityAndTracksRetry(t *testi
 	now := time.Now()
 	minter := &fakeGitHubMinter{revokeErr: errors.New("network down")}
 	app, _, sessionID := newLocalGitHubApprovalTestApp(t, minter)
+	createdAt := testGitHubSessionCreatedAt(app, sessionID)
+	auditDir := t.TempDir()
+	auditPath := filepath.Join(auditDir, "audit.jsonl")
+	auditStore, err := state.Open(filepath.Join(auditDir, "state.json"), auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Store = auditStore
 	app.githubGrants = map[string]githubGrant{}
 	app.githubRevocations = map[string]githubRevocation{}
 	request := testLocalGitHubBrokerRequest()
 	enrollment, _ := app.GitHubVault.Get("idolum")
 	key := []byte("decrypted signing capability")
 	app.githubGrants[githubBindingKey(request.Binding)] = githubGrant{
-		SessionID: sessionID, SessionCreatedAt: testGitHubSessionCreatedAt(app, sessionID),
+		SessionID: sessionID, SessionCreatedAt: createdAt,
 		Binding: request.Binding, Enrollment: enrollment,
 		Info: githubauth.GrantInfo{
-			ID: "grant-one", App: "idolum", Repositories: request.Repositories,
+			ID: "grant-one", App: "idolum", InstallationID: 789, Repositories: request.Repositories,
 			Permissions: request.Permissions, Purpose: "Review", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 		},
 		PrivateKey: key,
@@ -774,16 +816,23 @@ func TestGitHubGrantExplicitRevokeFailureRemovesAuthorityAndTracksRetry(t *testi
 	app.githubLeases[githubBindingKey(request.Binding)] = githubLease{
 		SessionID: sessionID, Binding: request.Binding, Enrollment: enrollment,
 		Info: githubauth.LeaseInfo{
-			App: "idolum", ExpiresAt: now.Add(time.Hour), GrantID: "grant-one", Generation: 1,
+			App: "idolum", InstallationID: 789, ExpiresAt: now.Add(time.Hour), GrantID: "grant-one", Generation: 1,
 		},
 		Token: "token-secret",
 	}
-	err := app.revokeGitHubBindingAuthority(context.Background(), sessionID, request.Binding)
+	err = app.revokeGitHubBindingAuthority(context.Background(), sessionID, request.Binding)
 	if err == nil || !strings.Contains(err.Error(), "revocation is pending") {
 		t.Fatalf("explicit revoke error = %v", err)
 	}
 	if len(app.githubGrants) != 0 || len(app.githubLeases) != 0 || app.githubRevocationCount() != 1 {
 		t.Fatalf("post-revoke grants=%d leases=%d pending=%d", len(app.githubGrants), len(app.githubLeases), app.githubRevocationCount())
+	}
+	app.githubMu.Lock()
+	pending := app.githubRevocations["token-secret"]
+	app.githubMu.Unlock()
+	installationField := reflect.ValueOf(pending).FieldByName("InstallationID")
+	if !installationField.IsValid() || installationField.Int() != 789 {
+		t.Fatalf("queued revocation lost installation identity: %#v", pending)
 	}
 	for _, value := range key {
 		if value != 0 {
@@ -797,6 +846,27 @@ func TestGitHubGrantExplicitRevokeFailureRemovesAuthorityAndTracksRetry(t *testi
 	app.transferWG.Wait()
 	if app.githubRevocationCount() != 0 || minter.revokeCount() != 2 {
 		t.Fatalf("recovered revocation pending=%d calls=%d", app.githubRevocationCount(), minter.revokeCount())
+	}
+	auditData, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(auditData)), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["type"] == "github.lease" && record["status"] == "revoke_recovered" {
+			recovered = record
+		}
+	}
+	if recovered == nil {
+		t.Fatalf("recovery audit missing from %s", auditData)
+	}
+	data, _ := recovered["data"].(map[string]any)
+	if data["installation_id"] != float64(789) {
+		t.Fatalf("recovery audit = %#v", recovered)
 	}
 }
 
