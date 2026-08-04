@@ -117,7 +117,8 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   running watches; normal unwatch or attached-pane untracking removes it
   without changing the pane program, environment, title, or other options.
 - A pane with an active renewable GitHub work-session grant shows one compact
-  status line containing the App alias, read/write permission counts,
+  status line containing the App alias, selected installation ID when known,
+  read/write permission counts,
   repository count, and remaining grant lifetime. This grant line takes
   presentation priority over its shorter current token lease so unattended
   authority remains conspicuous without expanding the card.

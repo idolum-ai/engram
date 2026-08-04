@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -108,8 +109,64 @@ func TestGitHubCapabilityRemoteApprovalMintsLeaseAndDeletesPassphraseReply(t *te
 	if !ok {
 		t.Fatal("session disappeared")
 	}
-	if got := app.githubStatusLine(session); !strings.Contains(got, "GH idolum · 1R 1W · 1 repo") {
+	if got := app.githubStatusLine(session); !strings.Contains(got, "GH idolum@456 · 1R 1W · 1 repo") {
 		t.Fatalf("capability line = %q", got)
+	}
+}
+
+func TestGitHubCapabilityRequiresExplicitInstallationForMultiInstallationApp(t *testing.T) {
+	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.GitHubVault = testGitHubVaultWithInstallations(t, false, 456, 789)
+
+	response := app.handleGitHubBrokerRequest(context.Background(), testLocalGitHubBrokerRequest())
+	if response.OK || !strings.Contains(response.Error, "pass --installation-id") ||
+		!strings.Contains(response.Error, "456, 789") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if len(app.githubPending) != 0 {
+		t.Fatal("ambiguous installation request reached human approval")
+	}
+	unknown := testLocalGitHubBrokerRequest()
+	unknown.InstallationID = 999
+	response = app.handleGitHubBrokerRequest(context.Background(), unknown)
+	if response.OK || !strings.Contains(response.Error, "does not enroll installation 999") {
+		t.Fatalf("unknown installation response = %#v", response)
+	}
+	if len(app.githubPending) != 0 {
+		t.Fatal("unknown installation request reached human approval")
+	}
+}
+
+func TestGitHubCapabilityBindsApprovalMintAndLeaseToSelectedInstallation(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(42 * time.Minute)}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	app.GitHubVault = testGitHubVaultWithInstallations(t, false, 456, 789)
+	request := testLocalGitHubBrokerRequest()
+	request.InstallationID = 789
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	approval := <-transport.sent
+	if !strings.Contains(approval.text, "installation 789") {
+		t.Fatalf("approval text = %q", approval.text)
+	}
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID:      "approve-selected-installation",
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("callback status = %q", status)
+	}
+	response := <-responses
+	if !response.OK || response.Token == "" {
+		t.Fatalf("broker response = %#v", response)
+	}
+	if len(minter.installationIDs) != 1 || minter.installationIDs[0] != 789 {
+		t.Fatalf("mint installations = %#v", minter.installationIDs)
+	}
+	leases := app.githubLeaseInfos(request.Binding)
+	if len(leases) != 1 || leases[0].InstallationID != 789 {
+		t.Fatalf("leases = %#v", leases)
 	}
 }
 
@@ -149,6 +206,58 @@ func TestGitHubCapabilityCancellationDuringMintRevokesTokenWithoutStoringLease(t
 	}
 	if minter.revokeCount() != 1 {
 		t.Fatalf("revoke calls = %d, want 1", minter.revokeCount())
+	}
+}
+
+func TestDiscardedGitHubTokenRevocationRetryPreservesLeaseProvenance(t *testing.T) {
+	minter := &fakeGitHubMinter{revokeErr: errors.New("network down")}
+	expiresAt := time.Now().Add(time.Hour)
+	app := &App{
+		GitHubMinter:      minter,
+		githubRevocations: map[string]githubRevocation{},
+		githubNow:         time.Now,
+	}
+	pending := githubRevocation{
+		Token: "discarded-token", SessionID: 17, App: "idolum",
+		InstallationID: 789, ExpiresAt: expiresAt,
+	}
+	if err := app.revokeDiscardedGitHubToken(context.Background(), pending, errors.New("delivery canceled")); err == nil {
+		t.Fatal("discarded token revocation failure was hidden")
+	}
+	got, ok := app.githubRevocations[pending.Token]
+	if !ok || got.SessionID != pending.SessionID || got.App != pending.App ||
+		got.InstallationID != pending.InstallationID || !got.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("queued discarded-token revocation = %#v, want provenance from %#v", got, pending)
+	}
+}
+
+func TestReplacementGitHubTokenRevocationRetryPreservesLeaseProvenance(t *testing.T) {
+	minter := &fakeGitHubMinter{revokeErr: errors.New("network down")}
+	expiresAt := time.Now().Add(time.Hour)
+	binding := githubauth.Binding{ServerID: "server", WindowID: "@2", PaneID: "%3"}
+	oldLease := githubLease{
+		SessionID: 17,
+		Binding:   binding,
+		Info: githubauth.LeaseInfo{
+			App: "idolum", InstallationID: 789, ExpiresAt: expiresAt,
+		},
+		Token: "replaced-token",
+	}
+	app := &App{
+		GitHubMinter: minter,
+		githubLeases: map[string]githubLease{
+			githubBindingKey(binding): oldLease,
+		},
+		githubRevocations: map[string]githubRevocation{},
+		githubNow:         time.Now,
+	}
+	replaced := app.storeGitHubLease(githubLease{Binding: binding, Token: "new-token"})
+	app.revokeGitHubLeases(replaced)
+	app.transferWG.Wait()
+	got, ok := app.githubRevocations[oldLease.Token]
+	if !ok || got.SessionID != oldLease.SessionID || got.App != oldLease.Info.App ||
+		got.InstallationID != oldLease.Info.InstallationID || !got.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("queued replacement revocation = %#v, want provenance from %#v", got, oldLease)
 	}
 }
 
@@ -850,6 +959,10 @@ func TestGitHubLeaseDecorationAppearsAcrossAnchorFormats(t *testing.T) {
 }
 
 func testGitHubVault(t *testing.T, telegramUnlock bool) *githubauth.Vault {
+	return testGitHubVaultWithInstallations(t, telegramUnlock, 456)
+}
+
+func testGitHubVaultWithInstallations(t *testing.T, telegramUnlock bool, installationIDs ...int64) *githubauth.Vault {
 	t.Helper()
 	vault, err := githubauth.OpenVault(filepath.Join(t.TempDir(), "github-apps.json"))
 	if err != nil {
@@ -863,28 +976,31 @@ func testGitHubVault(t *testing.T, telegramUnlock bool) *githubauth.Vault {
 	defer githubauth.Zero(privateKey)
 	passphrase := []byte("correct horse battery staple")
 	defer githubauth.Zero(passphrase)
-	if _, _, err := vault.Add("idolum", 123, 456, privateKey, passphrase, telegramUnlock); err != nil {
+	if _, _, err := vault.AddInstallations("idolum", 123, installationIDs, privateKey, passphrase, telegramUnlock); err != nil {
 		t.Fatal(err)
 	}
 	return vault
 }
 
 type fakeGitHubMinter struct {
-	mu           sync.Mutex
-	mintCalls    int
-	revokeCalls  int
-	repositories []string
-	permissions  map[string]string
-	expiresAt    time.Time
-	inspectOnce  sync.Once
-	inspectStart chan struct{}
-	inspectWait  chan struct{}
-	mintStarted  chan struct{}
-	mintRelease  chan struct{}
-	revokeErr    error
+	mu                 sync.Mutex
+	mintCalls          int
+	revokeCalls        int
+	installationIDs    []int64
+	repositoryChecks   []string
+	repositoryScopeErr error
+	repositories       []string
+	permissions        map[string]string
+	expiresAt          time.Time
+	inspectOnce        sync.Once
+	inspectStart       chan struct{}
+	inspectWait        chan struct{}
+	mintStarted        chan struct{}
+	mintRelease        chan struct{}
+	revokeErr          error
 }
 
-func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, _ githubauth.App, _ []byte) (githubauth.Installation, error) {
+func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, app githubauth.App, _ []byte) (githubauth.Installation, error) {
 	if m.inspectStart != nil {
 		m.inspectOnce.Do(func() { close(m.inspectStart) })
 	}
@@ -896,7 +1012,7 @@ func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, _ githubauth
 		}
 	}
 	installation := githubauth.Installation{
-		ID: 456,
+		ID: app.EffectiveInstallationID(),
 		Permissions: map[string]string{
 			"actions":       "read",
 			"contents":      "write",
@@ -908,7 +1024,15 @@ func (m *fakeGitHubMinter) InspectInstallation(ctx context.Context, _ githubauth
 	return installation, nil
 }
 
-func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey []byte, repositories []string, permissions map[string]string) (githubauth.Token, error) {
+func (m *fakeGitHubMinter) ValidateInstallationRepositories(_ context.Context, _ githubauth.App, _ []byte, _ githubauth.Installation, repositories []string) error {
+	m.mu.Lock()
+	m.repositoryChecks = append(m.repositoryChecks, repositories...)
+	err := m.repositoryScopeErr
+	m.mu.Unlock()
+	return err
+}
+
+func (m *fakeGitHubMinter) Mint(_ context.Context, app githubauth.App, privateKey []byte, repositories []string, permissions map[string]string) (githubauth.Token, error) {
 	if m.mintStarted != nil {
 		close(m.mintStarted)
 	}
@@ -921,6 +1045,7 @@ func (m *fakeGitHubMinter) Mint(_ context.Context, _ githubauth.App, privateKey 
 		return githubauth.Token{}, io.ErrUnexpectedEOF
 	}
 	m.mintCalls++
+	m.installationIDs = append(m.installationIDs, app.EffectiveInstallationID())
 	mintNumber := m.mintCalls
 	m.repositories = append([]string(nil), repositories...)
 	m.permissions = copyStringMap(permissions)

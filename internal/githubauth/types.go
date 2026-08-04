@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	ProtocolVersion = 2
+	ProtocolVersion = 3
 	ActionExec      = "exec"
 	ActionGrant     = "grant"
 	ActionStatus    = "status"
@@ -28,36 +28,39 @@ type Binding struct {
 }
 
 type BrokerRequest struct {
-	Version      int               `json:"version"`
-	Action       string            `json:"action"`
-	App          string            `json:"app,omitempty"`
-	Repositories []string          `json:"repositories,omitempty"`
-	Permissions  map[string]string `json:"permissions,omitempty"`
-	Command      []string          `json:"command,omitempty"`
-	Binding      Binding           `json:"binding"`
-	Passphrase   []byte            `json:"passphrase,omitempty"`
-	LocalUnlock  bool              `json:"local_unlock,omitempty"`
-	GrantFor     time.Duration     `json:"grant_for,omitempty"`
-	Purpose      string            `json:"purpose,omitempty"`
+	Version        int               `json:"version"`
+	Action         string            `json:"action"`
+	App            string            `json:"app,omitempty"`
+	InstallationID int64             `json:"installation_id,omitempty"`
+	Repositories   []string          `json:"repositories,omitempty"`
+	Permissions    map[string]string `json:"permissions,omitempty"`
+	Command        []string          `json:"command,omitempty"`
+	Binding        Binding           `json:"binding"`
+	Passphrase     []byte            `json:"passphrase,omitempty"`
+	LocalUnlock    bool              `json:"local_unlock,omitempty"`
+	GrantFor       time.Duration     `json:"grant_for,omitempty"`
+	Purpose        string            `json:"purpose,omitempty"`
 }
 
 type LeaseInfo struct {
-	App          string            `json:"app"`
-	Repositories []string          `json:"repositories"`
-	Permissions  map[string]string `json:"permissions"`
-	ExpiresAt    time.Time         `json:"expires_at"`
-	GrantID      string            `json:"grant_id,omitempty"`
-	Generation   uint64            `json:"generation,omitempty"`
+	App            string            `json:"app"`
+	InstallationID int64             `json:"installation_id"`
+	Repositories   []string          `json:"repositories"`
+	Permissions    map[string]string `json:"permissions"`
+	ExpiresAt      time.Time         `json:"expires_at"`
+	GrantID        string            `json:"grant_id,omitempty"`
+	Generation     uint64            `json:"generation,omitempty"`
 }
 
 type GrantInfo struct {
-	ID           string            `json:"id"`
-	App          string            `json:"app"`
-	Repositories []string          `json:"repositories"`
-	Permissions  map[string]string `json:"permissions"`
-	Purpose      string            `json:"purpose"`
-	CreatedAt    time.Time         `json:"created_at"`
-	ExpiresAt    time.Time         `json:"expires_at"`
+	ID             string            `json:"id"`
+	App            string            `json:"app"`
+	InstallationID int64             `json:"installation_id"`
+	Repositories   []string          `json:"repositories"`
+	Permissions    map[string]string `json:"permissions"`
+	Purpose        string            `json:"purpose"`
+	CreatedAt      time.Time         `json:"created_at"`
+	ExpiresAt      time.Time         `json:"expires_at"`
 }
 
 type BrokerResponse struct {
@@ -98,6 +101,9 @@ func (r BrokerRequest) Validate() error {
 	}
 	if err := validateAlias(r.App); err != nil {
 		return err
+	}
+	if r.InstallationID < 0 {
+		return fmt.Errorf("GitHub App installation ID must be positive")
 	}
 	if len(r.Repositories) == 0 {
 		return fmt.Errorf("at least one explicit repository is required")
@@ -296,7 +302,11 @@ func CompactLeaseLine(lease LeaseInfo, now time.Time) string {
 	if writeCount == 0 {
 		authority = "read-only"
 	}
-	return fmt.Sprintf("GH %s · %s · %s · %s", lease.App, authority, repositoryLabel, compactDuration(remaining))
+	appLabel := lease.App
+	if lease.InstallationID > 0 {
+		appLabel = fmt.Sprintf("%s@%d", lease.App, lease.InstallationID)
+	}
+	return fmt.Sprintf("GH %s · %s · %s · %s", appLabel, authority, repositoryLabel, compactDuration(remaining))
 }
 
 func CompactGrantLine(grant GrantInfo, now time.Time) string {
@@ -324,7 +334,11 @@ func CompactGrantLine(grant GrantInfo, now time.Time) string {
 	if remaining < time.Minute {
 		remaining = time.Minute
 	}
-	return fmt.Sprintf("GH grant %s · %s · %s · %s", grant.App, authority, repositoryLabel, compactDuration(remaining))
+	appLabel := grant.App
+	if grant.InstallationID > 0 {
+		appLabel = fmt.Sprintf("%s@%d", grant.App, grant.InstallationID)
+	}
+	return fmt.Sprintf("GH grant %s · %s · %s · %s", appLabel, authority, repositoryLabel, compactDuration(remaining))
 }
 
 func compactDuration(duration time.Duration) string {

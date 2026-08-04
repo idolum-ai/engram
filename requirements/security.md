@@ -255,6 +255,15 @@ privacy model must stay small and explicit.
   to one current immutable tmux server/window/pane identity and one exact
   enrolled GitHub App identity. Removing or replacing that enrollment while an
   approval is pending cancels the request.
+- One encrypted GitHub App enrollment may name several installation IDs, and
+  new-format ciphertext must authenticate that complete set. Existing
+  single-installation vault entries remain readable without an automatic
+  ciphertext rewrite. A request against a multi-installation alias must select
+  one enrolled installation explicitly; Engram must never guess, merge
+  authority across installations, or mint more than one installation token for
+  one request. The selected installation alone must cover every requested
+  repository and permission, and absent, unknown, or cross-installation scopes
+  must fail with actionable non-secret diagnostics before authority is stored.
 - GitHub capability approval must disclose the complete shell-quoted child
   command. If the full repositories, permissions, and command do not fit safely
   in the approval message, Engram must reject the request rather than truncate
@@ -267,8 +276,9 @@ privacy model must stay small and explicit.
   their text must not enter state, audit, or error output.
 - Active GitHub leases are process-local and pane-bound. A reused request must
   be a repository and permission subset of the lease and must match the complete
-  enrollment identity that minted it, including App ID, installation ID, public
-  fingerprint, unlock mode, and enrollment generation. Pane identity, watch
+  enrollment identity that minted it, including App ID, selected installation
+  ID, complete installation set, public fingerprint, unlock mode, and
+  enrollment generation. Pane identity, watch
   state, and enrollment identity must be checked again immediately before a
   reused token is returned. Pane loss, replacement, unwatch, expiry, explicit
   revocation, enrollment replacement, or restart removes authority; broader

@@ -52,6 +52,86 @@ func TestBrokerRoundTripNeverRequiresTokenOutput(t *testing.T) {
 	}
 }
 
+func TestBrokerRoundTripPreservesSelectedInstallationIdentity(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "engram-github-installation-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "github.sock")
+	server, err := Listen(path, func(_ context.Context, request BrokerRequest) BrokerResponse {
+		if request.InstallationID != 789 {
+			t.Fatalf("selected installation = %d", request.InstallationID)
+		}
+		return BrokerResponse{OK: true, Token: "provisional-test-token", ExpiresAt: time.Now().Add(time.Hour)}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(ctx) }()
+	response, err := Request(context.Background(), path, BrokerRequest{
+		Version: ProtocolVersion, Action: ActionExec, App: "shared", InstallationID: 789,
+		Repositories: []string{"other-owner/project"}, Permissions: map[string]string{"contents": "read"},
+		Command: []string{"gh", "repo", "view"},
+		Binding: Binding{ServerID: "server", WindowID: "@2", PaneID: "%3"},
+	})
+	if err != nil || response.Token != "provisional-test-token" {
+		t.Fatalf("response = %#v, error = %v", response, err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProtocolVersionFailsClosedAcrossInstallationSelectorUpgrade(t *testing.T) {
+	type versionTwoBrokerRequest struct {
+		Version      int               `json:"version"`
+		Action       string            `json:"action"`
+		App          string            `json:"app,omitempty"`
+		Repositories []string          `json:"repositories,omitempty"`
+		Permissions  map[string]string `json:"permissions,omitempty"`
+		Command      []string          `json:"command,omitempty"`
+		Binding      Binding           `json:"binding"`
+	}
+
+	legacyWire, err := json.Marshal(versionTwoBrokerRequest{
+		Version: 2, Action: ActionExec, App: "shared",
+		Repositories: []string{"owner/repo"}, Permissions: map[string]string{"contents": "read"},
+		Command: []string{"gh", "repo", "view"},
+		Binding: Binding{ServerID: "server", WindowID: "@2", PaneID: "%3"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var currentDaemon BrokerRequest
+	if err := json.Unmarshal(legacyWire, &currentDaemon); err != nil {
+		t.Fatal(err)
+	}
+	if err := currentDaemon.Validate(); err == nil || !strings.Contains(err.Error(), "protocol version") {
+		t.Fatalf("new daemon accepted version-2 CLI request: %v", err)
+	}
+
+	currentWire, err := json.Marshal(BrokerRequest{
+		Version: ProtocolVersion, Action: ActionExec, App: "shared", InstallationID: 789,
+		Repositories: []string{"owner/repo"}, Permissions: map[string]string{"contents": "read"},
+		Command: []string{"gh", "repo", "view"},
+		Binding: Binding{ServerID: "server", WindowID: "@2", PaneID: "%3"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacyDaemon versionTwoBrokerRequest
+	if err := json.Unmarshal(currentWire, &legacyDaemon); err != nil {
+		t.Fatal(err)
+	}
+	if legacyDaemon.Version == 2 {
+		t.Fatalf("version-2 daemon would accept a request after silently dropping installation %d", 789)
+	}
+}
+
 func TestListenRefusesToReplaceLiveBroker(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "engram-github-live-")
 	if err != nil {

@@ -69,6 +69,99 @@ func TestClientMintsExactlyScopedInstallationToken(t *testing.T) {
 	}
 }
 
+func TestClientUsesOnlyTheSelectedInstallationFromMultiInstallationEnrollment(t *testing.T) {
+	privateKeyPEM, privateKey := testPrivateKey(t)
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifyTestJWT(t, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), privateKey, 123, now)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/app/installations/789":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": 789, "app_slug": "shared-app",
+				"account":     map[string]any{"login": "other-owner"},
+				"permissions": map[string]string{"contents": "read"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/789/access_tokens":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token": "ghs_selected", "expires_at": now.Add(time.Hour),
+				"permissions":  map[string]string{"contents": "read", "metadata": "read"},
+				"repositories": []map[string]string{{"full_name": "other-owner/project"}},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	enrollment := App{Alias: "shared", AppID: 123, InstallationID: 456, InstallationIDs: []int64{456, 789}}
+	selected, err := enrollment.SelectInstallation(789)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewClient()
+	client.BaseURL = server.URL
+	client.HTTPClient = server.Client()
+	client.Now = func() time.Time { return now }
+	token, err := client.Mint(context.Background(), selected, privateKeyPEM,
+		[]string{"other-owner/project"}, map[string]string{"contents": "read"})
+	if err != nil || token.Value != "ghs_selected" {
+		t.Fatalf("token = %#v, error = %v", token, err)
+	}
+}
+
+func TestInstallationScopeRejectsRequestSpanningAccounts(t *testing.T) {
+	installation := Installation{ID: 456, Permissions: map[string]string{"contents": "read"}}
+	installation.Account.Login = "idolum-ai"
+	err := ValidateInstallationScope(installation,
+		[]string{"idolum-ai/engram", "other-owner/project"},
+		map[string]string{"contents": "read"})
+	if err == nil || !strings.Contains(err.Error(), "does not belong to installation account") {
+		t.Fatalf("cross-installation scope error = %v", err)
+	}
+}
+
+func TestClientPreflightsSelectedInstallationRepositoriesDeterministically(t *testing.T) {
+	privateKeyPEM, privateKey := testPrivateKey(t)
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifyTestJWT(t, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), privateKey, 123, now)
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/repos/idolum-ai/engram/installation":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 456})
+		case "/repos/idolum-ai/not-installed/installation":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient()
+	client.BaseURL = server.URL
+	client.HTTPClient = server.Client()
+	client.Now = func() time.Time { return now }
+	app := App{AppID: 123, InstallationID: 456}
+	installation := Installation{ID: 456, RepositorySelection: "selected"}
+	err := client.ValidateInstallationRepositories(context.Background(), app, privateKeyPEM, installation,
+		[]string{"idolum-ai/not-installed", "idolum-ai/engram", "idolum-ai/engram"})
+	if err == nil || !strings.Contains(err.Error(), `repository "idolum-ai/not-installed" is not available to selected installation 456`) {
+		t.Fatalf("repository preflight error = %v", err)
+	}
+	want := []string{"/repos/idolum-ai/engram/installation", "/repos/idolum-ai/not-installed/installation"}
+	if len(paths) != len(want) || paths[0] != want[0] || paths[1] != want[1] {
+		t.Fatalf("repository preflight paths = %#v, want %#v", paths, want)
+	}
+}
+
+func TestClientSkipsRepositoryProbesForAllRepositoryInstallation(t *testing.T) {
+	client := NewClient()
+	err := client.ValidateInstallationRepositories(context.Background(), App{AppID: 123, InstallationID: 456}, nil,
+		Installation{ID: 456, RepositorySelection: "all"}, []string{"idolum-ai/engram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientRevokesMintedTokenWhenEffectiveScopeDoesNotMatch(t *testing.T) {
 	privateKeyPEM, privateKey := testPrivateKey(t)
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)

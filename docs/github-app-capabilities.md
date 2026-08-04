@@ -18,7 +18,7 @@ Before starting, make sure:
 - the target terminal is a tmux pane watched by Engram;
 - a GitHub App is installed on the user or organization that owns the target
   repositories;
-- you know the GitHub App ID and installation ID;
+- you know the GitHub App ID and every installation ID you intend to enroll;
 - you have a private-key PEM for that App; and
 - the App installation has only the repository permissions the intended
   commands need.
@@ -34,7 +34,7 @@ and
 
 ## Understand the three identifiers
 
-Enrollment requires three independent values:
+Enrollment requires three independent kinds of value:
 
 1. **App ID** identifies the GitHub App definition. GitHub displays it on the
    App's settings page.
@@ -47,6 +47,12 @@ Enrollment requires three independent values:
 
 An installation ID is not interchangeable with an App ID, client ID, owner ID,
 or repository ID.
+
+The same App definition and private key may serve several installations. Engram
+stores those installation IDs under one alias, but it never treats them as one
+authority domain: every approval, grant, lease, and token selects exactly one
+installation. GitHub installation tokens cannot combine authority across
+installations.
 
 Use a short local alias to refer to this enrollment in Engram. The alias need
 not equal the public App name, but using a recognizable name makes Telegram
@@ -70,6 +76,9 @@ export ENGRAM_HOME="${ENGRAM_HOME:-$HOME/.engram}"
 
 These values are identifiers, not credentials. Do not create a variable for
 the PEM contents, vault passphrase, or a minted token.
+
+If the App is installed on more than one account, prepare each installation ID
+separately. Do not put a PEM, passphrase, or token in a shell variable.
 
 Shell variables are local to the current shell. Set `APP_ALIAS`, `OWNER`, and
 `REPOSITORY` again after moving to a different tmux pane later in this guide.
@@ -149,6 +158,17 @@ engram github app add "$APP_ALIAS" \
   --telegram-unlock
 ```
 
+To enroll several installations of the same App and key, repeat the flag in a
+single atomic enrollment:
+
+```sh
+engram github app add "$APP_ALIAS" \
+  --app-id "$APP_ID" \
+  --installation-id 987654 \
+  --installation-id 987655 \
+  --pem "$PEM_PATH"
+```
+
 Enter the new vault passphrase twice when prompted. Never place the passphrase
 in a command-line argument, environment variable, file, or shell history.
 
@@ -165,11 +185,16 @@ Enrollment:
 - does not mint a GitHub installation token.
 
 Enrollment validates the PEM structure but does not contact GitHub. The first
-capability request verifies that the key, App ID, installation ID, installation
-account, repository selection, and requested permissions agree.
+capability request verifies that the key, App ID, selected installation ID,
+installation account, repository selection, and requested permissions agree.
 
-Reusing an alias updates that enrollment. It does not silently preserve the
-previous unlock mode or key.
+Reusing an alias atomically replaces that enrollment. It does not silently
+preserve the previous installation set, unlock mode, or key: repeat every
+installation ID that should remain active. The complete set is authenticated
+with the encrypted credential so editing vault metadata cannot add an
+installation. Existing version-1 single-installation vault entries are read in
+place and are not automatically rewritten; explicitly re-enroll the alias to
+adopt the multi-installation format.
 
 ## Verify enrollment
 
@@ -183,9 +208,14 @@ The entry shows:
 
 - alias;
 - App ID;
-- installation ID;
+- installation IDs;
 - `local` or `telegram opt-in` unlock mode; and
 - public-key fingerprint.
+
+In `github app list --json`, `installation_ids` is the authoritative set. The
+singular `installation_id` field remains present as a backward-compatible
+encrypted-record identity anchor; it is not an implicit selector when the set
+contains more than one ID.
 
 Confirm the vault remains owner-only:
 
@@ -199,6 +229,12 @@ private security material.
 
 The running daemon reloads the vault when a request arrives, so enrollment does
 not normally require a service restart.
+
+`engram github app remove "$APP_ALIAS" --yes` removes the whole alias and all
+of its installation IDs. To add or remove an individual installation, repeat
+`github app add` with the complete desired set, the PEM, and the intended
+unlock mode. This deliberate full replacement keeps the installation set and
+encrypted key identity atomic.
 
 ## Verify the pane-native capability
 
@@ -238,12 +274,33 @@ engram github exec \
        --jq '{full_name: .full_name, private: .private, default_branch: .default_branch}'
 ```
 
+When `github app list` shows multiple installations for the alias, add the
+explicit selector:
+
+```sh
+engram github exec \
+  --app "$APP_ALIAS" \
+  --installation-id "$INSTALLATION_ID" \
+  --repo "$OWNER/$REPOSITORY" \
+  --permission contents=read \
+  -- gh repo view "$OWNER/$REPOSITORY"
+```
+
+Engram refuses an omitted or unknown selector for a multi-installation alias
+before creating a Telegram approval. It never guesses based on repository
+names. The selected installation must alone cover every requested repository
+and permission; split a cross-installation operation into separate commands.
+For selected-repository installations, renewable-grant creation probes the
+normalized repository list in deterministic order and stores no authority
+unless GitHub confirms that every repository belongs to that exact
+installation.
+
 The CLI blocks for at most three minutes while Telegram presents the request.
 
 Before approving, verify every field:
 
 - the requesting tmux window;
-- App alias;
+- App alias and selected installation ID;
 - repository list;
 - permission names and levels; and
 - complete shell-quoted child command.
@@ -292,6 +349,10 @@ engram github grant \
   --purpose "Complete and review the current pull request"
 ```
 
+For a multi-installation alias, include `--installation-id` in the grant and
+repeat the same selector in every grant-backed `github exec`. A grant for one
+installation cannot satisfy a request for another.
+
 Before approving, verify the exact enrollment identifiers and fingerprint,
 tmux server/window/pane binding, repositories, maximum permissions, requested
 duration and absolute expiry, and purpose. The approval explicitly warns that
@@ -337,7 +398,7 @@ and reports both expiries without exposing credentials.
 The Telegram card shows the broader authority:
 
 ```text
-GH grant example-app · 1R 2W · 1 repo · 5h42m
+GH grant example-app@987654 · 1R 2W · 1 repo · 5h42m
 ```
 
 Run `engram github status` from another watched pane. It should not see the
@@ -490,9 +551,26 @@ consumed and deleted rather than falling through to terminal input.
 Removing or replacing an enrolled App while its approval is pending also
 cancels the request. Engram repeats that exact enrollment check after token
 minting and before delivery. Existing pane leases also bind the App ID,
-installation ID, public fingerprint, unlock mode, and enrollment generation;
+selected installation ID, complete enrolled installation set, public
+fingerprint, unlock mode, and enrollment generation;
 retargeting an alias cannot reuse the prior installation's token. Start a fresh
 request after the intended enrollment is stable.
+
+### The App has several installations
+
+Pass `--installation-id ID` to `github exec` and `github grant`. The error lists
+the enrolled non-secret IDs when the selector is absent or unknown. Use
+`engram github app list` to inspect the current set, then choose the one whose
+account owns every requested repository. Engram intentionally does not probe
+all installations and choose on the caller's behalf because that would make
+the approved authority identity implicit.
+
+### The repositories span installations
+
+One installation token cannot span GitHub App installations. Request one
+installation at a time, splitting repositories into separate `github exec`
+commands (and, when longer authority is needed, separate panes/grants). Engram
+fails the combined request rather than minting several tokens or widening one.
 
 ### The GitHub App vault is unavailable
 
@@ -520,8 +598,8 @@ startup records `github.broker` with status `ready`.
 - Never display, paste, commit, or transmit the PEM.
 - Never place the vault passphrase in a command, environment variable, or file.
 - Telegram unlock crosses a non-E2E cloud boundary.
-- Approve only the exact pane, App, repositories, permissions, and command
-  shown.
+- Approve only the exact pane, App, selected installation, repositories,
+  permissions, and command shown.
 - The approved child is trusted with its token and can deliberately disclose
   its own environment.
 - Keep the source PEM and encrypted Engram vault owner-only.

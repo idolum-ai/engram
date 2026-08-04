@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,25 @@ type repeatedFlag []string
 func (f *repeatedFlag) String() string { return strings.Join(*f, ",") }
 func (f *repeatedFlag) Set(value string) error {
 	*f = append(*f, value)
+	return nil
+}
+
+type repeatedInt64Flag []int64
+
+func (f *repeatedInt64Flag) String() string {
+	values := make([]string, len(*f))
+	for index, value := range *f {
+		values[index] = strconv.FormatInt(value, 10)
+	}
+	return strings.Join(values, ",")
+}
+
+func (f *repeatedInt64Flag) Set(value string) error {
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || parsed <= 0 {
+		return fmt.Errorf("installation ID %q must be a positive integer", value)
+	}
+	*f = append(*f, parsed)
 	return nil
 }
 
@@ -82,7 +102,8 @@ func runGitHubAppAdd(args []string) int {
 	fs.SetOutput(os.Stderr)
 	envPath := fs.String("env", config.DefaultEnvPath(), "path to .env")
 	appID := fs.Int64("app-id", 0, "GitHub App ID")
-	installationID := fs.Int64("installation-id", 0, "GitHub App installation ID")
+	var installationIDs repeatedInt64Flag
+	fs.Var(&installationIDs, "installation-id", "GitHub App installation ID; repeatable")
 	pemPath := fs.String("pem", "", "path to GitHub App private key PEM")
 	telegramUnlock := fs.Bool("telegram-unlock", false, "allow passphrase replies through Telegram's non-E2E bot transport")
 	if err := fs.Parse(args); err != nil {
@@ -91,11 +112,11 @@ func runGitHubAppAdd(args []string) int {
 	if alias == "" && fs.NArg() == 1 {
 		alias = fs.Arg(0)
 	} else if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID --pem PATH [--telegram-unlock]")
+		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]")
 		return 2
 	}
-	if alias == "" || *appID <= 0 || *installationID <= 0 || strings.TrimSpace(*pemPath) == "" {
-		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID --pem PATH [--telegram-unlock]")
+	if alias == "" || *appID <= 0 || len(installationIDs) == 0 || strings.TrimSpace(*pemPath) == "" {
+		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]")
 		return 2
 	}
 	cfg, err := loadGitHubConfig(*envPath)
@@ -136,7 +157,7 @@ func runGitHubAppAdd(args []string) int {
 		fmt.Fprintln(os.Stderr, "github app add:", err)
 		return 1
 	}
-	item, created, err := vault.Add(alias, *appID, *installationID, privateKey, passphrase, *telegramUnlock)
+	item, created, err := vault.AddInstallations(alias, *appID, installationIDs, privateKey, passphrase, *telegramUnlock)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "github app add:", err)
 		return 1
@@ -145,7 +166,12 @@ func runGitHubAppAdd(args []string) int {
 	if created {
 		action = "enrolled"
 	}
-	fmt.Fprintf(os.Stdout, "GitHub App %q %s (fingerprint %s).\n", item.Alias, action, item.PublicFingerprint)
+	installationLabels := make([]string, 0, len(item.Installations()))
+	for _, installationID := range item.Installations() {
+		installationLabels = append(installationLabels, strconv.FormatInt(installationID, 10))
+	}
+	fmt.Fprintf(os.Stdout, "GitHub App %q %s with installations %s (fingerprint %s).\n",
+		item.Alias, action, strings.Join(installationLabels, ","), item.PublicFingerprint)
 	if item.TelegramUnlock {
 		fmt.Fprintln(os.Stdout, "Warning: Telegram bot chats are not end-to-end encrypted; remote passphrase replies are deleted after processing but traverse Telegram's cloud.")
 	}
@@ -191,8 +217,12 @@ func runGitHubAppList(args []string) int {
 		if app.TelegramUnlock {
 			unlock = "telegram opt-in"
 		}
-		fmt.Fprintf(os.Stdout, "%s\tapp=%d\tinstallation=%d\tunlock=%s\tfingerprint=%s\n",
-			app.Alias, app.AppID, app.InstallationID, unlock, app.PublicFingerprint)
+		installations := make([]string, 0, len(app.Installations()))
+		for _, installationID := range app.Installations() {
+			installations = append(installations, strconv.FormatInt(installationID, 10))
+		}
+		fmt.Fprintf(os.Stdout, "%s\tapp=%d\tinstallations=%s\tunlock=%s\tfingerprint=%s\n",
+			app.Alias, app.AppID, strings.Join(installations, ","), unlock, app.PublicFingerprint)
 	}
 	return 0
 }
@@ -249,13 +279,14 @@ func runGitHubAppRemove(args []string) int {
 func runGitHubExec(args []string) int {
 	flagArgs, command, ok := splitCommand(args)
 	if !ok {
-		fmt.Fprintln(os.Stderr, "usage: engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND [ARGS...]")
+		fmt.Fprintln(os.Stderr, "usage: engram github exec --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write -- COMMAND [ARGS...]")
 		return 2
 	}
 	fs := flag.NewFlagSet("github exec", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	envPath := fs.String("env", config.DefaultEnvPath(), "path to .env")
 	appAlias := fs.String("app", "", "enrolled GitHub App alias")
+	installationID := fs.Int64("installation-id", 0, "installation ID; required when the App has more than one")
 	localUnlock := fs.Bool("local-unlock", false, "enter the passphrase locally even when Telegram unlock is enabled")
 	var repositories repeatedFlag
 	var permissions repeatedFlag
@@ -265,7 +296,7 @@ func runGitHubExec(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 0 || strings.TrimSpace(*appAlias) == "" {
-		fmt.Fprintln(os.Stderr, "usage: engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND [ARGS...]")
+		fmt.Fprintln(os.Stderr, "usage: engram github exec --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write -- COMMAND [ARGS...]")
 		return 2
 	}
 	permissionMap, err := parsePermissionFlags(permissions)
@@ -284,14 +315,15 @@ func runGitHubExec(args []string) int {
 		return 1
 	}
 	request := githubauth.BrokerRequest{
-		Version:      githubauth.ProtocolVersion,
-		Action:       githubauth.ActionExec,
-		App:          strings.TrimSpace(*appAlias),
-		Repositories: repositories,
-		Permissions:  permissionMap,
-		Command:      command,
-		Binding:      binding,
-		LocalUnlock:  *localUnlock,
+		Version:        githubauth.ProtocolVersion,
+		Action:         githubauth.ActionExec,
+		App:            strings.TrimSpace(*appAlias),
+		InstallationID: *installationID,
+		Repositories:   repositories,
+		Permissions:    permissionMap,
+		Command:        command,
+		Binding:        binding,
+		LocalUnlock:    *localUnlock,
 	}
 	fmt.Fprintln(os.Stderr, "Requesting GitHub capability from Engram...")
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+30*time.Second)
@@ -313,6 +345,7 @@ func runGitHubGrant(args []string) int {
 	fs.SetOutput(os.Stderr)
 	envPath := fs.String("env", config.DefaultEnvPath(), "path to .env")
 	appAlias := fs.String("app", "", "enrolled GitHub App alias")
+	installationID := fs.Int64("installation-id", 0, "installation ID; required when the App has more than one")
 	localUnlock := fs.Bool("local-unlock", false, "enter the passphrase locally even when Telegram unlock is enabled")
 	duration := fs.Duration("for", 0, "bounded renewable grant duration")
 	purpose := fs.String("purpose", "", "human-readable work-session purpose")
@@ -324,7 +357,7 @@ func runGitHubGrant(args []string) int {
 		return 2
 	}
 	if fs.NArg() != 0 || strings.TrimSpace(*appAlias) == "" {
-		fmt.Fprintln(os.Stderr, "usage: engram github grant --app ALIAS --repo OWNER/NAME --permission NAME=read|write --for DURATION --purpose TEXT")
+		fmt.Fprintln(os.Stderr, "usage: engram github grant --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write --for DURATION --purpose TEXT")
 		return 2
 	}
 	permissionMap, err := parsePermissionFlags(permissions)
@@ -343,15 +376,16 @@ func runGitHubGrant(args []string) int {
 		return 1
 	}
 	request := githubauth.BrokerRequest{
-		Version:      githubauth.ProtocolVersion,
-		Action:       githubauth.ActionGrant,
-		App:          strings.TrimSpace(*appAlias),
-		Repositories: repositories,
-		Permissions:  permissionMap,
-		Binding:      binding,
-		LocalUnlock:  *localUnlock,
-		GrantFor:     *duration,
-		Purpose:      *purpose,
+		Version:        githubauth.ProtocolVersion,
+		Action:         githubauth.ActionGrant,
+		App:            strings.TrimSpace(*appAlias),
+		InstallationID: *installationID,
+		Repositories:   repositories,
+		Permissions:    permissionMap,
+		Binding:        binding,
+		LocalUnlock:    *localUnlock,
+		GrantFor:       *duration,
+		Purpose:        *purpose,
 	}
 	request.Normalize()
 	if err := request.Validate(); err != nil {
@@ -439,6 +473,9 @@ func writeGitHubStatusJSON(writer io.Writer, response githubauth.BrokerResponse)
 func writeGitHubStatus(writer io.Writer, response githubauth.BrokerResponse, now time.Time) {
 	for _, grant := range response.Grants {
 		fmt.Fprintln(writer, "Work-session grant:", githubauth.CompactGrantLine(grant, now))
+		if grant.InstallationID > 0 {
+			fmt.Fprintln(writer, "  installation:", grant.InstallationID)
+		}
 		fmt.Fprintln(writer, "  purpose:", grant.Purpose)
 		fmt.Fprintln(writer, "  expires:", grant.ExpiresAt.Local().Format(time.RFC3339))
 		for _, repository := range grant.Repositories {
@@ -455,6 +492,9 @@ func writeGitHubStatus(writer io.Writer, response githubauth.BrokerResponse, now
 	}
 	for _, lease := range response.Leases {
 		fmt.Fprintln(writer, "Current token lease:", githubauth.CompactLeaseLine(lease, now))
+		if lease.InstallationID > 0 {
+			fmt.Fprintln(writer, "  installation:", lease.InstallationID)
+		}
 		for _, repository := range lease.Repositories {
 			fmt.Fprintln(writer, "  repo:", repository)
 		}
@@ -655,11 +695,11 @@ func leadingAlias(args []string) (string, []string) {
 
 func printGitHubHelp(output io.Writer) {
 	fmt.Fprint(output, `Usage:
-  engram github app add <alias> --app-id ID --installation-id ID --pem PATH [--telegram-unlock]
+  engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]
   engram github app list [--json]
   engram github app remove <alias> --yes
-  engram github grant --app ALIAS --repo OWNER/NAME --permission NAME=read|write --for DURATION --purpose TEXT
-  engram github exec --app ALIAS --repo OWNER/NAME --permission NAME=read|write -- COMMAND [ARGS...]
+  engram github grant --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write --for DURATION --purpose TEXT
+  engram github exec --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write -- COMMAND [ARGS...]
   engram github status [--json]
   engram github revoke
 `)
@@ -667,7 +707,7 @@ func printGitHubHelp(output io.Writer) {
 
 func printGitHubAppHelp(output io.Writer) {
 	fmt.Fprint(output, `Usage:
-  engram github app add <alias> --app-id ID --installation-id ID --pem PATH [--telegram-unlock]
+  engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]
   engram github app list [--json]
   engram github app remove <alias> --yes
 `)

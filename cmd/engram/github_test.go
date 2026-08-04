@@ -30,6 +30,22 @@ func TestParsePermissionFlagsRejectsAmbiguousOrConflictingAuthority(t *testing.T
 	}
 }
 
+func TestRepeatedInstallationIDFlagAcceptsPositiveIDs(t *testing.T) {
+	var values repeatedInt64Flag
+	if err := values.Set("456"); err != nil {
+		t.Fatal(err)
+	}
+	if err := values.Set("789"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual([]int64(values), []int64{456, 789}) {
+		t.Fatalf("installation IDs = %#v", values)
+	}
+	if err := values.Set("0"); err == nil {
+		t.Fatal("zero installation ID was accepted")
+	}
+}
+
 func TestGitHubChildEnvironmentReplacesAmbientGitHubCredentials(t *testing.T) {
 	got := githubChildEnvironment([]string{
 		"PATH=/usr/bin",
@@ -63,15 +79,17 @@ func TestGitHubStatusEnumeratesGrantCeilings(t *testing.T) {
 	var output bytes.Buffer
 	writeGitHubStatus(&output, githubauth.BrokerResponse{
 		Grants: []githubauth.GrantInfo{{
-			App:          "idolum",
-			Repositories: []string{"idolum-ai/engram", "idolum-ai/agent-commons"},
-			Permissions:  map[string]string{"pull_requests": "write", "contents": "read"},
-			Purpose:      "Review the release",
-			ExpiresAt:    now.Add(6 * time.Hour),
+			App:            "idolum",
+			InstallationID: 789,
+			Repositories:   []string{"idolum-ai/engram", "idolum-ai/agent-commons"},
+			Permissions:    map[string]string{"pull_requests": "write", "contents": "read"},
+			Purpose:        "Review the release",
+			ExpiresAt:      now.Add(6 * time.Hour),
 		}},
 	}, now)
 	text := output.String()
 	for _, want := range []string{
+		"installation: 789",
 		"repo ceiling: idolum-ai/engram",
 		"repo ceiling: idolum-ai/agent-commons",
 		"permission ceiling: contents=read",
