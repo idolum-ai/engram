@@ -84,8 +84,9 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if latest, found := a.Store.FindSession(id); found && sameTerminalBinding(latest, ts) {
 		ts = latest
 	}
+	historical := a.codexContextForCapture(ctx, ts, capture)
 	refs := a.visibleReferencesForStyledCapture(referenceText, capture.Hyperlinks)
-	hash := guideCaptureHash(presentationText, ts, capture)
+	hash := guideCaptureHash(presentationText, ts, capture, historical.fingerprint)
 	if hash == ts.LastRawCaptureHash {
 		if !force {
 			if ts.AnchorFormat == anchorFormatGuideEvidence && a.snapshotAvailable() {
@@ -105,14 +106,14 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 			}
 		}
 	}
-	summary, evidence, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText)
+	summary, evidence, turn, guideErr := a.conversationalSummary(ctx, ts, capture, presentationText, historical)
 	if errors.Is(guideErr, errConversationTurnSuperseded) {
 		return
 	}
 	if a.snapshotAnchors() {
 		return
 	}
-	if !a.conversationTurnCurrent(ts, turn) {
+	if !a.conversationTurnCurrentContext(ctx, ts, turn) {
 		return
 	}
 	if guideErr != nil {
@@ -147,7 +148,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		return
 	}
 	lock.Unlock()
-	guard := func() bool { return !a.snapshotAnchors() && a.conversationTurnCurrent(ts, turn) }
+	guard := func() bool { return !a.snapshotAnchors() && a.conversationTurnCurrentContext(ctx, ts, turn) }
 	accepted := func() bool {
 		_, found, applied, err := a.updateSessionIfCurrent(ts, func(s *state.TerminalSession) {
 			s.LastRawCaptureHash = hash
@@ -166,11 +167,11 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 		if !committed {
 			return false
 		}
-		return guideErr != nil || a.commitConversationTurn(ts, turn, summary)
+		return guideErr != nil || a.commitConversationTurnContext(ctx, ts, turn, summary)
 	}
 	updated := false
 	if a.snapshotAvailable() {
-		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, force, guard, accepted)
+		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, historical.diagram, force, guard, accepted)
 		if !updated && !a.snapshotAvailable() {
 			updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
 		}
@@ -182,10 +183,14 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 }
 
-func guideCaptureHash(text string, session state.TerminalSession, capture tmux.StyledCapture) string {
+func guideCaptureHash(text string, session state.TerminalSession, capture tmux.StyledCapture, contextFingerprint ...string) string {
 	ansi := capture.ANSI
 	if session.PresentationProgram != "" {
 		ansi = ""
+	}
+	contextHash := ""
+	if len(contextFingerprint) > 0 {
+		contextHash = contextFingerprint[0]
 	}
 	return sha(strings.Join([]string{
 		text,
@@ -198,6 +203,7 @@ func guideCaptureHash(text string, session state.TerminalSession, capture tmux.S
 		capture.PaneInMode,
 		strconv.Itoa(capture.Columns),
 		strconv.Itoa(capture.VisibleRows),
+		contextHash,
 	}, "\x00"))
 }
 
@@ -229,8 +235,12 @@ func headUTF8(text string, maxBytes int) string {
 	return text[:end]
 }
 
-func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string) (string, []string, conversationTurn, error) {
-	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText))
+func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string, contexts ...codexContextSnapshot) (string, []string, conversationTurn, error) {
+	historical := codexContextSnapshot{}
+	if len(contexts) > 0 {
+		historical = contexts[0]
+	}
+	turn := a.prepareConversationTurn(session, capture, conversationEvidence(presentationText), historical)
 	turn.input.EvidenceRequested = a.snapshotAvailable()
 	if !acquireSlot(ctx, a.guideSlots) {
 		return "", nil, turn, ctx.Err()
@@ -242,7 +252,7 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	identityLock.Lock()
 	defer identityLock.Unlock()
 	latest, ok := a.Store.FindSession(session.ID)
-	if a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrent(session, turn) {
+	if a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || !a.conversationTurnCurrentContext(ctx, session, turn) {
 		return "", nil, turn, errConversationTurnSuperseded
 	}
 	var result guide.Result
@@ -259,7 +269,7 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	return result.Text, result.Evidence, turn, nil
 }
 
-func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string) (string, error) {
+func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string, contexts ...codexContextSnapshot) (string, error) {
 	if !acquireSlot(ctx, a.guideSlots) {
 		return "", ctx.Err()
 	}
@@ -273,9 +283,19 @@ func (a *App) snapshotConversationalSummary(ctx context.Context, session state.T
 	if !a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		return "", errConversationTurnSuperseded
 	}
-	summary, err := a.Guide.Converse(ctx, guide.Input{SessionID: session.ID, VisibleText: conversationEvidence(presentationText)})
+	historical := codexContextSnapshot{}
+	if len(contexts) > 0 {
+		historical = contexts[0]
+	}
+	if !a.codexContextCurrent(ctx, session, historical) {
+		return "", errConversationTurnSuperseded
+	}
+	summary, err := a.Guide.Converse(ctx, guide.Input{SessionID: session.ID, VisibleText: conversationEvidence(presentationText), HistoricalContext: historical.prompt})
 	if err != nil {
 		return "", err
+	}
+	if !a.codexContextCurrent(ctx, session, historical) {
+		return "", errConversationTurnSuperseded
 	}
 	return a.redactText(summary), nil
 }

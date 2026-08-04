@@ -532,12 +532,12 @@ func TestTmuxIntegrationCapabilityOptionsConvergeAsOneGuardedTransaction(t *test
 	if err := manager.AdvertiseEngramIfBindingMatches(ctx, window.PaneID, window.ID, serverID, 42, true); err != nil {
 		t.Fatal(err)
 	}
-	format := "#{@engram}\x1f#{@engram_watch_id}\x1f#{@engram_notify}\x1f#{@engram_artifact}"
+	format := "#{@engram}\x1f#{@engram_watch_id}\x1f#{@engram_notify}\x1f#{@engram_artifact}\x1f#{@engram_codex}"
 	advertised, err := runner.Run(ctx, "display-message", "-p", "-t", window.PaneID, format)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"v1 watch=42 remote=telegram", "42", "engram signal --stdout MESSAGE", "visible file:// URI"} {
+	for _, want := range []string{"v1 watch=42 remote=telegram", "42", "engram signal --stdout MESSAGE", "visible file:// URI", "engram codex-bind"} {
 		if !strings.Contains(advertised, want) {
 			t.Fatalf("advertised options = %q, missing %q", advertised, want)
 		}
@@ -549,7 +549,7 @@ func TestTmuxIntegrationCapabilityOptionsConvergeAsOneGuardedTransaction(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, stale := range []string{"watch=42", "engram signal", "file://"} {
+	for _, stale := range []string{"watch=42", "engram signal", "file://", "engram codex-bind"} {
 		if strings.Contains(cleared, stale) {
 			t.Fatalf("cleared options = %q, retained %q", cleared, stale)
 		}

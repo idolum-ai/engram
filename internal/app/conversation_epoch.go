@@ -25,12 +25,14 @@ type conversationFrame struct {
 	windowID     string
 	paneID       string
 	command      string
+	panePID      int
 	alternateOn  string
 	paneInMode   string
 	columns      int
 	visibleRows  int
 	text         string
 	physicalText string
+	contextHash  string
 }
 
 type conversationEpoch struct {
@@ -44,6 +46,7 @@ type conversationTurn struct {
 	frame         conversationFrame
 	previousFrame conversationFrame
 	resetRevision uint64
+	historical    codexContextSnapshot
 }
 
 func (a *App) acquireConversation(ctx context.Context, id int) (func(), bool) {
@@ -81,7 +84,11 @@ func (a *App) releaseConversationGate(id int, gate *conversationGate) {
 	}
 }
 
-func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmux.StyledCapture, text string) conversationTurn {
+func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmux.StyledCapture, text string, contexts ...codexContextSnapshot) conversationTurn {
+	historical := codexContextSnapshot{}
+	if len(contexts) > 0 {
+		historical = contexts[0]
+	}
 	if a.Store != nil {
 		a.pruneConversationEpochs(a.Store.Snapshot().TerminalSessions)
 	}
@@ -90,12 +97,14 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 		windowID:     capture.WindowID,
 		paneID:       capture.PaneID,
 		command:      strings.TrimSpace(capture.CurrentCmd),
+		panePID:      capture.PanePID,
 		alternateOn:  capture.AlternateOn,
 		paneInMode:   capture.PaneInMode,
 		columns:      capture.Columns,
 		visibleRows:  capture.VisibleRows,
 		text:         text,
 		physicalText: capture.Text,
+		contextHash:  historical.fingerprint,
 	}
 	a.conversationMu.Lock()
 	defer a.conversationMu.Unlock()
@@ -108,9 +117,11 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 	turn := conversationTurn{
 		frame:         frame,
 		resetRevision: epoch.resetRevision,
+		historical:    historical,
 		input: guide.Input{
-			SessionID:   session.ID,
-			VisibleText: text,
+			SessionID:         session.ID,
+			VisibleText:       text,
+			HistoricalContext: historical.prompt,
 		},
 	}
 	changed, removed, stable, ok := alignedConversationDelta(epoch.frame, frame)
@@ -131,6 +142,10 @@ func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmu
 }
 
 func (a *App) conversationTurnCurrent(session state.TerminalSession, turn conversationTurn) bool {
+	return a.conversationTurnCurrentContext(context.Background(), session, turn)
+}
+
+func (a *App) conversationTurnCurrentContext(ctx context.Context, session state.TerminalSession, turn conversationTurn) bool {
 	if a.Store == nil {
 		return false
 	}
@@ -140,13 +155,21 @@ func (a *App) conversationTurnCurrent(session state.TerminalSession, turn conver
 		return false
 	}
 	a.conversationMu.Lock()
-	defer a.conversationMu.Unlock()
 	a.ensureConversationEpochsLocked()
-	return a.conversationEpochs[session.ID].resetRevision == turn.resetRevision
+	current := a.conversationEpochs[session.ID].resetRevision == turn.resetRevision
+	a.conversationMu.Unlock()
+	if !current {
+		return false
+	}
+	return a.codexContextCurrent(ctx, session, turn.historical)
 }
 
 func (a *App) commitConversationTurn(session state.TerminalSession, turn conversationTurn, summary string) bool {
-	if !a.conversationTurnCurrent(session, turn) {
+	return a.commitConversationTurnContext(context.Background(), session, turn, summary)
+}
+
+func (a *App) commitConversationTurnContext(ctx context.Context, session state.TerminalSession, turn conversationTurn, summary string) bool {
+	if !a.conversationTurnCurrentContext(ctx, session, turn) {
 		return false
 	}
 	a.conversationMu.Lock()
@@ -209,8 +232,9 @@ func alignedConversationDelta(previous, current conversationFrame) (changed, rem
 	if previous.text == "" || current.text == "" || previous.paneID == "" || current.paneID == "" ||
 		previous.serverID == "" || previous.serverID != current.serverID || previous.windowID == "" || previous.windowID != current.windowID ||
 		previous.paneID != current.paneID || previous.command == "" || previous.command != current.command ||
+		previous.panePID != current.panePID ||
 		previous.alternateOn != current.alternateOn || previous.paneInMode != current.paneInMode ||
-		previous.columns != current.columns || previous.visibleRows != current.visibleRows {
+		previous.columns != current.columns || previous.visibleRows != current.visibleRows || previous.contextHash != current.contextHash {
 		return "", "", "", false
 	}
 	oldLines := conversationLines(previous.text)

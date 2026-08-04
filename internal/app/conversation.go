@@ -61,7 +61,11 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		return
 	}
 	presentationText := a.processCapturedFrame(ctx, current, capture)
-	summary, err := a.snapshotConversationalSummary(ctx, current, requested.AnchorMessageID, presentationText)
+	if latest, found := a.Store.FindSession(current.ID); found && sameTerminalBinding(latest, current) {
+		current = latest
+	}
+	historical := a.codexContextForCapture(ctx, current, capture)
+	summary, err := a.snapshotConversationalSummary(ctx, current, requested.AnchorMessageID, presentationText, historical)
 	if err != nil {
 		if errors.Is(err, errConversationTurnSuperseded) {
 			_ = a.audit("terminal.conversation", "superseded", map[string]any{"session_id": current.ID})
@@ -81,7 +85,7 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 	defer anchorLock.Unlock()
 	a.finishAnchorRotationLocked(ctx, current.ID)
 	latest, ok := a.Store.FindSession(current.ID)
-	if !a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.AnchorMessageID != requested.AnchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
+	if !a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !sameTerminalBinding(latest, current) || latest.AnchorMessageID == 0 || latest.AnchorMessageID != requested.AnchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 || !a.codexContextCurrent(ctx, current, historical) {
 		_ = a.audit("terminal.conversation", "superseded", map[string]any{"session_id": current.ID})
 		a.conversationNotice(ctx, requested, "That window changed while I was reading it, so I left the newer view in place.")
 		return

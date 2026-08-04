@@ -4,6 +4,21 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Conversational guide
+
+- Add a disabled-by-default Codex historical-context path. Exact pane-local
+  UUID and process-incarnation proof can supply a bounded number of recent
+  visible user/assistant messages to the guide without making them current
+  terminal truth. Future sessions bind through the `SessionStart` hook;
+  existing active sessions can run the argument-free `engram codex-bind`
+  command without restarting. Long-lived rollouts use bounded prefix identity
+  and recent-tail reads. Foreground-process-group and precise kernel-start proof
+  prevent stale or background runtimes from supplying context; provider-session
+  bindings are revalidated through publication. Full messages are redacted
+  before truncation. A deterministic, Unicode-width-aware detector may render
+  one exactly cropped box/arrow diagram as a separately labeled Codex-context
+  inset; literal snapshots and raw captures remain unchanged.
+
 ### GitHub capabilities
 
 - Add bounded renewable, pane-scoped work-session grants. One explicit

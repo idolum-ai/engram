@@ -354,6 +354,50 @@ func TestCompactEvidenceHTMLCanRenderQuietGuidedFrame(t *testing.T) {
 	}
 }
 
+func TestCompactEvidenceRendersLabeledContextInsetWithoutChangingOrdinaryFrames(t *testing.T) {
+	base := Input{ANSI: strings.Repeat("tests passed\n", 9) + "tests passed", Columns: 71, VisibleRows: 37, BufferRows: 10, Compact: true, Footer: "quoted terminal text"}
+	ordinary := RenderHTML(base, "contrast-dark")
+	if strings.Contains(ordinary, "context-diagram") || strings.Contains(ordinary, "Codex context") {
+		t.Fatal("ordinary terminal evidence acquired a context inset")
+	}
+	withContext := base
+	withContext.ContextLabel = "Codex context · prior visible message, not current terminal"
+	withContext.ContextInset = "┌──────┐\n│ queue│\n└──────┘"
+	page := RenderHTML(withContext, "contrast-dark")
+	for _, want := range []string{"context-diagram", "Codex context · prior visible message, not current terminal", "┌──────┐", "│ queue│"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("context HTML missing %q", want)
+		}
+	}
+	if renderHeight(withContext) <= renderHeight(base) {
+		t.Fatalf("context inset did not expand compact canvas: base=%d inset=%d", renderHeight(base), renderHeight(withContext))
+	}
+}
+
+func TestContextInsetFailsClosedForMissingProvenanceControlsAndPhoneOverflow(t *testing.T) {
+	base := Input{ANSI: "terminal", Columns: 80, VisibleRows: 24, BufferRows: 1, Compact: true}
+	tests := []Input{
+		func() Input { input := base; input.ContextInset = "a\nb\nc"; return input }(),
+		func() Input {
+			input := base
+			input.ContextInset = "a\tb\nc"
+			input.ContextLabel = "Codex context"
+			return input
+		}(),
+		func() Input {
+			input := base
+			input.ContextInset = strings.Repeat("x", 81) + "\nb\nc"
+			input.ContextLabel = "Codex context"
+			return input
+		}(),
+	}
+	for _, input := range tests {
+		if err := validateInput(input); err == nil {
+			t.Fatalf("validateInput accepted unsafe context inset: %#v", input)
+		}
+	}
+}
+
 func TestOSCTerminatorsPreserveFollowingRenderedTextAndRowCounts(t *testing.T) {
 	t.Parallel()
 	for name, terminator := range map[string]string{
@@ -734,6 +778,7 @@ func TestLiveChromiumSupportedSurfaceAreas(t *testing.T) {
 		input     Input
 		bodyText  bool
 		highlight bool
+		context   bool
 	}{
 		{
 			name: "narrow full snapshot", bodyText: true,
@@ -754,6 +799,13 @@ func TestLiveChromiumSupportedSurfaceAreas(t *testing.T) {
 			name: "quiet guided frame",
 			input: Input{ANSI: " ", Title: "quiet surface", Target: "[4]", CWD: "/a/very/long/current/working/directory/that/must/be/contained/in/the/header",
 				Columns: 71, VisibleRows: 37, BufferRows: 1, Compact: true, Footer: "quiet guided footer", Status: "disk 47G free"},
+		},
+		{
+			name: "guide evidence with Codex context", bodyText: true, context: true,
+			input: Input{ANSI: "CURRENT TERMINAL", Title: "context surface", Target: "[5]", CWD: "/synthetic",
+				Columns: 80, VisibleRows: 24, BufferRows: 1, Compact: true, Footer: "current terminal tail", Status: "disk 47G free",
+				ContextLabel: "Codex context · prior visible message, not current terminal",
+				ContextInset: "┌────────┐   ┌────────┐\n│ queued │ → │ active │\n└────────┘   └────────┘"},
 		},
 	}
 	for _, test := range tests {
@@ -787,6 +839,9 @@ func TestLiveChromiumSupportedSurfaceAreas(t *testing.T) {
 			}
 			if test.highlight && !regionContainsYellow(img, image.Rect(0, 44, 24, min(height-22, 110))) {
 				t.Fatal("compact evidence highlight is not visible")
+			}
+			if test.context {
+				assertVisibleInk(t, img, image.Rect(8, 82, width-8, height-24), [3]uint8{0x10, 0x10, 0x10}, "Codex context inset")
 			}
 		})
 	}

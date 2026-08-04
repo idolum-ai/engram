@@ -77,6 +77,60 @@ pair of separators enclosing Claude's composer. Exact completed elapsed rows,
 the low-band composer/status controls, and Claude's `/clear` token-saving hint
 are omitted from guide evidence only inside this versioned boundary.
 
+## Exact Codex session context
+
+`ENGRAM_CODEX_CONTEXT_TURNS` is a separate, disabled-by-default privacy surface.
+When enabled, it admits up to eight recent user turns and their visible assistant messages as
+historical guide context only after all of these independent checks succeed:
+
+- the watched tmux server, window, and pane binding validates around the
+  pane-local recovery option;
+- a `SessionStart` hook or explicit argument-free `engram codex-bind` provides
+  one syntactically valid Codex UUID from the session's inherited environment;
+- the active pane process tree contains one proven Codex executable in the
+  terminal's foreground process group and yields a
+  PID/path/version/precise-kernel-start incarnation fingerprint;
+- the binding observation is not older than that process incarnation;
+- exactly one regular, non-symlink rollout filename carries the UUID, and its
+  `session_meta.id` repeats it in a bounded prefix read; recent records come
+  from either the same bounded full-file read or a bounded tail ending at the
+  file size observed when opened; and
+- the same process incarnation, pane-local provider-session metadata, and
+  tracked tmux binding still exist after the rollout read and at the final
+  publication guard.
+
+There is no newest-session, working-directory, title, or model-based fallback.
+The parser contract is explicitly named `codex-rollout-v1`. It ignores unknown
+record types and admits text only from `response_item` records whose payload is
+a `message`, whose role is `user` or `assistant`, and whose content type matches
+`input_text` or `output_text`. System/developer roles, hidden reasoning, tool
+arguments/results, attachments, and generated environment/instruction metadata
+are excluded. Unrecognized structure in a recognized message fails closed.
+Messages, individual text, rollout read windows, JSON lines, and aggregate
+prompt text all have independent bounds. The ordinary Engram redactor runs on
+each complete decoded message before its per-message truncation and again
+before provider delivery, and transcript text is never added to state or audit
+output. A provider-session rebind resets conversational continuity before an
+in-flight result can publish.
+
+The guide prompt labels this field `historical_session_context`. It may clarify
+past topic and intent, but `terminal_text` remains the only current-state truth.
+The transcript fingerprint participates in guide capture and continuity hashes,
+so new context can refresh an otherwise stable pane and replacement or loss
+rebases continuity.
+
+One deterministic diagram detector examines only those admitted visible
+messages. It requires a bounded multi-row box or arrow structure, measures
+Unicode terminal-cell width, rejects controls, tabs, oversized candidates,
+ordinary prose, source-code-shaped blocks, and weak single arrows, and selects
+the latest qualifying block without a model. It crops the exact contiguous
+structural rows, excluding adjacent prose. A redaction conflict removes the
+diagram rather than drawing placeholders into it. Guide-evidence images render
+the copied text in a distinct `Codex context` inset. Exact unique terminal
+mapping is labeled reconstructed; otherwise the label explicitly says the text
+is a prior message and not the current terminal. Literal snapshot and raw paths
+do not accept this field.
+
 ## Fail-closed behavior
 
 Frames longer than 64 rows, unknown model identities, weak shell-like

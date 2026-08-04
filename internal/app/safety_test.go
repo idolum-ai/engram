@@ -867,6 +867,7 @@ type safetyRunner struct {
 type appPreemptionRunner struct {
 	mu              sync.Mutex
 	once            sync.Once
+	cancelOnce      sync.Once
 	calls           [][]string
 	captureStarted  chan struct{}
 	captureCanceled chan struct{}
@@ -885,7 +886,7 @@ func (r *appPreemptionRunner) Run(ctx context.Context, args ...string) (string, 
 	if len(args) > 0 && args[0] == "capture-pane" {
 		r.once.Do(func() { close(r.captureStarted) })
 		<-ctx.Done()
-		close(r.captureCanceled)
+		r.cancelOnce.Do(func() { close(r.captureCanceled) })
 		return "", ctx.Err()
 	}
 	return "", nil
