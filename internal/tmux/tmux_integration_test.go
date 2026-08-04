@@ -378,7 +378,7 @@ func TestTmuxIntegrationBracketedPasteSubmitsOneMultilineInput(t *testing.T) {
 	expected := "\x1b[200~" + payload + "\x1b[201~\n"
 	outputPath := t.TempDir() + "/input.bin"
 	helperPath := t.TempDir() + "/capture-input.sh"
-	script := fmt.Sprintf("#!/bin/sh\nprintf '\\033[?2004h'\ndd bs=1 count=%d of=%q 2>/dev/null\nsleep 5\n", len(expected), outputPath)
+	script := fmt.Sprintf("#!/bin/sh\nprintf '\\033[?2004hready\\n'\ndd bs=1 count=%d of=%q 2>/dev/null\nsleep 5\n", len(expected), outputPath)
 	if err := os.WriteFile(helperPath, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,21 @@ func TestTmuxIntegrationBracketedPasteSubmitsOneMultilineInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	ready := false
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		capture, captureErr := runner.Run(ctx, "capture-pane", "-p", "-t", window.PaneID)
+		if captureErr != nil {
+			t.Fatal(captureErr)
+		}
+		if strings.Contains(capture, "ready") {
+			ready = true
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !ready {
+		t.Fatal("tmux did not process bracketed-paste readiness output")
+	}
 	if err := manager.SendCommandIfBindingMatches(ctx, window.PaneID, window.ID, serverID, payload); err != nil {
 		t.Fatal(err)
 	}
