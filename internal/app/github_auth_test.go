@@ -847,7 +847,7 @@ func TestGitHubGrantApprovalKeepsDecisionCopyCompactAndDetailsExpandable(t *test
 		"<code>idolum-ai/engram</code>",
 		"<b>Write:</b> code, pull requests",
 		"<b>Read:</b> actions, checks",
-		"<b>For:</b> 2h, renewable · until 09:36 EDT",
+		"<b>For:</b> 2h, renewable · until " + expiresAt.Local().Format("15:04 MST"),
 		"<b>Why:</b> Push &lt;PR #59&gt; &amp; verify CI",
 		"Approve within 15 minutes",
 		"password reply is not end-to-end encrypted",
