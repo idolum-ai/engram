@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.8.0] - 2026-08-04
+
 ### Conversational guide
 
 - Add a disabled-by-default Codex historical-context path. Exact pane-local
