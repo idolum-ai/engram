@@ -23,10 +23,11 @@ import (
 const defaultGitHubAPIBase = "https://api.github.com"
 
 type Installation struct {
-	ID          int64             `json:"id"`
-	AppSlug     string            `json:"app_slug"`
-	Permissions map[string]string `json:"permissions"`
-	Account     struct {
+	ID                  int64             `json:"id"`
+	AppSlug             string            `json:"app_slug"`
+	RepositorySelection string            `json:"repository_selection"`
+	Permissions         map[string]string `json:"permissions"`
+	Account             struct {
 		Login string `json:"login"`
 	} `json:"account"`
 	SuspendedAt *time.Time `json:"suspended_at"`
@@ -43,8 +44,42 @@ type Token struct {
 
 type Minter interface {
 	InspectInstallation(context.Context, App, []byte) (Installation, error)
+	ValidateInstallationRepositories(context.Context, App, []byte, Installation, []string) error
 	Mint(context.Context, App, []byte, []string, map[string]string) (Token, error)
 	Revoke(context.Context, string) error
+}
+
+func (c *Client) ValidateInstallationRepositories(ctx context.Context, app App, privateKeyPEM []byte, installation Installation, repositories []string) error {
+	installationID := app.EffectiveInstallationID()
+	if installationID <= 0 || installation.ID != installationID {
+		return fmt.Errorf("GitHub App repository preflight is not bound to the selected installation")
+	}
+	selection := strings.TrimSpace(installation.RepositorySelection)
+	if selection == "all" {
+		return nil
+	}
+	if selection != "selected" {
+		return fmt.Errorf("GitHub installation %d returned unsupported repository selection %q", installationID, selection)
+	}
+	jwt, err := c.appJWT(app.AppID, privateKeyPEM)
+	if err != nil {
+		return err
+	}
+	for _, repository := range normalizeRepositories(repositories) {
+		parts := strings.Split(repository, "/")
+		if len(parts) != 2 {
+			return fmt.Errorf("repository %q must use owner/name form", repository)
+		}
+		var repositoryInstallation Installation
+		path := fmt.Sprintf("/repos/%s/%s/installation", parts[0], parts[1])
+		if err := c.request(ctx, http.MethodGet, path, jwt, nil, &repositoryInstallation); err != nil {
+			return fmt.Errorf("repository %q is not available to selected installation %d: %w", repository, installationID, err)
+		}
+		if repositoryInstallation.ID != installationID {
+			return fmt.Errorf("repository %q belongs to installation %d, not selected installation %d", repository, repositoryInstallation.ID, installationID)
+		}
+	}
+	return nil
 }
 
 type Client struct {

@@ -876,11 +876,11 @@ func TestGitHubRevocationQueueAndTokenAdmissionAreBounded(t *testing.T) {
 	expiresAt := app.githubTime().Add(time.Hour)
 	for index := 0; index < maxTrackedGitHubTokens; index++ {
 		token := fmt.Sprintf("pending-token-%03d", index)
-		if !app.trackGitHubRevocation(token, 1, "idolum", expiresAt) {
+		if !app.trackGitHubRevocation(token, 1, "idolum", 789, expiresAt) {
 			t.Fatalf("token %d was rejected before capacity", index)
 		}
 	}
-	if app.trackGitHubRevocation("overflow-token", 1, "idolum", expiresAt) {
+	if app.trackGitHubRevocation("overflow-token", 1, "idolum", 789, expiresAt) {
 		t.Fatal("revocation queue accepted a token beyond its bound")
 	}
 	if got := app.githubRevocationCount(); got != maxTrackedGitHubTokens {

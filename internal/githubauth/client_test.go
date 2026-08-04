@@ -119,6 +119,49 @@ func TestInstallationScopeRejectsRequestSpanningAccounts(t *testing.T) {
 	}
 }
 
+func TestClientPreflightsSelectedInstallationRepositoriesDeterministically(t *testing.T) {
+	privateKeyPEM, privateKey := testPrivateKey(t)
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifyTestJWT(t, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), privateKey, 123, now)
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/repos/idolum-ai/engram/installation":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 456})
+		case "/repos/idolum-ai/not-installed/installation":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("unexpected request: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewClient()
+	client.BaseURL = server.URL
+	client.HTTPClient = server.Client()
+	client.Now = func() time.Time { return now }
+	app := App{AppID: 123, InstallationID: 456}
+	installation := Installation{ID: 456, RepositorySelection: "selected"}
+	err := client.ValidateInstallationRepositories(context.Background(), app, privateKeyPEM, installation,
+		[]string{"idolum-ai/not-installed", "idolum-ai/engram", "idolum-ai/engram"})
+	if err == nil || !strings.Contains(err.Error(), `repository "idolum-ai/not-installed" is not available to selected installation 456`) {
+		t.Fatalf("repository preflight error = %v", err)
+	}
+	want := []string{"/repos/idolum-ai/engram/installation", "/repos/idolum-ai/not-installed/installation"}
+	if len(paths) != len(want) || paths[0] != want[0] || paths[1] != want[1] {
+		t.Fatalf("repository preflight paths = %#v, want %#v", paths, want)
+	}
+}
+
+func TestClientSkipsRepositoryProbesForAllRepositoryInstallation(t *testing.T) {
+	client := NewClient()
+	err := client.ValidateInstallationRepositories(context.Background(), App{AppID: 123, InstallationID: 456}, nil,
+		Installation{ID: 456, RepositorySelection: "all"}, []string{"idolum-ai/engram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestClientRevokesMintedTokenWhenEffectiveScopeDoesNotMatch(t *testing.T) {
 	privateKeyPEM, privateKey := testPrivateKey(t)
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)

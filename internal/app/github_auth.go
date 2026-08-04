@@ -50,12 +50,13 @@ type githubLease struct {
 }
 
 type githubRevocation struct {
-	Token       string
-	App         string
-	SessionID   int
-	ExpiresAt   time.Time
-	NextAttempt time.Time
-	Attempts    int
+	Token          string
+	App            string
+	InstallationID int64
+	SessionID      int
+	ExpiresAt      time.Time
+	NextAttempt    time.Time
+	Attempts       int
 }
 
 func (a *App) startGitHubBroker(ctx context.Context) {
@@ -114,14 +115,14 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		if lease, ok := a.reusableGitHubLease(request, app); ok && lease.Info.GrantID == "" {
 			if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
 				if a.discardGitHubLease(request.Binding, lease.Token) {
-					err = a.revokeDiscardedGitHubToken(ctx, lease.Token, err)
+					err = a.revokeDiscardedGitHubToken(ctx, githubRevocationForLease(lease), err)
 				}
 				_ = a.audit("github.lease", "invalidated", githubAuditRequest(session.ID, request))
 				return githubauth.BrokerResponse{Error: err.Error()}
 			}
 			if _, err := a.reloadMatchingGitHubEnrollment(lease.Enrollment); err != nil {
 				if a.discardGitHubLease(request.Binding, lease.Token) {
-					err = a.revokeDiscardedGitHubToken(ctx, lease.Token, err)
+					err = a.revokeDiscardedGitHubToken(ctx, githubRevocationForLease(lease), err)
 				}
 				_ = a.audit("github.lease", "enrollment_changed", githubAuditRequest(session.ID, request))
 				return githubauth.BrokerResponse{Error: err.Error()}
@@ -229,7 +230,10 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		Token: token.Value,
 	}
 	if err := a.validateGitHubBrokerContinuation(ctx, session, request.Binding); err != nil {
-		cleanupErr := a.revokeDiscardedGitHubToken(ctx, token.Value, err)
+		cleanupErr := a.revokeDiscardedGitHubToken(ctx, githubRevocation{
+			Token: token.Value, SessionID: session.ID, App: request.App,
+			InstallationID: request.InstallationID, ExpiresAt: token.ExpiresAt,
+		}, err)
 		a.completeGitHubApprovalMessage(pending, "Canceled: the requesting tmux pane changed before the capability could be delivered.")
 		_ = a.audit("github.mint", "discarded", map[string]any{
 			"session_id":      session.ID,
@@ -240,7 +244,10 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
 	}
 	if _, err := a.reloadMatchingGitHubEnrollment(pending.Enrollment); err != nil {
-		cleanupErr := a.revokeDiscardedGitHubToken(ctx, token.Value, err)
+		cleanupErr := a.revokeDiscardedGitHubToken(ctx, githubRevocation{
+			Token: token.Value, SessionID: session.ID, App: request.App,
+			InstallationID: request.InstallationID, ExpiresAt: token.ExpiresAt,
+		}, err)
 		a.completeGitHubApprovalMessage(pending, "Canceled: the GitHub App enrollment changed before the capability could be delivered.")
 		_ = a.audit("github.mint", "discarded", map[string]any{
 			"session_id":      session.ID,
@@ -251,7 +258,7 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
 	}
 	oldTokens := a.storeGitHubLease(lease)
-	a.revokeGitHubTokens(oldTokens)
+	a.revokeGitHubLeases(oldTokens)
 	a.queueManualRefresh(session.ID)
 	a.completeGitHubApprovalMessage(pending, fmt.Sprintf(
 		"Approved: %s now has GitHub access to %d %s until %s.",
@@ -297,18 +304,25 @@ func (a *App) validateGitHubBrokerContinuation(ctx context.Context, expected sta
 	return nil
 }
 
-func (a *App) revokeDiscardedGitHubToken(ctx context.Context, token string, cause error) error {
+func (a *App) revokeDiscardedGitHubToken(ctx context.Context, pending githubRevocation, cause error) error {
 	if a.GitHubMinter == nil {
 		return cause
 	}
 	revokeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	err := a.GitHubMinter.Revoke(revokeCtx, token)
+	err := a.GitHubMinter.Revoke(revokeCtx, pending.Token)
 	cancel()
 	if err != nil {
-		a.trackGitHubRevocation(token, 0, "", a.githubTime().Add(time.Hour))
+		a.trackGitHubRevocation(pending.Token, pending.SessionID, pending.App, pending.InstallationID, pending.ExpiresAt)
 		return fmt.Errorf("%w; revoke discarded GitHub token: %v", cause, err)
 	}
 	return cause
+}
+
+func githubRevocationForLease(lease githubLease) githubRevocation {
+	return githubRevocation{
+		Token: lease.Token, SessionID: lease.SessionID, App: lease.Info.App,
+		InstallationID: lease.Info.InstallationID, ExpiresAt: lease.Info.ExpiresAt,
+	}
 }
 
 func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App) (*githubPendingRequest, error) {
@@ -714,13 +728,13 @@ func sameInt64Set(left, right []int64) bool {
 	return true
 }
 
-func (a *App) storeGitHubLease(lease githubLease) []string {
+func (a *App) storeGitHubLease(lease githubLease) []githubLease {
 	key := githubBindingKey(lease.Binding)
 	a.githubMu.Lock()
 	defer a.githubMu.Unlock()
-	var old []string
+	var old []githubLease
 	if previous, ok := a.githubLeases[key]; ok && previous.Token != lease.Token {
-		old = append(old, previous.Token)
+		old = append(old, previous)
 	}
 	a.githubLeases[key] = lease
 	return old
@@ -813,7 +827,7 @@ func (a *App) revokeGitHubBindingAuthority(ctx context.Context, sessionID int, b
 		err := a.GitHubMinter.Revoke(revokeCtx, lease.Token)
 		cancel()
 		if err != nil {
-			a.trackGitHubRevocation(lease.Token, sessionID, lease.Info.App, lease.Info.ExpiresAt)
+			a.trackGitHubRevocation(lease.Token, sessionID, lease.Info.App, lease.Info.InstallationID, lease.Info.ExpiresAt)
 			_ = a.audit("github.lease", "revoke_failed", map[string]any{"session_id": sessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID, "error": err.Error()})
 			return fmt.Errorf("GitHub authority was removed locally, but remote token revocation is pending: %w", err)
 		}
@@ -899,13 +913,11 @@ func (a *App) expireGitHubLeases(now time.Time) {
 		a.queueManualRefresh(lease.SessionID)
 		_ = a.audit("github.lease", "expired", map[string]any{"session_id": lease.SessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID})
 	}
-	var tokens []string
 	for _, lease := range invalidated {
-		tokens = append(tokens, lease.Token)
 		a.queueManualRefresh(lease.SessionID)
 		_ = a.audit("github.lease", "invalidated", map[string]any{"session_id": lease.SessionID, "app": lease.Info.App, "installation_id": lease.Info.InstallationID})
 	}
-	a.revokeGitHubTokens(tokens)
+	a.revokeGitHubLeases(invalidated)
 }
 
 func (a *App) githubStatusLine(session state.TerminalSession) string {
@@ -928,19 +940,19 @@ func (a *App) githubStatusLine(session state.TerminalSession) string {
 	return ""
 }
 
-func (a *App) revokeGitHubTokens(tokens []string) {
-	if len(tokens) == 0 || a.GitHubMinter == nil {
+func (a *App) revokeGitHubLeases(leases []githubLease) {
+	if len(leases) == 0 || a.GitHubMinter == nil {
 		return
 	}
-	toRevoke := make([]string, 0, len(tokens))
-	seen := make(map[string]bool, len(tokens))
-	for _, token := range tokens {
-		if token == "" || seen[token] {
+	toRevoke := make([]githubLease, 0, len(leases))
+	seen := make(map[string]bool, len(leases))
+	for _, lease := range leases {
+		if lease.Token == "" || seen[lease.Token] {
 			continue
 		}
-		seen[token] = true
-		a.trackGitHubRevocation(token, 0, "", a.githubTime().Add(time.Hour))
-		toRevoke = append(toRevoke, token)
+		seen[lease.Token] = true
+		a.trackGitHubRevocation(lease.Token, lease.SessionID, lease.Info.App, lease.Info.InstallationID, lease.Info.ExpiresAt)
+		toRevoke = append(toRevoke, lease)
 	}
 	if len(toRevoke) == 0 {
 		return
@@ -948,22 +960,22 @@ func (a *App) revokeGitHubTokens(tokens []string) {
 	a.transferWG.Add(1)
 	go func() {
 		defer a.transferWG.Done()
-		for _, token := range toRevoke {
+		for _, lease := range toRevoke {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err := a.GitHubMinter.Revoke(ctx, token)
+			err := a.GitHubMinter.Revoke(ctx, lease.Token)
 			cancel()
 			if err == nil {
 				a.githubMu.Lock()
-				delete(a.githubRevocations, token)
+				delete(a.githubRevocations, lease.Token)
 				a.githubMu.Unlock()
 			} else {
-				a.trackGitHubRevocation(token, 0, "", a.githubTime().Add(time.Hour))
+				a.trackGitHubRevocation(lease.Token, lease.SessionID, lease.Info.App, lease.Info.InstallationID, lease.Info.ExpiresAt)
 			}
 		}
 	}()
 }
 
-func (a *App) trackGitHubRevocation(token string, sessionID int, app string, expiresAt time.Time) bool {
+func (a *App) trackGitHubRevocation(token string, sessionID int, app string, installationID int64, expiresAt time.Time) bool {
 	if token == "" {
 		return false
 	}
@@ -978,14 +990,22 @@ func (a *App) trackGitHubRevocation(token string, sessionID int, app string, exp
 	if !exists && len(a.githubRevocations) >= maxTrackedGitHubTokens {
 		a.githubMu.Unlock()
 		_ = a.audit("github.revocation", "capacity_exhausted", map[string]any{
-			"session_id": sessionID,
-			"app":        app,
+			"session_id":      sessionID,
+			"app":             app,
+			"installation_id": installationID,
 		})
 		return false
 	}
 	pending.Token = token
-	pending.SessionID = sessionID
-	pending.App = app
+	if sessionID != 0 {
+		pending.SessionID = sessionID
+	}
+	if app != "" {
+		pending.App = app
+	}
+	if installationID > 0 {
+		pending.InstallationID = installationID
+	}
 	pending.ExpiresAt = expiresAt
 	pending.Attempts++
 	pending.NextAttempt = a.githubTime().Add(min(time.Duration(pending.Attempts)*5*time.Second, time.Minute))
@@ -1051,10 +1071,10 @@ func (a *App) retryGitHubRevocations(now time.Time) {
 				a.githubMu.Lock()
 				delete(a.githubRevocations, pending.Token)
 				a.githubMu.Unlock()
-				_ = a.audit("github.lease", "revoke_recovered", map[string]any{"session_id": pending.SessionID, "app": pending.App})
+				_ = a.audit("github.lease", "revoke_recovered", map[string]any{"session_id": pending.SessionID, "app": pending.App, "installation_id": pending.InstallationID})
 				continue
 			}
-			a.trackGitHubRevocation(pending.Token, pending.SessionID, pending.App, pending.ExpiresAt)
+			a.trackGitHubRevocation(pending.Token, pending.SessionID, pending.App, pending.InstallationID, pending.ExpiresAt)
 		}
 	}()
 }
@@ -1067,21 +1087,27 @@ func (a *App) githubRevocationCount() int {
 
 func (a *App) revokeAllGitHubLeases() {
 	a.githubMu.Lock()
-	tokens := make([]string, 0, len(a.githubLeases))
+	leases := make([]githubLease, 0, len(a.githubLeases)+len(a.githubRevocations))
 	for key, lease := range a.githubLeases {
-		tokens = append(tokens, lease.Token)
+		leases = append(leases, lease)
 		delete(a.githubLeases, key)
 	}
 	for key, grant := range a.githubGrants {
 		githubauth.Zero(grant.PrivateKey)
 		delete(a.githubGrants, key)
 	}
-	for token := range a.githubRevocations {
-		tokens = append(tokens, token)
+	for token, pending := range a.githubRevocations {
+		leases = append(leases, githubLease{
+			SessionID: pending.SessionID,
+			Info: githubauth.LeaseInfo{
+				App: pending.App, InstallationID: pending.InstallationID, ExpiresAt: pending.ExpiresAt,
+			},
+			Token: pending.Token,
+		})
 		delete(a.githubRevocations, token)
 	}
 	a.githubMu.Unlock()
-	a.revokeGitHubTokens(tokens)
+	a.revokeGitHubLeases(leases)
 }
 
 func githubRequestID() (string, error) {

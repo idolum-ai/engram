@@ -28,6 +28,10 @@ Notable user-visible and operational changes are recorded here.
   refuses ambiguous, unknown, or cross-installation authority instead of
   guessing or combining tokens. Existing single-installation vaults remain
   readable without an automatic secret rewrite.
+- Validate every requested repository against a selected-repository
+  installation before storing renewable authority. A same-owner repository
+  that is not installed now fails during grant creation instead of creating an
+  unusable grant that fails only when first consumed.
 - Add bounded renewable, pane-scoped work-session grants. One explicit
   Telegram approval can authorize subset commands for a configured maximum of
   eight hours while Engram rotates ordinary short-lived GitHub installation
@@ -37,10 +41,10 @@ Notable user-visible and operational changes are recorded here.
   committed transactionally, concurrent subset children share one token at the
   displayed ceiling, and renewable writes use an explicit collaboration
   allowlist.
-- Compatibility: the local GitHub broker protocol is now version 2 so mixed
+- Compatibility: the local GitHub broker protocol is now version 3 so mixed
   old/new CLI and daemon processes fail closed instead of exposing a
-  provisional token during transactional delivery. Upgrade the CLI and daemon
-  together.
+  provisional token during transactional delivery or silently dropping the
+  installation selector. Upgrade the CLI and daemon together.
 - Compatibility: `engram github status --json` now emits an object with
   `grants` and `leases` arrays instead of the previous bare lease array. Update
   consumers to read the `leases` field.

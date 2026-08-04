@@ -290,6 +290,10 @@ Engram refuses an omitted or unknown selector for a multi-installation alias
 before creating a Telegram approval. It never guesses based on repository
 names. The selected installation must alone cover every requested repository
 and permission; split a cross-installation operation into separate commands.
+For selected-repository installations, renewable-grant creation probes the
+normalized repository list in deterministic order and stores no authority
+unless GitHub confirms that every repository belongs to that exact
+installation.
 
 The CLI blocks for at most three minutes while Telegram presents the request.
 

@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -205,6 +206,58 @@ func TestGitHubCapabilityCancellationDuringMintRevokesTokenWithoutStoringLease(t
 	}
 	if minter.revokeCount() != 1 {
 		t.Fatalf("revoke calls = %d, want 1", minter.revokeCount())
+	}
+}
+
+func TestDiscardedGitHubTokenRevocationRetryPreservesLeaseProvenance(t *testing.T) {
+	minter := &fakeGitHubMinter{revokeErr: errors.New("network down")}
+	expiresAt := time.Now().Add(time.Hour)
+	app := &App{
+		GitHubMinter:      minter,
+		githubRevocations: map[string]githubRevocation{},
+		githubNow:         time.Now,
+	}
+	pending := githubRevocation{
+		Token: "discarded-token", SessionID: 17, App: "idolum",
+		InstallationID: 789, ExpiresAt: expiresAt,
+	}
+	if err := app.revokeDiscardedGitHubToken(context.Background(), pending, errors.New("delivery canceled")); err == nil {
+		t.Fatal("discarded token revocation failure was hidden")
+	}
+	got, ok := app.githubRevocations[pending.Token]
+	if !ok || got.SessionID != pending.SessionID || got.App != pending.App ||
+		got.InstallationID != pending.InstallationID || !got.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("queued discarded-token revocation = %#v, want provenance from %#v", got, pending)
+	}
+}
+
+func TestReplacementGitHubTokenRevocationRetryPreservesLeaseProvenance(t *testing.T) {
+	minter := &fakeGitHubMinter{revokeErr: errors.New("network down")}
+	expiresAt := time.Now().Add(time.Hour)
+	binding := githubauth.Binding{ServerID: "server", WindowID: "@2", PaneID: "%3"}
+	oldLease := githubLease{
+		SessionID: 17,
+		Binding:   binding,
+		Info: githubauth.LeaseInfo{
+			App: "idolum", InstallationID: 789, ExpiresAt: expiresAt,
+		},
+		Token: "replaced-token",
+	}
+	app := &App{
+		GitHubMinter: minter,
+		githubLeases: map[string]githubLease{
+			githubBindingKey(binding): oldLease,
+		},
+		githubRevocations: map[string]githubRevocation{},
+		githubNow:         time.Now,
+	}
+	replaced := app.storeGitHubLease(githubLease{Binding: binding, Token: "new-token"})
+	app.revokeGitHubLeases(replaced)
+	app.transferWG.Wait()
+	got, ok := app.githubRevocations[oldLease.Token]
+	if !ok || got.SessionID != oldLease.SessionID || got.App != oldLease.Info.App ||
+		got.InstallationID != oldLease.Info.InstallationID || !got.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("queued replacement revocation = %#v, want provenance from %#v", got, oldLease)
 	}
 }
 

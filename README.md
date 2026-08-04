@@ -382,7 +382,11 @@ The GitHub installation is inspected before minting. Requested permission names
 must exist on the installation, requested levels cannot exceed its current
 grants, and GitHub's response must contain the exact repository and permission
 scope (apart from GitHub's implicit read-only metadata permission). Omitting a
-scope never falls back to the installation's broader defaults.
+scope never falls back to the installation's broader defaults. Before Engram
+stores a renewable grant for a selected-repository installation, it also asks
+GitHub to confirm that every named repository belongs to that exact
+installation; an unavailable repository fails the approval without storing
+authority.
 
 An active pane lease can satisfy later same-pane requests only when they are a
 subset of its repositories and permissions. Broader requests require another
