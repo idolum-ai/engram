@@ -17,6 +17,8 @@ const (
 	MaxRequestBytes = 64 << 10
 
 	ErrorCodeLocalPassphraseRequired = "local_passphrase_required"
+	ApprovalTimeout                  = 15 * time.Minute
+	BrokerExchangeTimeout            = ApprovalTimeout + time.Minute
 	MinGrantDuration                 = 15 * time.Minute
 	AbsoluteMaxGrantDuration         = 24 * time.Hour
 )

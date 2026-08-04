@@ -326,7 +326,7 @@ func runGitHubExec(args []string) int {
 		LocalUnlock:    *localUnlock,
 	}
 	fmt.Fprintln(os.Stderr, "Requesting GitHub capability from Engram...")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), githubauth.ApprovalTimeout+30*time.Second)
 	response, err := requestGitHubCapability(ctx, cfg, request)
 	cancel()
 	if err != nil {
@@ -393,7 +393,7 @@ func runGitHubGrant(args []string) int {
 		return 2
 	}
 	fmt.Fprintln(os.Stderr, "Requesting renewable GitHub work-session authority from Engram...")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute+30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), githubauth.ApprovalTimeout+30*time.Second)
 	response, err := requestGitHubCapability(ctx, cfg, request)
 	cancel()
 	if err != nil {

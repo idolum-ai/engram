@@ -87,8 +87,7 @@ func (a *App) createGitHubGrant(
 	a.revokeGitHubLeases(oldLeases)
 	a.queueManualRefresh(session.ID)
 	a.completeGitHubApprovalMessage(pending, fmt.Sprintf(
-		"Approved: renewable access for %s is active until %s.",
-		sessionLabel(session), grant.Info.ExpiresAt.Local().Format("2006-01-02 15:04 MST"),
+		"✓ Active until %s.", grant.Info.ExpiresAt.Local().Format("15:04 MST"),
 	))
 	fields := githubAuditRequest(session.ID, request)
 	fields["grant_id"] = grantID

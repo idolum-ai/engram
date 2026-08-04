@@ -38,10 +38,12 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	}()
 	requestID, approvalID := pendingGitHubTestIdentity(t, app)
 	approvalMessage := <-transport.sent
-	if !strings.Contains(approvalMessage.text, "Renewable GitHub work-session grant") ||
-		!strings.Contains(approvalMessage.text, "unattended short-lived token rotation") ||
+	if approvalMessage.parseMode != "HTML" ||
+		!strings.Contains(approvalMessage.text, "GitHub access requested") ||
+		!strings.Contains(approvalMessage.text, "<b>For:</b> 6h, renewable") ||
+		!strings.Contains(approvalMessage.text, "<blockquote expandable>") ||
 		!strings.Contains(approvalMessage.text, request.Purpose) ||
-		!strings.Contains(approvalMessage.text, expectedExpiry.Local().Format("2006-01-02 15:04 MST")) {
+		!strings.Contains(approvalMessage.text, expectedExpiry.Local().Format("15:04 MST")) {
 		t.Fatalf("approval text = %q", approvalMessage.text)
 	}
 	now = now.Add(2 * time.Minute)
@@ -59,6 +61,14 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	}
 	if len(app.githubGrants) != 1 || len(app.githubLeases) != 0 {
 		t.Fatalf("stored grants=%d leases=%d", len(app.githubGrants), len(app.githubLeases))
+	}
+	completion := <-transport.edited
+	if completion.parseMode != "HTML" ||
+		!strings.Contains(completion.text, "<b>GitHub access · "+sessionLabel(app.Store.Snapshot().TerminalSessions[0])+"</b>") ||
+		!strings.Contains(completion.text, "✓ Active until "+expectedExpiry.Local().Format("15:04 MST")) ||
+		strings.Contains(completion.text, request.Purpose) ||
+		strings.Contains(completion.text, "<blockquote expandable>") {
+		t.Fatalf("grant completion = %#v", completion)
 	}
 }
 

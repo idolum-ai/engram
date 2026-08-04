@@ -220,7 +220,7 @@ func (s *BrokerServer) shutdownTransport() {
 
 func (s *BrokerServer) handleConnection(serverContext context.Context, connection *net.UnixConn) {
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(4 * time.Minute))
+	_ = connection.SetDeadline(time.Now().Add(BrokerExchangeTimeout))
 	data, err := readBrokerFrame(connection)
 	if err != nil {
 		_ = writeBrokerFrame(connection, BrokerResponse{Error: "invalid GitHub broker request"})
@@ -313,7 +313,7 @@ func Request(ctx context.Context, path string, request BrokerRequest) (BrokerRes
 		}
 	}()
 	defer close(requestDone)
-	deadline := time.Now().Add(4 * time.Minute)
+	deadline := time.Now().Add(BrokerExchangeTimeout)
 	if requested, ok := ctx.Deadline(); ok && requested.Before(deadline) {
 		deadline = requested
 	}

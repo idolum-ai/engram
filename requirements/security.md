@@ -251,7 +251,7 @@ privacy model must stay small and explicit.
   protocol must stay connected through the approval handshake so requester exit
   cancels pending authority.
 - GitHub capability approvals are process-local, random, single-use, expire
-  within three minutes, and bind the authorized Telegram identity and message
+  within fifteen minutes, and bind the authorized Telegram identity and message
   to one current immutable tmux server/window/pane identity and one exact
   enrolled GitHub App identity. Removing or replacing that enrollment while an
   approval is pending cancels the request.
@@ -288,11 +288,13 @@ privacy model must stay small and explicit.
   and revoke a newly minted token before returning any effective-scope,
   post-mint cancellation/binding, or enrollment-identity failure.
 - Renewable GitHub work-session grants are a separate, conspicuous authority
-  class. They require one informed Telegram approval that shows the exact App
-  enrollment, tmux binding, repository and permission ceiling, purpose,
-  duration, absolute expiry, subset semantics, unattended token rotation, and
-  in-memory signing-capability retention. The configured maximum defaults to
-  eight hours and may never exceed the hard 24-hour ceiling.
+  class. Their Telegram approval keeps the decision surface compact: watched
+  window, App alias, exact repositories, friendly read/write permission groups,
+  purpose, duration, and absolute expiry. A native expandable details section
+  in the same message must expose the exact App enrollment, immutable tmux
+  binding, raw permission ceiling, subset semantics, unattended token rotation,
+  and in-memory signing-capability retention before approval. The configured
+  maximum defaults to eight hours and may never exceed the hard 24-hour ceiling.
 - Renewable grants and decrypted signing capability are process-local and
   never serialized. They are bound to the complete enrollment and immutable
   pane identity and are erased on expiry, pane loss or replacement, unwatch,

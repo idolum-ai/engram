@@ -341,7 +341,7 @@ engram github exec \
 Repository and permission flags are mandatory and repeatable. Engram rejects
 requests that omit either boundary. It validates the live tmux
 server/window/pane identity, sends an exact approval request to the configured
-Telegram user, and blocks for at most three minutes. Approval is single-use and
+Telegram user, and blocks for at most fifteen minutes. Approval is single-use and
 bound to the waiting local connection. The approval card includes the complete
 shell-quoted child command; if the repositories, permissions, and full command
 cannot fit safely in one card, Engram refuses the request instead of presenting
@@ -435,6 +435,13 @@ Giving each child the displayed ceiling keeps overlapping commands from
 invalidating each other's token. The token is reused until its upstream expiry,
 then replaced serially. The default configurable grant ceiling is eight hours
 (`ENGRAM_GITHUB_GRANT_MAX_DURATION`), with an absolute 24-hour limit.
+
+Telegram approval prompts lead with a compact decision summary: window, App,
+repositories, friendly read/write permission groups, duration, expiry, and
+purpose. Exact enrollment IDs, fingerprint, tmux binding, raw permission names,
+and renewal/key-lifetime semantics remain available before approval inside the
+message's native expandable **Details** section. Completed requests collapse to
+a short active, denied, failed, or canceled summary.
 
 Renewable write authority fails closed: only `checks`, `contents`,
 `discussions`, `issues`, `pull_requests`, `repository_projects`, and `statuses`
