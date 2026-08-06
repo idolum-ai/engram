@@ -238,7 +238,7 @@ transcript text.
 | `ENGRAM_HOME` | `~/.engram` | no | State, remembered input templates, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
-| `ENGRAM_TMUX_SIZE` | `100x48` | no | Stable `COLUMNSxROWS` geometry for Engram-created windows. Each dimension must be between 1 and 400. Existing attached panes retain their geometry. |
+| `ENGRAM_TMUX_SIZE` | `100x48` | no | Stable `COLUMNSxROWS` geometry for newly created Engram windows. Each dimension must be between 1 and 400. Existing windows and explicitly attached panes are not resized. |
 | `ENGRAM_SNAPSHOT_BROWSER` | auto-detected headless shell, with Linux browser fallbacks | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. macOS auto-detection accepts dedicated headless executables only; an explicit value may opt into a desktop browser. |
 | `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Live and on-demand snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_SNAPSHOT_STATUS_COMMAND` | none | no | Trusted local shell command whose sanitized one-line stdout occupies a bounded snapshot-footer slot. It runs only while an image is already being rendered, from the pane directory when available. |
@@ -541,8 +541,8 @@ the bot channel and must be revoked immediately.
 - **tmux and local processes:** Authorized messages can create windows and send
   literal shell input or key presses. Engram-created windows use the stable
   `ENGRAM_TMUX_SIZE` geometry, including while detached or while the selected
-  session has a differently sized attached client; explicitly attached panes
-  retain their existing geometry. tmux owns terminal history and continues running when
+  session has a differently sized attached client. Existing windows and
+  explicitly attached panes retain their geometry. tmux owns terminal history and continues running when
   Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.

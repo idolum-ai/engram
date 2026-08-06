@@ -81,6 +81,24 @@ func TestAnalyzeBoundsWorkAndPreservesOversizedFrame(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAcceptsMaximumFrameRows(t *testing.T) {
+	lines := make([]string, maxFrameRows)
+	for index := range lines {
+		lines[index] = "terminal output"
+	}
+	lines[len(lines)-3] = "›"
+	lines[len(lines)-2] = ""
+	lines[len(lines)-1] = "gpt-5.6-sol high · /work"
+	got := Analyze(Observation{Current: Frame{
+		Text:           strings.Join(lines, "\n"),
+		CurrentCommand: "codex",
+		Columns:        100,
+	}})
+	if !got.Applied || got.Model != "gpt-5.6-sol" {
+		t.Fatalf("maximum-row analysis = %#v", got)
+	}
+}
+
 func TestAnalyzeDoesNotUseTemporalEvidenceAcrossFrameIdentityChange(t *testing.T) {
 	current := Frame{Text: "result\nIndexing files (3s)\ngpt-5.6-sol high · /work", CurrentCommand: "codex", Columns: 80}
 	previous := Frame{Text: "result\nIndexing files (2s)\ngpt-5.6-sol high · /work", CurrentCommand: "claude", Columns: 80}
