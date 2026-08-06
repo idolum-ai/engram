@@ -116,7 +116,11 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 		}
 		workdir := a.resumeWorkdir(current)
 		title := tmux.WindowTitle(id, firstNonEmpty(current.Title, program))
-		windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, tmuxSessionID, workdir, title)
+		columns, rows, sizeErr := a.Config.EffectiveTmuxSize()
+		if sizeErr != nil {
+			return actionResult{Outcome: actionTmuxFailed, Message: "tmux window size unavailable: " + sizeErr.Error()}
+		}
+		windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, tmuxSessionID, workdir, title, columns, rows)
 		if err != nil {
 			return actionResult{Outcome: actionTmuxFailed, Message: "tmux window creation failed: " + err.Error()}
 		}

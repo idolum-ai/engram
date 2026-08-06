@@ -133,7 +133,7 @@ do not accept this field.
 
 ## Fail-closed behavior
 
-Frames longer than 64 rows, unknown model identities, weak shell-like
+Frames longer than 96 rows, unknown model identities, weak shell-like
 collisions, unrecognized footer fields, and chrome-only results pass through
 byte-for-byte. An ordinary shell line that merely contains a model-like word is
 not enough.

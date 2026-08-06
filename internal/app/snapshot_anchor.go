@@ -134,7 +134,7 @@ func (a *App) refreshSnapshotAnchor(ctx context.Context, id int, _ bool) {
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}
-	capture, captureErr := a.captureStyled(tctx, current, terminalshot.TargetRows)
+	capture, captureErr := a.captureStyled(tctx, current, terminalshot.SnapshotTargetRows)
 	releaseSlot(a.captureSlots)
 	if captureErr != nil {
 		_ = a.audit("tmux.snapshot_anchor", "capture_failed", map[string]any{"session_id": id, "pane_id": current.TmuxPaneID, "error": captureErr.Error()})

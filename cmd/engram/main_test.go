@@ -150,6 +150,20 @@ func TestPreflightDoesNotCallTelegramOrGuideProvider(t *testing.T) {
 	}
 }
 
+func TestRunRejectsMissingTmuxBeforeStarting(t *testing.T) {
+	env := writeTestEnv(t)
+	t.Setenv("PATH", t.TempDir())
+	_, stderr, code := captureCommand(t, func() int {
+		return run([]string{"run", "--env", env})
+	})
+	if code != 1 || !strings.Contains(stderr, "tmux executable not found in PATH") {
+		t.Fatalf("run code=%d stderr=%q", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(env), "home")); !os.IsNotExist(err) {
+		t.Fatalf("run touched application state before rejecting tmux: %v", err)
+	}
+}
+
 func TestDryStartCreatesStateWithoutPolling(t *testing.T) {
 	env := writeTestEnv(t)
 	stdout, stderr, code := captureCommand(t, func() int {

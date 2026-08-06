@@ -84,7 +84,7 @@ func (a *App) sendSnapshot(ctx context.Context, requested state.TerminalSession)
 		a.snapshotNotice(ctx, requested.ID, "Could not capture the tmux window before the request timed out.")
 		return
 	}
-	capture, captureErr := a.captureStyled(tctx, current, terminalshot.TargetRows)
+	capture, captureErr := a.captureStyled(tctx, current, terminalshot.SnapshotTargetRows)
 	releaseSlot(a.captureSlots)
 	cancel()
 	lock.Unlock()

@@ -238,6 +238,7 @@ transcript text.
 | `ENGRAM_HOME` | `~/.engram` | no | State, remembered input templates, audit log, and process-lock directory. |
 | `ENGRAM_WORKDIR` | `~` | no | Starting directory for new tmux sessions and windows. |
 | `ENGRAM_TMUX_SESSION` | first existing session, otherwise `engram-<chat-id>` | no | Forces one exact tmux session name and creates it when absent. `:` and `.` are unsupported because tmux canonicalizes them. |
+| `ENGRAM_TMUX_SIZE` | `100x48` | no | Stable `COLUMNSxROWS` geometry for Engram-created windows. Each dimension must be between 1 and 400. Existing attached panes retain their geometry. |
 | `ENGRAM_SNAPSHOT_BROWSER` | auto-detected headless shell, with Linux browser fallbacks | when enabling snapshots | Executable name or absolute path used for live or on-demand terminal images. macOS auto-detection accepts dedicated headless executables only; an explicit value may opt into a desktop browser. |
 | `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Live and on-demand snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_SNAPSHOT_STATUS_COMMAND` | none | no | Trusted local shell command whose sanitized one-line stdout occupies a bounded snapshot-footer slot. It runs only while an image is already being rendered, from the pane directory when available. |
@@ -538,10 +539,10 @@ the bot channel and must be revoked immediately.
   In Chromium mode, every changed anchor frame is an exact, unredacted terminal
   image sent automatically to Telegram at most once every ten seconds.
 - **tmux and local processes:** Authorized messages can create windows and send
-  literal shell input or key presses. Engram-created windows use tmux's global
-  `default-size`, matching detached tmux operation even when the selected session
-  has a much larger attached client; explicitly attached panes retain their
-  existing geometry. tmux owns terminal history and continues running when
+  literal shell input or key presses. Engram-created windows use the stable
+  `ENGRAM_TMUX_SIZE` geometry, including while detached or while the selected
+  session has a differently sized attached client; explicitly attached panes
+  retain their existing geometry. tmux owns terminal history and continues running when
   Engram stops unless a window is explicitly closed. A process in
   a nested environment may emit a visible upstream record; the outer Engram
   observes it through the same bounded capture and may notify the Telegram DM.
@@ -595,8 +596,9 @@ the bot channel and must be revoked immediately.
   does not ask the guide model to select or repair pixels. Sensitive, oversized,
   ambiguous, code-like, or weak candidates are omitted. Ordinary snapshot and
   raw paths never include this inset.
-- **Conversational guide:** Guide anchors start from the same frame as Chromium
-  and send its joined logical text, capped at 64 rows, in one non-streaming request.
+- **Conversational guide:** Guide anchors capture joined logical text from the
+  bottom 96 physical terminal rows in one non-streaming request. Chromium views
+  remain capped at the bottom 64 rows from their own atomic capture.
   Recognized upstream records, the trailing model-status footer, and a small
   allowlist of paired Codex placeholder prompts are omitted from model evidence
   but remain in screenshots and raw captures. Every request contains the

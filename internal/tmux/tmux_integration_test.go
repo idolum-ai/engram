@@ -493,7 +493,7 @@ func TestTmuxIntegrationSessionNamesResolveExactlyBeforeNewWindow(t *testing.T) 
 		if err != nil {
 			t.Fatalf("ensure session %q: %v", name, err)
 		}
-		_, paneID, err := manager.NewWindow(ctx, sessionID, t.TempDir(), "engram-exact")
+		_, paneID, err := manager.NewWindow(ctx, sessionID, t.TempDir(), "engram-exact", 91, 33)
 		if err != nil {
 			t.Fatalf("new window in %q: %v", name, err)
 		}

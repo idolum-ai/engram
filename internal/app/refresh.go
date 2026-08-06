@@ -11,7 +11,6 @@ import (
 	"github.com/idolum-ai/engram/internal/guide"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
-	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
@@ -58,7 +57,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	if !acquireSlot(tctx, a.captureSlots) {
 		return
 	}
-	capture, err := a.captureStyled(tctx, ts, terminalshot.TargetRows)
+	capture, err := a.captureStyled(tctx, ts, guideCaptureRows)
 	releaseSlot(a.captureSlots)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {

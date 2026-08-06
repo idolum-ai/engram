@@ -28,7 +28,12 @@ func (a *App) newSession(ctx context.Context, msg telegram.Message, input string
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux server identity unavailable"}
 	}
 	title := tmux.WindowTitle(0, input)
-	windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionID, a.Config.Workdir, title)
+	columns, rows, sizeErr := a.Config.EffectiveTmuxSize()
+	if sizeErr != nil {
+		a.reply(ctx, msg, "tmux size error: "+sizeErr.Error())
+		return actionResult{Outcome: actionTmuxFailed, Message: "tmux window size unavailable"}
+	}
+	windowID, paneID, err := a.Tmux.NewWindow(tmuxCtx, sessionID, a.Config.Workdir, title, columns, rows)
 	if err != nil {
 		a.reply(ctx, msg, "tmux error: "+err.Error())
 		return actionResult{Outcome: actionTmuxFailed, Message: "tmux window creation failed"}

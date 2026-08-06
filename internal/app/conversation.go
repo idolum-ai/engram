@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/state"
-	"github.com/idolum-ai/engram/internal/terminalshot"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
@@ -51,7 +50,7 @@ func (a *App) sendConversation(ctx context.Context, requested state.TerminalSess
 		a.conversationNotice(ctx, requested, "I couldn't read that window before the request timed out.")
 		return
 	}
-	capture, err := a.captureStyled(tctx, current, terminalshot.TargetRows)
+	capture, err := a.captureStyled(tctx, current, guideCaptureRows)
 	releaseSlot(a.captureSlots)
 	cancel()
 	lock.Unlock()

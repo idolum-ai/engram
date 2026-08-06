@@ -30,6 +30,7 @@ const (
 	DefaultGitHubGrantMaxDuration   = 8 * time.Hour
 	AbsoluteGitHubGrantMaxDuration  = 24 * time.Hour
 	MaxCodexContextTurns            = 8
+	DefaultTmuxSize                 = "100x48"
 )
 
 type Config struct {
@@ -48,6 +49,7 @@ type Config struct {
 	Home                       string
 	Workdir                    string
 	TmuxSession                string
+	TmuxSize                   string
 	AnchorMode                 string
 	SnapshotBrowser            string
 	SnapshotTheme              string
@@ -116,6 +118,7 @@ func Load(path string) (Config, error) {
 		Home:                       ExpandPath(firstNonEmpty(values["ENGRAM_HOME"], "~/.engram")),
 		Workdir:                    ExpandPath(firstNonEmpty(values["ENGRAM_WORKDIR"], "~")),
 		TmuxSession:                values["ENGRAM_TMUX_SESSION"],
+		TmuxSize:                   firstNonEmpty(values["ENGRAM_TMUX_SIZE"], DefaultTmuxSize),
 		AnchorMode:                 firstNonEmpty(values["ENGRAM_ANCHOR_MODE"], AnchorModeGuide),
 		SnapshotBrowser:            ExpandPath(values["ENGRAM_SNAPSHOT_BROWSER"]),
 		SnapshotTheme:              firstNonEmpty(values["ENGRAM_SNAPSHOT_THEME"], "terminal"),
@@ -203,10 +206,30 @@ func (c Config) Validate() error {
 	if strings.ContainsAny(strings.TrimSpace(c.TmuxSession), ":.") {
 		return fmt.Errorf("ENGRAM_TMUX_SESSION must not contain ':' or '.'")
 	}
+	if _, _, err := c.EffectiveTmuxSize(); err != nil {
+		return err
+	}
 	if err := validateTelegramAPIBase(c.EffectiveTelegramAPIBase()); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (c Config) EffectiveTmuxSize() (columns, rows int, err error) {
+	raw := strings.TrimSpace(c.TmuxSize)
+	if raw == "" {
+		raw = DefaultTmuxSize
+	}
+	width, height, found := strings.Cut(raw, "x")
+	if !found || strings.Contains(height, "x") {
+		return 0, 0, fmt.Errorf("ENGRAM_TMUX_SIZE must use COLUMNSxROWS")
+	}
+	columns, widthErr := strconv.Atoi(width)
+	rows, heightErr := strconv.Atoi(height)
+	if widthErr != nil || heightErr != nil || columns <= 0 || columns > 400 || rows <= 0 || rows > 400 {
+		return 0, 0, fmt.Errorf("ENGRAM_TMUX_SIZE must use dimensions between 1x1 and 400x400")
+	}
+	return columns, rows, nil
 }
 
 func (c Config) EffectiveAnchorMode() string {
