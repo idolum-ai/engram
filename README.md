@@ -214,6 +214,17 @@ message is redacted before its per-message byte ceiling is applied, so a secret
 spanning that boundary is not partially exposed. Engram does not persist
 transcript text.
 
+Claude Code has the same separately gated path. Set
+`ENGRAM_CLAUDE_CONTEXT_TURNS` to `1` through `8` and install the documented
+Claude `SessionStart` hook. Claude supplies the exact session UUID and
+transcript path; Engram still proves the live pane process and precise process
+incarnation before and after each bounded read. The versioned parser admits
+only non-meta, non-sidechain human string prompts and assistant `text` blocks.
+Thinking, tool use and results, attachments, system records, sidechains, and
+subagent transcripts are excluded. Claude documents its JSONL record shape as
+internal, so an unfamiliar recognized message shape fails closed until it has
+fixture-backed support.
+
 ## Configuration
 
 `.env.example` is the complete configuration surface. The env file is a simple
@@ -228,6 +239,7 @@ transcript text.
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
 | `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: conversational `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v9. |
 | `ENGRAM_CODEX_CONTEXT_TURNS` | `0` | no | Privacy opt-in (`0` disables; maximum `8`) for recent user turns and their visible assistant messages from an exactly identified active Codex session. This text is redacted and bounded before it is added as historical—not current-state—guide context. |
+| `ENGRAM_CLAUDE_CONTEXT_TURNS` | `0` | no | Separate privacy opt-in (`0` disables; maximum `8`) for bounded visible messages from an exactly hook-bound active Claude Code transcript. Thinking, tools, metadata, sidechains, and subagents are excluded. |
 | `LLM_PROVIDER` | `anthropic` | when enabling a guide | `anthropic` for Haiku 4.5 or `openai` for Luna. Only the selected provider is used. Changing it requires a restart. |
 | `ANTHROPIC_API_KEY` | none | when selecting Anthropic, secret | Credential for one-pass Haiku rendering. |
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | no | Haiku model ID; the `claude-haiku-4-5` alias is also accepted. |
@@ -587,9 +599,9 @@ the bot channel and must be revoked immediately.
   snapshot frame or the complete unwrapped selected guide rows as a bounded plain UTF-8 text attachment for
   screen readers or exact inspection. It does not recapture a newer terminal
   state on click.
-  With Codex context enabled, a conservative box/arrow detector may append one
+  With Codex or Claude context enabled, a conservative box/arrow detector may append one
   bounded diagram copied from those same visible session messages. The diagram
-  is always a visually separate inset labeled `Codex context`; it is labeled as
+  is always a visually separate provider-labeled inset; it is labeled as
   reconstructed only when its exact text maps uniquely to current semantic tmux
   evidence, otherwise it explicitly says it is a prior message and not the
   current terminal. Detection is local, Unicode-width aware, phone-bounded, and
@@ -604,9 +616,9 @@ the bot channel and must be revoked immediately.
   but remain in screenshots and raw captures. Every request contains the
   complete current semantic evidence;
   aligned requests may also carry prior prose and deterministic changed,
-  removed, and neighboring lines as attention hints. When the explicit Codex
+  removed, and neighboring lines as attention hints. When an explicit provider
   context opt-in is nonzero, the same request can also carry bounded, redacted
-  prior visible messages from the exactly identified active Codex session.
+  prior visible messages from the exactly identified active Codex or Claude session.
   They are historical topic context, never current evidence. There is no model
   API history, no second request, and no prior Telegram input supplied as model context. A
   private evidence trailer is removed before delivery and can only select a
@@ -640,6 +652,15 @@ the bot channel and must be revoked immediately.
   when admitted, is sent to Telegram with the guide-evidence card. Engram does
   not persist transcript text, but the provider and Telegram receive these
   opt-in disclosures under their normal data-retention policies.
+- **Local Claude session store:** When `ENGRAM_CLAUDE_CONTEXT_TURNS` is nonzero,
+  Engram reads only the exact UUID-named JSONL path published by Claude's
+  lifecycle hook. The hook path is not sufficient by itself: an owned regular
+  file, matching filename and record session IDs, a current process
+  incarnation, and an unchanged tmux/provider binding are required. Large
+  transcripts use a bounded identity prefix and fixed tail ending at the size
+  observed when opened. The selected provider receives only the bounded,
+  redacted visible-message subset; an admitted diagram may also reach Telegram.
+  Transcript text is never persisted or audited by Engram.
 - **Local state and logs:** `ENGRAM_HOME` contains `state.json`,
   `templates.json`, `audit.jsonl`, one rotated `audit.jsonl.1`, and lock files.
   `templates.json` stores exact user-authored input bodies in plaintext with
@@ -814,6 +835,36 @@ a pane-local tmux option. Engram validates the persisted pane/window/server
 binding before accepting it, then stores the mapping in its protected state.
 See the [Codex session context guide](docs/codex-session-context.md) for the
 one-time migration, verification, troubleshooting, and disclosure boundaries.
+
+Claude Code uses its official settings hook. Add this entry to the `hooks`
+object in `~/.claude/settings.json`, merging it with existing settings:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.local/bin/engram claude-hook",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Claude supplies `session_id`, the exact `transcript_path`, `cwd`, and lifecycle
+source on stdin. The hook prints no context and publishes only bounded binding
+metadata to the inherited tmux pane. Verify it with Claude's `/hooks` browser.
+An already-running session can attempt the argument-free `engram claude-bind`;
+that migration path accepts only a uniquely proven active PID registry and
+UUID transcript and otherwise asks for a restart with the official hook.
+See the [Claude Code session context guide](docs/claude-code-session-context.md).
 
 After a host reboot—or whenever Engram starts and discovers that its running
 state no longer matches tmux—the bot sends a deterministic recovery plan with

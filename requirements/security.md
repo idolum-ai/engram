@@ -91,6 +91,32 @@ privacy model must stay small and explicit.
   does not print the UUID, and publishes no transcript text. Publishing is not
   proof of acceptance; the service applies every ordinary process, rollout,
   and immutable tmux validation before admitting context.
+- Claude transcript context is separately disabled by default and may be
+  enabled only with `ENGRAM_CLAUDE_CONTEXT_TURNS` between one and eight. A
+  documented Claude `SessionStart` hook must supply the exact session UUID,
+  absolute transcript path, working directory, lifecycle source, and inherited
+  `TMUX_PANE`; the hook must print no context. Engram must prove an exact active
+  Claude descendant process, absolute running executable, version, and precise
+  kernel process-start identity before and after a bounded read and at final
+  publication. The hook observation must not predate the process. The UUID must
+  match the filename and bounded record `sessionId` values. The transcript must
+  be an owned regular non-symlink file. Recency, cwd, title, and model discovery
+  are forbidden fallbacks.
+- `engram claude-bind` is an optional migration path for sessions that predate
+  the official hook. It accepts no arguments, uses inherited `TMUX_PANE`, and
+  may publish a candidate only after proving one live Claude process, a bounded
+  owned PID registry with matching PID/version/UUID, and exactly one UUID-named
+  transcript. Because the registry is undocumented, any changed or ambiguous
+  shape must fail closed and direct the user to restart with the hook.
+- The named Claude transcript parser may admit only bounded non-meta,
+  non-sidechain human string prompts and main-session assistant `text` blocks.
+  Thinking, tool use and results, array-form user records, attachments, system
+  metadata, sidechains, subagent transcripts, and unknown recognized content
+  variants must be excluded. Split records require stable message identity.
+  Large files use a bounded identity prefix and a fixed tail ending at the
+  opened size. Complete messages are redacted before truncation; transcript
+  text, UUIDs, and paths are never audited. An unsupported schema, disabled
+  persistence, or missing file falls back to terminal-only guidance.
 - The versioned Codex rollout parser may admit only bounded visible text from
   user and assistant message records. It must exclude system/developer prompts,
   hidden reasoning, tool arguments and results, attachments, generated
