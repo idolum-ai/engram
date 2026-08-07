@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -172,6 +174,44 @@ func TestDismissAgentDetailRejectsStaleMessageIdentity(t *testing.T) {
 	current, _ := app.Store.FindSession(id)
 	if current.AgentDetailMessageID != 88 {
 		t.Fatalf("stale callback changed detail: %#v", current)
+	}
+}
+
+func TestRetireAgentDetailKeepsTelegramMessageWhenStateClearDoesNotCommit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session = bindTestSession(t, store, session.ID)
+	if _, _, err := store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+		current.WatchEnabled = true
+		current.AgentDetailChatID = 100
+		current.AgentDetailMessageID = 88
+		current.AgentDetailAnchorMessageID = 77
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := telegram.New("TOKEN")
+	client.BaseURL = "https://api.telegram.org/botTOKEN"
+	deleteCalls := 0
+	client.HTTPClient = &http.Client{Transport: anchorDeliveryRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		deleteCalls++
+		return telegramTestResponse(t, http.StatusOK, map[string]any{"ok": true, "result": true}), nil
+	})}
+	app := &App{Store: store, Telegram: client}
+	expected, _ := store.FindSession(session.ID)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	app.retireAgentDetail(context.Background(), expected)
+	current, _ := store.FindSession(session.ID)
+	if deleteCalls != 0 || current.AgentDetailMessageID != 88 || current.AgentDetailChatID != 100 {
+		t.Fatalf("uncommitted retirement: deletes=%d state=%#v", deleteCalls, current)
 	}
 }
 

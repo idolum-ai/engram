@@ -51,9 +51,16 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 		a.deliverUpstreamSignalWithArtifacts(ctx, observed, observation.Latest, a.intentionalArtifactPaths(observation.PresentationText, capture.Hyperlinks))
 	}
 	presentationText := observation.PresentationText
+	// Integration state may survive transient process-inspection failures, but
+	// only while at least one provider probe remains inconclusive. Once every
+	// configured provider definitively reports that its process is absent, the
+	// pane has returned to a non-agent foreground process and stale status must
+	// not remain attached to the terminal card.
+	providersAbsent := a.ClaudeDetector != nil && a.CodexDetector != nil
 	if a.ClaudeDetector != nil {
 		runtime, err := a.ClaudeDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
 		if err != nil {
+			providersAbsent = false
 			a.recordPresentationDecision(observed, "claude", runtime.Version, "unavailable", "runtime_detection_failed", false, "")
 			if runtime.Detected {
 				process := unavailableProcessAxis(agentcompat.ProviderClaude, processProbeReason(err), runtime.Version)
@@ -107,6 +114,7 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 	}
 	runtime, err := a.CodexDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
 	if err != nil {
+		providersAbsent = false
 		a.recordPresentationDecision(observed, "codex", runtime.Version, "unavailable", "runtime_detection_failed", false, "")
 		if runtime.Detected {
 			process := unavailableProcessAxis(agentcompat.ProviderCodex, processProbeReason(err), runtime.Version)
@@ -118,6 +126,9 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 		return a.processGenericAgentFrame(observed, capture, presentationText)
 	}
 	if !runtime.Detected {
+		if providersAbsent {
+			a.clearAgentIntegrationState(observed)
+		}
 		return a.processGenericAgentFrame(observed, capture, presentationText)
 	}
 	process := unavailableProcessAxis(agentcompat.ProviderCodex, agentcompat.ReasonProcessIdentityUnproven, runtime.Version)

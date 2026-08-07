@@ -24,35 +24,32 @@ func (a *App) showAgentDetail(ctx context.Context, expected state.TerminalSessio
 	markup := telegram.AgentDetailMarkup(current.ID)
 	hash := sha(text)
 	if current.AgentDetailMessageID != 0 && current.AgentDetailAnchorMessageID != current.AnchorMessageID {
-		a.retireProspectiveMessage(ctx, current.AgentDetailChatID, current.AgentDetailMessageID)
-		updated, found, applied, stateErr := a.updateSessionIfCurrent(current, func(session *state.TerminalSession) {
-			if session.AgentDetailMessageID == current.AgentDetailMessageID {
-				clearAgentDetailState(session)
-			}
-		})
-		if stateErr != nil || !found || !applied {
+		updated, committed := a.clearAgentDetailReference(current)
+		if !committed {
 			return actionResult{Outcome: actionStateFailed, Message: "stale agent detail could not be retired"}
 		}
+		a.retireProspectiveMessage(ctx, current.AgentDetailChatID, current.AgentDetailMessageID)
 		current = updated
 	}
 	if current.AgentDetailMessageID != 0 && current.AgentDetailAnchorMessageID == current.AnchorMessageID {
 		_, err := a.Telegram.EditMessage(ctx, current.AgentDetailChatID, current.AgentDetailMessageID, text, markup)
 		if err == nil || telegram.IsMessageNotModified(err) {
-			committed := false
+			changed := false
 			_, found, applied, stateErr := a.updateSessionIfCurrent(current, func(session *state.TerminalSession) {
 				if session.AgentDetailMessageID == current.AgentDetailMessageID && session.AnchorMessageID == current.AnchorMessageID && !session.Collapsed && session.State == state.TerminalRunning {
 					session.AgentDetailRenderHash = hash
-					committed = true
+					changed = true
 				}
 			})
-			if stateErr != nil || !found || !applied || !committed {
-				a.retireProspectiveMessage(ctx, current.AgentDetailChatID, current.AgentDetailMessageID)
-				_, _, _, _ = a.updateSessionIfCurrent(current, func(session *state.TerminalSession) {
-					if session.AgentDetailMessageID == current.AgentDetailMessageID {
-						clearAgentDetailState(session)
-					}
-				})
+			committed := changed && found && applied && (stateErr == nil || state.PersistenceReachedReplacement(stateErr))
+			if !committed {
+				if _, cleared := a.clearAgentDetailReference(current); cleared {
+					a.retireProspectiveMessage(ctx, current.AgentDetailChatID, current.AgentDetailMessageID)
+				}
 				return actionResult{Outcome: actionStateFailed, Message: "agent detail was superseded"}
+			}
+			if stateErr != nil {
+				_ = a.audit("state.agent_detail", "durability_uncertain", map[string]any{"session_id": current.ID, "message_id": current.AgentDetailMessageID, "error": stateErr.Error()})
 			}
 			return actionResult{Outcome: actionOK, Message: "agent detail refreshed"}
 		}
@@ -64,7 +61,7 @@ func (a *App) showAgentDetail(ctx context.Context, expected state.TerminalSessio
 	if err != nil {
 		return actionResult{Outcome: actionTelegramFailed, Message: "could not open agent detail"}
 	}
-	committed := false
+	changed := false
 	_, found, applied, stateErr := a.updateSessionIfCurrent(current, func(session *state.TerminalSession) {
 		if session.AnchorMessageID != current.AnchorMessageID || session.Collapsed || session.State != state.TerminalRunning {
 			return
@@ -73,11 +70,15 @@ func (a *App) showAgentDetail(ctx context.Context, expected state.TerminalSessio
 		session.AgentDetailMessageID = message.MessageID
 		session.AgentDetailAnchorMessageID = current.AnchorMessageID
 		session.AgentDetailRenderHash = hash
-		committed = true
+		changed = true
 	})
-	if stateErr != nil || !found || !applied || !committed {
+	committed := changed && found && applied && (stateErr == nil || state.PersistenceReachedReplacement(stateErr))
+	if !committed {
 		a.retireProspectiveMessage(ctx, message.Chat.ID, message.MessageID)
 		return actionResult{Outcome: actionStateFailed, Message: "agent detail was superseded"}
+	}
+	if stateErr != nil {
+		_ = a.audit("state.agent_detail", "durability_uncertain", map[string]any{"session_id": current.ID, "message_id": message.MessageID, "error": stateErr.Error()})
 	}
 	_ = a.audit("telegram.agent_detail", "opened", map[string]any{"session_id": current.ID, "message_id": message.MessageID})
 	return actionResult{Outcome: actionOK, Message: "agent detail opened"}
@@ -195,14 +196,18 @@ func (a *App) retireAgentDetail(ctx context.Context, expected state.TerminalSess
 	if expected.AgentDetailChatID == 0 || expected.AgentDetailMessageID == 0 {
 		return
 	}
+	if _, committed := a.clearAgentDetailReference(expected); committed {
+		a.retireProspectiveMessage(ctx, expected.AgentDetailChatID, expected.AgentDetailMessageID)
+	}
+}
+
+func (a *App) clearAgentDetailReference(expected state.TerminalSession) (state.TerminalSession, bool) {
 	cleared := false
-	_, _, _, _ = a.updateSessionIfCurrent(expected, func(session *state.TerminalSession) {
+	updated, found, applied, err := a.updateSessionIfCurrent(expected, func(session *state.TerminalSession) {
 		if session.AgentDetailMessageID == expected.AgentDetailMessageID {
 			clearAgentDetailState(session)
 			cleared = true
 		}
 	})
-	if cleared {
-		a.retireProspectiveMessage(ctx, expected.AgentDetailChatID, expected.AgentDetailMessageID)
-	}
+	return updated, cleared && found && applied && (err == nil || state.PersistenceReachedReplacement(err))
 }

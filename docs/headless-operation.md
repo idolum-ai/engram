@@ -53,6 +53,11 @@ make service-restart PREFIX="$HOME/.local"
 make service-logs PREFIX="$HOME/.local"
 ```
 
+`service-status` matches the service manager's live PID to an owner-only
+identity record written by that running Engram process. The reported build is
+therefore the active process build, not merely the version of the currently
+installed binary or service definition.
+
 To keep the user service alive after logout, explicitly enable lingering when
 that matches the host's security policy:
 

@@ -27,7 +27,11 @@ func TestDarwinServiceInstallerValidatesWithoutImplicitActivation(t *testing.T) 
 	}
 	writeExecutable("uname", `echo Darwin`)
 	writeExecutable("plutil", `echo "plutil $*" >>"$SERVICE_CALL_LOG"`)
-	writeExecutable("launchctl", `echo "launchctl $*" >>"$SERVICE_CALL_LOG"`)
+	writeExecutable("launchctl", `echo "launchctl $*" >>"$SERVICE_CALL_LOG"
+if [ "${1:-}" = print ]; then
+  echo '  state = running'
+  echo '  pid = 4242'
+fi`)
 	binary := writeExecutable("engram", `if [ "${1:-}" = version ]; then echo 'Engram v9 test-build'; else exit 2; fi`)
 	envPath := filepath.Join(root, ".engram", ".env")
 	if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
@@ -57,7 +61,7 @@ func TestDarwinServiceInstallerValidatesWithoutImplicitActivation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"Engram v9 test-build", "AbandonProcessGroup", binary, envPath} {
+	for _, required := range []string{"ENGRAM_SERVICE_STATUS_FILE", "service.identity", "AbandonProcessGroup", binary, envPath} {
 		if !strings.Contains(string(plist), required) {
 			t.Fatalf("plist omitted %q:\n%s", required, plist)
 		}
@@ -66,6 +70,49 @@ func TestDarwinServiceInstallerValidatesWithoutImplicitActivation(t *testing.T) 
 	calls, err = os.ReadFile(callLog)
 	if err != nil || !strings.Contains(string(calls), "launchctl bootout") || !strings.Contains(string(calls), "launchctl bootstrap") {
 		t.Fatalf("restart calls = %s err=%v", calls, err)
+	}
+	identityPath := filepath.Join(root, ".engram", "service.identity")
+	if err := os.WriteFile(identityPath, []byte("pid=4242\nbuild=Engram v10 running-build\nstarted=2026-08-07T12:30:00Z\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("bash", script, "status", binary, envPath)
+	command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"), "SERVICE_CALL_LOG="+callLog)
+	output, err := command.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "running build = Engram v10 running-build") || strings.Contains(string(output), "v9 test-build") {
+		t.Fatalf("status did not identify running build: err=%v\n%s", err, output)
+	}
+}
+
+func TestLinuxServiceStatusUsesManagerPIDAndRunningIdentity(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "fake-bin")
+	if err := os.Mkdir(binDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable := func(name, body string) string {
+		t.Helper()
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	writeExecutable("uname", `echo Linux`)
+	writeExecutable("systemctl", `if [ "${3:-}" = show ] || [ "${2:-}" = show ]; then echo 5252; else echo 'active (running)'; fi`)
+	binary := writeExecutable("engram", `if [ "${1:-}" = version ]; then echo 'installed-build-must-not-be-used'; else exit 2; fi`)
+	identityDir := filepath.Join(root, ".engram")
+	if err := os.MkdirAll(identityDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(identityDir, "service.identity"), []byte("pid=5252\nbuild=engram v11 live-linux\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(repoRoot(t), "scripts", "user-service.sh")
+	command := exec.Command("bash", script, "status", binary, filepath.Join(identityDir, ".env"))
+	command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"))
+	output, err := command.CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "running build = engram v11 live-linux") || strings.Contains(string(output), "installed-build-must-not-be-used") {
+		t.Fatalf("Linux status did not identify running build: err=%v\n%s", err, output)
 	}
 }
 
@@ -203,7 +250,7 @@ func TestUserServiceLifecycleContracts(t *testing.T) {
 	text := string(data)
 	for _, required := range []string{
 		"ai.idolum.engram", "plutil -lint", "launchctl bootstrap", "launchctl bootout",
-		"AbandonProcessGroup", "KillMode=process", "ENGRAM_SERVICE_BUILD", "lines <= 1000",
+		"AbandonProcessGroup", "KillMode=process", "ENGRAM_SERVICE_STATUS_FILE", "service.identity", "lines <= 1000",
 		"systemctl --user enable --now engram.service",
 	} {
 		if !strings.Contains(text, required) {

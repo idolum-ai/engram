@@ -339,6 +339,38 @@ func TestProcessCapturedFrameKeepsClaudeStateOnTransientDetectionFailure(t *test
 	}
 }
 
+func TestProcessCapturedFrameClearsAgentStateAfterDefinitiveExitToShell(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AgentCompatibility = agentcompat.Compatibility{Provider: agentcompat.ProviderCodex, Process: agentcompat.Axis{State: agentcompat.StateProven}}
+		session.AgentPresentation = agentcompat.Presentation{Model: agentcompat.Value{Value: "gpt-5.6-sol", Provenance: agentcompat.ProvenanceVisibleUI}, Activity: "active"}
+		session.SemanticViewport = agentcompat.Viewport{Applied: true, Contract: agentcompat.CodexScreenContract, RuntimeIdentity: strings.Repeat("a", 64)}
+		session.DeclaredModel = agentcompat.Value{Value: "stale-model", Provenance: agentcompat.ProvenanceHook}
+		session.DeclaredModelObservedAt = time.Now().UTC()
+		session.PresentationProgram = "codex"
+		session.PresentationModel = "gpt-5.6-sol"
+		session.PresentationActivity = "working"
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.ClaudeDetector = &fixedClaudeDetector{}
+	app.CodexDetector = &fixedCodexDetector{}
+	session, _ := app.Store.FindSession(id)
+	input := "user@host repo %"
+	if got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{JoinedText: input, PanePID: 4242, CurrentCmd: "zsh"}); got != input {
+		t.Fatalf("shell frame changed: %q", got)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.AgentCompatibility != (agentcompat.Compatibility{}) || current.AgentPresentation != (agentcompat.Presentation{}) ||
+		current.SemanticViewport != (agentcompat.Viewport{}) || current.DeclaredModel != (agentcompat.Value{}) ||
+		!current.DeclaredModelObservedAt.IsZero() || current.PresentationProgram != "" || current.PresentationModel != "" {
+		t.Fatalf("definitive agent exit retained integration state: %#v", current)
+	}
+	if got := app.renderLocal(current, input); strings.Contains(got, "Codex") || strings.Contains(got, "gpt-5.6-sol") {
+		t.Fatalf("shell card retained agent status: %q", got)
+	}
+}
+
 func TestProcessCapturedFrameBoundsTemporalSemanticsToTerminalIdentity(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	app.CodexDetector = nil

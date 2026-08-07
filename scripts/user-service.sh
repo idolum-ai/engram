@@ -7,6 +7,7 @@ env_file=${3:-"$HOME/.engram/.env"}
 label=ai.idolum.engram
 plist="$HOME/Library/LaunchAgents/$label.plist"
 unit="$HOME/.config/systemd/user/engram.service"
+status_file="$HOME/.engram/service.identity"
 
 usage() {
   echo "usage: user-service.sh install|start|stop|restart|status|logs|uninstall [binary] [env-file]" >&2
@@ -32,11 +33,10 @@ install_common() {
 install_darwin() {
   install_common
   install -d -m 0700 "$HOME/Library/LaunchAgents"
-  local build escaped_binary escaped_env escaped_build escaped_home
-  build=$($binary version)
+  local escaped_binary escaped_env escaped_status escaped_home
   escaped_binary=$(printf '%s' "$binary" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
   escaped_env=$(printf '%s' "$env_file" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
-  escaped_build=$(printf '%s' "$build" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
+  escaped_status=$(printf '%s' "$status_file" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
   escaped_home=$(printf '%s' "$HOME" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g')
   local candidate
   candidate=$(mktemp "${TMPDIR:-/tmp}/engram-launchagent.XXXXXX")
@@ -49,7 +49,7 @@ install_darwin() {
   <key>ProgramArguments</key><array>
     <string>$escaped_binary</string><string>run</string><string>--env</string><string>$escaped_env</string>
   </array>
-  <key>EnvironmentVariables</key><dict><key>ENGRAM_SERVICE_BUILD</key><string>$escaped_build</string></dict>
+  <key>EnvironmentVariables</key><dict><key>ENGRAM_SERVICE_STATUS_FILE</key><string>$escaped_status</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Background</string>
@@ -75,6 +75,7 @@ After=default.target
 
 [Service]
 Type=simple
+Environment="ENGRAM_SERVICE_STATUS_FILE=$status_file"
 ExecStart="$binary" run --env "$env_file"
 KillMode=process
 Restart=on-failure
@@ -90,6 +91,21 @@ EOF
 
 darwin_start() { launchctl bootstrap "gui/$UID" "$plist"; }
 darwin_stop() { launchctl bootout "gui/$UID/$label"; }
+
+print_live_identity() {
+  local manager_pid=$1 identity_pid identity_build
+  [[ $manager_pid =~ ^[1-9][0-9]*$ ]] || { echo "service manager did not report a live PID" >&2; exit 1; }
+  [[ -f $status_file ]] || { echo "running service identity is unavailable: $status_file" >&2; exit 1; }
+  identity_pid=$(sed -n 's/^pid=//p' "$status_file")
+  identity_build=$(sed -n 's/^build=//p' "$status_file")
+  [[ $identity_pid =~ ^[1-9][0-9]*$ && $identity_pid == "$manager_pid" ]] || {
+    echo "running service identity does not match manager PID $manager_pid" >&2
+    exit 1
+  }
+  [[ -n $identity_build ]] || { echo "running service build is unavailable" >&2; exit 1; }
+  echo "verified pid = $identity_pid"
+  echo "running build = $identity_build"
+}
 
 case "$action" in
   install)
@@ -111,10 +127,14 @@ case "$action" in
     ;;
   status)
     if [[ $platform == Darwin ]]; then
-      launchctl print "gui/$UID/$label" | sed -n -e '/^[[:space:]]*pid = /p' -e '/ENGRAM_SERVICE_BUILD/p' -e '/^[[:space:]]*state = /p'
+      launch_status=$(launchctl print "gui/$UID/$label")
+      printf '%s\n' "$launch_status" | sed -n -e '/^[[:space:]]*pid = /p' -e '/^[[:space:]]*state = /p'
+      manager_pid=$(printf '%s\n' "$launch_status" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)
+      print_live_identity "$manager_pid"
     else
       systemctl --user status --no-pager engram.service
-      "$binary" version
+      manager_pid=$(systemctl --user show --property MainPID --value engram.service)
+      print_live_identity "$manager_pid"
     fi
     ;;
   logs)

@@ -67,6 +67,14 @@ func run(args []string) int {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		if statusPath := strings.TrimSpace(os.Getenv(serviceStatusFileEnv)); statusPath != "" {
+			cleanup, err := publishServiceIdentity(statusPath, version.String(), os.Getpid(), time.Now().UTC())
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "start:", err)
+				return 1
+			}
+			defer cleanup()
+		}
 		return a.Run(ctx)
 	case "preflight":
 		return runDiagnostics(args[1:], "preflight")
@@ -201,6 +209,7 @@ func printHelp() {
 
 func runAgentDoctor(args []string) int {
 	envPath := config.DefaultEnvPath()
+	explicitEnv := false
 	filtered := make([]string, 0, len(args))
 	for index := 0; index < len(args); index++ {
 		if args[index] == "--env" {
@@ -209,6 +218,7 @@ func runAgentDoctor(args []string) int {
 				return 2
 			}
 			envPath = args[index+1]
+			explicitEnv = true
 			index++
 			continue
 		}
@@ -218,6 +228,9 @@ func runAgentDoctor(args []string) int {
 	loaded, err := config.LoadAgentOptions(envPath)
 	if err == nil {
 		options = loaded
+	} else if explicitEnv {
+		fmt.Fprintln(os.Stderr, "doctor config:", err)
+		return 1
 	} else if _, statErr := os.Stat(config.ExpandPath(envPath)); statErr == nil || !errors.Is(statErr, fs.ErrNotExist) {
 		fmt.Fprintln(os.Stderr, "doctor config:", err)
 		return 1

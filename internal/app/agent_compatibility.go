@@ -266,3 +266,21 @@ func resetAgentIntegrationState(session *state.TerminalSession) {
 	session.PresentationActivity = ""
 	session.PresentationNotice = ""
 }
+
+func (a *App) clearAgentIntegrationState(observed state.TerminalSession) {
+	current, ok := a.Store.FindSession(observed.ID)
+	if !ok || !sameTerminalBinding(current, observed) || !current.CreatedAt.Equal(observed.CreatedAt) {
+		return
+	}
+	if current.AgentCompatibility == (agentcompat.Compatibility{}) &&
+		current.AgentPresentation == (agentcompat.Presentation{}) &&
+		current.SemanticViewport == (agentcompat.Viewport{}) &&
+		current.DeclaredModel == (agentcompat.Value{}) && current.DeclaredModelObservedAt.IsZero() &&
+		current.PresentationProgram == "" {
+		return
+	}
+	_, found, applied, err := a.updateSessionIfCurrent(observed, resetAgentIntegrationState)
+	if err != nil || !found || !applied {
+		_ = a.audit("state.agent_integration", "clear_failed", map[string]any{"session_id": observed.ID, "error": firstNonEmpty(errorText(err), "superseded")})
+	}
+}

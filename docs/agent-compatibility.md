@@ -70,4 +70,3 @@ Support declarations require reviewed, sanitized fixtures and explicit tests
 for positive recognition, false positives, version mismatch, process change,
 and independence from the other axes. Never widen a version merely because its
 number is nearby. See [Compatibility fixtures](compatibility-fixtures.md).
-
