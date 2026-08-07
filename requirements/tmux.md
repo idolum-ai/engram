@@ -209,10 +209,12 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   cannot be delivered safely, Engram renders the same bounded range as redacted
   plain text. Empty terminals use a quiet `guided view` frame. Engram never
   preserves stale pixels or falls back to a larger automatic screenshot.
-- The complete bounded logical-text frame underlying `🖼️ View`, before visual
-  soft-wrapping, is retained only in process memory and is available through
-  `📄 Raw` while that canonical message remains current. In guide mode this is
-  intentionally broader than the compact evidence crop displayed on the card.
+- The complete bounded logical-text frame underlying the current canonical
+  media anchor, before visual soft-wrapping, is retained only in process memory
+  and is available through `📄 Raw` while that message remains current. It is
+  the 96-row guide frame in guide mode and the 64-row snapshot frame in snapshot
+  mode. In guide mode this is intentionally broader than the compact evidence
+  crop displayed on the card.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.
@@ -224,9 +226,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   missing files, and credential-shaped paths are omitted. `links` contains at
   most four valid HTTP(S) URLs. Engram never asks the model to generate
   references or fetches an extracted URL.
-- `/raw` captures the same complete bounded, plain logical-text frame used by
-  `🖼️ View`. `/dump` streams the pane's complete retained tmux history as plain
-  logical text, joining terminal soft wraps and omitting ANSI styling. Both
+- `/raw` captures a fresh complete bounded, plain logical-text frame using the
+  active presentation budget: 96 physical rows in guide mode or 64 in snapshot
+  mode. `🖼️ View` always performs its own fresh 64-row snapshot capture. `/dump`
+  streams the pane's complete retained tmux history as plain logical text,
+  joining terminal soft wraps and omitting ANSI styling. Both
   captures are conditionally executed against the stored server, window, and
   pane identity in the same tmux command queue; a queued request is canceled if
   that binding changed before its worker began.

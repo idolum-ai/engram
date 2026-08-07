@@ -1100,9 +1100,12 @@ links for particular services.
 Engram-created windows and attached tmux panes have different close semantics.
 `/close <id>` kills a window created by Engram, but only untracks an attached or
 legacy session and leaves its tmux window running. Inline close buttons always
-ask for confirmation. `/raw` returns the complete bounded plain-text frame used
-by `🖼️ View`; `/dump` streams the pane's full retained tmux history as readable
-plain text with soft wraps joined. Cloud Bot API
+ask for confirmation. `/raw` recaptures the complete bounded plain-text frame
+for the active presentation: 96 physical rows in guide mode or 64 in snapshot
+mode. `🖼️ View` always makes a fresh 64-row image capture, while inline `📄 Raw`
+returns the process-local companion for its current canonical media anchor
+without recapturing. `/dump` streams the pane's full retained tmux history as
+readable plain text with soft wraps joined. Cloud Bot API
 downloads are hard-limited to 20 MiB and `/download` uploads to 50 MiB.
 Generated captures and upload snapshots are also capped at 50 MiB, and Engram
 accepts at most eight queued file transfers with two running concurrently.
