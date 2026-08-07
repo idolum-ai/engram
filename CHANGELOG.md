@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.9.0] - 2026-08-07
+
 ### Agent compatibility
 
 - Give Codex and Claude Code the same independent process, hook binding, screen
