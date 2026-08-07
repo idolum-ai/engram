@@ -80,10 +80,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 
 ## Capture And Presentation
 
-- Both anchor modes use the same ANSI-preserving `CaptureStyled` result. It
-  targets and caps at 64 rows ending at the pane bottom, using available recent
-  scrollback when the pane is shorter. Taller panes always use the current
-  bottom 64 physical rows; historical density never outranks the current tail.
+- Both anchor modes use bounded ANSI-preserving `CaptureStyled` results ending
+  at the pane bottom. Guide mode targets and caps at 96 physical rows; snapshot
+  mode targets and caps at 64. Each uses available recent scrollback when the
+  pane is shorter. Taller panes always use the current bottom of their bounded
+  frame; historical density never outranks the current tail.
   The bounds are derived from pane geometry without a separate content probe,
   and the physical ANSI and joined captures use that exact interval in one tmux command batch. Engram
   samples identity, dimensions, foreground
@@ -177,14 +178,14 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   that belong to the reader alone.
 - The guide names a tool, project, account, or person only when the terminal text
   visibly establishes that identity. Model identifiers are never user identities.
-- Snapshot mode renders the same frame through Chromium into a full-bleed image
+- Snapshot mode renders its 64-row frame through Chromium into a full-bleed image
   at 3x density. Narrow frames use a 430x932 logical-pixel canvas. Rows wider
   than the readable viewport soft-wrap at up to 100 columns; the logical width
   expands only enough to retain the 7px font and the height grows to contain all
   wrapped rows. No captured column may be silently clipped. The worst supported
   400-column, 64-row frame remains within Telegram's photo dimension limits.
 - Guide mode may render its canonical anchor as a compact evidence photo card
-  from the same captured frame, with bounded prose below the media.
+  from its captured 96-row frame, with bounded prose below the media.
   Every model excerpt must first match one unique range in the cleaned semantic
   text sent to the provider, then one unique physical row range after whitespace
   normalization. Engram adds at most two context rows on each side without
@@ -208,10 +209,12 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   cannot be delivered safely, Engram renders the same bounded range as redacted
   plain text. Empty terminals use a quiet `guided view` frame. Engram never
   preserves stale pixels or falls back to a larger automatic screenshot.
-- The complete bounded logical-text frame underlying `🖼️ View`, before visual
-  soft-wrapping, is retained only in process memory and is available through
-  `📄 Raw` while that canonical message remains current. In guide mode this is
-  intentionally broader than the compact evidence crop displayed on the card.
+- The complete bounded logical-text frame underlying the current canonical
+  media anchor, before visual soft-wrapping, is retained only in process memory
+  and is available through `📄 Raw` while that message remains current. It is
+  the 96-row guide frame in guide mode and the 64-row snapshot frame in snapshot
+  mode. In guide mode this is intentionally broader than the compact evidence
+  crop displayed on the card.
 - Terminal content is untrusted data for the model, not intended instructions or
   authority; prompt-injection resistance is best effort and model output is
   never executed automatically.
@@ -223,9 +226,11 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   missing files, and credential-shaped paths are omitted. `links` contains at
   most four valid HTTP(S) URLs. Engram never asks the model to generate
   references or fetches an extracted URL.
-- `/raw` captures the same complete bounded, plain logical-text frame used by
-  `🖼️ View`. `/dump` streams the pane's complete retained tmux history as plain
-  logical text, joining terminal soft wraps and omitting ANSI styling. Both
+- `/raw` captures a fresh complete bounded, plain logical-text frame using the
+  active presentation budget: 96 physical rows in guide mode or 64 in snapshot
+  mode. `🖼️ View` always performs its own fresh 64-row snapshot capture. `/dump`
+  streams the pane's complete retained tmux history as plain logical text,
+  joining terminal soft wraps and omitting ANSI styling. Both
   captures are conditionally executed against the stored server, window, and
   pane identity in the same tmux command queue; a queued request is canceled if
   that binding changed before its worker began.

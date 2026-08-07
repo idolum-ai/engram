@@ -27,8 +27,9 @@ func (r *fileCaptureRunner) Run(_ context.Context, _ ...string) (string, error) 
 }
 
 type successfulFileCaptureRunner struct {
-	physical string
-	joined   string
+	physical    string
+	joined      string
+	captureArgs *[]string
 }
 
 func (r successfulFileCaptureRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -39,6 +40,9 @@ func (r successfulFileCaptureRunner) Run(_ context.Context, args ...string) (str
 		}
 		return framedTmuxBindingRecord("$1", "@1", "%1", "main", "0", "0", "1", "/tmp", "bash"), nil
 	case "capture-pane":
+		if r.captureArgs != nil {
+			*r.captureArgs = append(*r.captureArgs, strings.Join(args, " "))
+		}
 		return framedStyledCaptureMetadata("bash"), nil
 	case "show-buffer":
 		physical := firstNonEmpty(r.physical, "visible terminal\n")
@@ -51,7 +55,58 @@ func (r successfulFileCaptureRunner) Run(_ context.Context, args ...string) (str
 	}
 }
 
-func TestRawCaptureUploadsCompletePlainViewFrame(t *testing.T) {
+func TestRawCaptureBoundsFollowPresentationMode(t *testing.T) {
+	for _, test := range []struct {
+		mode       string
+		wantBounds string
+		wantRows   int
+	}{
+		{mode: config.AnchorModeGuide, wantBounds: "-S -59 -E 36", wantRows: guideCaptureRows},
+		{mode: config.AnchorModeSnapshot, wantBounds: "-S -27 -E 36", wantRows: 64},
+	} {
+		t.Run(test.mode, func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, err := store.AllocateSession("main", "@1", "%1", "shell")
+			if err != nil {
+				t.Fatal(err)
+			}
+			session, _, err = store.UpdateSession(session.ID, func(current *state.TerminalSession) {
+				current.TmuxServerID = appTestServerID
+				current.WatchEnabled = true
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := telegram.New("TOKEN")
+			client.BaseURL = "https://api.telegram.org/botTOKEN"
+			client.HTTPClient = &http.Client{Transport: fileRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path != "/botTOKEN/sendDocument" {
+					return nil, errors.New("unexpected Telegram endpoint")
+				}
+				return fileJSONResponse(t, map[string]any{"ok": true, "result": map[string]any{"message_id": 2, "chat": map[string]any{"id": 100}}}), nil
+			})}
+			var captureArgs []string
+			app := &App{
+				Config: config.Config{Home: dir, TelegramChatID: 100, AnchorMode: test.mode},
+				Store:  store, Telegram: client,
+				Tmux: tmux.New(successfulFileCaptureRunner{captureArgs: &captureArgs}),
+			}
+			if err := os.MkdirAll(app.Config.ArtifactDir(), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			app.captureSessionFile(context.Background(), telegram.Message{Chat: telegram.Chat{ID: 100}}, session, false)
+			if len(captureArgs) != 1 || strings.Count(captureArgs[0], test.wantBounds) != 2 {
+				t.Fatalf("%s Raw capture args = %#v, want two %d-row bounds %q", test.mode, captureArgs, test.wantRows, test.wantBounds)
+			}
+		})
+	}
+}
+
+func TestRawCaptureUploadsCompletePlainPresentationFrame(t *testing.T) {
 	dir := t.TempDir()
 	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -68,7 +123,7 @@ func TestRawCaptureUploadsCompletePlainViewFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const fullView = "history line that View includes\ncurrent prompt"
+	const fullFrame = "bounded presentation history\ncurrent prompt"
 	var uploaded string
 	client := telegram.New("TOKEN")
 	client.BaseURL = "https://api.telegram.org/botTOKEN"
@@ -97,14 +152,14 @@ func TestRawCaptureUploadsCompletePlainViewFrame(t *testing.T) {
 	})}
 	app := &App{
 		Config: config.Config{Home: dir, TelegramChatID: 100}, Store: store, Telegram: client,
-		Tmux: tmux.New(successfulFileCaptureRunner{physical: "\x1b[31mstyled crop\x1b[0m\n", joined: fullView}),
+		Tmux: tmux.New(successfulFileCaptureRunner{physical: "\x1b[31mstyled crop\x1b[0m\n", joined: fullFrame}),
 	}
 	if err := os.MkdirAll(app.Config.ArtifactDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	app.captureSessionFile(context.Background(), telegram.Message{Chat: telegram.Chat{ID: 100}}, session, false)
-	if uploaded != fullView || strings.Contains(uploaded, "\x1b[") {
-		t.Fatalf("uploaded raw frame = %q, want plain full View frame %q", uploaded, fullView)
+	if uploaded != fullFrame || strings.Contains(uploaded, "\x1b[") {
+		t.Fatalf("uploaded raw frame = %q, want plain full presentation frame %q", uploaded, fullFrame)
 	}
 }
 

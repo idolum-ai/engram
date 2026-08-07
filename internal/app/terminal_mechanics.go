@@ -9,6 +9,8 @@ import (
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
+const guideCaptureRows = 96
+
 func (a *App) terminalMechanics() mechanics.Controller {
 	return mechanics.New(a.Tmux)
 }

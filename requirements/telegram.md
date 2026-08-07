@@ -123,11 +123,13 @@ Telegram is Engram's only user interface.
   view work and expose no files or key controls until expanded.
 - Directional callbacks are accepted only from the current snapshot anchor, so
   a delayed callback cannot move a terminal after its card returns to guide mode.
-- `📄 Raw` uploads the process-local plain-text companion for the most recent
-  complete bounded `🖼️ View` frame. In guide mode the canonical card may show a
-  compact evidence crop, but Raw still contains the complete View text. It never
-  performs a later tmux capture; when restart has cleared that companion, the
-  control asks the user to wait for the startup refresh.
+- `📄 Raw` uploads the process-local plain-text companion for the current
+  canonical media anchor: the complete 96-row guide frame in guide mode or the
+  complete 64-row snapshot frame in snapshot mode. In guide mode the canonical
+  card may show only a compact evidence crop. The control never performs a later
+  tmux capture; when restart has cleared its companion, it asks the user to wait
+  for the startup refresh. The `/raw` command separately recaptures with the
+  active mode's corresponding 96- or 64-row budget.
 - `⌨️` opens a Telegram ForceReply in the configured private chat and is
   bound to the exact canonical anchor and immutable tmux identity. A reply
   supplies natural-language key intent to one bounded non-streaming provider

@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-const maxFrameRows = 64
+const maxFrameRows = 96
 
 var (
 	elapsedDecoration = regexp.MustCompile(`(?i)^[─━═]+\s*(?:worked|ran|completed)\s+for\s+(?:[0-9]+h\s+)?(?:[0-9]+m\s+)?[0-9]+s\s*[─━═]+$`)

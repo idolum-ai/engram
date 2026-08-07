@@ -67,13 +67,13 @@ func TestConversationUsesSnapshotFrameAndRepliesToCanonicalAnchor(t *testing.T) 
 		Store:          store,
 		Telegram:       tg,
 		Guide:          model,
-		Tmux:           tmux.New(snapshotTmuxRunner{}),
+		Tmux:           tmux.New(guideTmuxRunner{t: t}),
 		mode:           "snapshot",
 		guideAvailable: true,
 	}
 	app.sendConversation(context.Background(), session)
-	if !strings.Contains(modelPrompt, "green") || strings.Count(modelPrompt, "green") != 64 {
-		t.Fatalf("model did not receive the 64-row snapshot frame: %q", modelPrompt)
+	if !strings.Contains(modelPrompt, "green") || strings.Count(modelPrompt, "green") != guideCaptureRows {
+		t.Fatalf("model did not receive the %d-row guide frame: %q", guideCaptureRows, modelPrompt)
 	}
 	if telegramReplyMessageID(telegramBody) != 77 || !strings.Contains(telegramBody["text"].(string), "build is green") {
 		t.Fatalf("Telegram body = %#v", telegramBody)
@@ -85,6 +85,23 @@ func TestConversationUsesSnapshotFrameAndRepliesToCanonicalAnchor(t *testing.T) 
 	if _, ok := app.conversationEpochs[session.ID]; ok {
 		t.Fatal("one-off voice rendering mutated canonical conversation continuity")
 	}
+}
+
+type guideTmuxRunner struct{ t *testing.T }
+
+func (r guideTmuxRunner) Run(ctx context.Context, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "capture-pane" {
+		joined := strings.Join(args, " ")
+		if strings.Count(joined, "-S -59 -E 36") != 2 {
+			r.t.Fatalf("guide capture bounds = %q, want two 96-row captures", joined)
+		}
+	}
+	if len(args) > 0 && args[0] == "show-buffer" {
+		physical := strings.Repeat("\x1b[32mgreen\x1b[0m\n", guideCaptureRows)
+		joined := strings.Repeat("green\n", guideCaptureRows)
+		return pairedCaptureResult(args, physical, joined), nil
+	}
+	return (snapshotTmuxRunner{}).Run(ctx, args...)
 }
 
 func TestConversationOmitsUpstreamRecordFromModelInput(t *testing.T) {

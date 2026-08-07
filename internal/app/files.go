@@ -106,7 +106,11 @@ func (a *App) captureSessionFile(ctx context.Context, msg telegram.Message, ts s
 			return
 		}
 	} else {
-		capture, err := a.captureStyled(tctx, ts, terminalshot.TargetRows)
+		captureRows := guideCaptureRows
+		if a.snapshotAnchors() {
+			captureRows = terminalshot.SnapshotTargetRows
+		}
+		capture, err := a.captureStyled(tctx, ts, captureRows)
 		if err != nil {
 			a.reply(ctx, msg, "capture error: "+err.Error())
 			return

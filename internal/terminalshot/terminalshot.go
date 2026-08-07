@@ -26,7 +26,7 @@ const (
 	LogicalWidth                  = 430
 	LogicalHeight                 = 932
 	PixelRatio                    = 3
-	TargetRows                    = 64
+	SnapshotTargetRows            = 64
 	maxInputBytes                 = 1 << 20
 	probeTimeout                  = 15 * time.Second
 	terminalWidth                 = 406.0

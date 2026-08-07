@@ -45,9 +45,10 @@ privacy model must stay small and explicit.
   Telegram-bound Engram data. HTTPS is strongly recommended; HTTP provides no
   transport confidentiality and is intended only for explicitly trusted local
   deployments.
-- Documentation must explain that the selected model provider and Chromium begin from the same
-  `CaptureStyled` frame, capped at 64 rows. Chromium renders the literal styled
-  frame. The model provider receives its joined semantic text after upstream records,
+- Documentation must explain that the selected model provider receives one
+  atomic `CaptureStyled` frame capped at 96 physical rows, while Chromium receives
+  one capped at 64. Chromium renders its literal styled frame. The model provider
+  receives its frame's joined semantic text after upstream records,
   recognized model-status footer text, and a small allowlist of paired Codex
   placeholder prompts are removed. Guide anchors call it automatically;
   `🗣️` invokes it on demand from snapshot mode.

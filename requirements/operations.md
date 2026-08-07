@@ -30,6 +30,8 @@ runtime state.
   credential and does not become active merely because that credential exists.
 - Optional dependencies are checked at startup. A configured guide client or
   probed renderer enables its corresponding alternate view and `/mode` target.
+- `tmux` is mandatory. `engram run` must reject a PATH that cannot resolve its
+  executable before creating runtime state, acquiring service locks, or polling.
 - `/mode [guide|snapshot]` persists the selection and begins anchor migration
   without restarting. Its response says switching has begun; each anchor keeps
   its current format until migration succeeds.

@@ -46,9 +46,10 @@ ways to inspect exact state.
 tmux is a deliberate dependency because its mature, narrow interface has
 effectively crystallized. Low expected API drift lets Engram stay small and
 precise instead of continually adapting to a moving workspace substrate.
-Engram-created windows use tmux's configured default size, so their applications
-render against real tmux geometry consistently across attached and detached
-hosts. Engram does not resize windows that the user explicitly attaches.
+Engram-created windows use a stable configured size, defaulting to `100x48`, so
+their applications render against real tmux geometry consistently across
+attached and detached hosts. Engram does not resize windows that the user
+explicitly attaches.
 
 ### Phone-first anchors
 
@@ -121,12 +122,12 @@ cannot silently create a second route or abandon cleanup. A collapse also
 waits for already accepted presentation or voice work for that session; once
 membership is promoted, no such work remains in flight.
 
-### One frame, two presentations
+### Bounded frames for each presentation
 
-Guide and snapshot modes begin with the same `CaptureStyled` terminal frame,
-targeting and capped at 64 rows. Presentation changes; observation does not.
-This shared boundary keeps comparisons honest and prevents either mode from
-quietly seeing more of the machine.
+Guide and snapshot modes each begin with one atomic `CaptureStyled` terminal
+frame. Guide frames target and cap at 96 physical rows; snapshot frames target
+and cap at 64. Each presentation discloses its own bounded frame, and neither
+combines terminal observations from different instants.
 
 Guide mode sends every frame's joined logical text to the selected model after
 removing recognized upstream records. A bounded semantic analyzer uses visible

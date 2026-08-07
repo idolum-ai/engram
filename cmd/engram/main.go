@@ -50,6 +50,10 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, "config:", err)
 			return 1
 		}
+		if _, err := exec.LookPath("tmux"); err != nil {
+			fmt.Fprintln(os.Stderr, "start: tmux executable not found in PATH:", err)
+			return 1
+		}
 		a, err := app.New(cfg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "start:", err)

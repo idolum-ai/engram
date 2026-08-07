@@ -295,6 +295,7 @@ LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=anthropic-key
 ANTHROPIC_MODEL=claude-haiku-4-5-20251001
 ENGRAM_TMUX_SESSION=main
+ENGRAM_TMUX_SIZE=120x50
 ENGRAM_SNAPSHOT_BROWSER=/opt/chromium
 ENGRAM_SNAPSHOT_THEME=contrast-dark
 ENGRAM_CODEX_CONTEXT_TURNS=4
@@ -321,6 +322,9 @@ ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", 
 	if cfg.TmuxSession != "main" {
 		t.Fatalf("TmuxSession = %q, want main", cfg.TmuxSession)
 	}
+	if columns, rows, sizeErr := cfg.EffectiveTmuxSize(); sizeErr != nil || columns != 120 || rows != 50 {
+		t.Fatalf("TmuxSize = %dx%d, error = %v", columns, rows, sizeErr)
+	}
 	if cfg.SnapshotBrowser != "/opt/chromium" {
 		t.Fatalf("SnapshotBrowser = %q, want /opt/chromium", cfg.SnapshotBrowser)
 	}
@@ -338,6 +342,27 @@ ENGRAM_SNAPSHOT_STATUS_COMMAND=df -kP . | awk 'END {printf "disk %.1fG free\n", 
 	}
 	if cfg.EffectiveVoiceInputMode() != VoiceInputModePath || cfg.VoiceTranscriptionConfigured() {
 		t.Fatalf("voice defaults = mode:%q transcription:%v", cfg.EffectiveVoiceInputMode(), cfg.VoiceTranscriptionConfigured())
+	}
+}
+
+func TestLoadBoundsTmuxSize(t *testing.T) {
+	for _, value := range []string{"0x48", "100x0", "401x48", "100x401", "100", "100X48", "100x48x2"} {
+		t.Run(value, func(t *testing.T) {
+			env := filepath.Join(t.TempDir(), ".env")
+			body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_TMUX_SIZE=" + value + "\n"
+			if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(env); err == nil {
+				t.Fatalf("Load accepted ENGRAM_TMUX_SIZE=%s", value)
+			}
+		})
+	}
+
+	cfg := Config{}
+	columns, rows, err := cfg.EffectiveTmuxSize()
+	if err != nil || columns != 100 || rows != 48 {
+		t.Fatalf("default tmux size = %dx%d, error = %v", columns, rows, err)
 	}
 }
 
