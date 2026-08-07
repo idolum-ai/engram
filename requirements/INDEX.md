@@ -12,7 +12,7 @@ The requirements documents are the binding source of truth.
 2. [`tmux.md`](tmux.md) - tmux target selection, attachment, input, capture, and close behavior.
 3. [`reliability.md`](reliability.md) - failure handling, audit evidence, retry/degradation rules.
 4. [`security.md`](security.md) - single-user admission, secrets, filesystem, and tmux risk boundaries.
-5. [`operations.md`](operations.md) - service lifecycle, systemd, logs, state, and diagnostics.
+5. [`operations.md`](operations.md) - systemd/LaunchAgent lifecycle, logs, state, and diagnostics.
 6. [`upstream-signals.md`](upstream-signals.md) - terminal-native attention signals from nested environments.
 
 ## Executable Checks

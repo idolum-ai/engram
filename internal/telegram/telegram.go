@@ -567,6 +567,7 @@ type AnchorMarkupOptions struct {
 	Raw       bool
 	Arrows    bool
 	Keyboard  bool
+	Info      bool
 	FileToken string
 	FileCount int
 }
@@ -584,6 +585,9 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 	}
 	if options.Keyboard {
 		actions = append(actions, Button("⌨️", fmt.Sprintf("keyboard:%d", sessionID)))
+	}
+	if options.Info {
+		actions = append(actions, Button("ℹ️", fmt.Sprintf("agent-info:%d", sessionID)))
 	}
 	actions = append(actions, Button("➖", fmt.Sprintf("collapse:%d", sessionID)))
 	rows := [][]InlineKeyboardButton{actions}
@@ -612,6 +616,12 @@ func AnchorMarkup(sessionID int, options AnchorMarkupOptions) *InlineKeyboardMar
 		}
 	}
 	return &InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func AgentDetailMarkup(sessionID int) *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
+		Button("✕", fmt.Sprintf("agent-detail-dismiss:%d", sessionID)),
+	}}}
 }
 
 func KeyConfirmationMarkup(token string) *InlineKeyboardMarkup {

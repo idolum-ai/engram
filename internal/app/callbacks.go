@@ -42,6 +42,32 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		return a.handleGitHubApprovalCallback(ctx, cb, true, parts[1])
 	case "github-deny":
 		return a.handleGitHubApprovalCallback(ctx, cb, false, parts[1])
+	case "agent-info":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil || id <= 0 {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		session, status := a.validateAnchorCallback(ctx, cb, id)
+		if status != "" {
+			return status
+		}
+		result := a.showAgentDetail(ctx, session)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
+		return result.status("callback")
+	case "agent-detail-dismiss":
+		id, err := strconv.Atoi(parts[1])
+		if err != nil || id <= 0 {
+			a.answerCallback(ctx, cb.ID, "bad session id")
+			return "failed_bad_callback_id"
+		}
+		result := a.dismissAgentDetail(ctx, cb, id)
+		if !a.answerCallback(ctx, cb.ID, result.Message) {
+			return "callback_telegram_failed"
+		}
+		return result.status("callback")
 	case "collapse":
 		id, err := strconv.Atoi(parts[1])
 		if err != nil {

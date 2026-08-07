@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
@@ -135,12 +136,23 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 		providerSessionChanged = current.ResumeProgram != metadata.Program || current.ResumeSessionID != metadata.SessionID
 		current.ResumeProgram = metadata.Program
 		current.ResumeSessionID = metadata.SessionID
+		if metadata.Program == recovery.ProgramClaude && metadata.Model != "" {
+			current.DeclaredModel = agentcompat.Value{Value: metadata.Model, Provenance: agentcompat.ProvenanceHook}
+			current.DeclaredModelObservedAt = metadata.Observed
+		} else {
+			current.DeclaredModel = agentcompat.Value{}
+			current.DeclaredModelObservedAt = time.Time{}
+		}
+		if providerSessionChanged || metadataChange {
+			current.AgentPresentation = agentcompat.Presentation{}
+			current.SemanticViewport = agentcompat.Viewport{}
+		}
 		if metadata.CWD != "" {
 			current.LastKnownCWD = metadata.CWD
 		}
 		for index := len(current.RecoveryEvents) - 1; index >= 0; index-- {
 			event := current.RecoveryEvents[index]
-			if event.Kind == "provider_session" && event.Program == metadata.Program && event.ProviderSessionID == metadata.SessionID {
+			if event.Kind == "provider_session" && event.Program == metadata.Program && event.ProviderSessionID == metadata.SessionID && event.At.Equal(metadata.Observed) {
 				return
 			}
 		}
@@ -160,7 +172,7 @@ func (a *App) reconcileRecoverySession(ctx context.Context, expected state.Termi
 	if !found || !applied {
 		return fmt.Errorf("session changed while reconciling recovery metadata")
 	}
-	if providerSessionChanged {
+	if providerSessionChanged || metadataChange {
 		a.resetConversationEpoch(expected.ID)
 	}
 	if metadataErr != nil {
@@ -187,13 +199,17 @@ func recoveryMetadataChange(session state.TerminalSession, metadata recovery.Met
 	if metadataErr != nil || metadata.SessionID == "" {
 		return false
 	}
-	if session.ResumeProgram != metadata.Program || session.ResumeSessionID != metadata.SessionID || metadata.CWD != "" && session.LastKnownCWD != metadata.CWD {
+	declaredModel := ""
+	if session.DeclaredModel.Provenance == agentcompat.ProvenanceHook {
+		declaredModel = session.DeclaredModel.Value
+	}
+	if session.ResumeProgram != metadata.Program || session.ResumeSessionID != metadata.SessionID || declaredModel != metadata.Model || metadata.CWD != "" && session.LastKnownCWD != metadata.CWD {
 		return true
 	}
 	for index := len(session.RecoveryEvents) - 1; index >= 0; index-- {
 		event := session.RecoveryEvents[index]
 		if event.Kind == "provider_session" && event.Program == metadata.Program && event.ProviderSessionID == metadata.SessionID {
-			return false
+			return !event.At.Equal(metadata.Observed)
 		}
 	}
 	return true

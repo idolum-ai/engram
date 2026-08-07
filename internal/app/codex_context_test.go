@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexcontext"
 	"github.com/idolum-ai/engram/internal/codexui"
@@ -276,6 +277,11 @@ func TestClaudeContextUsesHookTranscriptAndSharedIdentityGuards(t *testing.T) {
 func TestClaudeContextRejectsProcessReplacementAfterTranscriptRead(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	app.Config.ClaudeContextTurns = 2
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AgentCompatibility = agentcompat.Compatibility{Provider: agentcompat.ProviderClaude, Screen: agentcompat.Axis{State: agentcompat.StateSupported, Contract: agentcompat.ClaudeScreenContract, Version: claudeui.SupportedVersion}}
+	}); err != nil {
+		t.Fatal(err)
+	}
 	session, _ := app.Store.FindSession(id)
 	observed := time.Date(2026, 8, 7, 12, 0, 2, 0, time.UTC)
 	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encodedClaudeContextMetadata(t, recoveryTestSessionID, "/tmp/"+recoveryTestSessionID+".jsonl", observed)})
@@ -289,9 +295,14 @@ func TestClaudeContextRejectsProcessReplacementAfterTranscriptRead(t *testing.T)
 	}
 }
 
-func TestClaudeContextRejectsUnsupportedTranscriptSchemaBeforeRead(t *testing.T) {
+func TestClaudeContextRejectsUnsupportedTranscriptSchemaIndependentlyOfScreenVersion(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
 	app.Config.ClaudeContextTurns = 2
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AgentCompatibility = agentcompat.Compatibility{Provider: agentcompat.ProviderClaude, Screen: agentcompat.Axis{State: agentcompat.StateSupported, Contract: agentcompat.ClaudeScreenContract, Version: claudeui.SupportedVersion}}
+	}); err != nil {
+		t.Fatal(err)
+	}
 	session, _ := app.Store.FindSession(id)
 	observed := time.Date(2026, 8, 7, 12, 0, 2, 0, time.UTC)
 	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encodedClaudeContextMetadata(t, recoveryTestSessionID, "/tmp/"+recoveryTestSessionID+".jsonl", observed)})
@@ -301,8 +312,37 @@ func TestClaudeContextRejectsUnsupportedTranscriptSchemaBeforeRead(t *testing.T)
 	reader := &fixedClaudeContextReader{context: codexcontext.Context{Parser: "unexpected", Messages: []codexcontext.Message{{Role: codexcontext.RoleUser, Text: "must not be read"}}}}
 	app.ClaudeContext = reader
 
-	if got := app.sessionContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "2.1.999"}); got.prompt != "" || reader.path != "" {
+	if got := app.sessionContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "2.1.999"}); got.prompt != "" || reader.path == "" {
 		t.Fatalf("unsupported Claude schema reached transcript: got=%#v reader=%#v", got, reader)
+	}
+	current, _ := app.Store.FindSession(id)
+	if current.AgentCompatibility.Screen.State != agentcompat.StateSupported || current.AgentCompatibility.Transcript.State != agentcompat.StateUnsupported {
+		t.Fatalf("unsupported transcript collapsed screen support: %#v", current.AgentCompatibility)
+	}
+}
+
+func TestClaudeContextSurvivesUnsupportedScreenVersionWhenTranscriptContractMatches(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config.ClaudeContextTurns = 2
+	observed := time.Date(2026, 8, 7, 12, 0, 2, 0, time.UTC)
+	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {
+		session.AgentCompatibility = agentcompat.Compatibility{
+			Provider: agentcompat.ProviderClaude,
+			Screen:   agentcompat.Axis{State: agentcompat.StateLiteral, Contract: agentcompat.ClaudeScreenContract, Version: "2.1.999", Reason: agentcompat.ReasonScreenVersionUnknown},
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	session, _ := app.Store.FindSession(id)
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encodedClaudeContextMetadata(t, recoveryTestSessionID, "/tmp/"+recoveryTestSessionID+".jsonl", observed)})
+	runtime := claudeui.Runtime{Detected: true, Supported: false, Version: "2.1.999", Identity: strings.Repeat("a", 64), StartedAt: observed.Add(-time.Second)}
+	app.ClaudeDetector = &sequenceClaudeDetector{runtimes: []claudeui.Runtime{runtime, runtime}}
+	app.ClaudeContext = &fixedClaudeContextReader{context: codexcontext.Context{Parser: agentcompat.ClaudeTranscriptContract, Messages: []codexcontext.Message{{Role: codexcontext.RoleUser, Text: "independent history"}}}}
+
+	got := app.sessionContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "2.1.999"})
+	current, _ := app.Store.FindSession(id)
+	if !strings.Contains(got.prompt, "independent history") || current.AgentCompatibility.Screen.State != agentcompat.StateLiteral || current.AgentCompatibility.Transcript.State != agentcompat.StateEligible {
+		t.Fatalf("one-axis compatibility collapsed: context=%#v compatibility=%#v", got, current.AgentCompatibility)
 	}
 }
 

@@ -4,10 +4,70 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDarwinServiceInstallerValidatesWithoutImplicitActivation(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "fake-bin")
+	if err := os.Mkdir(binDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	callLog := filepath.Join(root, "calls")
+	writeExecutable := func(name, body string) string {
+		t.Helper()
+		path := filepath.Join(binDir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	writeExecutable("uname", `echo Darwin`)
+	writeExecutable("plutil", `echo "plutil $*" >>"$SERVICE_CALL_LOG"`)
+	writeExecutable("launchctl", `echo "launchctl $*" >>"$SERVICE_CALL_LOG"`)
+	binary := writeExecutable("engram", `if [ "${1:-}" = version ]; then echo 'Engram v9 test-build'; else exit 2; fi`)
+	envPath := filepath.Join(root, ".engram", ".env")
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(envPath, []byte("TELEGRAM_BOT_TOKEN=not-read\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(repoRoot(t), "scripts", "user-service.sh")
+	run := func(action string) {
+		t.Helper()
+		command := exec.Command("bash", script, action, binary, envPath)
+		command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"), "SERVICE_CALL_LOG="+callLog)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v\n%s", action, err, output)
+		}
+	}
+	run("install")
+	calls, err := os.ReadFile(callLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "plutil -lint") || strings.Contains(string(calls), "launchctl") {
+		t.Fatalf("install calls = %s", calls)
+	}
+	plist, err := os.ReadFile(filepath.Join(root, "Library", "LaunchAgents", "ai.idolum.engram.plist"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"Engram v9 test-build", "AbandonProcessGroup", binary, envPath} {
+		if !strings.Contains(string(plist), required) {
+			t.Fatalf("plist omitted %q:\n%s", required, plist)
+		}
+	}
+	run("restart")
+	calls, err = os.ReadFile(callLog)
+	if err != nil || !strings.Contains(string(calls), "launchctl bootout") || !strings.Contains(string(calls), "launchctl bootstrap") {
+		t.Fatalf("restart calls = %s err=%v", calls, err)
+	}
+}
 
 func TestPackageImportBoundaries(t *testing.T) {
 	t.Parallel()
@@ -131,6 +191,29 @@ func TestPackageImportBoundaries(t *testing.T) {
 			}
 			assertNoForbiddenImports(t, filepath.Join(root, rule.dir), forbidden)
 		})
+	}
+}
+
+func TestUserServiceLifecycleContracts(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "scripts", "user-service.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, required := range []string{
+		"ai.idolum.engram", "plutil -lint", "launchctl bootstrap", "launchctl bootout",
+		"AbandonProcessGroup", "KillMode=process", "ENGRAM_SERVICE_BUILD", "lines <= 1000",
+		"systemctl --user enable --now engram.service",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("service lifecycle omits %q", required)
+		}
+	}
+	installStart := strings.Index(text, "install_darwin()")
+	installEnd := strings.Index(text, "install_linux()")
+	if installStart < 0 || installEnd < installStart || strings.Contains(text[installStart:installEnd], "launchctl bootstrap") {
+		t.Fatal("Darwin installation must not implicitly activate or restart the service")
 	}
 }
 

@@ -112,16 +112,19 @@ contents, verifies the binary's embedded version, and atomically replaces
 The installer does not create configuration, install a service, or restart one.
 After an update, the operator chooses when to restart and can inspect the new
 binary first with `engram version`. This preserves active tmux work and keeps
-service interruption explicit. A systemd `Restart=on-failure` can activate the
-new file after an unexpected crash, so operators needing a strict activation
-boundary stop the service before replacement. After restart, Telegram
-`/version` or `/status` and `systemctl --user is-active engram.service` verify
-the running process.
+service interruption explicit. Automatic failure recovery can activate the new
+file after an unexpected crash, so operators needing a strict activation
+boundary stop the service before replacement. After an explicit
+`make service-restart`, Telegram `/version` or `/status` and
+`make service-status` verify the running process.
 
-Initial systemd setup still uses a source checkout for `.env.example` and the
-unit template. `make install-service-unit` installs the unit around an existing
-release binary; `make install-service` intentionally builds and installs from
-the checkout first.
+Initial systemd or LaunchAgent setup still uses a source checkout for
+`.env.example` and the service template. `make install-service-unit` installs
+the definition around an existing release binary; systemd preserves its
+existing `enable --now` behavior, while a LaunchAgent leaves activation
+explicit. `make install-service` intentionally builds and installs from the
+checkout first. macOS operators choose `make service-start` or
+`make service-restart`.
 
 Source-checkout installation through `make install` remains supported for
 development. It reports version `dev`; published release binaries report their

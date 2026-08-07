@@ -33,6 +33,12 @@ including `session_id`, `transcript_path`, `cwd`, and `source`. It inherits
 `TMUX_PANE`, prints no context, and writes only bounded provider-session
 metadata to that pane.
 
+Claude's official `SessionStart` payload also includes `model`. Engram accepts
+that bounded token as declared presentation metadata with `hook` provenance;
+it does not use the model to locate a process or transcript. A visible model
+card takes precedence, and the declaration is discarded on process replacement,
+rebind, resume preparation, or pane adoption.
+
 The service treats hook output as a candidate, not proof. It validates the
 watched tmux server, window, and pane around every metadata read. Automatic
 recovery retains only the allowlisted provider and UUID and reconstructs:
@@ -87,7 +93,8 @@ Claude lifecycle hook. It requires:
   identity after the read; and
 - the same identities again at final guide publication.
 
-There is no newest-file, working-directory, title, model, or timestamp fallback.
+There is no newest-file, working-directory, title, model, or timestamp fallback
+for session identity or transcript selection.
 Missing transcript persistence is an ordinary unavailable-context outcome; tmux
 monitoring continues normally.
 

@@ -149,18 +149,20 @@ Confirm that each command ends with `status: ok`, that `tmux` is not reported as
 
 ### 5. Start Engram
 
-On Linux, install the binary and systemd user service:
+On Linux, install the binary and systemd user service (which preserves its
+existing start-on-install behavior):
 
 ```sh
 make install-service PREFIX="$HOME/.local"
-systemctl --user --no-pager --full status engram.service
+make service-status PREFIX="$HOME/.local"
 ```
 
-On macOS, install and run it in a terminal instead:
+On macOS, install the binary and LaunchAgent, then activate it explicitly:
 
 ```sh
-make install PREFIX="$HOME/.local"
-"$HOME/.local/bin/engram" run --env "$HOME/.engram/.env"
+make install-service PREFIX="$HOME/.local"
+make service-start PREFIX="$HOME/.local"
+make service-status PREFIX="$HOME/.local"
 ```
 
 Only one Engram process may poll a configured bot/user/chat tuple, and only one
@@ -224,6 +226,15 @@ Thinking, tool use and results, attachments, system records, sidechains, and
 subagent transcripts are excluded. Claude documents its JSONL record shape as
 internal, so an unfamiliar recognized message shape fails closed until it has
 fixture-backed support.
+
+Codex and Claude Code compatibility is tracked across four independent axes:
+process identity, pane-local hook binding, visible screen grammar, and
+historical transcript parser. The compact session card's `ℹ️` control shows
+their status plus structured model provenance, effort, interaction mode,
+activity, duration, and bounded active-agent counts without exposing terminal
+text, paths, UUIDs, task text, or agent names. Diagnose one pane locally with
+`engram doctor agent [--provider codex|claude] [--pane %N]`. See
+[Agent compatibility](docs/agent-compatibility.md).
 
 ## Configuration
 
@@ -699,7 +710,7 @@ attachments, existing Telegram history, or captures sent to the selected provide
 Treat all terminal transcripts and diagnostic artifacts as sensitive and review
 them before sharing.
 
-## Linux Lifecycle
+## Linux and macOS Lifecycle
 
 Install or replace the binary from a source checkout:
 
@@ -721,43 +732,47 @@ bash /tmp/engram-install-release.sh "${version}"
 ```
 
 Release installation does not modify `~/.engram`, create a service, or restart
-one. A source checkout is still required for the initial `.env` and systemd
-setup. Install the unit without rebuilding over the reviewed release binary:
+one. A source checkout is still required for the initial `.env` and native user
+service setup. Install the definition without rebuilding over the reviewed
+release binary:
 
 ```sh
 make install-service-unit PREFIX="$HOME/.local"
 ```
 
-Existing service operators choose the interruption point explicitly. Because
-the unit uses `Restart=on-failure`, a crash after binary replacement can activate
-the new binary before a planned restart; stop the service first when that gap is
-unacceptable:
+Existing service operators choose the interruption point explicitly. Installing
+or replacing a binary never restarts a running service. Because automatic
+failure recovery can activate a replaced binary before a planned restart, stop
+the service first when that gap is unacceptable:
 
 ```sh
-systemctl --user stop engram.service # optional strict activation boundary
+make service-stop PREFIX="$HOME/.local" # optional strict activation boundary
 "$HOME/.local/bin/engram" version
-systemctl --user restart engram.service
-systemctl --user is-active engram.service
+make service-restart PREFIX="$HOME/.local"
+make service-status PREFIX="$HOME/.local"
 ```
 
 After restart, `/version` or `/status` in the bot DM verifies the running
 process rather than only the binary on disk.
 
-Install and start the systemd user service. This seeds `~/.engram/.env` with
-mode `0600` only when it does not already exist:
+Install the systemd user unit on Linux or LaunchAgent on macOS. This seeds
+`~/.engram/.env` with mode `0600` only when it does not already exist. Linux
+preserves `enable --now`; macOS leaves activation explicit:
 
 ```sh
 make install-service PREFIX="$HOME/.local"
+# macOS only:
+make service-start PREFIX="$HOME/.local"
 ```
 
 Operate and inspect the service:
 
 ```sh
-systemctl --user status engram.service
-systemctl --user stop engram.service
-systemctl --user start engram.service
-systemctl --user restart engram.service
-journalctl --user -u engram.service
+make service-status PREFIX="$HOME/.local"
+make service-stop PREFIX="$HOME/.local"
+make service-start PREFIX="$HOME/.local"
+make service-restart PREFIX="$HOME/.local"
+make service-logs PREFIX="$HOME/.local" # bounded to 200 lines by default
 ```
 
 To keep the user service running after logout, enable lingering if that matches
@@ -773,7 +788,7 @@ Update from a source checkout:
 git pull --ff-only
 make check
 make install PREFIX="$HOME/.local"
-systemctl --user restart engram.service
+make service-restart PREFIX="$HOME/.local"
 ```
 
 When upgrading from a build that predates tmux server-incarnation binding,
@@ -887,28 +902,27 @@ and attachments are no longer needed.
 
 ## macOS Lifecycle
 
-Build, install, preflight, and foreground execution are supported:
+The tagged-release installer supports Darwin on `amd64` and `arm64`; it
+replaces only the binary. From a source checkout, install the official
+LaunchAgent definition and activate it explicitly:
 
 ```sh
-make install PREFIX="$HOME/.local"
 "$HOME/.local/bin/engram" preflight --env "$HOME/.engram/.env"
-"$HOME/.local/bin/engram" run --env "$HOME/.engram/.env"
+make install-service-unit PREFIX="$HOME/.local"
+make service-start PREFIX="$HOME/.local"
+make service-status PREFIX="$HOME/.local"
 ```
 
-The tagged-release installer shown in the Linux lifecycle also supports Darwin
-on `amd64` and `arm64`. It replaces only the binary and never creates or starts
-a LaunchAgent.
+The label is `ai.idolum.engram` and the validated definition lives at
+`~/Library/LaunchAgents/ai.idolum.engram.plist`. `AbandonProcessGroup` preserves
+tmux descendants across Engram stops and upgrades. `make service-status`
+reports the live launchd PID and embedded build identity without reading
+credentials. `make service-logs` reads at most 200 lines by default;
+`ENGRAM_LOG_LINES=500 make service-logs` may raise the bound to 1000.
 
-Stop the foreground process with `Ctrl+C`; tmux sessions remain. Engram does not
-ship launchd integration, and `make install-service` and
-`make uninstall-service` require Linux `systemctl`. A user-authored LaunchAgent
-is outside the supported service lifecycle. Update by stopping Engram, updating
-the checkout, running `make check` and `make install`, then starting it again.
-Remove only the binary with:
-
-```sh
-make uninstall PREFIX="$HOME/.local"
-```
+For rollback, install the previously reviewed binary, explicitly run
+`make service-restart`, then verify both `make service-status` and `/version`.
+Uninstalling the service does not delete tmux sessions or `~/.engram`.
 
 ## Commands
 

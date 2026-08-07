@@ -17,9 +17,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
+	"github.com/idolum-ai/engram/internal/agentdoctor"
 	"github.com/idolum-ai/engram/internal/app"
 	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/commands"
+	"github.com/idolum-ai/engram/internal/compatfixture"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/inspect"
 	"github.com/idolum-ai/engram/internal/lockfile"
@@ -85,6 +88,10 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "doctor":
+		return runAgentDoctor(args[1:])
+	case "compatibility":
+		return runCompatibility(args[1:])
 	case "version", "--version", "-v":
 		fmt.Println(version.String())
 		return 0
@@ -178,6 +185,8 @@ func printHelp() {
   engram inspect status
   engram inspect sessions
   engram inspect frame <watch-id>
+  engram doctor agent [--provider codex|claude] [--pane %N] [--env ~/.engram/.env]
+  engram compatibility capture --provider codex|claude --pane %N --out /tmp/candidate
   engram commands
   engram signal [--stdout] <message>
   engram codex-hook
@@ -188,6 +197,62 @@ func printHelp() {
   engram version
   engram help
 `)
+}
+
+func runAgentDoctor(args []string) int {
+	envPath := config.DefaultEnvPath()
+	filtered := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		if args[index] == "--env" {
+			if index+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "doctor: --env requires a path")
+				return 2
+			}
+			envPath = args[index+1]
+			index++
+			continue
+		}
+		filtered = append(filtered, args[index])
+	}
+	options := config.AgentOptions{}
+	loaded, err := config.LoadAgentOptions(envPath)
+	if err == nil {
+		options = loaded
+	} else if _, statErr := os.Stat(config.ExpandPath(envPath)); statErr == nil || !errors.Is(statErr, fs.ErrNotExist) {
+		fmt.Fprintln(os.Stderr, "doctor config:", err)
+		return 1
+	}
+	doctor := agentdoctor.New(tmux.ExecRunner{}, options, os.Getenv("TMUX_PANE"))
+	if err := doctor.Run(context.Background(), filtered, os.Stdout); err != nil {
+		fmt.Fprintln(os.Stderr, "doctor:", err)
+		if agentdoctor.IsUsageError(err) {
+			return 2
+		}
+		return 1
+	}
+	return 0
+}
+
+func runCompatibility(args []string) int {
+	if len(args) == 0 || args[0] != "capture" {
+		fmt.Fprintln(os.Stderr, "usage: engram compatibility capture --provider codex|claude --pane %N --out /absolute/path")
+		return 2
+	}
+	set := flag.NewFlagSet("compatibility capture", flag.ContinueOnError)
+	provider := set.String("provider", "", "agent provider")
+	pane := set.String("pane", os.Getenv("TMUX_PANE"), "exact tmux pane")
+	out := set.String("out", "", "new output directory outside a Git worktree")
+	if err := set.Parse(args[1:]); err != nil || len(set.Args()) != 0 {
+		return 2
+	}
+	options := compatfixture.Options{Provider: agentcompat.Provider(strings.ToLower(strings.TrimSpace(*provider))), PaneID: strings.TrimSpace(*pane), Output: *out}
+	if err := compatfixture.Capture(context.Background(), tmux.ExecRunner{}, options); err != nil {
+		fmt.Fprintln(os.Stderr, "compatibility capture:", err)
+		return 1
+	}
+	fmt.Println("Sanitized candidate written to", filepath.Clean(*out))
+	fmt.Println("Review every file before copying any material into a repository; this command does not declare support.")
+	return 0
 }
 
 func runCodexHook(input io.Reader, paneID string, manager tmux.Manager, now time.Time) error {

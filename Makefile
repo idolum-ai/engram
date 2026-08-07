@@ -9,7 +9,7 @@ GOCACHE ?= /tmp/engram-go-build
 GOMODCACHE ?= /tmp/engram-go-mod
 ENGRAM_ENV ?= $(HOME)/.engram/.env
 
-.PHONY: build release-dist release-smoke install install-release uninstall install-service install-service-unit uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
+.PHONY: build release-dist release-smoke install install-release uninstall install-service install-service-unit service-start service-stop service-restart service-status service-logs uninstall-service test test-race vet darwin-compile check architecture public-readiness secrets workflow-sanity stdlib-only docs-freshness smoke run
 
 build:
 	mkdir -p bin
@@ -37,32 +37,27 @@ install-service: install
 	@$(MAKE) --no-print-directory install-service-unit PREFIX="$(PREFIX)" BINDIR="$(BINDIR)"
 
 install-service-unit:
-	@test -x "$(BINDIR)/$(BINARY)" || { echo "missing executable $(BINDIR)/$(BINARY); install a source or release binary first" >&2; exit 1; }
-	mkdir -p $(HOME)/.config/systemd/user
 	install -d -m 0700 $(HOME)/.engram
-	@if [ ! -f "$(HOME)/.engram/.env" ]; then install -m 0600 .env.example "$(HOME)/.engram/.env"; fi
-	printf '%s\n' \
-		'[Unit]' \
-		'Description=Engram Telegram tmux client' \
-		'After=default.target' \
-		'' \
-		'[Service]' \
-		'Type=simple' \
-		'ExecStart=$(BINDIR)/$(BINARY) run --env %h/.engram/.env' \
-		'KillMode=process' \
-		'Restart=on-failure' \
-		'RestartSec=5' \
-		'' \
-		'[Install]' \
-		'WantedBy=default.target' \
-		> $(HOME)/.config/systemd/user/engram.service
-	systemctl --user daemon-reload
-	systemctl --user enable --now engram.service
+	@if [ ! -f "$(ENGRAM_ENV)" ]; then install -m 0600 .env.example "$(ENGRAM_ENV)"; fi
+	bash scripts/user-service.sh install "$(BINDIR)/$(BINARY)" "$(ENGRAM_ENV)"
+
+service-start:
+	bash scripts/user-service.sh start "$(BINDIR)/$(BINARY)" "$(ENGRAM_ENV)"
+
+service-stop:
+	bash scripts/user-service.sh stop "$(BINDIR)/$(BINARY)" "$(ENGRAM_ENV)"
+
+service-restart:
+	bash scripts/user-service.sh restart "$(BINDIR)/$(BINARY)" "$(ENGRAM_ENV)"
+
+service-status:
+	bash scripts/user-service.sh status "$(BINDIR)/$(BINARY)" "$(ENGRAM_ENV)"
+
+service-logs:
+	bash scripts/user-service.sh logs "$(BINDIR)/$(BINARY)" "$(ENGRAM_ENV)"
 
 uninstall-service:
-	-systemctl --user disable --now engram.service
-	rm -f $(HOME)/.config/systemd/user/engram.service
-	systemctl --user daemon-reload
+	bash scripts/user-service.sh uninstall "$(BINDIR)/$(BINARY)" "$(ENGRAM_ENV)"
 
 test:
 	GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) go test ./...

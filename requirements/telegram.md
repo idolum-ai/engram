@@ -66,6 +66,12 @@ Telegram is Engram's only user interface.
   `🖼️ View`. Dynamic display labels are shortened locally when necessary while
   their callback data remains exact; dense Telegram rows must not rely on the
   client truncating labels.
+- Every running anchor exposes one icon-only `ℹ️` agent-detail control. The
+  detail is bound to the exact current anchor and at most one message per
+  session; refresh edits it in place and `✕` dismisses it. Collapse, close,
+  reattach, resume, lost state, anchor replacement, and supersession retire it.
+  It may show bounded structured presentation and compatibility axes but never
+  title, CWD, UUID, paths, terminal/task text, or agent names.
 - Close controls are accepted only from the current canonical message. Close
   uses a random, single-use confirmation token expiring after two minutes; the
   token records the immutable tmux binding and becomes stale after reattachment.

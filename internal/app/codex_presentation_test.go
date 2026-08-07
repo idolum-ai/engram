@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/agentui"
 	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexui"
@@ -56,9 +58,9 @@ func (d *fixedCodexDetector) Detect(_ context.Context, pid int, command string) 
 	return d.runtime, d.err
 }
 
-func TestProcessCapturedFrameUsesGenericSemanticsBeforeVersionedCodexFallback(t *testing.T) {
+func TestProcessCapturedFrameUsesProvenCodexAdapterBeforeGenericFallback(t *testing.T) {
 	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
-	detector := &fixedCodexDetector{runtime: codexui.Runtime{Detected: true, Supported: true, Version: codexui.SupportedVersion}}
+	detector := &fixedCodexDetector{runtime: codexui.Runtime{Detected: true, Supported: true, Version: codexui.SupportedVersion, Identity: strings.Repeat("a", 64), StartedAt: time.Unix(1_700_000_000, 0)}}
 	app.CodexDetector = detector
 	session, _ := app.Store.FindSession(id)
 	input := strings.Join([]string{
@@ -78,8 +80,8 @@ func TestProcessCapturedFrameUsesGenericSemanticsBeforeVersionedCodexFallback(t 
 	got := app.processCapturedFrame(context.Background(), session, tmux.StyledCapture{
 		JoinedText: input, PanePID: 4242, CurrentCmd: "node",
 	})
-	if detector.pid != 0 || detector.command != "" {
-		t.Fatalf("generic analysis unnecessarily invoked versioned detector: pid=%d command=%q", detector.pid, detector.command)
+	if detector.pid != 4242 || detector.command != "node" {
+		t.Fatalf("Codex detector observed pid=%d command=%q", detector.pid, detector.command)
 	}
 	if !strings.Contains(got, "Ran go test") || strings.Contains(got, "Working (") || strings.Contains(got, "Write tests") || strings.Contains(got, "gpt-5.6-sol") {
 		t.Fatalf("guide input = %q", got)
@@ -89,11 +91,11 @@ func TestProcessCapturedFrameUsesGenericSemanticsBeforeVersionedCodexFallback(t 
 		t.Fatalf("reference boundary refs=%#v guide=%q", refs, got)
 	}
 	current, ok := app.Store.FindSession(id)
-	if !ok || current.PresentationProgram != "agent" || current.PresentationVersion != "" || current.PresentationModel != "gpt-5.6-sol" || current.PresentationEffort != "high" || current.PresentationMode != "fast" || current.PresentationActivity != "active" {
+	if !ok || current.PresentationProgram != "codex" || current.PresentationVersion != codexui.SupportedVersion || current.PresentationModel != "gpt-5.6-sol" || current.PresentationEffort != "high" || current.PresentationMode != "fast" || current.PresentationActivity != "working" || current.AgentCompatibility.Process.State != agentcompat.StateProven || current.AgentCompatibility.Screen.State != agentcompat.StateSupported || current.AgentPresentation.Model.Value != "gpt-5.6-sol" || current.SemanticViewport.RuntimeIdentity != detector.runtime.Identity || current.SemanticViewport.Contract != agentcompat.CodexScreenContract {
 		t.Fatalf("session presentation = %#v ok=%v", current, ok)
 	}
 	card := app.renderLocal(current, "Tests are passing.")
-	if !strings.Contains(card, "Agent · gpt-5.6-sol · high · fast · active\n\nTests are passing.") {
+	if !strings.Contains(card, "Codex · gpt-5.6-sol · high · fast · active\n\nTests are passing.") {
 		t.Fatalf("card = %q", card)
 	}
 }
@@ -110,8 +112,8 @@ func TestProcessCapturedFrameGenericAnalysisSupportsNonCodexAgentUI(t *testing.T
 	if strings.Contains(got, "claude-sonnet") || strings.Contains(got, "❯") || !strings.Contains(got, "refactor is complete") {
 		t.Fatalf("generic guide input = %q", got)
 	}
-	if detector.pid != 0 {
-		t.Fatalf("generic analysis invoked Codex detector with pid %d", detector.pid)
+	if detector.pid != 4242 {
+		t.Fatalf("Codex detector did not inspect ambiguous agent frame: pid=%d", detector.pid)
 	}
 	current, ok := app.Store.FindSession(id)
 	if !ok || current.PresentationProgram != "agent" || current.PresentationModel != "claude-sonnet-4-6" || current.PresentationActivity != "idle" {
@@ -178,7 +180,7 @@ func TestProcessCapturedFrameRetainsClaudeModelForSameRuntime(t *testing.T) {
 	if detector.pid != 4242 || detector.command != "claude" {
 		t.Fatalf("detector observed pid=%d command=%q", detector.pid, detector.command)
 	}
-	if got := app.renderLocal(current, "Checks are running."); !strings.Contains(got, "Claude · claude-opus-4-8 · high · active") {
+	if got := app.renderLocal(current, "Checks are running."); !strings.Contains(got, "Claude Code · Opus 4.8 · high · active") {
 		t.Fatalf("Claude card = %q", got)
 	}
 }
@@ -226,11 +228,16 @@ func TestProcessCapturedFrameDoesNotCarryClaudeModelAcrossRuntimeIdentity(t *tes
 		session.PresentationModel = "claude-fable-5"
 		session.PresentationEffort = "high"
 		session.PresentationActivity = "active"
+		session.AgentCompatibility = agentcompat.Compatibility{Provider: agentcompat.ProviderClaude, Binding: agentcompat.Axis{State: agentcompat.StateProven}, Transcript: agentcompat.Axis{State: agentcompat.StateEligible}}
+		session.AgentPresentation = agentcompat.Presentation{Model: agentcompat.Value{Value: "claude-fable-5", Provenance: agentcompat.ProvenanceRetainedUI}}
+		session.SemanticViewport = agentcompat.Viewport{Applied: true, Contract: agentcompat.ClaudeScreenContract, RuntimeIdentity: oldIdentity, TmuxIdentity: strings.Repeat("e", 64), Boundary: "full_capture"}
+		session.DeclaredModel = agentcompat.Value{Value: "claude-fable-5", Provenance: agentcompat.ProvenanceHook}
+		session.DeclaredModelObservedAt = time.Now().UTC()
 	}); err != nil {
 		t.Fatal(err)
 	}
 	app.ClaudeDetector = &fixedClaudeDetector{runtime: claudeui.Runtime{
-		Detected: true, Supported: true, Version: claudeui.SupportedVersion, Identity: newIdentity,
+		Detected: true, Supported: true, Version: claudeui.SupportedVersion, Identity: newIdentity, PID: 5252, StartedAt: time.Now().Add(-time.Minute),
 	}}
 	app.CodexDetector = nil
 	session, _ := app.Store.FindSession(id)
@@ -245,7 +252,10 @@ func TestProcessCapturedFrameDoesNotCarryClaudeModelAcrossRuntimeIdentity(t *tes
 		current.PresentationModel != "" || current.PresentationActivity != "idle" {
 		t.Fatalf("replacement Claude presentation = %#v", current)
 	}
-	if got := app.renderLocal(current, "Waiting."); !strings.Contains(got, "Claude · high · idle") || strings.Contains(got, "fable") {
+	if current.SemanticViewport.RuntimeIdentity != newIdentity || current.AgentPresentation.Model.Value != "" || current.DeclaredModel.Value != "" || current.AgentCompatibility.Binding.State == agentcompat.StateProven || current.AgentCompatibility.Transcript.State == agentcompat.StateEligible {
+		t.Fatalf("replacement compatibility was not independently invalidated: %#v", current)
+	}
+	if got := app.renderLocal(current, "Waiting."); !strings.Contains(got, "Claude Code · high · idle") || strings.Contains(got, "fable") {
 		t.Fatalf("replacement Claude card = %q", got)
 	}
 }

@@ -727,6 +727,7 @@ func (a *App) anchorMarkup(ts state.TerminalSession) *telegram.InlineKeyboardMar
 			Raw:       mediaAnchorFormat(ts.AnchorFormat),
 			Arrows:    ts.AnchorFormat == anchorFormatSnapshot,
 			Keyboard:  a.KeyInterpreter != nil,
+			Info:      true,
 			FileToken: ts.AnchorFileToken,
 			FileCount: len(ts.AnchorFiles),
 		})
@@ -738,6 +739,9 @@ func (a *App) scheduler(ctx context.Context) {
 	a.expireKeyComposer(ctx)
 	a.reconcileCollapsedShelf(ctx)
 	for _, ts := range a.Store.Snapshot().TerminalSessions {
+		if agentDetailNeedsRetirement(ts) {
+			a.retireAgentDetail(ctx, ts)
+		}
 		a.queueTerminalCapabilityReconcile(ts.ID)
 		if ts.AnchorMessageID != 0 && !ts.Collapsed {
 			a.reconcileAnchorControls(ctx, ts.ID)
@@ -799,4 +803,8 @@ func (a *App) scheduler(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func agentDetailNeedsRetirement(session state.TerminalSession) bool {
+	return session.AgentDetailMessageID != 0 && (session.Collapsed || session.State != state.TerminalRunning || session.PendingResume != nil || session.AgentDetailAnchorMessageID != session.AnchorMessageID)
 }

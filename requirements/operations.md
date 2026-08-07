@@ -41,17 +41,23 @@ runtime state.
   not launch a desktop browser application; an operator may opt into one by
   configuring its executable explicitly.
 
-## Linux Installation And Service
+## Linux And macOS Installation And Service
 
 - `make build` builds the binary and `make install` installs to
   `$(PREFIX)/bin`.
-- `make install-service` installs and starts a systemd user service and seeds
-  `~/.engram/.env` with mode `0600` only when absent.
+- `make install-service` installs the binary and a systemd user unit on Linux
+  or validated `ai.idolum.engram` LaunchAgent on macOS, and seeds
+  `~/.engram/.env` with mode `0600` only when absent. Linux preserves its
+  existing `enable --now` behavior; macOS installation must not implicitly
+  start or restart a running service.
+- `make service-start`, `service-stop`, `service-restart`, `service-status`, and
+  `service-logs` provide the explicit platform-native lifecycle. Log inspection
+  is bounded to at most 1000 lines.
 - The service must run the installed binary with `~/.engram/.env`, use
   `KillMode=process`, and restart after failure without systemd signaling the
   tmux server or terminal processes Engram started.
-- Updating a running installation requires replacing the binary and restarting
-  the user service.
+- Updating a running installation replaces the binary; the operator chooses
+  the explicit activation or restart point.
 - Automatic Codex recovery mapping is opt-in operator configuration through a
   trusted `SessionStart` hook that invokes the installed `engram codex-hook`.
   Engram does not edit Codex hook configuration during installation.
@@ -60,7 +66,7 @@ runtime state.
   `CODEX_THREAD_ID`, `TMUX_PANE`, current directory, and current time before
   publishing the same bounded pane-local metadata used by the hook. It does
   not restart, clear, or resume Codex.
-- `make uninstall-service` removes the systemd user unit, and `make uninstall`
+- `make uninstall-service` removes the native user-service definition, and `make uninstall`
   removes the binary. Neither operation deletes tmux sessions, configuration,
   state, remembered input templates, logs, or artifacts in Engram's private
   runtime root.
@@ -69,12 +75,13 @@ runtime state.
 
 ## macOS
 
-- macOS must compile and support build, install, diagnostics, foreground run,
-  and binary uninstall paths.
-- Engram does not provide launchd integration.
-- `make install-service` and `make uninstall-service` are Linux-only because
-  they require `systemctl`.
-- A user-authored LaunchAgent is outside the supported service lifecycle.
+- The LaunchAgent must preserve tmux descendants with
+  `AbandonProcessGroup`, restart Engram after failure, use the installed binary
+  and explicit env path, and expose the live PID and build identity without
+  loading credentials.
+- The plist is installed owner-only only after `plutil` validation. Installation
+  never bootstraps or restarts it. Rollback replaces the binary, explicitly
+  restarts, and verifies the live build.
 
 ## Diagnostics
 
@@ -103,6 +110,13 @@ runtime state.
   configuration, make no network request, and open no listener or worker.
 - Inspection selects state from `ENGRAM_HOME`, defaulting to `~/.engram`, and
   reads a complete atomic snapshot without writer locking or mutation.
+- `engram doctor agent` uses production agent probes but writes no state or pane
+  metadata, sends no keys, starts no service, makes no network request, and
+  omits pane text, paths, UUIDs, task text, and agent names.
+- `engram compatibility capture` is an explicit local maintenance tool. It
+  writes only a new candidate directory outside a Git worktree, retains no live
+  transcript values, fails closed on recognized private tokens, and never
+  modifies support declarations automatically.
 - Inspection rejects symlinked, non-regular, oversized, corrupt, and
   future-version state without recovery or replacement. Frame output validates
   immutable pane/window identity and is capped at 64 sanitized rows and 128 KiB.

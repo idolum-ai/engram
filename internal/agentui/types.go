@@ -52,13 +52,19 @@ type Region struct {
 }
 
 type Analysis struct {
-	Original     string   `json:"original"`
-	Conversation string   `json:"conversation"`
-	Regions      []Region `json:"regions,omitempty"`
-	Model        string   `json:"model,omitempty"`
-	Effort       string   `json:"effort,omitempty"`
-	Mode         string   `json:"mode,omitempty"`
-	Activity     Activity `json:"activity"`
-	Confidence   int      `json:"confidence"`
-	Applied      bool     `json:"applied"`
+	Original         string   `json:"original"`
+	Conversation     string   `json:"conversation"`
+	Regions          []Region `json:"regions,omitempty"`
+	Model            string   `json:"model,omitempty"`
+	Effort           string   `json:"effort,omitempty"`
+	Mode             string   `json:"mode,omitempty"`
+	Activity         Activity `json:"activity"`
+	ModelObserved    bool     `json:"model_observed,omitempty"`
+	LastTurnSeconds  int      `json:"last_turn_seconds,omitempty"`
+	AgentTotal       int      `json:"agent_total,omitempty"`
+	AgentActive      int      `json:"agent_active,omitempty"`
+	ViewportStart    int      `json:"viewport_start,omitempty"`
+	ViewportBoundary string   `json:"viewport_boundary,omitempty"`
+	Confidence       int      `json:"confidence"`
+	Applied          bool     `json:"applied"`
 }

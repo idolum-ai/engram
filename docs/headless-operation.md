@@ -11,12 +11,12 @@ diagnostic for the machine already running tmux.
 
 ## Unattended Telegram Service
 
-Status: available on Linux.
+Status: available on Linux and macOS.
 
 The normal headless deployment is one Engram process running as a systemd user
-service. It long-polls Telegram, observes local tmux, and preserves state under
-`~/.engram`. The installed unit uses `KillMode=process`, so tmux and its terminal
-processes continue running if Engram stops or restarts.
+service on Linux or LaunchAgent on macOS. It long-polls Telegram, observes local
+tmux, and preserves state under `~/.engram`. `KillMode=process` on Linux and
+`AbandonProcessGroup` on macOS preserve tmux descendants across Engram stops.
 
 From a source checkout:
 
@@ -36,18 +36,21 @@ restarting the service:
 "$HOME/.local/bin/engram" dry-start --env "$HOME/.engram/.env"
 ```
 
-When both diagnostics end with `status: ok`, install and start the user service:
+When both diagnostics end with `status: ok`, install the user service. Linux
+starts its systemd unit as before; macOS uses an explicit start:
 
 ```sh
 make install-service PREFIX="$HOME/.local"
+# macOS only:
+make service-start PREFIX="$HOME/.local"
 ```
 
 Operate it without an attached terminal:
 
 ```sh
-systemctl --user status engram.service
-systemctl --user restart engram.service
-journalctl --user -u engram.service
+make service-status PREFIX="$HOME/.local"
+make service-restart PREFIX="$HOME/.local"
+make service-logs PREFIX="$HOME/.local"
 ```
 
 To keep the user service alive after logout, explicitly enable lingering when
@@ -70,7 +73,15 @@ engram run --env "$HOME/.engram/.env"
 ```
 
 This remains a Telegram-backed process. `Ctrl+C` stops Engram without closing
-tmux sessions. Engram does not install a macOS LaunchAgent.
+tmux sessions. Do not run it while the native user service is active.
+
+## Agent Compatibility Doctor
+
+`engram doctor agent [--provider codex|claude] [--pane %N]` is a second local,
+read-only diagnostic. It uses the production process, screen, binding, and
+transcript probes while omitting terminal text, paths, UUIDs, task text, and
+agent names. It writes no Engram state or pane metadata and makes no network
+calls. See [Agent compatibility](agent-compatibility.md).
 
 ## Local Read-Only Inspection
 

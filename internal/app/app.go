@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/anthropic"
 	"github.com/idolum-ai/engram/internal/claudecontext"
 	"github.com/idolum-ai/engram/internal/claudeui"
@@ -1007,7 +1008,36 @@ func renderLocalWithReferencesAndStatus(ts state.TerminalSession, summary, refer
 }
 
 func terminalPresentationText(ts state.TerminalSession) string {
-	if ts.State != state.TerminalRunning || ts.PresentationActivity == "" {
+	if ts.State != state.TerminalRunning {
+		return ""
+	}
+	presentation := ts.AgentPresentation
+	provider := ts.AgentCompatibility.Provider
+	if presentation.Model.Value == "" && ts.DeclaredModel.Provenance == agentcompat.ProvenanceHook {
+		presentation.Model = ts.DeclaredModel
+	}
+	hasStructuredPresentation := presentation.Model.Value != "" || presentation.Effort.Value != "" || presentation.Interaction.Value != "" || presentation.Activity != "" || presentation.AgentTotal > 0
+	if agentcompat.ValidProvider(provider) && (ts.AgentCompatibility.Process.State == agentcompat.StateProven || hasStructuredPresentation) {
+		parts := []string{agentcompat.DisplayName(provider)}
+		if presentation.Model.Value != "" {
+			parts = append(parts, presentationModelDisplay(provider, presentation.Model.Value))
+		}
+		if presentation.Effort.Value != "" {
+			parts = append(parts, presentation.Effort.Value)
+		}
+		if presentation.Interaction.Value != "" {
+			parts = append(parts, presentation.Interaction.Value)
+		}
+		if presentation.Activity != "" {
+			parts = append(parts, presentation.Activity)
+		}
+		line := strings.Join(parts, " · ")
+		if presentation.AgentTotal > 0 {
+			line += fmt.Sprintf("\n%d agents · %d active", presentation.AgentTotal, presentation.AgentActive)
+		}
+		return line
+	}
+	if ts.PresentationActivity == "" {
 		return ""
 	}
 	program := "Agent"
@@ -1036,6 +1066,24 @@ func terminalPresentationText(ts state.TerminalSession) string {
 		line += "\nnotice: " + ts.PresentationNotice
 	}
 	return line
+}
+
+func presentationModelDisplay(provider agentcompat.Provider, model string) string {
+	if provider != agentcompat.ProviderClaude {
+		return model
+	}
+	parts := strings.Split(strings.TrimPrefix(model, "claude-"), "-")
+	if len(parts) < 3 {
+		return model
+	}
+	family := parts[0]
+	switch family {
+	case "opus", "sonnet", "haiku", "fable":
+		family = strings.ToUpper(family[:1]) + family[1:]
+	default:
+		return model
+	}
+	return family + " " + strings.Join(parts[1:], ".")
 }
 
 func parseID(arg string) (int, bool) {

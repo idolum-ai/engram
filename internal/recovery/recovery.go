@@ -24,6 +24,7 @@ type Metadata struct {
 	SessionID      string    `json:"session_id"`
 	CWD            string    `json:"cwd,omitempty"`
 	TranscriptPath string    `json:"transcript_path,omitempty"`
+	Model          string    `json:"model,omitempty"`
 	Source         string    `json:"source,omitempty"`
 	Observed       time.Time `json:"observed_at"`
 }
@@ -41,6 +42,7 @@ type claudeHookInput struct {
 	CWD            string `json:"cwd"`
 	HookEventName  string `json:"hook_event_name"`
 	Source         string `json:"source"`
+	Model          string `json:"model"`
 }
 
 func ParseCodexSessionStart(input io.Reader, now time.Time) (Metadata, error) {
@@ -115,6 +117,10 @@ func ParseClaudeSessionStart(input io.Reader, now time.Time) (Metadata, error) {
 	if strings.ToLower(filepath.Base(transcriptPath)) != strings.ToLower(event.SessionID)+".jsonl" {
 		return Metadata{}, fmt.Errorf("Claude transcript path does not match session id")
 	}
+	model, err := validateModel(event.Model)
+	if err != nil {
+		return Metadata{}, fmt.Errorf("invalid Claude model")
+	}
 	source := strings.ToLower(strings.TrimSpace(event.Source))
 	if !validSource(source, false) {
 		return Metadata{}, fmt.Errorf("unsupported Claude lifecycle source %q", event.Source)
@@ -124,7 +130,7 @@ func ParseClaudeSessionStart(input io.Reader, now time.Time) (Metadata, error) {
 	}
 	return Metadata{
 		Version: 1, Program: ProgramClaude, SessionID: strings.ToLower(event.SessionID),
-		CWD: event.CWD, TranscriptPath: transcriptPath, Source: source, Observed: now.UTC(),
+		CWD: event.CWD, TranscriptPath: transcriptPath, Model: model, Source: source, Observed: now.UTC(),
 	}, nil
 }
 
@@ -175,7 +181,31 @@ func validateMetadata(metadata Metadata) (Metadata, error) {
 		}
 		metadata.TranscriptPath = path
 	}
+	if metadata.Model != "" {
+		model, err := validateModel(metadata.Model)
+		if err != nil || metadata.Program != ProgramClaude {
+			return Metadata{}, fmt.Errorf("invalid recovery model")
+		}
+		metadata.Model = model
+	}
 	return metadata, nil
+}
+
+func validateModel(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "", nil
+	}
+	if len(value) < 2 || len(value) > 96 {
+		return "", fmt.Errorf("invalid model")
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || strings.ContainsRune("._-/", r) {
+			continue
+		}
+		return "", fmt.Errorf("invalid model")
+	}
+	return value, nil
 }
 
 func validSource(source string, allowEmpty bool) bool {

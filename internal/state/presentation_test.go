@@ -4,7 +4,41 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/idolum-ai/engram/internal/agentcompat"
 )
+
+func TestStructuredAgentStateAndDetailIdentitySurviveRunningServiceRestart(t *testing.T) {
+	dir := t.TempDir()
+	statePath, auditPath := filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl")
+	store, err := Open(statePath, auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.AllocateSession("main", "@1", "%1", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := strings.Repeat("a", 64)
+	if _, _, err := store.UpdateSession(session.ID, func(current *TerminalSession) {
+		current.AnchorChatID, current.AnchorMessageID = 100, 77
+		current.AgentCompatibility = agentcompat.Compatibility{Provider: agentcompat.ProviderClaude, Process: agentcompat.Axis{State: agentcompat.StateProven, Contract: agentcompat.ClaudeProcessContract}}
+		current.AgentPresentation = agentcompat.Presentation{Model: agentcompat.Value{Value: "claude-opus-4-8", Provenance: agentcompat.ProvenanceRetainedUI}, LastTurnSeconds: 42, ObservedAt: time.Now().UTC()}
+		current.SemanticViewport = agentcompat.Viewport{Applied: true, Contract: agentcompat.ClaudeScreenContract, RuntimeIdentity: identity, TmuxIdentity: strings.Repeat("c", 64), Boundary: "full_capture", AlternateScreen: "on", CopyMode: "off"}
+		current.AgentDetailChatID, current.AgentDetailMessageID, current.AgentDetailAnchorMessageID, current.AgentDetailRenderHash = 100, 88, 77, strings.Repeat("b", 64)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(statePath, auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := reopened.FindSession(session.ID)
+	if !ok || got.AgentCompatibility.Provider != agentcompat.ProviderClaude || got.AgentPresentation.Model.Provenance != agentcompat.ProvenanceRetainedUI || got.SemanticViewport.RuntimeIdentity != identity || got.AgentDetailMessageID != 88 || got.AgentDetailAnchorMessageID != 77 {
+		t.Fatalf("reopened structured state = %#v ok=%v", got, ok)
+	}
+}
 
 func TestCodexPresentationStateSurvivesRestartWithoutSchemaBump(t *testing.T) {
 	dir := t.TempDir()

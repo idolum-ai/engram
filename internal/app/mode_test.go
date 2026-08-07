@@ -132,7 +132,7 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	ts := state.TerminalSession{ID: 7, State: state.TerminalRunning, AnchorFormat: "text"}
 	app := &App{mode: config.AnchorModeGuide, snapshotReady: true}
 	guide := app.anchorMarkup(ts)
-	if got := guide.InlineKeyboard[0]; len(got) != 3 || got[1].CallbackData != "snapshot:7" || got[2].CallbackData != "collapse:7" {
+	if got := guide.InlineKeyboard[0]; len(got) != 4 || got[1].CallbackData != "snapshot:7" || got[2].CallbackData != "agent-info:7" || got[3].CallbackData != "collapse:7" {
 		t.Fatalf("guide actions = %#v", got)
 	}
 	if len(guide.InlineKeyboard) != 2 {
@@ -142,7 +142,7 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	app.guideAvailable = true
 	ts.AnchorFormat = "snapshot"
 	snapshot := app.anchorMarkup(ts)
-	if got := snapshot.InlineKeyboard[0]; len(got) != 4 || got[1].CallbackData != "voice:7" || got[2].CallbackData != "raw:7" || got[3].CallbackData != "collapse:7" {
+	if got := snapshot.InlineKeyboard[0]; len(got) != 5 || got[1].CallbackData != "voice:7" || got[2].CallbackData != "raw:7" || got[3].CallbackData != "agent-info:7" || got[4].CallbackData != "collapse:7" {
 		t.Fatalf("snapshot actions = %#v", got)
 	}
 	if len(snapshot.InlineKeyboard) != 3 || snapshot.InlineKeyboard[2][0].CallbackData != "key:7:left" {
@@ -150,7 +150,7 @@ func TestAnchorMarkupReflectsDeliverableAlternates(t *testing.T) {
 	}
 	app.guideAvailable = false
 	withoutGuide := app.anchorMarkup(ts)
-	if got := withoutGuide.InlineKeyboard[0]; len(got) != 3 || got[1].CallbackData != "raw:7" || got[2].CallbackData != "collapse:7" {
+	if got := withoutGuide.InlineKeyboard[0]; len(got) != 4 || got[1].CallbackData != "raw:7" || got[2].CallbackData != "agent-info:7" || got[3].CallbackData != "collapse:7" {
 		t.Fatalf("unavailable alternate leaked into markup: %#v", got)
 	}
 	if len(withoutGuide.InlineKeyboard) != 3 {
