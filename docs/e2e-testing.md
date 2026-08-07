@@ -104,6 +104,14 @@ and proves the ordinary literal render does not acquire transcript pixels. It
 runs in `make check` on Linux and in both Darwin compile lanes. It never reads
 `~/.codex`, launches a real client, or includes user transcript evidence.
 
+Claude has a parallel ordinary contract in
+`internal/e2e/claude_context_contract_test.go`. It creates a private synthetic
+UUID-named JSONL transcript containing visible text plus excluded thinking,
+tool-use, and tool-result shapes. The test composes `claude-transcript-v1`, the
+shared prompt and diagram contract, and the Claude-provenance renderer while
+proving literal output remains transcript-free. It never reads `~/.claude` or
+launches Claude Code.
+
 On macOS, PNG evidence requires a dedicated `chrome-headless-shell`,
 `chromium-headless-shell`, or `headless_shell` executable. Unset
 `ENGRAM_SNAPSHOT_BROWSER` to run only the semantic assertions. The harness

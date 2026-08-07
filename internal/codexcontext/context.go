@@ -13,41 +13,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/idolum-ai/engram/internal/sessioncontext"
 )
 
 const (
 	ParserVersion     = "codex-rollout-v1"
-	MaxContextBytes   = 12 << 10
-	MaxMessageBytes   = 3 << 10
+	MaxContextBytes   = sessioncontext.MaxContextBytes
+	MaxMessageBytes   = sessioncontext.MaxMessageBytes
 	maxRolloutBytes   = 32 << 20
 	maxJSONLineBytes  = 2 << 20
 	maxCandidateFiles = 2
 	maxWalkEntries    = 100000
 	maxWalkDepth      = 5
 	maxParsedMessages = 128
-	MaxDiagramRows    = 16
-	MaxDiagramColumns = 80
+	MaxDiagramRows    = sessioncontext.MaxDiagramRows
+	MaxDiagramColumns = sessioncontext.MaxDiagramColumns
 )
 
-type Role string
+type Role = sessioncontext.Role
 
 const (
-	RoleUser      Role = "user"
-	RoleAssistant Role = "assistant"
+	RoleUser      = sessioncontext.RoleUser
+	RoleAssistant = sessioncontext.RoleAssistant
 )
 
-type Message struct {
-	Role     Role
-	Text     string
-	Redacted bool
-}
-
-type Context struct {
-	Messages []Message
-	Parser   string
-}
+type Message = sessioncontext.Message
+type Context = sessioncontext.Context
 
 // Reader resolves only a rollout whose filename carries the exact session UUID
 // and whose session_meta record repeats it. Ambiguity fails closed.
@@ -368,172 +361,15 @@ func boundMessages(messages []Message, limit int) []Message {
 }
 
 func PromptText(messages []Message) string {
-	var out strings.Builder
-	for _, message := range boundMessages(messages, len(messages)) {
-		if out.Len() > 0 {
-			out.WriteString("\n\n")
-		}
-		if message.Role == RoleUser {
-			out.WriteString("User:\n")
-		} else {
-			out.WriteString("Assistant:\n")
-		}
-		out.WriteString(message.Text)
-	}
-	return headUTF8(out.String(), MaxContextBytes)
+	return sessioncontext.PromptText(messages)
 }
 
-type Diagram struct {
-	Text    string
-	Message int
-}
+type Diagram = sessioncontext.Diagram
 
 // DetectDiagram returns the latest conservative box/arrow diagram. It never
 // asks a model to select or repair transcript text.
 func DetectDiagram(messages []Message) (Diagram, bool) {
-	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
-		blocks := candidateDiagramExtents(messages[messageIndex].Text)
-		for blockIndex := len(blocks) - 1; blockIndex >= 0; blockIndex-- {
-			text := strings.Trim(blocks[blockIndex], "\n")
-			if diagramBlock(text) {
-				return Diagram{Text: text, Message: messageIndex}, true
-			}
-		}
-	}
-	return Diagram{}, false
-}
-
-func candidateDiagramExtents(text string) []string {
-	blocks := candidateBlocks(text)
-	extents := make([]string, 0, len(blocks))
-	for _, block := range blocks {
-		var rows []string
-		flush := func() {
-			if len(rows) >= 3 {
-				extents = append(extents, strings.Join(rows, "\n"))
-			}
-			rows = nil
-		}
-		for _, line := range strings.Split(block, "\n") {
-			if diagramStructuralLine(line) {
-				rows = append(rows, line)
-				continue
-			}
-			flush()
-		}
-		flush()
-	}
-	return extents
-}
-
-func candidateBlocks(text string) []string {
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	blocks := make([]string, 0, 4)
-	var current []string
-	flush := func() {
-		if len(current) >= 3 {
-			blocks = append(blocks, strings.Join(current, "\n"))
-		}
-		current = nil
-	}
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") || trimmed == "" {
-			flush()
-			continue
-		}
-		current = append(current, strings.TrimRight(line, " \t"))
-	}
-	flush()
-	return blocks
-}
-
-func diagramBlock(text string) bool {
-	lines := strings.Split(text, "\n")
-	if len(lines) < 3 || len(lines) > MaxDiagramRows || len(text) > 8<<10 {
-		return false
-	}
-	boxCorners, horizontal, vertical, arrows, structural := 0, 0, 0, 0, 0
-	for _, line := range lines {
-		width := terminalCells(line)
-		if width == 0 || width > MaxDiagramColumns || strings.ContainsRune(line, '\t') {
-			return false
-		}
-		lineStructural := false
-		for _, r := range line {
-			switch {
-			case strings.ContainsRune("┌┐└┘╭╮╰╯┏┓┗┛+", r):
-				boxCorners++
-				lineStructural = true
-			case strings.ContainsRune("─━═-", r):
-				horizontal++
-				lineStructural = true
-			case strings.ContainsRune("│┃║|", r):
-				vertical++
-				lineStructural = true
-			case strings.ContainsRune("→←↑↓↔↕⇒⇐⇄⇆", r):
-				arrows++
-				lineStructural = true
-			}
-		}
-		arrows += strings.Count(line, "->") + strings.Count(line, "<-") + strings.Count(line, "=>")
-		if strings.Contains(line, "->") || strings.Contains(line, "<-") || strings.Contains(line, "=>") {
-			lineStructural = true
-		}
-		if !lineStructural {
-			return false
-		}
-		if lineStructural {
-			structural++
-		}
-	}
-	box := boxCorners >= 2 && horizontal >= 2 && vertical >= 2 && structural >= 3
-	flow := arrows >= 2 && structural >= 2 && (vertical >= 1 || horizontal >= 4)
-	return box || flow
-}
-
-func diagramStructuralLine(line string) bool {
-	for _, r := range line {
-		if strings.ContainsRune("┌┐└┘╭╮╰╯┏┓┗┛─━═│┃║→←↑↓↔↕⇒⇐⇄⇆", r) {
-			return true
-		}
-	}
-	if strings.Contains(line, "->") || strings.Contains(line, "<-") || strings.Contains(line, "=>") {
-		return true
-	}
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "|" {
-		return true
-	}
-	pipes := strings.Count(trimmed, "|")
-	pluses := strings.Count(trimmed, "+")
-	hyphens := strings.Count(trimmed, "-")
-	return pipes >= 2 || pluses >= 2 && hyphens >= 2
-}
-
-func terminalCells(text string) int {
-	cells := 0
-	for _, r := range text {
-		switch {
-		case r == 0 || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || unicode.Is(unicode.Cf, r):
-		case r < 0x20 || r == 0x7f:
-			return MaxDiagramColumns + 1
-		case wideRune(r):
-			cells += 2
-		default:
-			cells++
-		}
-	}
-	return cells
-}
-
-func wideRune(r rune) bool {
-	return r >= 0x1100 && (r <= 0x115f || r == 0x2329 || r == 0x232a ||
-		r >= 0x2e80 && r <= 0xa4cf && r != 0x303f || r >= 0xac00 && r <= 0xd7a3 ||
-		r >= 0xf900 && r <= 0xfaff || r >= 0xfe10 && r <= 0xfe19 ||
-		r >= 0xfe30 && r <= 0xfe6f || r >= 0xff00 && r <= 0xff60 ||
-		r >= 0xffe0 && r <= 0xffe6 || r >= 0x1f300 && r <= 0x1faff ||
-		r >= 0x20000 && r <= 0x3fffd)
+	return sessioncontext.DetectDiagram(messages)
 }
 
 func validSessionID(id string) bool {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/mechanics"
 	"github.com/idolum-ai/engram/internal/state"
@@ -82,6 +83,27 @@ func TestResumeSessionRebindsExistingWatchAndPersistsMapping(t *testing.T) {
 	}
 	if !runner.calledWith("set-buffer", "codex resume "+codexID) {
 		t.Fatalf("resume command not sent literally: %#v", runner.calls)
+	}
+}
+
+func TestResumeSessionAcceptsVersionNamedNativeClaudeProcess(t *testing.T) {
+	app, runner, id := newResumeTestApp(t, state.TerminalLost)
+	runner.nativeForeground = claudeui.SupportedVersion
+	app.ClaudeDetector = &fixedClaudeDetector{runtime: claudeui.Runtime{
+		PID: 4321, Detected: true, Version: claudeui.SupportedVersion, Supported: true,
+		Identity: strings.Repeat("c", 64), StartedAt: time.Unix(1_700_000_000, 0),
+	}}
+	const sessionID = "479e8b39-ff64-4bf8-a6f6-75688d2815f0"
+	result := app.resumeSession(context.Background(), id, "claude", sessionID)
+	if !result.OK() {
+		t.Fatalf("resume result = %#v", result)
+	}
+	detector := app.ClaudeDetector.(*fixedClaudeDetector)
+	if detector.pid != 1234 || detector.command != claudeui.SupportedVersion {
+		t.Fatalf("Claude detector observed pid=%d command=%q", detector.pid, detector.command)
+	}
+	if !runner.calledWith("set-buffer", "claude --resume "+sessionID) {
+		t.Fatalf("Claude resume command not sent literally: %#v", runner.calls)
 	}
 }
 
@@ -284,13 +306,14 @@ func newResumeTestApp(t *testing.T, terminalState state.TerminalState) (*App, *r
 }
 
 type resumeRunner struct {
-	calls        [][]string
-	cwd          string
-	program      string
-	resumed      bool
-	neverResume  bool
-	existingPane bool
-	failCleanup  bool
+	calls            [][]string
+	cwd              string
+	program          string
+	resumed          bool
+	neverResume      bool
+	existingPane     bool
+	failCleanup      bool
+	nativeForeground string
 }
 
 func (r *resumeRunner) Run(_ context.Context, args ...string) (string, error) {
@@ -314,6 +337,12 @@ func (r *resumeRunner) Run(_ context.Context, args ...string) (string, error) {
 		program := "bash"
 		if r.resumed {
 			program = r.program
+			if r.nativeForeground != "" {
+				program = r.nativeForeground
+			}
+		}
+		if args[len(args)-1] == "#{pane_pid}\x1f#{pane_current_command}" {
+			return "1234\x1f" + program + "\n", nil
 		}
 		return framedTmuxBindingRecord("$1", "@2", "%2", "main", "1", "0", "1", r.cwd, program), nil
 	case "set-buffer":

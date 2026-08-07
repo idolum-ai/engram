@@ -7,15 +7,18 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/app"
+	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/commands"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/inspect"
@@ -121,6 +124,12 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "claude-hook":
+		if err := runClaudeHook(os.Stdin, os.Getenv("TMUX_PANE"), tmux.New(tmux.ExecRunner{}), time.Now().UTC()); err != nil {
+			fmt.Fprintln(os.Stderr, "claude-hook:", err)
+			return 1
+		}
+		return 0
 	case "codex-bind":
 		if len(args) != 1 {
 			fmt.Fprintln(os.Stderr, "usage: engram codex-bind")
@@ -136,6 +145,17 @@ func run(args []string) int {
 			return 1
 		}
 		fmt.Println("Codex session binding published for this tmux pane. Engram will verify the active process and exact rollout before using it.")
+		return 0
+	case "claude-bind":
+		if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "usage: engram claude-bind")
+			return 2
+		}
+		if err := runClaudeBind(os.Getenv("TMUX_PANE"), defaultClaudeConfigRoot(), tmux.New(tmux.ExecRunner{}), claudeui.NewDetector(), time.Now().UTC()); err != nil {
+			fmt.Fprintln(os.Stderr, "claude-bind:", err)
+			return 1
+		}
+		fmt.Println("Claude session binding published for this tmux pane. Engram will verify the active process and exact transcript before using it.")
 		return 0
 	case "github":
 		return runGitHub(args[1:])
@@ -162,6 +182,8 @@ func printHelp() {
   engram signal [--stdout] <message>
   engram codex-hook
   engram codex-bind
+  engram claude-hook
+  engram claude-bind
   engram github help
   engram version
   engram help
@@ -170,8 +192,17 @@ func printHelp() {
 
 func runCodexHook(input io.Reader, paneID string, manager tmux.Manager, now time.Time) error {
 	metadata, err := recovery.ParseCodexSessionStart(input, now)
-	if err != nil {
-		return err
+	return publishHookMetadata(metadata, err, paneID, manager)
+}
+
+func runClaudeHook(input io.Reader, paneID string, manager tmux.Manager, now time.Time) error {
+	metadata, err := recovery.ParseClaudeSessionStart(input, now)
+	return publishHookMetadata(metadata, err, paneID, manager)
+}
+
+func publishHookMetadata(metadata recovery.Metadata, parseErr error, paneID string, manager tmux.Manager) error {
+	if parseErr != nil {
+		return parseErr
 	}
 	if strings.TrimSpace(paneID) == "" {
 		return errors.New("TMUX_PANE is not set")
@@ -198,6 +229,146 @@ func runCodexBind(sessionID, paneID, cwd string, manager tmux.Manager, now time.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return manager.PublishRecoveryMetadata(ctx, paneID, metadata)
+}
+
+func runClaudeBind(paneID, configRoot string, manager tmux.Manager, detector *claudeui.Detector, now time.Time) error {
+	if strings.TrimSpace(paneID) == "" {
+		return errors.New("TMUX_PANE is not set; run this command from the Claude session inside its watched tmux pane")
+	}
+	if detector == nil {
+		return errors.New("Claude process detector is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	panePID, foreground, err := manager.PaneProcess(ctx, paneID)
+	if err != nil {
+		return fmt.Errorf("inspect current tmux pane: %w", err)
+	}
+	runtime, err := detector.Detect(ctx, panePID, foreground)
+	if err != nil || !runtime.Detected || runtime.PID <= 0 || runtime.Identity == "" || runtime.StartedAt.IsZero() {
+		return errors.New("one exact active Claude process could not be proven; restart Claude after configuring the documented SessionStart hook")
+	}
+	registry, err := readClaudeRegistry(configRoot, runtime.PID)
+	registryStart, startErr := time.ParseInLocation("Mon Jan _2 15:04:05 2006", registry.ProcStart, time.Local)
+	if err != nil || startErr != nil || registry.PID != runtime.PID || registry.Version != runtime.Version ||
+		registryStart.Unix() != runtime.StartedAt.Unix() || !recovery.ValidSessionID(registry.SessionID) {
+		return errors.New("the active Claude session registry could not be proven; restart Claude after configuring the documented SessionStart hook")
+	}
+	transcript, err := findClaudeTranscript(filepath.Join(configRoot, "projects"), registry.SessionID)
+	if err != nil {
+		return errors.New("the exact active Claude transcript is unavailable; restart Claude after configuring the documented SessionStart hook")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	metadata := recovery.Metadata{
+		Version: 1, Program: recovery.ProgramClaude, SessionID: strings.ToLower(registry.SessionID),
+		CWD: registry.CWD, TranscriptPath: transcript, Source: "manual", Observed: now.UTC(),
+	}
+	return manager.PublishRecoveryMetadata(ctx, paneID, metadata)
+}
+
+type claudeRegistry struct {
+	PID       int    `json:"pid"`
+	SessionID string `json:"sessionId"`
+	CWD       string `json:"cwd"`
+	Version   string `json:"version"`
+	ProcStart string `json:"procStart"`
+}
+
+func readClaudeRegistry(root string, pid int) (claudeRegistry, error) {
+	if pid <= 0 || !filepath.IsAbs(root) {
+		return claudeRegistry{}, errors.New("invalid Claude registry identity")
+	}
+	path := filepath.Join(filepath.Clean(root), "sessions", strconv.Itoa(pid)+".json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 64<<10 || !ownedByCurrentUser(info) {
+		return claudeRegistry{}, errors.New("Claude registry is not an owned bounded regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return claudeRegistry{}, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) || opened.Size() <= 0 || opened.Size() > 64<<10 || !ownedByCurrentUser(opened) {
+		return claudeRegistry{}, errors.New("Claude registry identity changed")
+	}
+	decoder := json.NewDecoder(io.LimitReader(file, 64<<10))
+	var registry claudeRegistry
+	if err := decoder.Decode(&registry); err != nil {
+		return claudeRegistry{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return claudeRegistry{}, errors.New("Claude registry has trailing data")
+	}
+	if registry.PID != pid || !filepath.IsAbs(registry.CWD) || len(registry.CWD) > 4096 || strings.ContainsRune(registry.CWD, '\x00') || len(registry.ProcStart) > 64 {
+		return claudeRegistry{}, errors.New("Claude registry identity does not match")
+	}
+	return registry, nil
+}
+
+func findClaudeTranscript(root, sessionID string) (string, error) {
+	if !filepath.IsAbs(root) || !recovery.ValidSessionID(sessionID) {
+		return "", errors.New("invalid Claude transcript lookup")
+	}
+	rootInfo, err := os.Lstat(root)
+	if err != nil || !rootInfo.IsDir() || rootInfo.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("Claude projects root is unavailable")
+	}
+	want := strings.ToLower(sessionID) + ".jsonl"
+	var found string
+	ambiguous := false
+	entries := 0
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		entries++
+		if entries > 100000 {
+			return errors.New("Claude project store exceeds bounded scan")
+		}
+		if path != root && entry.Type()&os.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() || strings.ToLower(entry.Name()) != want || !entry.Type().IsRegular() {
+			return nil
+		}
+		if found != "" {
+			ambiguous = true
+			return fs.SkipAll
+		}
+		info, err := entry.Info()
+		if err != nil || !ownedByCurrentUser(info) {
+			return errors.New("Claude transcript is not owned by the current user")
+		}
+		found = path
+		return nil
+	})
+	if err != nil || found == "" || ambiguous {
+		return "", errors.New("exact Claude transcript is unavailable or ambiguous")
+	}
+	return found, nil
+}
+
+func defaultClaudeConfigRoot() string {
+	if configured := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); configured != "" {
+		return config.ExpandPath(configured)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".claude")
+}
+
+func ownedByCurrentUser(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Uid == uint32(os.Getuid())
 }
 
 func openControllingTerminal() (io.WriteCloser, error) {
@@ -308,7 +479,11 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 	if cfg.CodexContextTurns > 0 {
 		codexContextStatus = fmt.Sprintf("enabled, %d recent visible turns max (exact active session only)", cfg.CodexContextTurns)
 	}
-	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nguide: %s\ncodex context: %s\nvoice input: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nprovider: %s\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\nopenai_api: not_called\npolling: not_started\nstatus: ok\n",
+	claudeContextStatus := "disabled"
+	if cfg.ClaudeContextTurns > 0 {
+		claudeContextStatus = fmt.Sprintf("enabled, %d recent visible turns max (exact active session only)", cfg.ClaudeContextTurns)
+	}
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nguide: %s\ncodex context: %s\nclaude context: %s\nvoice input: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nprovider: %s\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\nopenai_api: not_called\npolling: not_started\nstatus: ok\n",
 		mode,
 		version.String(),
 		cfg.EnvPath,
@@ -321,6 +496,7 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 		anchorMode,
 		guideStatus,
 		codexContextStatus,
+		claudeContextStatus,
 		voiceStatus,
 		snapshotPath,
 		cfg.TelegramAllowedUserID,

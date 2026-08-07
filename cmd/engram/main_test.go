@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/lockfile"
 	"github.com/idolum-ai/engram/internal/recovery"
@@ -29,6 +31,37 @@ func (r *hookRunner) Run(_ context.Context, args ...string) (string, error) {
 	return "", nil
 }
 
+type claudeBindRunner struct{ calls [][]string }
+
+func (r *claudeBindRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if len(args) > 0 && args[0] == "display-message" {
+		return "100\x1f2.1.223\n", nil
+	}
+	return "", nil
+}
+
+type bindProcessRunner struct{}
+
+func (bindProcessRunner) Run(_ context.Context, name string, args ...string) (string, error) {
+	if name == "ps" && len(args) > 0 && args[0] == "-axo" {
+		return "100 1 bash -bash\n110 100 2.1.223 /Users/example/.local/share/claude/versions/2.1.223\n", nil
+	}
+	return "", errors.New("unexpected process command")
+}
+
+type bindExecutableResolver struct{ path string }
+
+func (r bindExecutableResolver) Resolve(int) (string, error) { return r.path, nil }
+
+type bindVersionResolver struct{ version string }
+
+func (r bindVersionResolver) Resolve(string) (string, error) { return r.version, nil }
+
+type bindStartResolver struct{ at time.Time }
+
+func (r bindStartResolver) Resolve(int) (time.Time, string, error) { return r.at, "fixture-start", nil }
+
 func TestCodexHookPublishesExactSessionToInheritedPane(t *testing.T) {
 	runner := &hookRunner{}
 	input := strings.NewReader(`{"session_id":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0","cwd":"/work","hook_event_name":"SessionStart","source":"resume"}`)
@@ -41,6 +74,78 @@ func TestCodexHookPublishesExactSessionToInheritedPane(t *testing.T) {
 	}
 	if err := runCodexHook(strings.NewReader(`{}`), "", tmux.New(runner), time.Time{}); err == nil {
 		t.Fatal("invalid hook input was accepted")
+	}
+}
+
+func TestClaudeHookPublishesExactSessionAndTranscriptToInheritedPane(t *testing.T) {
+	runner := &hookRunner{}
+	input := strings.NewReader(`{"session_id":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0","transcript_path":"/Users/example/.claude/projects/-work/019f7607-c8b0-74b3-87ca-64a7e6e7ede0.jsonl","cwd":"/work","hook_event_name":"SessionStart","source":"resume"}`)
+	err := runClaudeHook(input, "%7", tmux.New(runner), time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 || len(runner.calls[0]) != 7 || runner.calls[0][4] != "%7" {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	metadata, err := recovery.Decode(runner.calls[0][6])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Program != recovery.ProgramClaude || metadata.TranscriptPath == "" || metadata.Source != "resume" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+}
+
+func TestClaudeBindProvesProcessRegistryAndExactTranscript(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "projects", "-work"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-time.Minute)
+	registry := fmt.Sprintf(`{"pid":110,"sessionId":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0","cwd":"/work","version":"2.1.223","procStart":%q}`, started.In(time.Local).Format("Mon Jan _2 15:04:05 2006"))
+	if err := os.WriteFile(filepath.Join(root, "sessions", "110.json"), []byte(registry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(root, "projects", "-work", "019f7607-c8b0-74b3-87ca-64a7e6e7ede0.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "share", "claude", "versions", "2.1.223")
+	runner := &claudeBindRunner{}
+	detector := &claudeui.Detector{
+		Runner: bindProcessRunner{}, Executables: bindExecutableResolver{path: executable},
+		Versions: bindVersionResolver{version: "2.1.223"}, Starts: bindStartResolver{at: started},
+	}
+	if err := runClaudeBind("%7", root, tmux.New(runner), detector, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 2 || runner.calls[1][0] != "set-option" {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	metadata, err := recovery.Decode(runner.calls[1][6])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Program != recovery.ProgramClaude || metadata.TranscriptPath != transcript || metadata.Source != "manual" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+
+	wrongStart := fmt.Sprintf(`{"pid":110,"sessionId":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0","cwd":"/work","version":"2.1.223","procStart":%q}`, started.Add(-time.Hour).In(time.Local).Format("Mon Jan _2 15:04:05 2006"))
+	if err := os.WriteFile(filepath.Join(root, "sessions", "110.json"), []byte(wrongStart), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := len(runner.calls)
+	if err := runClaudeBind("%7", root, tmux.New(runner), detector, now); err == nil {
+		t.Fatal("registry from a different process incarnation was accepted")
+	}
+	for _, call := range runner.calls[before:] {
+		if len(call) > 0 && call[0] == "set-option" {
+			t.Fatalf("invalid registry reached tmux: %#v", call)
+		}
 	}
 }
 
@@ -298,6 +403,7 @@ func TestPreflightRecognizesOpenAILunaWithoutCallingIt(t *testing.T) {
 		"OPENAI_API_KEY=openai-secret-key",
 		"OPENAI_MODEL=gpt-5.6-luna",
 		"ENGRAM_CODEX_CONTEXT_TURNS=3",
+		"ENGRAM_CLAUDE_CONTEXT_TURNS=2",
 		"ENGRAM_HOME=" + filepath.Join(dir, "home"),
 		"ENGRAM_WORKDIR=" + dir,
 	}, "\n")
@@ -313,6 +419,7 @@ func TestPreflightRecognizesOpenAILunaWithoutCallingIt(t *testing.T) {
 	for _, want := range []string{
 		"guide: configured, not probed",
 		"codex context: enabled, 3 recent visible turns max (exact active session only)",
+		"claude context: enabled, 2 recent visible turns max (exact active session only)",
 		"provider: openai",
 		"model: gpt-5.6-luna",
 		"openai_api: not_called",

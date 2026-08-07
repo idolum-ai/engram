@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -86,11 +87,11 @@ func TestDetectorRejectsClaudePathInUnrelatedProcessArgument(t *testing.T) {
 }
 
 func TestDetectorIdentifiesSupportedVersionedClaudeProcess(t *testing.T) {
-	const executable = "/home/example/.local/share/claude/versions/2.1.219"
+	const executable = "/home/example/.local/share/claude/versions/" + SupportedVersion
 	runner := &fakeRunner{
 		processes: strings.Join([]string{
 			"100 1 bash -bash",
-			"110 100 2.1.219 " + executable,
+			"110 100 " + SupportedVersion + " " + executable,
 			"120 110 helper /opt/helper",
 			"",
 		}, "\n"),
@@ -103,7 +104,7 @@ func TestDetectorIdentifiesSupportedVersionedClaudeProcess(t *testing.T) {
 	}
 
 	got, err := detector.Detect(context.Background(), 100, "claude")
-	if err != nil || !got.Detected || !got.Supported || got.Version != SupportedVersion || len(got.Identity) != 64 {
+	if err != nil || !got.Detected || !got.Supported || got.PID != 110 || got.Version != SupportedVersion || len(got.Identity) != 64 {
 		t.Fatalf("runtime = %#v, err=%v", got, err)
 	}
 	if !reflect.DeepEqual(versions.calls, []string{executable}) {
@@ -227,6 +228,20 @@ func TestPathVersionResolverUsesResolvedVersionedInstallation(t *testing.T) {
 	}
 }
 
+func TestOSIdentityResolversDescribeRunningProcess(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("running process identity is supported on Darwin and Linux")
+	}
+	path, err := (OSExecutableResolver{}).Resolve(os.Getpid())
+	if err != nil || !filepath.IsAbs(path) {
+		t.Fatalf("executable path = %q, err=%v", path, err)
+	}
+	started, identity, err := (OSProcessStartResolver{}).Resolve(os.Getpid())
+	if err != nil || started.IsZero() || identity == "" {
+		t.Fatalf("process start = %v identity=%q err=%v", started, identity, err)
+	}
+}
+
 func TestPossibleClaudeProcessRejectsRelativeAndPathLookalikes(t *testing.T) {
 	for _, process := range []process{
 		{comm: "claude", args: "claude"},
@@ -236,6 +251,22 @@ func TestPossibleClaudeProcessRejectsRelativeAndPathLookalikes(t *testing.T) {
 		want := strings.EqualFold(filepath.Base(strings.TrimSpace(process.comm)), "claude")
 		if got := possibleClaudeProcess(process); got != want {
 			t.Fatalf("possibleClaudeProcess(%#v) = %v, want %v", process, got, want)
+		}
+	}
+}
+
+func TestPossibleClaudeForegroundAllowsNativeVersionOnlyForFurtherVerification(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		want    bool
+	}{
+		{command: "2.1.222", want: true},
+		{command: "/Users/example/.local/share/claude/versions/2.1.223", want: true},
+		{command: "not-a-version"},
+		{command: "2.1"},
+	} {
+		if got := possibleClaudeForeground(test.command); got != test.want {
+			t.Fatalf("possibleClaudeForeground(%q) = %v, want %v", test.command, got, test.want)
 		}
 	}
 }
@@ -250,7 +281,7 @@ func TestDetectorAgainstRunningClaudeProcess(t *testing.T) {
 		t.Fatalf("invalid ENGRAM_CLAUDEUI_INTEGRATION_PID %q", value)
 	}
 	got, err := NewDetector().Detect(context.Background(), pid, "claude")
-	if err != nil || !got.Detected || !got.Supported || got.Version != SupportedVersion || len(got.Identity) != 64 {
+	if err != nil || !got.Detected || !got.Supported || !supportedVersion(got.Version) || got.PID <= 0 || got.StartedAt.IsZero() || len(got.Identity) != 64 {
 		t.Fatalf("live runtime = %#v, err=%v", got, err)
 	}
 }

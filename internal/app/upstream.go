@@ -187,7 +187,7 @@ func (a *App) clearAgentFrame(sessionID int) {
 	defer a.agentFrameMu.Unlock()
 	delete(a.agentFrames, sessionID)
 	a.presentationDiagnostics.Delete(sessionID)
-	a.codexContextDiagnostics.Delete(sessionID)
+	a.sessionContextDiagnostics.Delete(sessionID)
 }
 
 func (a *App) recordAgentPresentation(observed state.TerminalSession, analysis agentui.Analysis) {

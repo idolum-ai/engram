@@ -42,7 +42,7 @@ func Analyze(observation Observation) Analysis {
 		footer, model, effort, modelLine, ok = findCompositeStatus(lines)
 	}
 	if !ok && observation.VerifiedProgram == "claude" && strings.HasPrefix(observation.VerifiedModel, "claude-") && knownModel(observation.VerifiedModel) {
-		footer, effort, ok = findVerifiedClaudeStatus(lines)
+		footer, effort, mode, ok = findVerifiedClaudeStatus(lines)
 		model = observation.VerifiedModel
 	}
 	if !ok || !sufficientStructuralAnchor(observation, lines, footer) {
@@ -259,7 +259,7 @@ func findCompositeStatusForModel(lines []string) (index int, effort string, ok b
 	return 0, "", false
 }
 
-func findVerifiedClaudeStatus(lines []string) (index int, effort string, ok bool) {
+func findVerifiedClaudeStatus(lines []string) (index int, effort, mode string, ok bool) {
 	last := len(lines) - 1
 	for last >= 0 && strings.TrimSpace(lines[last]) == "" {
 		last--
@@ -270,12 +270,17 @@ func findVerifiedClaudeStatus(lines []string) (index int, effort string, ok bool
 			continue
 		}
 		parts := strings.Split(line, " · ")
+		if len(parts) == 3 && strings.TrimSpace(parts[1]) == "? for shortcuts" && strings.TrimSpace(parts[2]) == "← for agents" {
+			if candidate, valid := claudeInteractionMode(parts[0]); valid {
+				return index, "", candidate, true
+			}
+		}
 		if len(parts) != 3 || strings.TrimSpace(parts[2]) != "/effort" || !validClaudePermissionStatus(parts[0]) {
 			continue
 		}
 		field := strings.TrimSpace(strings.Trim(strings.TrimSpace(parts[1]), "●○◉◌"))
 		if validEffort(field) {
-			return index, strings.ToLower(field), true
+			return index, strings.ToLower(field), "", true
 		}
 	}
 	for index = last; index >= 0 && index >= last-9; index-- {
@@ -286,10 +291,41 @@ func findVerifiedClaudeStatus(lines []string) (index int, effort string, ok bool
 		above := previousNonemptyLine(lines, index-1)
 		below := nextNonemptyLine(lines, index+1)
 		if above >= 0 && below >= 0 && separatorLine(strings.TrimSpace(lines[above])) && separatorLine(strings.TrimSpace(lines[below])) {
-			return below, "", true
+			return below, "", "", true
 		}
 	}
-	return 0, "", false
+	return 0, "", "", false
+}
+
+func claudeInteractionMode(value string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(value))
+	if len(fields) < 4 || fields[len(fields)-2] != "mode" || fields[len(fields)-1] != "on" || letterOrNumber(fields[0]) {
+		return "", false
+	}
+	modeFields := fields[1 : len(fields)-2]
+	if len(modeFields) == 0 || len(modeFields) > 2 {
+		return "", false
+	}
+	mode := strings.Join(modeFields, " ")
+	if len(mode) > 16 {
+		return "", false
+	}
+	for _, r := range mode {
+		if r >= 'a' && r <= 'z' || r == '-' || r == ' ' {
+			continue
+		}
+		return "", false
+	}
+	return mode, true
+}
+
+func letterOrNumber(value string) bool {
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 func validClaudePermissionStatus(value string) bool {
@@ -579,6 +615,9 @@ func passivePrompt(prompt string) bool {
 }
 
 func markChrome(lines []string, footer int, model, verifiedProgram string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+	if verifiedProgram == "claude" {
+		markClaudeStartupPrelude(lines, remove, roles, confidence, evidence)
+	}
 	for index := range lines {
 		line := lines[index]
 		trimmed := strings.TrimSpace(line)
@@ -594,6 +633,10 @@ func markChrome(lines []string, footer int, model, verifiedProgram string, remov
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 94, true, "command-hints")
 		case verifiedProgram == "claude" && inLowBand && claudeCommandHint(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "claude-command-hint", "versioned-runtime")
+		case verifiedProgram == "claude" && inLowBand && claudeLabeledBorder(trimmed):
+			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "claude-agent-label", "versioned-runtime")
+		case verifiedProgram == "claude" && inLowBand && claudeAgentRoster(trimmed):
+			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "claude-agent-roster", "versioned-runtime")
 		case verifiedProgram == "claude" && glyphElapsed.MatchString(trimmed):
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 98, true, "elapsed-decoration", "versioned-runtime")
 		case inLowBand && (elapsedDecoration.MatchString(trimmed) || glyphElapsed.MatchString(trimmed)):
@@ -604,6 +647,87 @@ func markChrome(lines []string, footer int, model, verifiedProgram string, remov
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 96, true, "embedded-composer-status", "low-band-status")
 		}
 	}
+}
+
+func markClaudeStartupPrelude(lines []string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+	boundary := -1
+	for index, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "Quick safety check: Is this a project you created or one you trust?") {
+			boundary = index
+			break
+		}
+	}
+	if boundary < 0 {
+		return
+	}
+	workspace := false
+	for index := max(0, boundary-6); index < boundary; index++ {
+		if strings.TrimSpace(lines[index]) == "Accessing workspace:" {
+			workspace = true
+			break
+		}
+	}
+	if !workspace {
+		return
+	}
+	for index := 0; index <= boundary; index++ {
+		markLine(remove, roles, confidence, evidence, index, RoleChrome, 100, true, "claude-startup-prelude", "versioned-runtime")
+	}
+}
+
+func claudeLabeledBorder(line string) bool {
+	if utf8.RuneCountInString(line) < 16 {
+		return false
+	}
+	border, labels := 0, 0
+	for _, field := range strings.Fields(line) {
+		allBorder := true
+		for _, r := range field {
+			if !strings.ContainsRune("─━═", r) {
+				allBorder = false
+				break
+			}
+			border++
+		}
+		if allBorder {
+			continue
+		}
+		if !claudeStatusToken(field) {
+			return false
+		}
+		labels++
+	}
+	return border >= 12 && labels == 1
+}
+
+func claudeAgentRoster(line string) bool {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "⧉") {
+		return false
+	}
+	parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(line, "⧉")), " · ")
+	if len(parts) < 2 || len(parts) > 8 {
+		return false
+	}
+	for _, part := range parts {
+		if !claudeStatusToken(strings.TrimSpace(part)) {
+			return false
+		}
+	}
+	return true
+}
+
+func claudeStatusToken(value string) bool {
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._+-/", r) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func claudeCommandHint(line string) bool {

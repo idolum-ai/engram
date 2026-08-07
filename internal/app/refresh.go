@@ -170,7 +170,7 @@ func (a *App) refreshSession(ctx context.Context, id int, force bool) {
 	}
 	updated := false
 	if a.snapshotAvailable() {
-		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, historical.diagram, force, guard, accepted)
+		updated = a.updateGuidedAnchorWithEvidence(ctx, ts, capture, turn.previousFrame, turn.input.VisibleText, summary, refs, evidence, historical.program, historical.diagram, force, guard, accepted)
 		if !updated && !a.snapshotAvailable() {
 			updated = a.updateAnchorLocalGuardedWithReferences(ctx, id, summary, force, guard, accepted, &refs)
 		}
@@ -234,8 +234,8 @@ func headUTF8(text string, maxBytes int) string {
 	return text[:end]
 }
 
-func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string, contexts ...codexContextSnapshot) (string, []string, conversationTurn, error) {
-	historical := codexContextSnapshot{}
+func (a *App) conversationalSummary(ctx context.Context, session state.TerminalSession, capture tmux.StyledCapture, presentationText string, contexts ...sessionContextSnapshot) (string, []string, conversationTurn, error) {
+	historical := sessionContextSnapshot{}
 	if len(contexts) > 0 {
 		historical = contexts[0]
 	}
@@ -268,7 +268,7 @@ func (a *App) conversationalSummary(ctx context.Context, session state.TerminalS
 	return result.Text, result.Evidence, turn, nil
 }
 
-func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string, contexts ...codexContextSnapshot) (string, error) {
+func (a *App) snapshotConversationalSummary(ctx context.Context, session state.TerminalSession, anchorMessageID int, presentationText string, contexts ...sessionContextSnapshot) (string, error) {
 	if !acquireSlot(ctx, a.guideSlots) {
 		return "", ctx.Err()
 	}
@@ -282,7 +282,7 @@ func (a *App) snapshotConversationalSummary(ctx context.Context, session state.T
 	if !a.snapshotAnchors() || !ok || latest.Collapsed || latest.State != state.TerminalRunning || !latest.WatchEnabled || !sameTerminalBinding(latest, session) || latest.AnchorMessageID != anchorMessageID || latest.AnchorFormat != "snapshot" || latest.RetiringAnchorMessageID != 0 {
 		return "", errConversationTurnSuperseded
 	}
-	historical := codexContextSnapshot{}
+	historical := sessionContextSnapshot{}
 	if len(contexts) > 0 {
 		historical = contexts[0]
 	}

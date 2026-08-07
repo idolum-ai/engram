@@ -102,6 +102,28 @@ type Pane struct {
 	CurrentCmd  string
 }
 
+// PaneProcess returns only the shell/process anchor needed by an explicit
+// in-pane migration binder. The published result remains a candidate until the
+// Engram service validates the immutable watched binding.
+func (m Manager) PaneProcess(ctx context.Context, paneID string) (int, string, error) {
+	if !validImmutableID(paneID, '%') {
+		return 0, "", fmt.Errorf("invalid tmux pane id")
+	}
+	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_pid}\x1f#{pane_current_command}")
+	if err != nil {
+		return 0, "", err
+	}
+	parts := strings.Split(strings.TrimSuffix(out, "\n"), "\x1f")
+	if len(parts) != 2 {
+		return 0, "", fmt.Errorf("unexpected tmux pane process metadata")
+	}
+	pid, err := strconv.Atoi(parts[0])
+	if err != nil || pid <= 0 {
+		return 0, "", fmt.Errorf("invalid tmux pane process id")
+	}
+	return pid, strings.TrimSpace(parts[1]), nil
+}
+
 type StyledCapture struct {
 	ANSI        string
 	Text        string
@@ -131,6 +153,7 @@ const (
 	EngramWatchIDOption  = "@engram_watch_id"
 	EngramNotifyOption   = "@engram_notify"
 	EngramArtifactOption = "@engram_artifact"
+	EngramAgentOption    = "@engram_agent"
 	EngramCodexOption    = "@engram_codex"
 	EngramGitHubOption   = "@engram_github"
 	EngramRecoveryOption = "@engram_recovery"
@@ -552,7 +575,10 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 		return fmt.Errorf("invalid Engram watch ID %d", watchID)
 	}
 	marker := fmt.Sprintf("v1 watch=%d remote=telegram", watchID)
-	commands := []string{"set-option -p -q -u -t " + paneID + " " + EngramPaneOption}
+	commands := []string{
+		"set-option -p -q -u -t " + paneID + " " + EngramPaneOption,
+		"set-option -p -q -u -t " + paneID + " " + EngramCodexOption,
+	}
 	type capabilityOption struct {
 		name  string
 		value string
@@ -561,7 +587,7 @@ func (m Manager) AdvertiseEngramIfBindingMatches(ctx context.Context, paneID, wi
 		{EngramWatchIDOption, strconv.Itoa(watchID)},
 		{EngramNotifyOption, "run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)"},
 		{EngramArtifactOption, "print a visible file:// URI (OSC 8 optional), then run @engram_notify"},
-		{EngramCodexOption, "active Codex session: run engram codex-bind once; future sessions: configure the documented SessionStart hook"},
+		{EngramAgentOption, "agent sessions: configure the documented Codex or Claude SessionStart hook; existing sessions: run engram codex-bind or engram claude-bind"},
 	}
 	if githubAvailable {
 		options = append(options, capabilityOption{
@@ -586,7 +612,7 @@ func (m Manager) ClearEngramAdvertisementIfBindingMatches(ctx context.Context, p
 	// Clear the commit marker first so stale auxiliary values are never treated
 	// as a live capability advertisement if a later clear is interrupted.
 	commands := make([]string, 0, 6)
-	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption, EngramCodexOption, EngramGitHubOption} {
+	for _, option := range []string{EngramPaneOption, EngramWatchIDOption, EngramNotifyOption, EngramArtifactOption, EngramAgentOption, EngramCodexOption, EngramGitHubOption} {
 		commands = append(commands, "set-option -p -q -u -t "+paneID+" "+option)
 	}
 	return m.runIfBindingMatches(ctx, paneID, windowID, serverID, strings.Join(commands, " ; "))

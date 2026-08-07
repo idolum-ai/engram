@@ -65,10 +65,11 @@ because systemd does not own the tmux child process. A changed process
 fingerprint discards the model. A later visible model card replaces it, which
 covers in-session model switches.
 
-Linux resolves the running executable through `/proc/<pid>/exe`. Engram does
-not substitute a `$PATH` lookup on platforms that cannot expose that identity;
-the dedicated Claude adapter therefore fails closed on current macOS builds
-while the generic structural analyzer remains available.
+Linux resolves the running executable through `/proc/<pid>/exe`; Darwin uses
+the native process-information syscall. Engram does not substitute a `$PATH`
+lookup because that would identify a future launch rather than the running
+process. Native version-named Claude executables are admitted only after exact
+path and descendant-process verification.
 
 Runtime confirmation may also expose Claude's activity without a known model.
 In that case the card says `Claude` with effort and activity, but no model is
@@ -131,6 +132,28 @@ mapping is labeled reconstructed; otherwise the label explicitly says the text
 is a prior message and not the current terminal. Literal snapshot and raw paths
 do not accept this field.
 
+## Exact Claude Code session context
+
+`ENGRAM_CLAUDE_CONTEXT_TURNS` is a separate disabled-by-default privacy
+surface with the same one-through-eight bound. Claude's documented
+`SessionStart` hook supplies the exact UUID and transcript path on startup,
+resume, clear, compact, and fork. Engram applies the same pane, process,
+binding-age, post-read, and final-publication guards used for Codex.
+
+The named `claude-transcript-v1` parser accepts non-meta, non-sidechain human
+string prompts and assistant blocks explicitly typed `text`. It excludes
+thinking, tool use and results, array-form user records, attachments, system
+metadata, sidechains, and subagent transcripts. Split assistant records require
+a stable message identity. Because Claude documents JSONL entries as an
+internal changing format, unexpected structure inside a recognized message
+fails closed. The exact hook path, owned regular-file identity, UUID filename,
+and record `sessionId` values must agree; no directory-recency lookup is used.
+
+Historical continuity and deterministic diagram behavior are shared across
+providers. Claude insets say `Claude context`, and literal snapshot/raw paths
+remain transcript-free. See `docs/claude-code-session-context.md` for setup and
+disclosure details.
+
 ## Fail-closed behavior
 
 Frames longer than 96 rows, unknown model identities, weak shell-like
@@ -148,10 +171,18 @@ evidence.
 The process-confirmed Codex adapter remains a fallback for supported Codex
 versions when a frame is too weak for the generic structural contract. The
 Claude adapter runs first because its remembered model is part of the
-structural proof. Engram currently supports Claude Code `2.1.219` plus the
-hermetic `2.1.206` fixture version. Unsupported versions, ambiguous process
+structural proof. Engram currently supports Claude Code `2.1.219`, `2.1.222`,
+`2.1.223`, and `2.1.224`, plus the hermetic `2.1.206` fixture version. Unsupported versions, ambiguous process
 trees, unreadable process identity, and unknown layouts preserve the captured
 text byte-for-byte. Detection failures do not erase the last card state.
+
+The `2.1.224` contract recognizes Claude's exact workspace trust prelude and
+keeps it out of semantic conversation only when the verified runtime, workspace
+banner, and safety prompt all agree. Elapsed `Brewed for` rows and the bounded
+active-agent/team footer are UI chrome; interaction text such as `manual mode
+on` becomes presentation mode metadata. Visible agent-completion notices remain
+conversation evidence. Literal snapshots continue to show the exact terminal
+frame, including all of this chrome and any shell scrollback.
 
 Bounded `terminal.presentation` audit records report program, version, outcome,
 reason, whether a model was present, and normalized activity. Identical
@@ -161,7 +192,7 @@ not recorded.
 ## Tests
 
 The ordinary test suite replays a checked-in corpus covering observed Codex,
-sanitized Claude Code `2.1.219`, hermetic Claude Code `2.1.206`, and OpenCode
+sanitized Claude Code `2.1.219`/`2.1.222`/`2.1.223`/`2.1.224`, hermetic Claude Code `2.1.206`, and OpenCode
 structures plus false-positive, model-switch, process-replacement, and
 identity-change cases. These tests are deterministic, stdlib-only, and make no
 network calls.

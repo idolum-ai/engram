@@ -11,22 +11,26 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const SupportedVersion = "2.1.219"
+const SupportedVersion = "2.1.224"
+const previousSupportedVersion = "2.1.223"
+const olderSupportedVersion = "2.1.222"
+const legacySupportedVersion = "2.1.219"
 const supportedFixtureVersion = "2.1.206"
 const maxProcessOutputBytes = 2 << 20
 
 type Runtime struct {
+	PID       int
 	Detected  bool
 	Version   string
 	Supported bool
 	Identity  string
+	StartedAt time.Time
 }
 
 type CommandRunner interface {
@@ -65,10 +69,11 @@ type Detector struct {
 	Runner      CommandRunner
 	Executables ExecutableResolver
 	Versions    VersionResolver
+	Starts      ProcessStartResolver
 }
 
 func NewDetector() *Detector {
-	return &Detector{Runner: ExecRunner{}, Executables: OSExecutableResolver{}, Versions: PathVersionResolver{}}
+	return &Detector{Runner: ExecRunner{}, Executables: OSExecutableResolver{}, Versions: PathVersionResolver{}, Starts: OSProcessStartResolver{}}
 }
 
 func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (Runtime, error) {
@@ -106,29 +111,42 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 	if err != nil {
 		return Runtime{Detected: true}, err
 	}
-	started, err := d.Runner.Run(probeCtx, "ps", "-o", "lstart=", "-p", strconv.Itoa(candidate.pid))
+	startedAt, startedIdentity, err := d.processStart(probeCtx, candidate.pid)
+	if err != nil {
+		return Runtime{Detected: true, Version: version}, fmt.Errorf("identify Claude Code process incarnation: %w", err)
+	}
+	return Runtime{
+		PID: candidate.pid, Detected: true, Version: version, Supported: supportedVersion(version),
+		Identity: runtimeIdentity(candidate.pid, executable, version, startedIdentity), StartedAt: startedAt,
+	}, nil
+}
+
+func (d *Detector) processStart(ctx context.Context, pid int) (time.Time, string, error) {
+	if d.Starts != nil {
+		return d.Starts.Resolve(pid)
+	}
+	started, err := d.Runner.Run(ctx, "ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
 	if err != nil || strings.TrimSpace(started) == "" {
 		if err == nil {
 			err = fmt.Errorf("empty process start time")
 		}
-		return Runtime{Detected: true, Version: version}, fmt.Errorf("identify Claude Code process incarnation: %w", err)
+		return time.Time{}, "", err
 	}
-	return Runtime{
-		Detected: true, Version: version, Supported: supportedVersion(version),
-		Identity: runtimeIdentity(candidate.pid, executable, version, strings.TrimSpace(started)),
-	}, nil
+	return time.Time{}, strings.TrimSpace(started), nil
 }
 
 func supportedVersion(version string) bool {
-	return version == SupportedVersion || version == supportedFixtureVersion
+	return version == SupportedVersion || version == previousSupportedVersion || version == olderSupportedVersion ||
+		version == legacySupportedVersion || version == supportedFixtureVersion
 }
 
 func possibleClaudeForeground(command string) bool {
-	switch strings.ToLower(filepath.Base(strings.TrimSpace(command))) {
+	base := strings.ToLower(filepath.Base(strings.TrimSpace(command)))
+	switch base {
 	case "claude", "node", "nodejs":
 		return true
 	default:
-		return false
+		return validVersion(base)
 	}
 }
 
@@ -229,19 +247,11 @@ type ExecutableResolver interface {
 
 type OSExecutableResolver struct{}
 
-func (OSExecutableResolver) Resolve(pid int) (string, error) {
-	if pid <= 0 {
-		return "", fmt.Errorf("invalid process ID")
-	}
-	if runtime.GOOS != "linux" {
-		return "", fmt.Errorf("running executable resolution is unsupported on %s", runtime.GOOS)
-	}
-	path, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
-	if err != nil {
-		return "", err
-	}
-	return path, nil
+type ProcessStartResolver interface {
+	Resolve(int) (time.Time, string, error)
 }
+
+type OSProcessStartResolver struct{}
 
 func isClaudeExecutablePath(path string) bool {
 	if filepath.Base(path) == "claude" {

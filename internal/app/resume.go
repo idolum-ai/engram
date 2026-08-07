@@ -222,7 +222,15 @@ func (a *App) waitForResumeProcess(ctx context.Context, binding mechanics.Bindin
 		if err != nil {
 			return tmux.Pane{}, err
 		}
-		if commandExecutable(pane.CurrentCmd) == program {
+		observed := commandExecutable(pane.CurrentCmd) == program
+		if !observed && program == recovery.ProgramClaude && a.ClaudeDetector != nil {
+			panePID, foreground, processErr := a.Tmux.PaneProcess(ctx, pane.ID)
+			if processErr == nil {
+				runtime, detectErr := a.ClaudeDetector.Detect(ctx, panePID, foreground)
+				observed = detectErr == nil && runtime.Detected && runtime.PID > 0 && runtime.Identity != "" && !runtime.StartedAt.IsZero()
+			}
+		}
+		if observed {
 			if firstObserved.IsZero() {
 				firstObserved = time.Now()
 			} else if time.Since(firstObserved) >= resumeProcessSettlePeriod {

@@ -30,6 +30,7 @@ const (
 	DefaultGitHubGrantMaxDuration   = 8 * time.Hour
 	AbsoluteGitHubGrantMaxDuration  = 24 * time.Hour
 	MaxCodexContextTurns            = 8
+	MaxClaudeContextTurns           = 8
 	DefaultTmuxSize                 = "100x48"
 )
 
@@ -58,6 +59,7 @@ type Config struct {
 	TelegramPollTimeoutSeconds int
 	GitHubGrantMaxDuration     time.Duration
 	CodexContextTurns          int
+	ClaudeContextTurns         int
 }
 
 type ModeCapabilities struct {
@@ -94,6 +96,10 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	claudeContextTurns, err := parseInt64Default(values["ENGRAM_CLAUDE_CONTEXT_TURNS"], "ENGRAM_CLAUDE_CONTEXT_TURNS", 0)
+	if err != nil {
+		return Config{}, err
+	}
 	grantMaxDuration := DefaultGitHubGrantMaxDuration
 	if value := strings.TrimSpace(values["ENGRAM_GITHUB_GRANT_MAX_DURATION"]); value != "" {
 		grantMaxDuration, err = time.ParseDuration(value)
@@ -127,6 +133,7 @@ func Load(path string) (Config, error) {
 		TelegramPollTimeoutSeconds: int(pollTimeout),
 		GitHubGrantMaxDuration:     grantMaxDuration,
 		CodexContextTurns:          int(codexContextTurns),
+		ClaudeContextTurns:         int(claudeContextTurns),
 	}
 	if cfg.TelegramAllowedUserID, err = parseOptionalInt64(values["TELEGRAM_ALLOWED_USER_ID"], "TELEGRAM_ALLOWED_USER_ID"); err != nil {
 		return Config{}, err
@@ -191,6 +198,9 @@ func (c Config) Validate() error {
 	}
 	if c.CodexContextTurns < 0 || c.CodexContextTurns > MaxCodexContextTurns {
 		return fmt.Errorf("ENGRAM_CODEX_CONTEXT_TURNS must be between 0 and %d", MaxCodexContextTurns)
+	}
+	if c.ClaudeContextTurns < 0 || c.ClaudeContextTurns > MaxClaudeContextTurns {
+		return fmt.Errorf("ENGRAM_CLAUDE_CONTEXT_TURNS must be between 0 and %d", MaxClaudeContextTurns)
 	}
 	switch c.SnapshotTheme {
 	case "terminal", "contrast-dark", "contrast-light":

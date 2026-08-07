@@ -11,6 +11,98 @@ func supportedRuntime(identity string) Runtime {
 	return Runtime{Detected: true, Supported: true, Version: SupportedVersion, Identity: identity}
 }
 
+func TestDeclaredNativeVersionsShareTheFixtureBackedPresentationContract(t *testing.T) {
+	frame := claudeFrame(strings.Join([]string{
+		"╭──────────────────────────────────╮",
+		"│ Opus 4.8 · API Usage Billing     │",
+		"╰──────────────────────────────────╯",
+		"",
+		"⏺ Visible answer.",
+		"",
+		"────────────────────────────────────",
+		"❯ next prompt",
+		"────────────────────────────────────",
+		"  bypass permissions on · ● high · /effort",
+	}, "\n"))
+	for _, version := range []string{SupportedVersion, previousSupportedVersion, olderSupportedVersion, legacySupportedVersion, supportedFixtureVersion} {
+		t.Run(version, func(t *testing.T) {
+			got := Analyze(Runtime{Detected: true, Supported: supportedVersion(version), Version: version, Identity: "runtime-" + version}, agentui.Observation{Current: frame}, "")
+			if !got.Applied || got.Model != "claude-opus-4-8" || got.Effort != "high" || !strings.Contains(got.Conversation, "Visible answer") || !strings.Contains(got.Conversation, "next prompt") {
+				t.Fatalf("analysis = %#v", got)
+			}
+		})
+	}
+}
+
+func TestAnalyzeClaude224SeparatesStartupConversationAndTeamFooter(t *testing.T) {
+	input := strings.Join([]string{
+		"example@host ~ % claude --bad-option",
+		"error: unknown option '--bad-option'",
+		"example@host ~ % claude --dangerously-skip-permissions",
+		"",
+		"────────────────────────────────────────────────────────────────────────────────",
+		" Accessing workspace:",
+		"",
+		" /Users/example",
+		"",
+		" Quick safety check: Is this a project you created or one you trust? (Like your",
+		"",
+		"  Please review the fixture behavior.",
+		"",
+		"✻ Brewed for 1m 21s",
+		"",
+		"⏺ Agent \"Review the fixture\" finished · 13m 45s",
+		"",
+		"⏺ The visible result is ready.",
+		"",
+		"✻ Brewed for 14m 46s",
+		"",
+		"────────────────────────────────────────────────────────────────── front-end ──",
+		"❯ ",
+		"────────────────────────────────────────────────────────────────────────────────",
+		"  ⏸ manual mode on · ? for shortcuts · ← for agents",
+		"  ⧉  project-design · project-front-end · project-try-it",
+	}, "\n")
+	got := Analyze(supportedRuntime("runtime-224"), agentui.Observation{Current: claudeFrame(input)}, "claude-opus-4-8")
+	if !got.Applied || got.Model != "claude-opus-4-8" || got.Mode != "manual" || got.Activity != agentui.ActivityIdle {
+		t.Fatalf("analysis = %#v", got)
+	}
+	for _, wanted := range []string{"Please review the fixture behavior", "Agent \"Review the fixture\" finished", "The visible result is ready"} {
+		if !strings.Contains(got.Conversation, wanted) {
+			t.Fatalf("conversation omitted %q: %q", wanted, got.Conversation)
+		}
+	}
+	for _, omitted := range []string{"--bad-option", "Accessing workspace", "Quick safety check", "Brewed for", "front-end", "manual mode on", "project-design"} {
+		if strings.Contains(got.Conversation, omitted) {
+			t.Fatalf("conversation retained %q: %q", omitted, got.Conversation)
+		}
+	}
+}
+
+func TestAnalyzeClaude224AcceptsChangingInteractionMode(t *testing.T) {
+	input := "⏺ Waiting for input.\n\n────────────\n❯\n────────────\n  ⏵ accept-edits mode on · ? for shortcuts · ← for agents"
+	got := Analyze(supportedRuntime("runtime-mode"), agentui.Observation{Current: claudeFrame(input)}, "")
+	if !got.Applied || got.Mode != "accept-edits" || got.Activity != agentui.ActivityIdle {
+		t.Fatalf("analysis = %#v", got)
+	}
+}
+
+func TestAnalyzeClaude224DoesNotEraseQuotedSafetyPrompt(t *testing.T) {
+	input := strings.Join([]string{
+		"⏺ The phrase below is part of the answer:",
+		"Quick safety check: Is this a project you created or one you trust?",
+		"",
+		"────────────",
+		"❯",
+		"────────────",
+		"  ⏸ manual mode on · ? for shortcuts · ← for agents",
+	}, "\n")
+	got := Analyze(supportedRuntime("runtime-quote"), agentui.Observation{Current: claudeFrame(input)}, "")
+	if !got.Applied || !strings.Contains(got.Conversation, "Quick safety check") {
+		t.Fatalf("quoted conversation was removed: %#v", got)
+	}
+}
+
 func claudeFrame(text string) agentui.Frame {
 	return agentui.Frame{Text: text, CurrentCommand: "claude", Columns: 80, VisibleRows: 24, AlternateScreen: "on", CopyMode: "off"}
 }

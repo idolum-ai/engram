@@ -46,7 +46,7 @@ type conversationTurn struct {
 	frame         conversationFrame
 	previousFrame conversationFrame
 	resetRevision uint64
-	historical    codexContextSnapshot
+	historical    sessionContextSnapshot
 }
 
 func (a *App) acquireConversation(ctx context.Context, id int) (func(), bool) {
@@ -84,8 +84,8 @@ func (a *App) releaseConversationGate(id int, gate *conversationGate) {
 	}
 }
 
-func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmux.StyledCapture, text string, contexts ...codexContextSnapshot) conversationTurn {
-	historical := codexContextSnapshot{}
+func (a *App) prepareConversationTurn(session state.TerminalSession, capture tmux.StyledCapture, text string, contexts ...sessionContextSnapshot) conversationTurn {
+	historical := sessionContextSnapshot{}
 	if len(contexts) > 0 {
 		historical = contexts[0]
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -18,12 +19,13 @@ const (
 )
 
 type Metadata struct {
-	Version   int       `json:"version"`
-	Program   string    `json:"program"`
-	SessionID string    `json:"session_id"`
-	CWD       string    `json:"cwd,omitempty"`
-	Source    string    `json:"source,omitempty"`
-	Observed  time.Time `json:"observed_at"`
+	Version        int       `json:"version"`
+	Program        string    `json:"program"`
+	SessionID      string    `json:"session_id"`
+	CWD            string    `json:"cwd,omitempty"`
+	TranscriptPath string    `json:"transcript_path,omitempty"`
+	Source         string    `json:"source,omitempty"`
+	Observed       time.Time `json:"observed_at"`
 }
 
 type codexHookInput struct {
@@ -31,6 +33,14 @@ type codexHookInput struct {
 	CWD           string `json:"cwd"`
 	HookEventName string `json:"hook_event_name"`
 	Source        string `json:"source"`
+}
+
+type claudeHookInput struct {
+	SessionID      string `json:"session_id"`
+	TranscriptPath string `json:"transcript_path"`
+	CWD            string `json:"cwd"`
+	HookEventName  string `json:"hook_event_name"`
+	Source         string `json:"source"`
 }
 
 func ParseCodexSessionStart(input io.Reader, now time.Time) (Metadata, error) {
@@ -72,6 +82,52 @@ func ParseCodexSessionStart(input io.Reader, now time.Time) (Metadata, error) {
 	}, nil
 }
 
+func ParseClaudeSessionStart(input io.Reader, now time.Time) (Metadata, error) {
+	data, err := io.ReadAll(io.LimitReader(input, maxHookBytes+1))
+	if err != nil {
+		return Metadata{}, fmt.Errorf("read Claude hook input: %w", err)
+	}
+	if len(data) > maxHookBytes {
+		return Metadata{}, fmt.Errorf("Claude hook input is too large")
+	}
+	var event claudeHookInput
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	if err := decoder.Decode(&event); err != nil {
+		return Metadata{}, fmt.Errorf("decode Claude hook input: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return Metadata{}, fmt.Errorf("Claude hook input has trailing data")
+	}
+	if event.HookEventName != "SessionStart" {
+		return Metadata{}, fmt.Errorf("unsupported Claude hook event %q", event.HookEventName)
+	}
+	if !ValidSessionID(event.SessionID) {
+		return Metadata{}, fmt.Errorf("invalid Claude session id")
+	}
+	if err := validateCWD(event.CWD); err != nil {
+		return Metadata{}, fmt.Errorf("invalid Claude working directory")
+	}
+	transcriptPath, err := validateTranscriptPath(event.TranscriptPath)
+	if err != nil {
+		return Metadata{}, err
+	}
+	if strings.ToLower(filepath.Base(transcriptPath)) != strings.ToLower(event.SessionID)+".jsonl" {
+		return Metadata{}, fmt.Errorf("Claude transcript path does not match session id")
+	}
+	source := strings.ToLower(strings.TrimSpace(event.Source))
+	if !validSource(source, false) {
+		return Metadata{}, fmt.Errorf("unsupported Claude lifecycle source %q", event.Source)
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return Metadata{
+		Version: 1, Program: ProgramClaude, SessionID: strings.ToLower(event.SessionID),
+		CWD: event.CWD, TranscriptPath: transcriptPath, Source: source, Observed: now.UTC(),
+	}, nil
+}
+
 func Encode(metadata Metadata) (string, error) {
 	metadata.Version = 1
 	metadata, err := validateMetadata(metadata)
@@ -106,13 +162,51 @@ func validateMetadata(metadata Metadata) (Metadata, error) {
 	if metadata.Version != 1 || !ValidProgram(metadata.Program) || !ValidSessionID(metadata.SessionID) {
 		return Metadata{}, fmt.Errorf("invalid recovery metadata")
 	}
-	if metadata.Source != "" && metadata.Source != "startup" && metadata.Source != "resume" && metadata.Source != "clear" && metadata.Source != "compact" && metadata.Source != "manual" {
+	if !validSource(metadata.Source, true) {
 		return Metadata{}, fmt.Errorf("invalid recovery metadata source")
 	}
-	if len(metadata.CWD) > 4096 || strings.ContainsRune(metadata.CWD, '\x00') {
+	if err := validateCWD(metadata.CWD); err != nil {
 		return Metadata{}, fmt.Errorf("invalid recovery working directory")
 	}
+	if metadata.TranscriptPath != "" {
+		path, err := validateTranscriptPath(metadata.TranscriptPath)
+		if err != nil || metadata.Program != ProgramClaude {
+			return Metadata{}, fmt.Errorf("invalid recovery transcript path")
+		}
+		metadata.TranscriptPath = path
+	}
 	return metadata, nil
+}
+
+func validSource(source string, allowEmpty bool) bool {
+	if source == "" {
+		return allowEmpty
+	}
+	switch source {
+	case "startup", "resume", "clear", "compact", "fork", "manual":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateCWD(cwd string) error {
+	if len(cwd) > 4096 || strings.ContainsRune(cwd, '\x00') {
+		return fmt.Errorf("invalid working directory")
+	}
+	return nil
+}
+
+func validateTranscriptPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || len(path) > 4096 || strings.ContainsRune(path, '\x00') || !filepath.IsAbs(path) {
+		return "", fmt.Errorf("invalid Claude transcript path")
+	}
+	cleaned := filepath.Clean(path)
+	if filepath.Ext(cleaned) != ".jsonl" {
+		return "", fmt.Errorf("invalid Claude transcript path")
+	}
+	return cleaned, nil
 }
 
 func ValidProgram(program string) bool {

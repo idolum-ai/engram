@@ -46,6 +46,47 @@ func TestParseCodexSessionStartRejectsOtherEventsAndInvalidIDs(t *testing.T) {
 	}
 }
 
+func TestParseClaudeSessionStart(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	metadata, err := ParseClaudeSessionStart(strings.NewReader(`{
+  "session_id":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0",
+  "transcript_path":"/Users/example/.claude/projects/-work/019f7607-c8b0-74b3-87ca-64a7e6e7ede0.jsonl",
+  "cwd":"/work",
+  "hook_event_name":"SessionStart",
+  "source":"fork"
+}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Program != ProgramClaude || metadata.Source != "fork" || metadata.CWD != "/work" || metadata.TranscriptPath == "" || !metadata.Observed.Equal(now) {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+	encoded, err := Encode(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := Decode(encoded)
+	if err != nil || decoded != metadata {
+		t.Fatalf("decoded = %#v err=%v", decoded, err)
+	}
+}
+
+func TestParseClaudeSessionStartRejectsUnsafeInput(t *testing.T) {
+	validID := "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"
+	for _, input := range []string{
+		`{"session_id":"` + validID + `","transcript_path":"relative.jsonl","hook_event_name":"SessionStart","source":"startup"}`,
+		`{"session_id":"` + validID + `","transcript_path":"/tmp/session.txt","hook_event_name":"SessionStart","source":"startup"}`,
+		`{"session_id":"` + validID + `","transcript_path":"/tmp/019f7607-c8b0-74b3-87ca-64a7e6e7ede1.jsonl","hook_event_name":"SessionStart","source":"startup"}`,
+		`{"session_id":"` + validID + `","transcript_path":"/tmp/session.jsonl","hook_event_name":"Stop","source":"startup"}`,
+		`{"session_id":"` + validID + `","transcript_path":"/tmp/session.jsonl","hook_event_name":"SessionStart","source":"unknown"}`,
+		`{"session_id":"bad","transcript_path":"/tmp/session.jsonl","hook_event_name":"SessionStart","source":"startup"}`,
+	} {
+		if _, err := ParseClaudeSessionStart(strings.NewReader(input), time.Time{}); err == nil {
+			t.Fatalf("accepted %s", input)
+		}
+	}
+}
+
 func TestEncodeAndDecodeEnforceTheSameMetadataBounds(t *testing.T) {
 	base := Metadata{Version: 1, Program: ProgramCodex, SessionID: "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"}
 	for _, cwd := range []string{strings.Repeat("x", 4097), "bad\x00path"} {
