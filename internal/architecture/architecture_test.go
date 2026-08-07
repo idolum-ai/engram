@@ -27,11 +27,22 @@ func TestDarwinServiceInstallerValidatesWithoutImplicitActivation(t *testing.T) 
 	}
 	writeExecutable("uname", `echo Darwin`)
 	writeExecutable("plutil", `echo "plutil $*" >>"$SERVICE_CALL_LOG"`)
+	writeExecutable("tmux", `exit 0`)
 	writeExecutable("launchctl", `echo "launchctl $*" >>"$SERVICE_CALL_LOG"
-if [ "${1:-}" = print ]; then
+if [ "${1:-}" = bootout ]; then
+  rm -f "$SERVICE_STATE"
+  exit 0
+fi
+if [ "${1:-}" = bootstrap ]; then
+  touch "$SERVICE_STATE"
+  exit 0
+fi
+if [ "${1:-}" = print ] && [ -f "$SERVICE_STATE" ]; then
   echo '  state = running'
   echo '  pid = 4242'
-fi`)
+  exit 0
+fi
+exit 1`)
 	binary := writeExecutable("engram", `if [ "${1:-}" = version ]; then echo 'Engram v9 test-build'; else exit 2; fi`)
 	envPath := filepath.Join(root, ".engram", ".env")
 	if err := os.MkdirAll(filepath.Dir(envPath), 0o700); err != nil {
@@ -44,7 +55,7 @@ fi`)
 	run := func(action string) {
 		t.Helper()
 		command := exec.Command("bash", script, action, binary, envPath)
-		command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"), "SERVICE_CALL_LOG="+callLog)
+		command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"), "SERVICE_CALL_LOG="+callLog, "SERVICE_STATE="+filepath.Join(root, "launchctl.state"))
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", action, err, output)
 		}
@@ -66,6 +77,9 @@ fi`)
 			t.Fatalf("plist omitted %q:\n%s", required, plist)
 		}
 	}
+	if !strings.Contains(string(plist), "<key>PATH</key>") || !strings.Contains(string(plist), binDir) {
+		t.Fatalf("plist omitted discovered tmux PATH: %s", plist)
+	}
 	run("restart")
 	calls, err = os.ReadFile(callLog)
 	if err != nil || !strings.Contains(string(calls), "launchctl bootout") || !strings.Contains(string(calls), "launchctl bootstrap") {
@@ -76,7 +90,7 @@ fi`)
 		t.Fatal(err)
 	}
 	command := exec.Command("bash", script, "status", binary, envPath)
-	command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"), "SERVICE_CALL_LOG="+callLog)
+	command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"), "SERVICE_CALL_LOG="+callLog, "SERVICE_STATE="+filepath.Join(root, "launchctl.state"))
 	output, err := command.CombinedOutput()
 	if err != nil || !strings.Contains(string(output), "running build = Engram v10 running-build") || strings.Contains(string(output), "v9 test-build") {
 		t.Fatalf("status did not identify running build: err=%v\n%s", err, output)
@@ -250,7 +264,7 @@ func TestUserServiceLifecycleContracts(t *testing.T) {
 	text := string(data)
 	for _, required := range []string{
 		"ai.idolum.engram", "plutil -lint", "launchctl bootstrap", "launchctl bootout",
-		"AbandonProcessGroup", "KillMode=process", "ENGRAM_SERVICE_STATUS_FILE", "service.identity", "lines <= 1000",
+		"AbandonProcessGroup", "KillMode=process", "ENGRAM_SERVICE_STATUS_FILE", "service.identity", "service_path", "lines <= 1000",
 		"systemctl --user enable --now engram.service",
 	} {
 		if !strings.Contains(text, required) {

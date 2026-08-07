@@ -58,6 +58,10 @@ identity record written by that running Engram process. The reported build is
 therefore the active process build, not merely the version of the currently
 installed binary or service definition.
 
+Service installation also resolves the exact `tmux` executable from the
+installer's PATH and records an explicit service PATH containing that directory.
+This is required on macOS, where launchd does not inherit Homebrew's PATH.
+
 To keep the user service alive after logout, explicitly enable lingering when
 that matches the host's security policy:
 
