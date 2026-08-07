@@ -62,6 +62,11 @@ Service installation also resolves the exact `tmux` executable from the
 installer's PATH and records an explicit service PATH containing that directory.
 This is required on macOS, where launchd does not inherit Homebrew's PATH.
 
+`service-restart` is also the service-definition migration boundary: it first
+regenerates and validates the LaunchAgent or systemd unit from the installed
+binary and current environment path, then performs the explicit restart. Merely
+replacing the binary still does not activate or restart the service.
+
 To keep the user service alive after logout, explicitly enable lingering when
 that matches the host's security policy:
 

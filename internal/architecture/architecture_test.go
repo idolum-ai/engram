@@ -34,7 +34,9 @@ if [ "${1:-}" = bootout ]; then
   exit 0
 fi
 if [ "${1:-}" = bootstrap ]; then
+  grep -q ENGRAM_SERVICE_STATUS_FILE "${3:-}" || exit 3
   touch "$SERVICE_STATE"
+  printf 'pid=4242\nbuild=Engram v10 running-build\n' >"$HOME/.engram/service.identity"
   exit 0
 fi
 if [ "${1:-}" = print ] && [ -f "$SERVICE_STATE" ]; then
@@ -68,7 +70,8 @@ exit 1`)
 	if !strings.Contains(string(calls), "plutil -lint") || strings.Contains(string(calls), "launchctl") {
 		t.Fatalf("install calls = %s", calls)
 	}
-	plist, err := os.ReadFile(filepath.Join(root, "Library", "LaunchAgents", "ai.idolum.engram.plist"))
+	plistPath := filepath.Join(root, "Library", "LaunchAgents", "ai.idolum.engram.plist")
+	plist, err := os.ReadFile(plistPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +83,21 @@ exit 1`)
 	if !strings.Contains(string(plist), "<key>PATH</key>") || !strings.Contains(string(plist), binDir) {
 		t.Fatalf("plist omitted discovered tmux PATH: %s", plist)
 	}
+	legacyPlist := `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Label</key><string>ai.idolum.engram</string></dict></plist>`
+	if err := os.WriteFile(plistPath, []byte(legacyPlist), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"${1:-}\" = version ]; then echo 'Engram v10 replacement'; else exit 2; fi\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	run("restart")
 	calls, err = os.ReadFile(callLog)
 	if err != nil || !strings.Contains(string(calls), "launchctl bootout") || !strings.Contains(string(calls), "launchctl bootstrap") {
 		t.Fatalf("restart calls = %s err=%v", calls, err)
 	}
-	identityPath := filepath.Join(root, ".engram", "service.identity")
-	if err := os.WriteFile(identityPath, []byte("pid=4242\nbuild=Engram v10 running-build\nstarted=2026-08-07T12:30:00Z\n"), 0o600); err != nil {
-		t.Fatal(err)
+	refreshed, err := os.ReadFile(plistPath)
+	if err != nil || !strings.Contains(string(refreshed), "ENGRAM_SERVICE_STATUS_FILE") {
+		t.Fatalf("restart did not migrate legacy plist: err=%v\n%s", err, refreshed)
 	}
 	command := exec.Command("bash", script, "status", binary, envPath)
 	command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"), "SERVICE_CALL_LOG="+callLog, "SERVICE_STATE="+filepath.Join(root, "launchctl.state"))
@@ -97,7 +107,7 @@ exit 1`)
 	}
 }
 
-func TestLinuxServiceStatusUsesManagerPIDAndRunningIdentity(t *testing.T) {
+func TestLinuxServiceRestartMigratesLegacyUnitAndUsesRunningIdentity(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "fake-bin")
 	if err := os.Mkdir(binDir, 0o700); err != nil {
@@ -112,17 +122,46 @@ func TestLinuxServiceStatusUsesManagerPIDAndRunningIdentity(t *testing.T) {
 		return path
 	}
 	writeExecutable("uname", `echo Linux`)
-	writeExecutable("systemctl", `if [ "${3:-}" = show ] || [ "${2:-}" = show ]; then echo 5252; else echo 'active (running)'; fi`)
+	writeExecutable("tmux", `exit 0`)
+	writeExecutable("systemctl", `case "${2:-}" in
+  daemon-reload)
+    grep -q ENGRAM_SERVICE_STATUS_FILE "$HOME/.config/systemd/user/engram.service" || exit 3
+    ;;
+  restart)
+    grep -q ENGRAM_SERVICE_STATUS_FILE "$HOME/.config/systemd/user/engram.service" || exit 3
+    printf 'pid=5252\nbuild=engram v11 live-linux\n' >"$HOME/.engram/service.identity"
+    ;;
+  status) echo 'active (running)' ;;
+  show) echo 5252 ;;
+esac`)
 	binary := writeExecutable("engram", `if [ "${1:-}" = version ]; then echo 'installed-build-must-not-be-used'; else exit 2; fi`)
 	identityDir := filepath.Join(root, ".engram")
 	if err := os.MkdirAll(identityDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(identityDir, "service.identity"), []byte("pid=5252\nbuild=engram v11 live-linux\n"), 0o600); err != nil {
+	envPath := filepath.Join(identityDir, ".env")
+	if err := os.WriteFile(envPath, []byte("TELEGRAM_BOT_TOKEN=not-read\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unitDir := filepath.Join(root, ".config", "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unitPath := filepath.Join(unitDir, "engram.service")
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart="+binary+" run --env "+envPath+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	script := filepath.Join(repoRoot(t), "scripts", "user-service.sh")
-	command := exec.Command("bash", script, "status", binary, filepath.Join(identityDir, ".env"))
+	command := exec.Command("bash", script, "restart", binary, envPath)
+	command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"))
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("restart did not migrate legacy Linux unit: %v\n%s", err, output)
+	}
+	unit, err := os.ReadFile(unitPath)
+	if err != nil || !strings.Contains(string(unit), "ENGRAM_SERVICE_STATUS_FILE") || !strings.Contains(string(unit), "PATH=") {
+		t.Fatalf("restart did not refresh Linux unit: err=%v\n%s", err, unit)
+	}
+	command = exec.Command("bash", script, "status", binary, envPath)
 	command.Env = append(os.Environ(), "HOME="+root, "PATH="+binDir+":"+os.Getenv("PATH"))
 	output, err := command.CombinedOutput()
 	if err != nil || !strings.Contains(string(output), "running build = engram v11 live-linux") || strings.Contains(string(output), "installed-build-must-not-be-used") {

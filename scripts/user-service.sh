@@ -35,7 +35,7 @@ install_common() {
   fi
 }
 
-install_darwin() {
+install_darwin_definition() {
   install_common
   install -d -m 0700 "$HOME/Library/LaunchAgents"
   local escaped_binary escaped_env escaped_status escaped_home escaped_path
@@ -70,11 +70,17 @@ install_darwin() {
 EOF
   plutil -lint "$candidate" >/dev/null
   install -m 0600 "$candidate" "$plist"
+  rm -f "$candidate"
+  trap - RETURN
   echo "installed $plist"
+}
+
+install_darwin() {
+  install_darwin_definition
   echo "the running service was not changed; run 'make service-start' or 'make service-restart' explicitly"
 }
 
-install_linux() {
+install_linux_definition() {
   install_common
   install -d -m 0700 "$HOME/.config/systemd/user"
   cat >"$unit" <<EOF
@@ -95,8 +101,12 @@ RestartSec=5
 WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now engram.service
   echo "installed $unit"
+}
+
+install_linux() {
+  install_linux_definition
+  systemctl --user enable --now engram.service
 }
 
 darwin_start() { launchctl bootstrap "gui/$UID" "$plist"; }
@@ -143,8 +153,10 @@ case "$action" in
     ;;
   restart)
     if [[ $platform == Darwin ]]; then
+      install_darwin_definition
       darwin_restart
     else
+      install_linux_definition
       systemctl --user restart engram.service
     fi
     ;;
