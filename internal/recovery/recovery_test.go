@@ -53,12 +53,13 @@ func TestParseClaudeSessionStart(t *testing.T) {
   "transcript_path":"/Users/example/.claude/projects/-work/019f7607-c8b0-74b3-87ca-64a7e6e7ede0.jsonl",
   "cwd":"/work",
   "hook_event_name":"SessionStart",
-  "source":"fork"
+  "source":"fork",
+  "model":"claude-opus-4-8"
 }`), now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Program != ProgramClaude || metadata.Source != "fork" || metadata.CWD != "/work" || metadata.TranscriptPath == "" || !metadata.Observed.Equal(now) {
+	if metadata.Program != ProgramClaude || metadata.Source != "fork" || metadata.Model != "claude-opus-4-8" || metadata.CWD != "/work" || metadata.TranscriptPath == "" || !metadata.Observed.Equal(now) {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 	encoded, err := Encode(metadata)
@@ -79,6 +80,7 @@ func TestParseClaudeSessionStartRejectsUnsafeInput(t *testing.T) {
 		`{"session_id":"` + validID + `","transcript_path":"/tmp/019f7607-c8b0-74b3-87ca-64a7e6e7ede1.jsonl","hook_event_name":"SessionStart","source":"startup"}`,
 		`{"session_id":"` + validID + `","transcript_path":"/tmp/session.jsonl","hook_event_name":"Stop","source":"startup"}`,
 		`{"session_id":"` + validID + `","transcript_path":"/tmp/session.jsonl","hook_event_name":"SessionStart","source":"unknown"}`,
+		`{"session_id":"` + validID + `","transcript_path":"/tmp/` + validID + `.jsonl","hook_event_name":"SessionStart","source":"startup","model":"claude opus secret"}`,
 		`{"session_id":"bad","transcript_path":"/tmp/session.jsonl","hook_event_name":"SessionStart","source":"startup"}`,
 	} {
 		if _, err := ParseClaudeSessionStart(strings.NewReader(input), time.Time{}); err == nil {

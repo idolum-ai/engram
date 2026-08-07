@@ -3,20 +3,25 @@ package codexui
 import (
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
 var elapsedDecoration = regexp.MustCompile(`^[─━═]+ Worked for (?:[0-9]+h )?(?:[0-9]+m )?[0-9]+s [─━═]+$`)
+var turnDuration = regexp.MustCompile(`\bWorked for ((?:[0-9]+h )?(?:[0-9]+m )?[0-9]+s)\b`)
 
 type Presentation struct {
-	Text     string
-	Applied  bool
-	Version  string
-	Model    string
-	Effort   string
-	Mode     string
-	Activity string
-	Notice   string
+	Text             string
+	Applied          bool
+	Version          string
+	Model            string
+	Effort           string
+	Mode             string
+	Activity         string
+	Notice           string
+	LastTurnSeconds  int
+	ViewportStart    int
+	ViewportBoundary string
 }
 
 func Present(runtime Runtime, text string) Presentation {
@@ -30,6 +35,14 @@ func Present(runtime Runtime, text string) Presentation {
 		return fallback
 	}
 	remove := make([]bool, len(lines))
+	viewportStart, viewportBoundary := 0, ""
+	if boundary, found := codexStartupBoundary(lines, runtime.Version, model); found {
+		viewportStart = boundary + 1
+		viewportBoundary = "codex_startup_card"
+		for index := 0; index <= boundary; index++ {
+			remove[index] = true
+		}
+	}
 	remove[footer] = true
 	activity := "idle"
 	for i := max(0, footer-8); i < footer; i++ {
@@ -78,7 +91,53 @@ func Present(runtime Runtime, text string) Presentation {
 	return Presentation{
 		Text: cleaned, Applied: true, Version: runtime.Version, Model: model,
 		Effort: effort, Mode: mode, Activity: activity, Notice: notice,
+		LastTurnSeconds: lastTurnSeconds(lines), ViewportStart: viewportStart, ViewportBoundary: viewportBoundary,
 	}
+}
+
+func codexStartupBoundary(lines []string, version, model string) (int, bool) {
+	for start := 0; start < len(lines) && start < 12; start++ {
+		trimmed := strings.TrimSpace(lines[start])
+		if !strings.HasPrefix(trimmed, "╭") || !strings.HasSuffix(trimmed, "╮") {
+			continue
+		}
+		identified := false
+		modelIdentified := false
+		for end := start + 1; end < len(lines) && end <= start+10; end++ {
+			line := strings.TrimSpace(lines[end])
+			if strings.Contains(line, ">_ OpenAI Codex") && strings.Contains(line, "(v"+version+")") {
+				identified = true
+			}
+			if strings.HasPrefix(strings.TrimSpace(strings.Trim(line, "│")), "model:") && strings.Contains(line, model) {
+				modelIdentified = true
+			}
+			if strings.HasPrefix(line, "╰") && strings.HasSuffix(line, "╯") {
+				if identified && modelIdentified {
+					return end, true
+				}
+				break
+			}
+		}
+	}
+	return 0, false
+}
+
+func lastTurnSeconds(lines []string) int {
+	for index := len(lines) - 1; index >= 0; index-- {
+		trimmed := strings.TrimSpace(lines[index])
+		if !elapsedLine(trimmed) {
+			continue
+		}
+		match := turnDuration.FindStringSubmatch(trimmed)
+		if len(match) != 2 {
+			continue
+		}
+		duration, err := time.ParseDuration(strings.ReplaceAll(match[1], " ", ""))
+		if err == nil && duration > 0 && duration <= 7*24*time.Hour {
+			return int(duration / time.Second)
+		}
+	}
+	return 0
 }
 
 func findFooter(lines []string) (index int, model, effort, mode string, ok bool) {

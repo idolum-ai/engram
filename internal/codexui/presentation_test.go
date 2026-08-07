@@ -31,6 +31,9 @@ func TestPresentRemovesObservedCodexChromeAndKeepsConversation(t *testing.T) {
 	if !got.Applied || got.Model != "gpt-5.6-sol" || got.Effort != "high" || got.Activity != "working" {
 		t.Fatalf("presentation metadata = %#v", got)
 	}
+	if got.LastTurnSeconds != 68 {
+		t.Fatalf("last turn seconds = %d", got.LastTurnSeconds)
+	}
 	for _, noise := range []string{"Automatic approval", "Auto-reviewer", "Worked for", "Write tests for", "Working (", "gpt-5.6-sol", "────"} {
 		if strings.Contains(got.Text, noise) {
 			t.Fatalf("cleaned text retained %q: %q", noise, got.Text)
@@ -40,6 +43,49 @@ func TestPresentRemovesObservedCodexChromeAndKeepsConversation(t *testing.T) {
 		if !strings.Contains(got.Text, evidence) {
 			t.Fatalf("cleaned text dropped %q: %q", evidence, got.Text)
 		}
+	}
+}
+
+func TestPresentUsesExactCodexStartupCardAsSemanticBoundary(t *testing.T) {
+	input := strings.Join([]string{
+		"example@host % codex --bad-option",
+		"error: unexpected argument",
+		"╭──────────────────────────────╮",
+		"│ >_ OpenAI Codex (v" + SupportedVersion + ") │",
+		"│ model: gpt-5.6-sol          │",
+		"╰──────────────────────────────╯",
+		"",
+		"• Current work is visible.",
+		"",
+		"gpt-5.6-sol high · /work",
+	}, "\n")
+	got := Present(Runtime{Detected: true, Supported: true, Version: SupportedVersion}, input)
+	if !got.Applied || got.ViewportBoundary != "codex_startup_card" || got.ViewportStart != 6 || strings.Contains(got.Text, "--bad-option") || !strings.Contains(got.Text, "Current work is visible") {
+		t.Fatalf("presentation = %#v", got)
+	}
+}
+
+func TestPresentDoesNotUseQuotedCodexBannerAsBoundary(t *testing.T) {
+	input := "• The string >_ OpenAI Codex (v" + SupportedVersion + ") is documentation.\n\ngpt-5.6-sol high · /work"
+	got := Present(Runtime{Detected: true, Supported: true, Version: SupportedVersion}, input)
+	if !got.Applied || got.ViewportBoundary != "" || !strings.Contains(got.Text, "documentation") {
+		t.Fatalf("quoted banner changed viewport: %#v", got)
+	}
+}
+
+func TestPresentDoesNotUseIncompleteCodexCardAsStartupBoundary(t *testing.T) {
+	input := strings.Join([]string{
+		"• Documentation reproduces this box:",
+		"╭──────────────────────────────╮",
+		"│ >_ OpenAI Codex (v" + SupportedVersion + ") │",
+		"╰──────────────────────────────╯",
+		"• Keep the quoted box visible.",
+		"",
+		"gpt-5.6-sol high · /work",
+	}, "\n")
+	got := Present(Runtime{Detected: true, Supported: true, Version: SupportedVersion}, input)
+	if !got.Applied || got.ViewportBoundary != "" || !strings.Contains(got.Text, "Documentation reproduces") || !strings.Contains(got.Text, "OpenAI Codex") {
+		t.Fatalf("incomplete card changed viewport: %#v", got)
 	}
 }
 

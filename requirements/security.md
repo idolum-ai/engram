@@ -102,6 +102,14 @@ privacy model must stay small and explicit.
   match the filename and bounded record `sessionId` values. The transcript must
   be an owned regular non-symlink file. Recency, cwd, title, and model discovery
   are forbidden fallbacks.
+- Claude's documented `SessionStart.model` may populate only bounded structured
+  presentation with explicit hook provenance. It is not process or transcript
+  identity and is cleared at every lifecycle or process-incarnation boundary.
+  Codex hook model fields are not accepted without an official contract.
+- Agent compatibility diagnostics and fixture inventories never print or store
+  terminal messages, transcript values, working directories, executable or
+  transcript paths, UUIDs, task text, or agent names. Fixture capture uses an
+  allow-list transform before writing and requires human review before check-in.
 - `engram claude-bind` is an optional migration path for sessions that predate
   the official hook. It accepts no arguments, uses inherited `TMUX_PANE`, and
   may publish a candidate only after proving one live Claude process, a bounded

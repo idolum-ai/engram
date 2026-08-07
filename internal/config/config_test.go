@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -32,6 +33,26 @@ func TestArtifactDirPrefersPrivateXDGRunTimeDir(t *testing.T) {
 		if !info.IsDir() || info.Mode().Perm() != 0o700 {
 			t.Fatalf("private dir %s has mode %v", path, info.Mode())
 		}
+	}
+}
+
+func TestLoadAgentOptionsReadsNoCredentialsAndEnforcesBounds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(path, []byte("TELEGRAM_BOT_TOKEN=private\nOPENAI_API_KEY=private-too\nENGRAM_CODEX_CONTEXT_TURNS=3\nENGRAM_CLAUDE_CONTEXT_TURNS=4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadAgentOptions(path)
+	if err != nil || got.CodexContextTurns != 3 || got.ClaudeContextTurns != 4 {
+		t.Fatalf("options=%#v err=%v", got, err)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", got), "private") {
+		t.Fatalf("options retained credentials: %#v", got)
+	}
+	if err := os.WriteFile(path, []byte("ENGRAM_CLAUDE_CONTEXT_TURNS=9\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAgentOptions(path); err == nil {
+		t.Fatal("out-of-range context option accepted")
 	}
 }
 

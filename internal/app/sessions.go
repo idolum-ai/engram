@@ -158,6 +158,7 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 			return actionResult{Outcome: actionStateFailed, Message: "session changed while attaching"}
 		}
 		existing = lockedCurrent
+		detailChatID, detailMessageID := existing.AgentDetailChatID, existing.AgentDetailMessageID
 		if err := a.neutralizeAnchorForReattachLocked(ctx, existing); err != nil {
 			anchorLock.Unlock()
 			lock.Unlock()
@@ -184,6 +185,8 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 			s.UpstreamRetryAt = time.Time{}
 			retireAlternateReplyTargets(s)
 			setAnchorFiles(s, nil)
+			resetAgentIntegrationState(s)
+			clearAgentDetailState(s)
 		})
 		committed := found && applied && (updateErr == nil || state.PersistenceReachedReplacement(updateErr))
 		if updateErr != nil && committed {
@@ -200,6 +203,9 @@ func (a *App) attachTarget(ctx context.Context, msg telegram.Message, target str
 		a.resetConversationEpochLocked(updated.ID)
 		anchorLock.Unlock()
 		lock.Unlock()
+		if detailChatID != 0 && detailMessageID != 0 {
+			a.retireProspectiveMessage(ctx, detailChatID, detailMessageID)
+		}
 		a.reply(ctx, msg, fmt.Sprintf("reattached %s as [%d]", window.PaneID, updated.ID))
 		a.advertiseTerminalCapabilities(ctx, updated)
 		a.reconcileAnchorPresentation(ctx, updated.ID)
@@ -524,6 +530,7 @@ func clearRecoveryMetadata(session *state.TerminalSession) {
 	session.ResumeSessionID = ""
 	session.PendingResume = nil
 	session.RecoveryEvents = nil
+	resetAgentIntegrationState(session)
 }
 
 func closeConfirmationText(ts state.TerminalSession) string {
@@ -558,6 +565,7 @@ func (a *App) markSessionLostConditionally(ctx context.Context, ts state.Termina
 		}
 		s.State = state.TerminalLost
 		s.WatchEnabled = false
+		resetAgentIntegrationState(s)
 		applied = true
 	})
 	committed := found && applied && (err == nil || state.PersistenceReachedReplacement(err))

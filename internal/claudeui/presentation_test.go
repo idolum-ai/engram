@@ -67,6 +67,9 @@ func TestAnalyzeClaude224SeparatesStartupConversationAndTeamFooter(t *testing.T)
 	if !got.Applied || got.Model != "claude-opus-4-8" || got.Mode != "manual" || got.Activity != agentui.ActivityIdle {
 		t.Fatalf("analysis = %#v", got)
 	}
+	if got.ModelObserved || got.LastTurnSeconds != 14*60+46 || got.AgentTotal != 3 || got.AgentActive != 1 || got.ViewportBoundary != "claude_trust_prompt" || got.ViewportStart != 10 {
+		t.Fatalf("structured metadata = %#v", got)
+	}
 	for _, wanted := range []string{"Please review the fixture behavior", "Agent \"Review the fixture\" finished", "The visible result is ready"} {
 		if !strings.Contains(got.Conversation, wanted) {
 			t.Fatalf("conversation omitted %q: %q", wanted, got.Conversation)
@@ -84,6 +87,14 @@ func TestAnalyzeClaude224AcceptsChangingInteractionMode(t *testing.T) {
 	got := Analyze(supportedRuntime("runtime-mode"), agentui.Observation{Current: claudeFrame(input)}, "")
 	if !got.Applied || got.Mode != "accept-edits" || got.Activity != agentui.ActivityIdle {
 		t.Fatalf("analysis = %#v", got)
+	}
+}
+
+func TestAnalyzeClaude224DoesNotPublishUnknownInteractionTextAsMetadata(t *testing.T) {
+	input := "⏺ Waiting for input.\n\n────────────\n❯\n────────────\n  ⏵ private-project mode on · ? for shortcuts · ← for agents"
+	got := Analyze(supportedRuntime("runtime-private-mode"), agentui.Observation{Current: claudeFrame(input)}, "")
+	if got.Mode != "" || !strings.Contains(got.Conversation, "private-project mode") {
+		t.Fatalf("unknown interaction was hidden or published: %#v", got)
 	}
 }
 

@@ -11,6 +11,13 @@ Engram is a long-running service. Failure must be visible and recoverable.
 - Keep polling and tmux input responsive while terminal images render and upload.
 - Keep polling and tmux input responsive while upstream signals refresh or notify.
 - Prefer truthful degraded presentation over missing anchors.
+- Persist agent compatibility axes independently. Process replacement and
+  terminal lifecycle transitions atomically clear process-bound viewport,
+  retained presentation, declared model provenance, and expandable-detail
+  identity before later observations can repopulate them.
+- Service installation never hides activation inside binary replacement;
+  explicit start/restart and credential-free live-build status are available on
+  Linux and macOS, while stopping Engram preserves tmux descendants.
 
 ## Audit
 

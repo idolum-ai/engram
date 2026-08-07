@@ -11,12 +11,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/config"
 	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
+
+func TestRecoveryMetadataChangeTreatsNewSameSessionHookObservationAsRebind(t *testing.T) {
+	first := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	session := state.TerminalSession{
+		ResumeProgram: recovery.ProgramClaude, ResumeSessionID: recoveryTestSessionID,
+		RecoveryEvents: []state.RecoveryEvent{{At: first, Kind: "provider_session", Program: recovery.ProgramClaude, ProviderSessionID: recoveryTestSessionID}},
+	}
+	metadata := recovery.Metadata{Program: recovery.ProgramClaude, SessionID: recoveryTestSessionID, Observed: first}
+	if recoveryMetadataChange(session, metadata, nil) {
+		t.Fatal("identical hook observation was treated as a rebind")
+	}
+	metadata.Observed = first.Add(time.Minute)
+	if !recoveryMetadataChange(session, metadata, nil) {
+		t.Fatal("new same-session hook observation did not rebase semantic state")
+	}
+}
 
 const recoveryTestSessionID = "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"
 
@@ -217,6 +234,7 @@ func TestRecoveryReconciliationAutomaticallyPersistsClaudeHook(t *testing.T) {
 	encoded, err := recovery.Encode(recovery.Metadata{
 		Program: recovery.ProgramClaude, SessionID: recoveryTestSessionID, CWD: "/work",
 		TranscriptPath: "/tmp/" + recoveryTestSessionID + ".jsonl",
+		Model:          "claude-opus-4-8",
 		Source:         "fork", Observed: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
@@ -227,7 +245,7 @@ func TestRecoveryReconciliationAutomaticallyPersistsClaudeHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	current, _ := app.Store.FindSession(session.ID)
-	if current.ResumeProgram != recovery.ProgramClaude || current.ResumeSessionID != recoveryTestSessionID {
+	if current.ResumeProgram != recovery.ProgramClaude || current.ResumeSessionID != recoveryTestSessionID || current.DeclaredModel.Value != "claude-opus-4-8" || current.DeclaredModel.Provenance != agentcompat.ProvenanceHook {
 		t.Fatalf("Claude provider mapping = %#v", current)
 	}
 	if len(current.RecoveryEvents) != 1 || current.RecoveryEvents[0].Validation != "provider_hook" {

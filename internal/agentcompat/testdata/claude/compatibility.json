@@ -1,0 +1,9 @@
+{
+  "format": "engram-reviewed-compatibility-v1",
+  "provider": "claude",
+  "process_contract": "claude-process-v1",
+  "binding_contract": "claude-session-start-v1",
+  "screen_contract": "claude-screen-v1",
+  "transcript_contract": "claude-transcript-v1",
+  "contains_live_content": false
+}

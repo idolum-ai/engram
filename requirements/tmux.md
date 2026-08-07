@@ -161,6 +161,15 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   neighbors. These fields direct attention and conversational tone; they never
   replace or override the complete current terminal evidence. Engram does not
   remember submitted Telegram input for this purpose.
+- Codex and Claude Code support consists of independent process, pane-binding,
+  screen-grammar, and transcript-parser axes. An unsupported screen must not
+  disable an otherwise proven transcript, and a disabled transcript must not
+  weaken process or screen truth.
+- A semantic startup viewport may trim only a complete exact versioned startup
+  boundary. It is bound to process incarnation, screen contract, tmux identity,
+  copy mode, and alternate-screen state and is reset on restart, rebind,
+  reattach, pane adoption, resume, or process replacement. Raw text,
+  screenshots, references, and dumps remain literal.
 - A different binding, foreground command, pane size, alternate-screen state,
   copy-mode state, weak line alignment, manual refresh, mode switch,
   reattachment, or service restart discards conversational hints. Continuity

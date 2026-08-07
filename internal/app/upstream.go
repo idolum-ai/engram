@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/agentui"
 	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexui"
@@ -50,20 +51,53 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 		a.deliverUpstreamSignalWithArtifacts(ctx, observed, observation.Latest, a.intentionalArtifactPaths(observation.PresentationText, capture.Hyperlinks))
 	}
 	presentationText := observation.PresentationText
+	// Integration state may survive transient process-inspection failures, but
+	// only while at least one provider probe remains inconclusive. Once every
+	// configured provider definitively reports that its process is absent, the
+	// pane has returned to a non-agent foreground process and stale status must
+	// not remain attached to the terminal card.
+	providersAbsent := a.ClaudeDetector != nil && a.CodexDetector != nil
 	if a.ClaudeDetector != nil {
 		runtime, err := a.ClaudeDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
 		if err != nil {
+			providersAbsent = false
 			a.recordPresentationDecision(observed, "claude", runtime.Version, "unavailable", "runtime_detection_failed", false, "")
 			if runtime.Detected {
+				process := unavailableProcessAxis(agentcompat.ProviderClaude, processProbeReason(err), runtime.Version)
+				screen := screenAxis(agentcompat.ProviderClaude, runtime.Version, false, agentcompat.ReasonScreenVersionUnknown)
+				a.recordCompatibility(observed, agentcompat.ProviderClaude, &process, nil, &screen, nil)
+				a.clearAgentStructures(observed)
 				return presentationText
 			}
-		} else if runtime.Detected && runtime.Supported {
+		} else if runtime.Detected {
+			process := unavailableProcessAxis(agentcompat.ProviderClaude, agentcompat.ReasonProcessIdentityUnproven, runtime.Version)
+			if runtime.PID > 0 && runtime.Identity != "" && !runtime.StartedAt.IsZero() {
+				process = provenProcessAxis(agentcompat.ProviderClaude, runtime.Version)
+				a.invalidateAgentProcessReplacement(observed, agentcompat.ProviderClaude, runtime.Identity)
+			}
+			a.recordRuntimeBinding(ctx, observed, agentcompat.ProviderClaude, runtime.StartedAt)
+			if !runtime.Supported {
+				screen := screenAxis(agentcompat.ProviderClaude, runtime.Version, false, agentcompat.ReasonScreenVersionUnknown)
+				a.recordCompatibility(observed, agentcompat.ProviderClaude, &process, nil, &screen, nil)
+				a.clearAgentStructures(observed)
+				if current, ok := a.Store.FindSession(observed.ID); ok && current.PresentationProgram == "claude" {
+					a.clearPresentation(observed, "unsupported_version")
+				}
+				a.recordPresentationDecision(observed, "claude", runtime.Version, "literal", "unsupported_version", false, "")
+				return presentationText
+			}
 			analysis := a.analyzeClaudeFrame(observed, capture, presentationText, runtime)
 			if analysis.Applied {
+				screen := screenAxis(agentcompat.ProviderClaude, runtime.Version, true, agentcompat.ReasonNone)
+				a.recordCompatibility(observed, agentcompat.ProviderClaude, &process, nil, &screen, nil)
 				a.recordClaudePresentation(observed, runtime, analysis)
+				a.recordClaudeStructuredPresentation(observed, runtime.Identity, runtime.StartedAt, analysis, capture)
 				a.recordPresentationDecision(observed, "claude", runtime.Version, "applied", "runtime_and_layout_verified", analysis.Model != "", string(analysis.Activity))
 				return analysis.Conversation
 			}
+			screen := screenAxis(agentcompat.ProviderClaude, runtime.Version, false, agentcompat.ReasonScreenLayoutUnknown)
+			a.recordCompatibility(observed, agentcompat.ProviderClaude, &process, nil, &screen, nil)
+			a.clearAgentStructures(observed)
 			if current, ok := a.Store.FindSession(observed.ID); ok && current.PresentationProgram == "claude" {
 				reason := "layout_unrecognized"
 				if current.PresentationRuntimeID != runtime.Identity {
@@ -73,52 +107,84 @@ func (a *App) processCapturedFrame(ctx context.Context, observed state.TerminalS
 			}
 			a.recordPresentationDecision(observed, "claude", runtime.Version, "literal", "layout_unrecognized", false, "")
 			return presentationText
-		} else if runtime.Detected {
-			if current, ok := a.Store.FindSession(observed.ID); ok && current.PresentationProgram == "claude" {
-				a.clearPresentation(observed, "unsupported_version")
-			}
-			a.recordPresentationDecision(observed, "claude", runtime.Version, "literal", "unsupported_version", false, "")
-			return presentationText
 		}
 	}
-	analysis := a.analyzeAgentFrame(observed, capture, presentationText)
-	if analysis.Applied {
-		a.recordAgentPresentation(observed, analysis)
-		a.recordPresentationDecision(observed, "agent", "", "applied", "structural_anchor_verified", analysis.Model != "", string(analysis.Activity))
-		return analysis.Conversation
-	}
 	if a.CodexDetector == nil {
-		a.recordPresentationDecision(observed, "", "", "literal", "no_adapter_applied", false, "")
-		return presentationText
+		return a.processGenericAgentFrame(observed, capture, presentationText)
 	}
 	runtime, err := a.CodexDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
 	if err != nil {
+		providersAbsent = false
 		a.recordPresentationDecision(observed, "codex", runtime.Version, "unavailable", "runtime_detection_failed", false, "")
-		return presentationText
+		if runtime.Detected {
+			process := unavailableProcessAxis(agentcompat.ProviderCodex, processProbeReason(err), runtime.Version)
+			screen := screenAxis(agentcompat.ProviderCodex, runtime.Version, false, agentcompat.ReasonScreenVersionUnknown)
+			a.recordCompatibility(observed, agentcompat.ProviderCodex, &process, nil, &screen, nil)
+			a.clearAgentStructures(observed)
+			return presentationText
+		}
+		return a.processGenericAgentFrame(observed, capture, presentationText)
 	}
+	if !runtime.Detected {
+		if providersAbsent {
+			a.clearAgentIntegrationState(observed)
+		}
+		return a.processGenericAgentFrame(observed, capture, presentationText)
+	}
+	process := unavailableProcessAxis(agentcompat.ProviderCodex, agentcompat.ReasonProcessIdentityUnproven, runtime.Version)
+	if runtime.Identity != "" && !runtime.StartedAt.IsZero() {
+		process = provenProcessAxis(agentcompat.ProviderCodex, runtime.Version)
+		a.invalidateAgentProcessReplacement(observed, agentcompat.ProviderCodex, runtime.Identity)
+	}
+	a.recordRuntimeBinding(ctx, observed, agentcompat.ProviderCodex, runtime.StartedAt)
 	presentation := codexui.Present(runtime, presentationText)
 	a.recordCodexPresentation(observed, runtime, presentation)
 	if presentation.Applied {
+		screen := screenAxis(agentcompat.ProviderCodex, runtime.Version, true, agentcompat.ReasonNone)
+		a.recordCompatibility(observed, agentcompat.ProviderCodex, &process, nil, &screen, nil)
+		a.recordCodexStructuredPresentation(observed, runtime.Identity, presentation, capture)
 		a.recordPresentationDecision(observed, "codex", presentation.Version, "applied", "runtime_and_layout_verified", presentation.Model != "", presentation.Activity)
 	} else {
+		reason := agentcompat.ReasonScreenLayoutUnknown
+		if !runtime.Supported {
+			reason = agentcompat.ReasonScreenVersionUnknown
+		}
+		screen := screenAxis(agentcompat.ProviderCodex, runtime.Version, false, reason)
+		a.recordCompatibility(observed, agentcompat.ProviderCodex, &process, nil, &screen, nil)
+		a.clearAgentStructures(observed)
 		a.recordPresentationDecision(observed, "codex", runtime.Version, "literal", "runtime_or_layout_unrecognized", false, "")
 	}
 	return presentation.Text
 }
 
+func (a *App) processGenericAgentFrame(observed state.TerminalSession, capture tmux.StyledCapture, text string) string {
+	analysis := a.analyzeAgentFrame(observed, capture, text)
+	if analysis.Applied {
+		a.recordAgentPresentation(observed, analysis)
+		a.recordPresentationDecision(observed, "agent", "", "applied", "structural_anchor_verified", analysis.Model != "", string(analysis.Activity))
+		return analysis.Conversation
+	}
+	a.recordPresentationDecision(observed, "", "", "literal", "no_adapter_applied", false, "")
+	return text
+}
+
 func (a *App) analyzeAgentFrame(observed state.TerminalSession, capture tmux.StyledCapture, text string) agentui.Analysis {
-	return a.analyzeFrame(observed, capture, text, "", "", func(observation agentui.Observation, _ string) agentui.Analysis {
+	return a.analyzeFrame(observed, capture, text, "", "", "", func(observation agentui.Observation, _ string) agentui.Analysis {
 		return agentui.Analyze(observation)
 	})
 }
 
 func (a *App) analyzeClaudeFrame(observed state.TerminalSession, capture tmux.StyledCapture, text string, runtime claudeui.Runtime) agentui.Analysis {
-	return a.analyzeFrame(observed, capture, text, "claude", runtime.Identity, func(observation agentui.Observation, model string) agentui.Analysis {
+	declaredModel := ""
+	if current, ok := a.Store.FindSession(observed.ID); ok && current.DeclaredModel.Provenance == agentcompat.ProvenanceHook && !current.DeclaredModelObservedAt.Before(runtime.StartedAt) {
+		declaredModel = current.DeclaredModel.Value
+	}
+	return a.analyzeFrame(observed, capture, text, "claude", runtime.Identity, declaredModel, func(observation agentui.Observation, model string) agentui.Analysis {
 		return claudeui.Analyze(runtime, observation, model)
 	})
 }
 
-func (a *App) analyzeFrame(observed state.TerminalSession, capture tmux.StyledCapture, text, program, runtimeID string, analyze func(agentui.Observation, string) agentui.Analysis) agentui.Analysis {
+func (a *App) analyzeFrame(observed state.TerminalSession, capture tmux.StyledCapture, text, program, runtimeID, declaredModel string, analyze func(agentui.Observation, string) agentui.Analysis) agentui.Analysis {
 	current := agentui.Frame{
 		Text:            text,
 		CurrentCommand:  strings.TrimSpace(capture.CurrentCmd),
@@ -152,17 +218,19 @@ func (a *App) analyzeFrame(observed state.TerminalSession, capture tmux.StyledCa
 	}
 	previousState, found := a.agentFrames[observed.ID]
 	var previous *agentui.Frame
-	verifiedModel := ""
+	verifiedModel := declaredModel
 	sameFrameBoundary := found && sameAgentFrameBinding(previousState, frameState)
 	sameRuntimeBoundary := program != "claude" || previousState.claudeRuntime == runtimeID
 	if sameFrameBoundary && sameRuntimeBoundary {
 		copy := previousState.frame
 		previous = &copy
-		if program == "claude" && previousState.claudeRuntime == runtimeID {
+		if program == "claude" && previousState.claudeRuntime == runtimeID && previousState.verifiedModel != "" {
 			verifiedModel = previousState.verifiedModel
 		}
 	}
-	if verifiedModel == "" && program == "claude" && latest.PresentationProgram == "claude" && latest.PresentationRuntimeID == runtimeID {
+	if verifiedModel == "" && program == "claude" && latest.SemanticViewport.RuntimeIdentity == runtimeID && latest.AgentPresentation.Model.Value != "" {
+		verifiedModel = latest.AgentPresentation.Model.Value
+	} else if verifiedModel == "" && program == "claude" && latest.PresentationProgram == "claude" && latest.PresentationRuntimeID == runtimeID {
 		verifiedModel = latest.PresentationModel
 	}
 	analysis := analyze(agentui.Observation{Current: current, Previous: previous}, verifiedModel)

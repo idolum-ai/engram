@@ -1,0 +1,9 @@
+{
+  "format": "engram-reviewed-compatibility-v1",
+  "provider": "codex",
+  "process_contract": "codex-process-v1",
+  "binding_contract": "codex-session-start-v1",
+  "screen_contract": "codex-screen-v1",
+  "transcript_contract": "codex-rollout-v1",
+  "contains_live_content": false
+}

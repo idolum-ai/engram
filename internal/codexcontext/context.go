@@ -56,6 +56,19 @@ func DefaultSessionsRoot() string {
 	return filepath.Join(home, ".codex", "sessions")
 }
 
+// ExactRolloutPath resolves one hook-bound rollout without reading message
+// content. It is exposed for the opt-in compatibility fixture inventory.
+func ExactRolloutPath(root, sessionID string) (string, error) {
+	if !validSessionID(sessionID) {
+		return "", fmt.Errorf("invalid Codex session identity")
+	}
+	root = filepath.Clean(root)
+	if root == "." || !filepath.IsAbs(root) {
+		return "", fmt.Errorf("Codex sessions root is unavailable")
+	}
+	return exactRolloutPath(root, strings.ToLower(sessionID))
+}
+
 func (r Reader) Load(sessionID string, turnLimit int, transforms ...func(string) string) (Context, error) {
 	if !validSessionID(sessionID) {
 		return Context{}, fmt.Errorf("invalid Codex session identity")

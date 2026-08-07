@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/sessioncontext"
 	"github.com/idolum-ai/engram/internal/state"
@@ -51,30 +52,56 @@ func (a *App) sessionContextForCapture(ctx context.Context, expected state.Termi
 		return sessionContextSnapshot{}
 	}
 	metadata, metadataErr := a.sessionRecoveryMetadata(ctx, expected)
-	if metadataErr != nil || !recovery.ValidProgram(metadata.Program) {
+	if metadataErr != nil {
+		provider := expected.AgentCompatibility.Provider
+		if agentcompat.ValidProvider(provider) && strings.Contains(strings.ToLower(metadataErr.Error()), "unsupported") {
+			binding := bindingAxis(provider, agentcompat.StateUnsupported, agentcompat.ReasonBindingUnsupported)
+			a.recordCompatibility(expected, provider, nil, &binding, nil, nil)
+		}
 		return sessionContextSnapshot{}
 	}
+	if !recovery.ValidProgram(metadata.Program) {
+		provider := expected.AgentCompatibility.Provider
+		if agentcompat.ValidProvider(provider) {
+			binding := bindingAxis(provider, agentcompat.StateMissing, agentcompat.ReasonBindingMissing)
+			a.recordCompatibility(expected, provider, nil, &binding, nil, nil)
+		}
+		return sessionContextSnapshot{}
+	}
+	provider := agentcompat.Provider(metadata.Program)
 	limit := a.contextTurnLimit(metadata.Program)
-	if limit <= 0 {
-		a.recordSessionContextDecision(expected.ID, metadata.Program, "", "disabled", "context_disabled", "", 0, false)
-		return sessionContextSnapshot{}
-	}
 	runtime, err := a.detectContextRuntime(ctx, metadata.Program, capture)
 	if err != nil || !runtime.detected || runtime.identity == "" || runtime.startedAt.IsZero() {
+		binding := bindingAxis(provider, agentcompat.StateStale, agentcompat.ReasonProcessIdentityUnproven)
+		a.recordCompatibility(expected, provider, nil, &binding, nil, nil)
 		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "process_identity_unproven", "", 0, false)
 		return sessionContextSnapshot{}
 	}
-	if metadata.Program == recovery.ProgramClaude && !runtime.supported {
-		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "schema_unsupported", "", 0, false)
+	if !recovery.ValidSessionID(metadata.SessionID) || metadata.Observed.Before(runtime.startedAt) {
+		binding := bindingAxis(provider, agentcompat.StateStale, agentcompat.ReasonBindingStale)
+		a.recordCompatibility(expected, provider, nil, &binding, nil, nil)
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "session_identity_unproven", "", 0, false)
 		return sessionContextSnapshot{}
 	}
-	if !recovery.ValidSessionID(metadata.SessionID) || metadata.Observed.Before(runtime.startedAt) {
-		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "session_identity_unproven", "", 0, false)
+	binding := bindingAxis(provider, agentcompat.StateProven, agentcompat.ReasonNone)
+	a.recordCompatibility(expected, provider, nil, &binding, nil, nil)
+	if limit <= 0 {
+		transcript := transcriptAxis(provider, agentcompat.StateDisabled, agentcompat.ReasonContextDisabled, "")
+		a.recordCompatibility(expected, provider, nil, nil, nil, &transcript)
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "disabled", "context_disabled", "", 0, false)
 		return sessionContextSnapshot{}
 	}
 	loaded, err := a.loadSessionContext(metadata, limit)
 	if err != nil {
+		transcript := transcriptProbeAxis(provider, err)
+		a.recordCompatibility(expected, provider, nil, nil, nil, &transcript)
 		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "transcript_unavailable", "", 0, false)
+		return sessionContextSnapshot{}
+	}
+	if !supportedTranscriptParser(metadata.Program, loaded.Parser) {
+		transcript := transcriptAxis(provider, agentcompat.StateUnsupported, agentcompat.ReasonTranscriptUnsupported, loaded.Parser)
+		a.recordCompatibility(expected, provider, nil, nil, nil, &transcript)
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "schema_unsupported", loaded.Parser, 0, false)
 		return sessionContextSnapshot{}
 	}
 
@@ -102,10 +129,14 @@ func (a *App) sessionContextForCapture(ctx context.Context, expected state.Termi
 	latestMetadata, latestMetadataErr := a.sessionRecoveryMetadata(ctx, expected)
 	latest, tracked := a.Store.FindSession(expected.ID)
 	if afterErr != nil || after.identity == "" || after.identity != runtime.identity || latestMetadataErr != nil || recoveryMetadataIdentity(latestMetadata) != recoveryMetadataIdentity(metadata) || !tracked || !sameTerminalBinding(latest, expected) || !latest.CreatedAt.Equal(expected.CreatedAt) {
+		transcript := transcriptAxis(provider, agentcompat.StateUnavailable, agentcompat.ReasonIdentityChanged, loaded.Parser)
+		a.recordCompatibility(expected, provider, nil, nil, nil, &transcript)
 		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "identity_changed", loaded.Parser, 0, false)
 		return sessionContextSnapshot{}
 	}
 	if prompt == "" {
+		transcript := transcriptAxis(provider, agentcompat.StateEligible, agentcompat.ReasonTranscriptEligible, loaded.Parser)
+		a.recordCompatibility(expected, provider, nil, nil, nil, &transcript)
 		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "empty", "no_visible_messages", loaded.Parser, 0, false)
 		return sessionContextSnapshot{}
 	}
@@ -116,11 +147,40 @@ func (a *App) sessionContextForCapture(ctx context.Context, expected state.Termi
 		reason = "redaction_conflict"
 	}
 	a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "applied", reason, loaded.Parser, len(redacted), diagram != "")
+	transcript := transcriptAxis(provider, agentcompat.StateEligible, agentcompat.ReasonTranscriptEligible, loaded.Parser)
+	a.recordCompatibility(expected, provider, nil, nil, nil, &transcript)
 	return sessionContextSnapshot{
 		prompt: prompt, fingerprint: fingerprint, diagram: diagram, program: metadata.Program,
 		runtimeIdentity: runtime.identity, bindingIdentity: bindingIdentity,
 		panePID: capture.PanePID, currentCommand: capture.CurrentCmd,
 	}
+}
+
+func supportedTranscriptParser(program, parser string) bool {
+	switch program {
+	case recovery.ProgramCodex:
+		return parser == agentcompat.CodexTranscriptContract
+	case recovery.ProgramClaude:
+		return parser == agentcompat.ClaudeTranscriptContract
+	default:
+		return false
+	}
+}
+
+func bindingAxis(provider agentcompat.Provider, stateValue agentcompat.State, reason agentcompat.Reason) agentcompat.Axis {
+	contract := agentcompat.CodexBindingContract
+	if provider == agentcompat.ProviderClaude {
+		contract = agentcompat.ClaudeBindingContract
+	}
+	return agentcompat.Axis{State: stateValue, Contract: contract, Version: "1", Reason: reason}
+}
+
+func transcriptAxis(provider agentcompat.Provider, stateValue agentcompat.State, reason agentcompat.Reason, parser string) agentcompat.Axis {
+	contract := agentcompat.CodexTranscriptContract
+	if provider == agentcompat.ProviderClaude {
+		contract = agentcompat.ClaudeTranscriptContract
+	}
+	return agentcompat.Axis{State: stateValue, Contract: contract, Version: parser, Reason: reason}
 }
 
 func (a *App) contextTurnLimit(program string) int {
@@ -179,7 +239,7 @@ func (a *App) sessionRecoveryMetadata(ctx context.Context, expected state.Termin
 func recoveryMetadataIdentity(metadata recovery.Metadata) string {
 	return sha(strings.Join([]string{
 		fmt.Sprintf("%d", metadata.Version), metadata.Program, metadata.SessionID, metadata.CWD,
-		metadata.TranscriptPath, metadata.Source,
+		metadata.TranscriptPath, metadata.Model, metadata.Source,
 		metadata.Observed.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
 	}, "\x00"))
 }

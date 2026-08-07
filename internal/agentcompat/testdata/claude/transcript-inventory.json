@@ -1,0 +1,8 @@
+{
+  "format": "engram-transcript-inventory-v1",
+  "records": 3,
+  "root_keys": ["message", "sessionId", "type", "userType"],
+  "record_types": ["assistant", "user"],
+  "provenance_values": ["external"],
+  "content_types": ["text"]
+}

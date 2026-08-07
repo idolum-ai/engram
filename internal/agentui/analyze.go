@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -14,6 +15,7 @@ var (
 	glyphElapsed      = regexp.MustCompile(`(?i)^[^\pL\pN\s]\s*[\pL]+\s+for\s+(?:[0-9]+h\s+)?(?:[0-9]+m\s+)?[0-9]+s$`)
 	durationStatus    = regexp.MustCompile(`\((?:[0-9]+h\s+)?(?:[0-9]+m\s+)?[0-9]+s(?:\s*[•·;][^)]*)?\)`)
 	displayModel      = regexp.MustCompile(`(?i)\b(sonnet|opus|haiku|fable|gemini|gpt)[ -]([0-9]+(?:\.[0-9]+)*)(?:[ -]([a-z][a-z0-9]*))?\b`)
+	turnDuration      = regexp.MustCompile(`(?i)\b(?:worked|ran|completed|brewed|cooked|crunched)\s+for\s+((?:[0-9]+h\s+)?(?:[0-9]+m\s+)?[0-9]+s)\b`)
 )
 
 // Analyze conservatively interprets one bounded terminal frame. A recognized
@@ -34,12 +36,15 @@ func Analyze(observation Observation) Analysis {
 	}
 
 	footer, model, effort, mode, ok := findStatusFooter(lines)
+	modelObserved := ok && model != ""
 	modelLine := -1
 	if !ok {
 		footer, model, effort, mode, ok = findEmbeddedStatus(lines)
+		modelObserved = ok && model != ""
 	}
 	if !ok {
 		footer, model, effort, modelLine, ok = findCompositeStatus(lines)
+		modelObserved = ok && model != ""
 	}
 	if !ok && observation.VerifiedProgram == "claude" && strings.HasPrefix(observation.VerifiedModel, "claude-") && knownModel(observation.VerifiedModel) {
 		footer, effort, mode, ok = findVerifiedClaudeStatus(lines)
@@ -81,7 +86,7 @@ func Analyze(observation Observation) Analysis {
 	}
 
 	annotateConversation(lines, roles, confidence, evidence)
-	markChrome(lines, footer, model, observation.VerifiedProgram, remove, roles, confidence, evidence)
+	viewportStart, viewportBoundary := markChrome(lines, footer, model, observation.VerifiedProgram, remove, roles, confidence, evidence)
 	markTrailingPrompt(lines, footer, remove, roles, confidence, evidence)
 	markModelCard(lines, modelLine, remove, roles, confidence, evidence)
 	markCompletedApproval(lines, footer, remove, roles, confidence, evidence)
@@ -107,6 +112,11 @@ func Analyze(observation Observation) Analysis {
 	analysis.Effort = effort
 	analysis.Mode = mode
 	analysis.Activity = activity
+	analysis.ModelObserved = modelObserved
+	analysis.LastTurnSeconds = lastTurnSeconds(lines)
+	analysis.AgentTotal, analysis.AgentActive = agentCounts(lines, observation.VerifiedProgram, footer)
+	analysis.ViewportStart = viewportStart
+	analysis.ViewportBoundary = viewportBoundary
 	analysis.Confidence = 100
 	analysis.Applied = true
 	analysis.Regions = regionsFor(lines, roles, confidence, evidence, remove)
@@ -316,7 +326,12 @@ func claudeInteractionMode(value string) (string, bool) {
 		}
 		return "", false
 	}
-	return mode, true
+	switch mode {
+	case "manual", "accept-edits", "plan", "auto-accept", "bypass-permissions", "dont-ask":
+		return mode, true
+	default:
+		return "", false
+	}
 }
 
 func letterOrNumber(value string) bool {
@@ -614,9 +629,14 @@ func passivePrompt(prompt string) bool {
 	}
 }
 
-func markChrome(lines []string, footer int, model, verifiedProgram string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+func markChrome(lines []string, footer int, model, verifiedProgram string, remove []bool, roles []Role, confidence []int, evidence [][]string) (int, string) {
+	viewportStart := 0
+	viewportBoundary := ""
 	if verifiedProgram == "claude" {
-		markClaudeStartupPrelude(lines, remove, roles, confidence, evidence)
+		if boundary := markClaudeStartupPrelude(lines, remove, roles, confidence, evidence); boundary >= 0 {
+			viewportStart = boundary + 1
+			viewportBoundary = "claude_trust_prompt"
+		}
 	}
 	for index := range lines {
 		line := lines[index]
@@ -647,9 +667,10 @@ func markChrome(lines []string, footer int, model, verifiedProgram string, remov
 			markLine(remove, roles, confidence, evidence, index, RoleChrome, 96, true, "embedded-composer-status", "low-band-status")
 		}
 	}
+	return viewportStart, viewportBoundary
 }
 
-func markClaudeStartupPrelude(lines []string, remove []bool, roles []Role, confidence []int, evidence [][]string) {
+func markClaudeStartupPrelude(lines []string, remove []bool, roles []Role, confidence []int, evidence [][]string) int {
 	boundary := -1
 	for index, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "Quick safety check: Is this a project you created or one you trust?") {
@@ -658,21 +679,71 @@ func markClaudeStartupPrelude(lines []string, remove []bool, roles []Role, confi
 		}
 	}
 	if boundary < 0 {
-		return
+		return -1
 	}
 	workspace := false
+	workspaceIndex := -1
 	for index := max(0, boundary-6); index < boundary; index++ {
 		if strings.TrimSpace(lines[index]) == "Accessing workspace:" {
 			workspace = true
+			workspaceIndex = index
 			break
 		}
 	}
-	if !workspace {
-		return
+	if !workspace || workspaceIndex <= 0 || !separatorLine(strings.TrimSpace(lines[workspaceIndex-1])) {
+		return -1
 	}
 	for index := 0; index <= boundary; index++ {
 		markLine(remove, roles, confidence, evidence, index, RoleChrome, 100, true, "claude-startup-prelude", "versioned-runtime")
 	}
+	return boundary
+}
+
+func lastTurnSeconds(lines []string) int {
+	for index := len(lines) - 1; index >= 0; index-- {
+		trimmed := strings.TrimSpace(lines[index])
+		if !glyphElapsed.MatchString(trimmed) {
+			continue
+		}
+		match := turnDuration.FindStringSubmatch(trimmed)
+		if len(match) != 2 {
+			continue
+		}
+		value := strings.ReplaceAll(match[1], " ", "")
+		duration, err := time.ParseDuration(value)
+		if err == nil && duration > 0 && duration <= 7*24*time.Hour {
+			return int(duration / time.Second)
+		}
+	}
+	return 0
+}
+
+func agentCounts(lines []string, verifiedProgram string, footer int) (int, int) {
+	if verifiedProgram != "claude" {
+		return 0, 0
+	}
+	total := 0
+	start, end := max(0, footer-8), min(len(lines), footer+9)
+	for _, line := range lines[start:end] {
+		trimmed := strings.TrimSpace(line)
+		if !claudeAgentRoster(trimmed) {
+			continue
+		}
+		parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(trimmed, "⧉")), " · ")
+		total = len(parts)
+		break
+	}
+	if total == 0 {
+		return 0, 0
+	}
+	active := 0
+	for _, line := range lines[start:end] {
+		if claudeLabeledBorder(strings.TrimSpace(line)) {
+			active = 1
+			break
+		}
+	}
+	return total, active
 }
 
 func claudeLabeledBorder(line string) bool {

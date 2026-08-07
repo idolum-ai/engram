@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/idolum-ai/engram/internal/agentcompat"
 	"github.com/idolum-ai/engram/internal/atomicfile"
 )
 
@@ -108,58 +109,67 @@ type PendingRestore struct {
 }
 
 type TerminalSession struct {
-	ID                       int             `json:"id"`
-	TmuxSessionName          string          `json:"tmux_session_name"`
-	TmuxWindowID             string          `json:"tmux_window_id"`
-	TmuxPaneID               string          `json:"tmux_pane_id"`
-	TmuxServerID             string          `json:"tmux_server_id,omitempty"`
-	Origin                   TerminalOrigin  `json:"origin,omitempty"`
-	Title                    string          `json:"title"`
-	LastKnownCWD             string          `json:"last_known_cwd,omitempty"`
-	State                    TerminalState   `json:"state"`
-	CreatedAt                time.Time       `json:"created_at"`
-	UpdatedAt                time.Time       `json:"updated_at"`
-	LastActivityAt           time.Time       `json:"last_activity_at"`
-	LastRawCaptureHash       string          `json:"last_raw_capture_hash,omitempty"`
-	LastSnapshotCaptureHash  string          `json:"last_snapshot_capture_hash,omitempty"`
-	LastSnapshotAttemptAt    time.Time       `json:"last_snapshot_attempt_at,omitempty"`
-	LastRenderHash           string          `json:"last_render_hash,omitempty"`
-	LastSummary              string          `json:"last_summary,omitempty"`
-	PresentationProgram      string          `json:"presentation_program,omitempty"`
-	PresentationVersion      string          `json:"presentation_version,omitempty"`
-	PresentationRuntimeID    string          `json:"presentation_runtime_id,omitempty"`
-	PresentationModel        string          `json:"presentation_model,omitempty"`
-	PresentationEffort       string          `json:"presentation_effort,omitempty"`
-	PresentationMode         string          `json:"presentation_mode,omitempty"`
-	PresentationActivity     string          `json:"presentation_activity,omitempty"`
-	PresentationNotice       string          `json:"presentation_notice,omitempty"`
-	SummaryMessageID         int             `json:"summary_message_id,omitempty"`
-	SnapshotMessageID        int             `json:"snapshot_message_id,omitempty"`
-	UpstreamMessageID        int             `json:"upstream_message_id,omitempty"`
-	SeenUpstreamSignalIDs    []string        `json:"seen_upstream_signal_ids,omitempty"`
-	LastUpstreamSignalAt     time.Time       `json:"last_upstream_signal_at,omitempty"`
-	UpstreamRetryAt          time.Time       `json:"upstream_retry_at,omitempty"`
-	StaleAlternateMessageIDs []int           `json:"stale_alternate_message_ids,omitempty"`
-	AnchorChatID             int64           `json:"anchor_chat_id,omitempty"`
-	AnchorMessageID          int             `json:"anchor_message_id,omitempty"`
-	AnchorFormat             string          `json:"anchor_format,omitempty"`
-	RetiringAnchorMessageID  int             `json:"retiring_anchor_message_id,omitempty"`
-	RetiringAnchorFormat     string          `json:"retiring_anchor_format,omitempty"`
-	RetiringAnchorRetryAt    time.Time       `json:"retiring_anchor_retry_at,omitempty"`
-	AnchorPinned             bool            `json:"anchor_pinned,omitempty"`
-	AnchorPinKnown           bool            `json:"anchor_pin_known,omitempty"`
-	WatchEnabled             bool            `json:"watch_enabled"`
-	Collapsed                bool            `json:"collapsed,omitempty"`
-	PendingCollapse          bool            `json:"pending_collapse,omitempty"`
-	PendingRestore           *PendingRestore `json:"pending_restore,omitempty"`
-	ResumeProgram            string          `json:"resume_program,omitempty"`
-	ResumeSessionID          string          `json:"resume_session_id,omitempty"`
-	PendingResume            *PendingResume  `json:"pending_resume,omitempty"`
-	RecoveryEvents           []RecoveryEvent `json:"recovery_events,omitempty"`
-	LastAnchorEditAt         time.Time       `json:"last_anchor_edit_at,omitempty"`
-	LastRawCapture           string          `json:"last_raw_capture,omitempty"`
-	AnchorFiles              []string        `json:"-"`
-	AnchorFileToken          string          `json:"-"`
+	ID                         int                       `json:"id"`
+	TmuxSessionName            string                    `json:"tmux_session_name"`
+	TmuxWindowID               string                    `json:"tmux_window_id"`
+	TmuxPaneID                 string                    `json:"tmux_pane_id"`
+	TmuxServerID               string                    `json:"tmux_server_id,omitempty"`
+	Origin                     TerminalOrigin            `json:"origin,omitempty"`
+	Title                      string                    `json:"title"`
+	LastKnownCWD               string                    `json:"last_known_cwd,omitempty"`
+	State                      TerminalState             `json:"state"`
+	CreatedAt                  time.Time                 `json:"created_at"`
+	UpdatedAt                  time.Time                 `json:"updated_at"`
+	LastActivityAt             time.Time                 `json:"last_activity_at"`
+	LastRawCaptureHash         string                    `json:"last_raw_capture_hash,omitempty"`
+	LastSnapshotCaptureHash    string                    `json:"last_snapshot_capture_hash,omitempty"`
+	LastSnapshotAttemptAt      time.Time                 `json:"last_snapshot_attempt_at,omitempty"`
+	LastRenderHash             string                    `json:"last_render_hash,omitempty"`
+	LastSummary                string                    `json:"last_summary,omitempty"`
+	PresentationProgram        string                    `json:"presentation_program,omitempty"`
+	PresentationVersion        string                    `json:"presentation_version,omitempty"`
+	PresentationRuntimeID      string                    `json:"presentation_runtime_id,omitempty"`
+	PresentationModel          string                    `json:"presentation_model,omitempty"`
+	PresentationEffort         string                    `json:"presentation_effort,omitempty"`
+	PresentationMode           string                    `json:"presentation_mode,omitempty"`
+	PresentationActivity       string                    `json:"presentation_activity,omitempty"`
+	PresentationNotice         string                    `json:"presentation_notice,omitempty"`
+	AgentCompatibility         agentcompat.Compatibility `json:"agent_compatibility,omitempty"`
+	AgentPresentation          agentcompat.Presentation  `json:"agent_presentation,omitempty"`
+	SemanticViewport           agentcompat.Viewport      `json:"semantic_viewport,omitempty"`
+	DeclaredModel              agentcompat.Value         `json:"declared_model,omitempty"`
+	DeclaredModelObservedAt    time.Time                 `json:"declared_model_observed_at,omitempty"`
+	AgentDetailChatID          int64                     `json:"agent_detail_chat_id,omitempty"`
+	AgentDetailMessageID       int                       `json:"agent_detail_message_id,omitempty"`
+	AgentDetailAnchorMessageID int                       `json:"agent_detail_anchor_message_id,omitempty"`
+	AgentDetailRenderHash      string                    `json:"agent_detail_render_hash,omitempty"`
+	SummaryMessageID           int                       `json:"summary_message_id,omitempty"`
+	SnapshotMessageID          int                       `json:"snapshot_message_id,omitempty"`
+	UpstreamMessageID          int                       `json:"upstream_message_id,omitempty"`
+	SeenUpstreamSignalIDs      []string                  `json:"seen_upstream_signal_ids,omitempty"`
+	LastUpstreamSignalAt       time.Time                 `json:"last_upstream_signal_at,omitempty"`
+	UpstreamRetryAt            time.Time                 `json:"upstream_retry_at,omitempty"`
+	StaleAlternateMessageIDs   []int                     `json:"stale_alternate_message_ids,omitempty"`
+	AnchorChatID               int64                     `json:"anchor_chat_id,omitempty"`
+	AnchorMessageID            int                       `json:"anchor_message_id,omitempty"`
+	AnchorFormat               string                    `json:"anchor_format,omitempty"`
+	RetiringAnchorMessageID    int                       `json:"retiring_anchor_message_id,omitempty"`
+	RetiringAnchorFormat       string                    `json:"retiring_anchor_format,omitempty"`
+	RetiringAnchorRetryAt      time.Time                 `json:"retiring_anchor_retry_at,omitempty"`
+	AnchorPinned               bool                      `json:"anchor_pinned,omitempty"`
+	AnchorPinKnown             bool                      `json:"anchor_pin_known,omitempty"`
+	WatchEnabled               bool                      `json:"watch_enabled"`
+	Collapsed                  bool                      `json:"collapsed,omitempty"`
+	PendingCollapse            bool                      `json:"pending_collapse,omitempty"`
+	PendingRestore             *PendingRestore           `json:"pending_restore,omitempty"`
+	ResumeProgram              string                    `json:"resume_program,omitempty"`
+	ResumeSessionID            string                    `json:"resume_session_id,omitempty"`
+	PendingResume              *PendingResume            `json:"pending_resume,omitempty"`
+	RecoveryEvents             []RecoveryEvent           `json:"recovery_events,omitempty"`
+	LastAnchorEditAt           time.Time                 `json:"last_anchor_edit_at,omitempty"`
+	LastRawCapture             string                    `json:"last_raw_capture,omitempty"`
+	AnchorFiles                []string                  `json:"-"`
+	AnchorFileToken            string                    `json:"-"`
 }
 
 func (s TerminalSession) HasSeenUpstreamSignal(recordID string) bool {
@@ -242,7 +252,7 @@ type Store struct {
 }
 
 const (
-	currentStateVersion     = 17
+	currentStateVersion     = 18
 	maxTerminalSessions     = 200
 	maxAttachments          = 200
 	maxAttachmentBypasses   = 100
@@ -1856,6 +1866,56 @@ func normalizeTerminalSessions(sessions []TerminalSession) {
 			session.PresentationMode = truncateUTF8(session.PresentationMode, 16)
 			session.PresentationActivity = truncateUTF8(session.PresentationActivity, 32)
 			session.PresentationNotice = truncateUTF8(session.PresentationNotice, 256)
+		}
+		if session.AgentCompatibility == (agentcompat.Compatibility{}) && (session.PresentationProgram == "codex" || session.PresentationProgram == "claude") {
+			provider := agentcompat.Provider(session.PresentationProgram)
+			session.AgentCompatibility = agentcompat.Compatibility{
+				Provider: provider,
+				Screen:   agentcompat.Axis{State: agentcompat.StateSupported, Contract: session.PresentationProgram + "-screen-legacy", Version: session.PresentationVersion},
+			}
+		}
+		if session.AgentPresentation == (agentcompat.Presentation{}) && session.PresentationActivity != "" {
+			activity := session.PresentationActivity
+			if activity == "working" {
+				activity = "active"
+			} else if activity == "reviewing approval" {
+				activity = "awaiting_approval"
+			}
+			session.AgentPresentation = agentcompat.Presentation{
+				Model:       agentcompat.Value{Value: session.PresentationModel, Provenance: agentcompat.ProvenanceVisibleUI},
+				Effort:      agentcompat.Value{Value: session.PresentationEffort, Provenance: agentcompat.ProvenanceVisibleUI},
+				Interaction: agentcompat.Value{Value: session.PresentationMode, Provenance: agentcompat.ProvenanceVisibleUI},
+				Activity:    activity,
+			}
+		}
+		session.AgentCompatibility = agentcompat.NormalizeCompatibility(session.AgentCompatibility)
+		session.AgentPresentation = agentcompat.NormalizePresentation(session.AgentPresentation)
+		session.SemanticViewport = agentcompat.NormalizeViewport(session.SemanticViewport)
+		session.DeclaredModel = agentcompat.NormalizePresentation(agentcompat.Presentation{Model: session.DeclaredModel}).Model
+		if session.DeclaredModel.Provenance != agentcompat.ProvenanceHook {
+			session.DeclaredModel = agentcompat.Value{}
+			session.DeclaredModelObservedAt = time.Time{}
+		}
+		if session.State != TerminalRunning {
+			session.SemanticViewport = agentcompat.Viewport{}
+			session.AgentPresentation = agentcompat.Presentation{}
+		}
+		if session.AgentDetailChatID == 0 || session.AgentDetailMessageID <= 0 {
+			session.AgentDetailChatID = 0
+			session.AgentDetailMessageID = 0
+			session.AgentDetailAnchorMessageID = 0
+			session.AgentDetailRenderHash = ""
+		} else if session.AgentDetailAnchorMessageID <= 0 {
+			if session.AnchorMessageID > 0 {
+				session.AgentDetailAnchorMessageID = session.AnchorMessageID
+			} else {
+				session.AgentDetailChatID = 0
+				session.AgentDetailMessageID = 0
+				session.AgentDetailAnchorMessageID = 0
+				session.AgentDetailRenderHash = ""
+			}
+		} else {
+			session.AgentDetailRenderHash = truncateUTF8(session.AgentDetailRenderHash, 64)
 		}
 		if len(session.StaleAlternateMessageIDs) > maxStaleAlternates {
 			session.StaleAlternateMessageIDs = append([]int(nil), session.StaleAlternateMessageIDs[len(session.StaleAlternateMessageIDs)-maxStaleAlternates:]...)

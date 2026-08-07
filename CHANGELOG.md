@@ -4,6 +4,23 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Agent compatibility
+
+- Give Codex and Claude Code the same independent process, hook binding, screen
+  grammar, and transcript contracts. Add process-bound semantic startup
+  viewports, structured model/status provenance, durations and active-agent
+  counts, plus an icon-only Telegram detail surface with strict lifecycle and
+  privacy guards.
+- Add a read-only local agent doctor and an opt-in, fail-closed sanitized
+  compatibility-fixture workflow. Neither command contacts a model or Telegram,
+  mutates Engram state, or turns captured evidence into support automatically.
+- Add an official macOS LaunchAgent lifecycle alongside unchanged systemd
+  behavior. macOS installation and binary replacement do not restart a running
+  service implicitly; activation, restart, status, and bounded log inspection
+  are explicit.
+- Compatibility: state migrates from schema 17 to schema 18. Back up
+  `~/.engram/state.json` before upgrading when rollback matters.
+
 ## [v0.8.0] - 2026-08-04
 
 ### Conversational guide

@@ -68,6 +68,36 @@ type ModeCapabilities struct {
 	SnapshotConfigured bool
 }
 
+type AgentOptions struct {
+	CodexContextTurns  int
+	ClaudeContextTurns int
+}
+
+// LoadAgentOptions reads only the privacy opt-ins needed by the read-only
+// agent doctor. It does not require or return credentials.
+func LoadAgentOptions(path string) (AgentOptions, error) {
+	if strings.TrimSpace(path) == "" {
+		path = DefaultEnvPath()
+	}
+	path = ExpandPath(path)
+	if err := validateEnvFileMetadata(path); err != nil {
+		return AgentOptions{}, err
+	}
+	values, err := parseEnvFile(path)
+	if err != nil {
+		return AgentOptions{}, err
+	}
+	codex, err := parseInt64Default(values["ENGRAM_CODEX_CONTEXT_TURNS"], "ENGRAM_CODEX_CONTEXT_TURNS", 0)
+	if err != nil || codex < 0 || codex > MaxCodexContextTurns {
+		return AgentOptions{}, fmt.Errorf("ENGRAM_CODEX_CONTEXT_TURNS must be between 0 and %d", MaxCodexContextTurns)
+	}
+	claude, err := parseInt64Default(values["ENGRAM_CLAUDE_CONTEXT_TURNS"], "ENGRAM_CLAUDE_CONTEXT_TURNS", 0)
+	if err != nil || claude < 0 || claude > MaxClaudeContextTurns {
+		return AgentOptions{}, fmt.Errorf("ENGRAM_CLAUDE_CONTEXT_TURNS must be between 0 and %d", MaxClaudeContextTurns)
+	}
+	return AgentOptions{CodexContextTurns: int(codex), ClaudeContextTurns: int(claude)}, nil
+}
+
 func DefaultEnvPath() string {
 	return ExpandPath("~/.engram/.env")
 }

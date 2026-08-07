@@ -1,0 +1,7 @@
+{
+  "format": "engram-transcript-inventory-v1",
+  "records": 3,
+  "root_keys": ["payload", "timestamp", "type"],
+  "record_types": ["response_item", "session_meta"],
+  "content_types": ["input_text", "output_text"]
+}

@@ -24,6 +24,7 @@ required_files=(
   scripts/prepare-release-notes.sh
   scripts/validate-release-notes.sh
   scripts/validate-release-version.sh
+  scripts/user-service.sh
 )
 
 for file in "${required_files[@]}"; do
@@ -65,8 +66,18 @@ for script in \
   fi
 done
 
-if ! rg -q "KillMode=process" Makefile; then
+if [[ ! -x scripts/user-service.sh ]]; then
+  echo "service lifecycle script must be executable: scripts/user-service.sh" >&2
+  exit 1
+fi
+
+if ! rg -q "KillMode=process" scripts/user-service.sh; then
   echo "generated service unit must preserve tmux descendants with KillMode=process" >&2
+  exit 1
+fi
+
+if ! rg -q "AbandonProcessGroup" scripts/user-service.sh; then
+  echo "generated LaunchAgent must preserve tmux descendants with AbandonProcessGroup" >&2
   exit 1
 fi
 

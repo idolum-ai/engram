@@ -481,6 +481,16 @@ func writeTestEnv(t *testing.T) string {
 	return env
 }
 
+func TestAgentDoctorRejectsExplicitlyMissingEnvFile(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "mistyped.env")
+	out, stderr, code := captureCommand(t, func() int {
+		return run([]string{"doctor", "agent", "--env", missing})
+	})
+	if code != 1 || out != "" || !strings.Contains(stderr, "doctor config:") || !strings.Contains(stderr, "mistyped.env") {
+		t.Fatalf("explicit missing env: code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+}
+
 func captureCommand(t *testing.T, fn func() int) (string, string, int) {
 	t.Helper()
 	oldOut := os.Stdout

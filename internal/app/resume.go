@@ -127,6 +127,7 @@ func (a *App) resumeSession(ctx context.Context, id int, program, sessionID stri
 		binding := mechanics.Binding{PaneID: paneID, WindowID: windowID, ServerID: serverID}
 		now := time.Now().UTC()
 		prepared, found, applied, prepareErr := a.updateSessionIfCurrent(current, func(session *state.TerminalSession) {
+			resetAgentIntegrationState(session)
 			session.PendingResume = &state.PendingResume{
 				StartedAt:               now,
 				PreviousTmuxSessionName: current.TmuxSessionName,
