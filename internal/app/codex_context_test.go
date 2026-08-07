@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexcontext"
 	"github.com/idolum-ai/engram/internal/codexui"
 	"github.com/idolum-ai/engram/internal/recovery"
@@ -57,6 +58,41 @@ func (reader *mutatingCodexContextReader) Load(_ string, _ int, transforms ...fu
 type sequenceCodexDetector struct {
 	runtimes []codexui.Runtime
 	calls    int
+}
+
+type fixedClaudeContextReader struct {
+	context codexcontext.Context
+	path    string
+	session string
+	limit   int
+}
+
+func (reader *fixedClaudeContextReader) Load(path, session string, limit int, transforms ...func(string) string) (codexcontext.Context, error) {
+	reader.path, reader.session, reader.limit = path, session, limit
+	result := reader.context
+	if len(transforms) > 0 && transforms[0] != nil {
+		result.Messages = append([]codexcontext.Message(nil), result.Messages...)
+		for index := range result.Messages {
+			transformed := transforms[0](result.Messages[index].Text)
+			result.Messages[index].Redacted = transformed != result.Messages[index].Text
+			result.Messages[index].Text = transformed
+		}
+	}
+	return result, nil
+}
+
+type sequenceClaudeDetector struct {
+	runtimes []claudeui.Runtime
+	calls    int
+}
+
+func (detector *sequenceClaudeDetector) Detect(context.Context, int, string) (claudeui.Runtime, error) {
+	if len(detector.runtimes) == 0 {
+		return claudeui.Runtime{}, errors.New("no runtime")
+	}
+	index := min(detector.calls, len(detector.runtimes)-1)
+	detector.calls++
+	return detector.runtimes[index], nil
 }
 
 func (detector *sequenceCodexDetector) Detect(context.Context, int, string) (codexui.Runtime, error) {
@@ -210,6 +246,66 @@ func TestCodexContextRedactsBeforeProviderAndOmitsSensitiveDiagram(t *testing.T)
 	}
 }
 
+func TestClaudeContextUsesHookTranscriptAndSharedIdentityGuards(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config.ClaudeContextTurns = 3
+	session, _ := app.Store.FindSession(id)
+	observed := time.Date(2026, 8, 7, 12, 0, 2, 0, time.UTC)
+	transcript := "/Users/example/.claude/projects/-work/" + recoveryTestSessionID + ".jsonl"
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encodedClaudeContextMetadata(t, recoveryTestSessionID, transcript, observed)})
+	runtime := claudeui.Runtime{Detected: true, Supported: true, Version: "2.1.223", Identity: strings.Repeat("a", 64), StartedAt: observed.Add(-time.Second)}
+	app.ClaudeDetector = &sequenceClaudeDetector{runtimes: []claudeui.Runtime{runtime, runtime, runtime}}
+	reader := &fixedClaudeContextReader{context: codexcontext.Context{
+		Parser: "claude-transcript-v1",
+		Messages: []codexcontext.Message{
+			{Role: codexcontext.RoleUser, Text: "Explain the worker."},
+			{Role: codexcontext.RoleAssistant, Text: "┌────────┐\n│ worker │\n└────────┘"},
+		},
+	}}
+	app.ClaudeContext = reader
+
+	got := app.sessionContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "2.1.223"})
+	if got.program != recovery.ProgramClaude || got.prompt == "" || got.diagram == "" || reader.path != transcript || reader.session != recoveryTestSessionID || reader.limit != 3 {
+		t.Fatalf("context=%#v reader=%#v", got, reader)
+	}
+	if !app.sessionContextCurrent(context.Background(), session, got) {
+		t.Fatal("stable Claude context was not current")
+	}
+}
+
+func TestClaudeContextRejectsProcessReplacementAfterTranscriptRead(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config.ClaudeContextTurns = 2
+	session, _ := app.Store.FindSession(id)
+	observed := time.Date(2026, 8, 7, 12, 0, 2, 0, time.UTC)
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encodedClaudeContextMetadata(t, recoveryTestSessionID, "/tmp/"+recoveryTestSessionID+".jsonl", observed)})
+	first := claudeui.Runtime{Detected: true, Supported: true, Identity: strings.Repeat("a", 64), StartedAt: observed.Add(-time.Second)}
+	second := claudeui.Runtime{Detected: true, Supported: true, Identity: strings.Repeat("b", 64), StartedAt: observed.Add(-time.Second)}
+	app.ClaudeDetector = &sequenceClaudeDetector{runtimes: []claudeui.Runtime{first, second}}
+	app.ClaudeContext = &fixedClaudeContextReader{context: codexcontext.Context{Parser: "claude-transcript-v1", Messages: []codexcontext.Message{{Role: codexcontext.RoleUser, Text: "old process"}}}}
+
+	if got := app.sessionContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "2.1.223"}); got.prompt != "" {
+		t.Fatalf("replaced process retained context: %#v", got)
+	}
+}
+
+func TestClaudeContextRejectsUnsupportedTranscriptSchemaBeforeRead(t *testing.T) {
+	app, _, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config.ClaudeContextTurns = 2
+	session, _ := app.Store.FindSession(id)
+	observed := time.Date(2026, 8, 7, 12, 0, 2, 0, time.UTC)
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encodedClaudeContextMetadata(t, recoveryTestSessionID, "/tmp/"+recoveryTestSessionID+".jsonl", observed)})
+	app.ClaudeDetector = &sequenceClaudeDetector{runtimes: []claudeui.Runtime{{
+		Detected: true, Supported: false, Version: "2.1.999", Identity: strings.Repeat("a", 64), StartedAt: observed.Add(-time.Second),
+	}}}
+	reader := &fixedClaudeContextReader{context: codexcontext.Context{Parser: "unexpected", Messages: []codexcontext.Message{{Role: codexcontext.RoleUser, Text: "must not be read"}}}}
+	app.ClaudeContext = reader
+
+	if got := app.sessionContextForCapture(context.Background(), session, tmux.StyledCapture{PanePID: 4242, CurrentCmd: "2.1.999"}); got.prompt != "" || reader.path != "" {
+		t.Fatalf("unsupported Claude schema reached transcript: got=%#v reader=%#v", got, reader)
+	}
+}
+
 func encodedCodexContextMetadata(t *testing.T, observed time.Time) string {
 	return encodedCodexContextMetadataForSession(t, recoveryTestSessionID, observed)
 }
@@ -218,6 +314,18 @@ func encodedCodexContextMetadataForSession(t *testing.T, sessionID string, obser
 	t.Helper()
 	encoded, err := recovery.Encode(recovery.Metadata{
 		Program: recovery.ProgramCodex, SessionID: sessionID,
+		Observed: observed, Source: "startup", CWD: "/synthetic",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func encodedClaudeContextMetadata(t *testing.T, sessionID, transcript string, observed time.Time) string {
+	t.Helper()
+	encoded, err := recovery.Encode(recovery.Metadata{
+		Program: recovery.ProgramClaude, SessionID: sessionID, TranscriptPath: transcript,
 		Observed: observed, Source: "startup", CWD: "/synthetic",
 	})
 	if err != nil {

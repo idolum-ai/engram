@@ -125,11 +125,11 @@ func TestConversationTurnAlwaysCarriesFullCurrentTruth(t *testing.T) {
 func TestConversationContextFingerprintIsAContinuityBoundary(t *testing.T) {
 	app, session := conversationEpochTestApp(t, 3)
 	capture := testStyledCapture("codex", "project\nbranch\ntests running\napp pending\nstatus\ncwd\nready")
-	first := app.prepareConversationTurn(session, capture, capture.JoinedText, codexContextSnapshot{prompt: "User:\nfirst", fingerprint: "context-a"})
+	first := app.prepareConversationTurn(session, capture, capture.JoinedText, sessionContextSnapshot{prompt: "User:\nfirst", fingerprint: "context-a"})
 	if !app.commitConversationTurn(session, first, "We are running tests.") {
 		t.Fatal("first turn did not commit")
 	}
-	second := app.prepareConversationTurn(session, capture, capture.JoinedText, codexContextSnapshot{prompt: "User:\nsecond", fingerprint: "context-b"})
+	second := app.prepareConversationTurn(session, capture, capture.JoinedText, sessionContextSnapshot{prompt: "User:\nsecond", fingerprint: "context-b"})
 	if second.input.PreviousRendering != "" || second.previousFrame.text != "" || second.input.HistoricalContext != "User:\nsecond" {
 		t.Fatalf("context replacement retained continuity: %#v", second)
 	}

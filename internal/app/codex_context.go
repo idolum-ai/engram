@@ -4,85 +4,173 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/idolum-ai/engram/internal/codexcontext"
 	"github.com/idolum-ai/engram/internal/recovery"
+	"github.com/idolum-ai/engram/internal/sessioncontext"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/tmux"
 )
 
+// The provider-neutral session-context pipeline deliberately retains these
+// legacy names at its app boundary so stored behavior and focused Codex race
+// tests remain stable while Claude uses the identical publication guards.
 type codexContextReader interface {
-	Load(string, int, ...func(string) string) (codexcontext.Context, error)
+	Load(string, int, ...func(string) string) (sessioncontext.Context, error)
 }
 
-type codexContextSnapshot struct {
+type claudeContextReader interface {
+	Load(string, string, int, ...func(string) string) (sessioncontext.Context, error)
+}
+
+type sessionContextSnapshot struct {
 	prompt          string
 	fingerprint     string
 	diagram         string
+	program         string
 	runtimeIdentity string
 	bindingIdentity string
 	panePID         int
 	currentCommand  string
 }
 
-func (a *App) codexContextForCapture(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture) codexContextSnapshot {
-	limit := a.Config.CodexContextTurns
-	if limit <= 0 || a.CodexContext == nil || a.CodexDetector == nil || capture.PanePID <= 0 {
-		return codexContextSnapshot{}
+type sessionContextRuntime struct {
+	detected  bool
+	supported bool
+	version   string
+	identity  string
+	startedAt time.Time
+}
+
+func (a *App) codexContextForCapture(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture) sessionContextSnapshot {
+	return a.sessionContextForCapture(ctx, expected, capture)
+}
+
+func (a *App) sessionContextForCapture(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture) sessionContextSnapshot {
+	if capture.PanePID <= 0 {
+		return sessionContextSnapshot{}
 	}
-	runtime, err := a.CodexDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
-	if err != nil || !runtime.Detected || runtime.Identity == "" || runtime.StartedAt.IsZero() {
-		a.recordCodexContextDecision(expected.ID, "unavailable", "process_identity_unproven", 0, false)
-		return codexContextSnapshot{}
+	metadata, metadataErr := a.sessionRecoveryMetadata(ctx, expected)
+	if metadataErr != nil || !recovery.ValidProgram(metadata.Program) {
+		return sessionContextSnapshot{}
 	}
-	metadata, metadataErr := a.codexRecoveryMetadata(ctx, expected)
-	if metadataErr != nil || metadata.Program != recovery.ProgramCodex || !recovery.ValidSessionID(metadata.SessionID) || metadata.Observed.Before(runtime.StartedAt) {
-		a.recordCodexContextDecision(expected.ID, "unavailable", "session_identity_unproven", 0, false)
-		return codexContextSnapshot{}
+	limit := a.contextTurnLimit(metadata.Program)
+	if limit <= 0 {
+		a.recordSessionContextDecision(expected.ID, metadata.Program, "", "disabled", "context_disabled", "", 0, false)
+		return sessionContextSnapshot{}
 	}
-	loaded, err := a.CodexContext.Load(metadata.SessionID, limit, a.redactText)
+	runtime, err := a.detectContextRuntime(ctx, metadata.Program, capture)
+	if err != nil || !runtime.detected || runtime.identity == "" || runtime.startedAt.IsZero() {
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "process_identity_unproven", "", 0, false)
+		return sessionContextSnapshot{}
+	}
+	if metadata.Program == recovery.ProgramClaude && !runtime.supported {
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "schema_unsupported", "", 0, false)
+		return sessionContextSnapshot{}
+	}
+	if !recovery.ValidSessionID(metadata.SessionID) || metadata.Observed.Before(runtime.startedAt) {
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "session_identity_unproven", "", 0, false)
+		return sessionContextSnapshot{}
+	}
+	loaded, err := a.loadSessionContext(metadata, limit)
 	if err != nil {
-		a.recordCodexContextDecision(expected.ID, "unavailable", "rollout_unavailable", 0, false)
-		return codexContextSnapshot{}
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "transcript_unavailable", "", 0, false)
+		return sessionContextSnapshot{}
 	}
 
-	redacted := make([]codexcontext.Message, 0, len(loaded.Messages))
+	redacted := make([]sessioncontext.Message, 0, len(loaded.Messages))
 	for _, message := range loaded.Messages {
-		text := headUTF8(a.redactText(message.Text), codexcontext.MaxMessageBytes)
+		text := headUTF8(a.redactText(message.Text), sessioncontext.MaxMessageBytes)
 		if strings.TrimSpace(text) != "" {
-			redacted = append(redacted, codexcontext.Message{Role: message.Role, Text: text, Redacted: message.Redacted || text != message.Text})
+			redacted = append(redacted, sessioncontext.Message{Role: message.Role, Text: text, Redacted: message.Redacted || text != message.Text})
 		}
 	}
-	prompt := headUTF8(codexcontext.PromptText(redacted), codexcontext.MaxContextBytes)
+	prompt := headUTF8(sessioncontext.PromptText(redacted), sessioncontext.MaxContextBytes)
 	diagram := ""
-	if candidate, ok := codexcontext.DetectDiagram(loaded.Messages); ok && !loaded.Messages[candidate.Message].Redacted && a.redactText(candidate.Text) == candidate.Text {
-		diagram = candidate.Text
+	diagramConflict := false
+	if candidate, ok := sessioncontext.DetectDiagram(loaded.Messages); ok {
+		if loaded.Messages[candidate.Message].Redacted || a.redactText(candidate.Text) != candidate.Text {
+			diagramConflict = true
+		} else {
+			diagram = candidate.Text
+		}
 	}
 
-	// The file read is provisional until both the tmux binding and the Codex
-	// process incarnation are proven unchanged after it completes.
-	after, afterErr := a.CodexDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
-	latestMetadata, latestMetadataErr := a.codexRecoveryMetadata(ctx, expected)
+	// The transcript read remains provisional until process, provider binding,
+	// and watched tmux identity are proven unchanged after I/O.
+	after, afterErr := a.detectContextRuntime(ctx, metadata.Program, capture)
+	latestMetadata, latestMetadataErr := a.sessionRecoveryMetadata(ctx, expected)
 	latest, tracked := a.Store.FindSession(expected.ID)
-	if afterErr != nil || after.Identity == "" || after.Identity != runtime.Identity || latestMetadataErr != nil || recoveryMetadataIdentity(latestMetadata) != recoveryMetadataIdentity(metadata) || !tracked || !sameTerminalBinding(latest, expected) || !latest.CreatedAt.Equal(expected.CreatedAt) {
-		a.recordCodexContextDecision(expected.ID, "unavailable", "identity_changed", 0, false)
-		return codexContextSnapshot{}
+	if afterErr != nil || after.identity == "" || after.identity != runtime.identity || latestMetadataErr != nil || recoveryMetadataIdentity(latestMetadata) != recoveryMetadataIdentity(metadata) || !tracked || !sameTerminalBinding(latest, expected) || !latest.CreatedAt.Equal(expected.CreatedAt) {
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "unavailable", "identity_changed", loaded.Parser, 0, false)
+		return sessionContextSnapshot{}
 	}
 	if prompt == "" {
-		a.recordCodexContextDecision(expected.ID, "empty", "no_visible_messages", 0, false)
-		return codexContextSnapshot{}
+		a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "empty", "no_visible_messages", loaded.Parser, 0, false)
+		return sessionContextSnapshot{}
 	}
 	bindingIdentity := recoveryMetadataIdentity(metadata)
-	fingerprint := sha(strings.Join([]string{runtime.Identity, bindingIdentity, loaded.Parser, prompt, diagram}, "\x00"))
-	a.recordCodexContextDecision(expected.ID, "applied", loaded.Parser, len(redacted), diagram != "")
-	return codexContextSnapshot{
-		prompt: prompt, fingerprint: fingerprint, diagram: diagram,
-		runtimeIdentity: runtime.Identity, bindingIdentity: bindingIdentity,
+	fingerprint := sha(strings.Join([]string{metadata.Program, runtime.identity, bindingIdentity, loaded.Parser, prompt, diagram}, "\x00"))
+	reason := "visible_messages"
+	if diagramConflict {
+		reason = "redaction_conflict"
+	}
+	a.recordSessionContextDecision(expected.ID, metadata.Program, runtime.version, "applied", reason, loaded.Parser, len(redacted), diagram != "")
+	return sessionContextSnapshot{
+		prompt: prompt, fingerprint: fingerprint, diagram: diagram, program: metadata.Program,
+		runtimeIdentity: runtime.identity, bindingIdentity: bindingIdentity,
 		panePID: capture.PanePID, currentCommand: capture.CurrentCmd,
 	}
 }
 
-func (a *App) codexRecoveryMetadata(ctx context.Context, expected state.TerminalSession) (recovery.Metadata, error) {
+func (a *App) contextTurnLimit(program string) int {
+	switch program {
+	case recovery.ProgramCodex:
+		return a.Config.CodexContextTurns
+	case recovery.ProgramClaude:
+		return a.Config.ClaudeContextTurns
+	default:
+		return 0
+	}
+}
+
+func (a *App) loadSessionContext(metadata recovery.Metadata, limit int) (sessioncontext.Context, error) {
+	switch metadata.Program {
+	case recovery.ProgramCodex:
+		if a.CodexContext == nil {
+			return sessioncontext.Context{}, fmt.Errorf("Codex context reader unavailable")
+		}
+		return a.CodexContext.Load(metadata.SessionID, limit, a.redactText)
+	case recovery.ProgramClaude:
+		if a.ClaudeContext == nil || metadata.TranscriptPath == "" {
+			return sessioncontext.Context{}, fmt.Errorf("Claude context reader unavailable")
+		}
+		return a.ClaudeContext.Load(metadata.TranscriptPath, metadata.SessionID, limit, a.redactText)
+	default:
+		return sessioncontext.Context{}, fmt.Errorf("unsupported context provider")
+	}
+}
+
+func (a *App) detectContextRuntime(ctx context.Context, program string, capture tmux.StyledCapture) (sessionContextRuntime, error) {
+	switch program {
+	case recovery.ProgramCodex:
+		if a.CodexDetector == nil {
+			return sessionContextRuntime{}, fmt.Errorf("Codex detector unavailable")
+		}
+		runtime, err := a.CodexDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
+		return sessionContextRuntime{detected: runtime.Detected, supported: runtime.Supported, version: runtime.Version, identity: runtime.Identity, startedAt: runtime.StartedAt}, err
+	case recovery.ProgramClaude:
+		if a.ClaudeDetector == nil {
+			return sessionContextRuntime{}, fmt.Errorf("Claude detector unavailable")
+		}
+		runtime, err := a.ClaudeDetector.Detect(ctx, capture.PanePID, capture.CurrentCmd)
+		return sessionContextRuntime{detected: runtime.Detected, supported: runtime.Supported, version: runtime.Version, identity: runtime.Identity, startedAt: runtime.StartedAt}, err
+	default:
+		return sessionContextRuntime{}, fmt.Errorf("unsupported context provider")
+	}
+}
+
+func (a *App) sessionRecoveryMetadata(ctx context.Context, expected state.TerminalSession) (recovery.Metadata, error) {
 	tmuxCtx, cancel := tmux.TimeoutContext(ctx)
 	defer cancel()
 	return a.Tmux.RecoveryMetadata(tmux.BackgroundContext(tmuxCtx), expected.TmuxPaneID, expected.TmuxWindowID, expected.TmuxServerID)
@@ -90,23 +178,28 @@ func (a *App) codexRecoveryMetadata(ctx context.Context, expected state.Terminal
 
 func recoveryMetadataIdentity(metadata recovery.Metadata) string {
 	return sha(strings.Join([]string{
-		fmt.Sprintf("%d", metadata.Version), metadata.Program, metadata.SessionID, metadata.CWD, metadata.Source,
+		fmt.Sprintf("%d", metadata.Version), metadata.Program, metadata.SessionID, metadata.CWD,
+		metadata.TranscriptPath, metadata.Source,
 		metadata.Observed.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"),
 	}, "\x00"))
 }
 
-func (a *App) codexContextCurrent(ctx context.Context, expected state.TerminalSession, snapshot codexContextSnapshot) bool {
+func (a *App) codexContextCurrent(ctx context.Context, expected state.TerminalSession, snapshot sessionContextSnapshot) bool {
+	return a.sessionContextCurrent(ctx, expected, snapshot)
+}
+
+func (a *App) sessionContextCurrent(ctx context.Context, expected state.TerminalSession, snapshot sessionContextSnapshot) bool {
 	if snapshot.bindingIdentity == "" && snapshot.runtimeIdentity == "" {
 		return true
 	}
-	if snapshot.bindingIdentity == "" || snapshot.runtimeIdentity == "" || a.CodexDetector == nil || snapshot.panePID <= 0 {
+	if snapshot.program == "" || snapshot.bindingIdentity == "" || snapshot.runtimeIdentity == "" || snapshot.panePID <= 0 {
 		return false
 	}
-	runtime, err := a.CodexDetector.Detect(ctx, snapshot.panePID, snapshot.currentCommand)
-	if err != nil || runtime.Identity == "" || runtime.Identity != snapshot.runtimeIdentity {
+	runtime, err := a.detectContextRuntime(ctx, snapshot.program, tmux.StyledCapture{PanePID: snapshot.panePID, CurrentCmd: snapshot.currentCommand})
+	if err != nil || runtime.identity == "" || runtime.identity != snapshot.runtimeIdentity {
 		return false
 	}
-	metadata, err := a.codexRecoveryMetadata(ctx, expected)
+	metadata, err := a.sessionRecoveryMetadata(ctx, expected)
 	if err != nil || recoveryMetadataIdentity(metadata) != snapshot.bindingIdentity {
 		return false
 	}
@@ -114,12 +207,18 @@ func (a *App) codexContextCurrent(ctx context.Context, expected state.TerminalSe
 	return ok && latest.State == state.TerminalRunning && sameTerminalBinding(latest, expected) && latest.CreatedAt.Equal(expected.CreatedAt)
 }
 
-func (a *App) recordCodexContextDecision(sessionID int, outcome, reason string, messages int, diagram bool) {
-	signature := fmt.Sprintf("%s\x00%s\x00%d\x00%t", outcome, reason, messages, diagram)
-	if previous, loaded := a.codexContextDiagnostics.Swap(sessionID, signature); loaded && previous == signature {
+func (a *App) recordSessionContextDecision(sessionID int, program, version, outcome, reason, parser string, messages int, diagram bool) {
+	signature := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d\x00%t", program, version, outcome, reason, parser, messages, diagram)
+	if previous, loaded := a.sessionContextDiagnostics.Swap(sessionID, signature); loaded && previous == signature {
 		return
 	}
-	_ = a.audit("terminal.codex_context", outcome, map[string]any{
-		"session_id": sessionID, "reason": reason, "messages": messages, "diagram": diagram,
+	event := "terminal.session_context"
+	if program == recovery.ProgramCodex {
+		event = "terminal.codex_context"
+	} else if program == recovery.ProgramClaude {
+		event = "terminal.claude_context"
+	}
+	_ = a.audit(event, outcome, map[string]any{
+		"session_id": sessionID, "program": program, "version": version, "reason": reason, "parser": parser, "messages": messages, "diagram": diagram,
 	})
 }

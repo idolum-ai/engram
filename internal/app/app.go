@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/idolum-ai/engram/internal/anthropic"
+	"github.com/idolum-ai/engram/internal/claudecontext"
 	"github.com/idolum-ai/engram/internal/claudeui"
 	"github.com/idolum-ai/engram/internal/codexcontext"
 	"github.com/idolum-ai/engram/internal/codexui"
@@ -47,6 +48,7 @@ type App struct {
 	ClaudeDetector                claudeRuntimeDetector
 	CodexDetector                 codexRuntimeDetector
 	CodexContext                  codexContextReader
+	ClaudeContext                 claudeContextReader
 	Snapshots                     snapshotRenderer
 	SnapshotProber                snapshotProber
 	footerStatusRunner            snapshotFooterStatusRunner
@@ -57,7 +59,7 @@ type App struct {
 	agentFrames                   map[int]agentFrameState
 	agentFrameValidatedHook       func(state.TerminalSession)
 	presentationDiagnostics       sync.Map
-	codexContextDiagnostics       sync.Map
+	sessionContextDiagnostics     sync.Map
 	guideAvailable                bool
 	snapshotHealthMu              sync.RWMutex
 	snapshotReady                 bool
@@ -252,6 +254,7 @@ func New(cfg config.Config) (*App, error) {
 		ClaudeDetector:                claudeui.NewDetector(),
 		CodexDetector:                 codexui.NewDetector(),
 		CodexContext:                  codexcontext.Reader{SessionsRoot: codexcontext.DefaultSessionsRoot()},
+		ClaudeContext:                 claudecontext.Reader{},
 		Snapshots:                     snapshotRenderer,
 		SnapshotProber:                snapshotRenderer,
 		mode:                          mode,
@@ -936,13 +939,18 @@ func (a *App) statusText() string {
 	if a.Config.CodexContextTurns > 0 {
 		codexContextStatus = fmt.Sprintf("enabled, %d recent visible turns max (exact active session only)", a.Config.CodexContextTurns)
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\ncodex context: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\ngithub apps: %s\ngithub grants: %d\ngithub leases: %d\ngithub revocations pending: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	claudeContextStatus := "disabled"
+	if a.Config.ClaudeContextTurns > 0 {
+		claudeContextStatus = fmt.Sprintf("enabled, %d recent visible turns max (exact active session only)", a.Config.ClaudeContextTurns)
+	}
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\ncodex context: %s\nclaude context: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\ngithub apps: %s\ngithub grants: %d\ngithub leases: %d\ngithub revocations pending: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
 		a.anchorMode(),
 		guideStatus,
 		codexContextStatus,
+		claudeContextStatus,
 		voiceStatus,
 		a.snapshotStatus(),
 		templateCount,

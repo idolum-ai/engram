@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/idolum-ai/engram/internal/recovery"
 	"github.com/idolum-ai/engram/internal/state"
 	"github.com/idolum-ai/engram/internal/telegram"
 	"github.com/idolum-ai/engram/internal/terminalshot"
@@ -80,13 +81,13 @@ func (a *App) updateGuidedAnchorReferences(ctx context.Context, expected state.T
 	return updated
 }
 
-func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, refs visibleReferences, excerpts []string, contextDiagram string, force bool, guard, accepted func() bool) bool {
+func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state.TerminalSession, capture tmux.StyledCapture, previous conversationFrame, semanticText, summary string, refs visibleReferences, excerpts []string, contextProgram, contextDiagram string, force bool, guard, accepted func() bool) bool {
 	if !a.snapshotAvailable() || a.Snapshots == nil || a.snapshotAnchors() {
 		return false
 	}
 	crop := a.selectGuidedEvidenceCrop(expected, capture, previous, semanticText, summary, excerpts)
 	if contextDiagram != "" {
-		crop.input = withGuidedContextDiagram(crop.input, contextDiagram, semanticText)
+		crop.input = withGuidedContextDiagramForProvider(crop.input, contextProgram, contextDiagram, semanticText)
 		crop.hash = guidedCropHash(crop.input, a.Config.SnapshotTheme, crop.source)
 	}
 	if !acquireSlot(ctx, a.renderSlots) {
@@ -236,10 +237,21 @@ func (a *App) updateGuidedAnchorWithEvidence(ctx context.Context, expected state
 }
 
 func withGuidedContextDiagram(input terminalshot.Input, diagram, semanticText string) terminalshot.Input {
+	return withGuidedContextDiagramForProvider(input, recovery.ProgramCodex, diagram, semanticText)
+}
+
+func withGuidedContextDiagramForProvider(input terminalshot.Input, program, diagram, semanticText string) terminalshot.Input {
+	provider := "Agent"
+	switch program {
+	case recovery.ProgramCodex:
+		provider = "Codex"
+	case recovery.ProgramClaude:
+		provider = "Claude"
+	}
 	input.ContextInset = diagram
-	input.ContextLabel = "Codex context · prior visible message, not current terminal"
+	input.ContextLabel = provider + " context · prior visible message, not current terminal"
 	if strings.Count(semanticText, diagram) == 1 {
-		input.ContextLabel = "Codex context · reconstructed from visible terminal text"
+		input.ContextLabel = provider + " context · reconstructed from visible terminal text"
 	}
 	return input
 }
