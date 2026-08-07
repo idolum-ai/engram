@@ -17,8 +17,9 @@ import (
 	"time"
 )
 
-const SupportedVersion = "2.1.223"
-const previousSupportedVersion = "2.1.222"
+const SupportedVersion = "2.1.224"
+const previousSupportedVersion = "2.1.223"
+const olderSupportedVersion = "2.1.222"
 const legacySupportedVersion = "2.1.219"
 const supportedFixtureVersion = "2.1.206"
 const maxProcessOutputBytes = 2 << 20
@@ -135,7 +136,8 @@ func (d *Detector) processStart(ctx context.Context, pid int) (time.Time, string
 }
 
 func supportedVersion(version string) bool {
-	return version == SupportedVersion || version == previousSupportedVersion || version == legacySupportedVersion || version == supportedFixtureVersion
+	return version == SupportedVersion || version == previousSupportedVersion || version == olderSupportedVersion ||
+		version == legacySupportedVersion || version == supportedFixtureVersion
 }
 
 func possibleClaudeForeground(command string) bool {

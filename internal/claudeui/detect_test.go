@@ -87,11 +87,11 @@ func TestDetectorRejectsClaudePathInUnrelatedProcessArgument(t *testing.T) {
 }
 
 func TestDetectorIdentifiesSupportedVersionedClaudeProcess(t *testing.T) {
-	const executable = "/home/example/.local/share/claude/versions/2.1.223"
+	const executable = "/home/example/.local/share/claude/versions/" + SupportedVersion
 	runner := &fakeRunner{
 		processes: strings.Join([]string{
 			"100 1 bash -bash",
-			"110 100 2.1.223 " + executable,
+			"110 100 " + SupportedVersion + " " + executable,
 			"120 110 helper /opt/helper",
 			"",
 		}, "\n"),

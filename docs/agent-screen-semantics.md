@@ -172,9 +172,17 @@ The process-confirmed Codex adapter remains a fallback for supported Codex
 versions when a frame is too weak for the generic structural contract. The
 Claude adapter runs first because its remembered model is part of the
 structural proof. Engram currently supports Claude Code `2.1.219`, `2.1.222`,
-and `2.1.223`, plus the hermetic `2.1.206` fixture version. Unsupported versions, ambiguous process
+`2.1.223`, and `2.1.224`, plus the hermetic `2.1.206` fixture version. Unsupported versions, ambiguous process
 trees, unreadable process identity, and unknown layouts preserve the captured
 text byte-for-byte. Detection failures do not erase the last card state.
+
+The `2.1.224` contract recognizes Claude's exact workspace trust prelude and
+keeps it out of semantic conversation only when the verified runtime, workspace
+banner, and safety prompt all agree. Elapsed `Brewed for` rows and the bounded
+active-agent/team footer are UI chrome; interaction text such as `manual mode
+on` becomes presentation mode metadata. Visible agent-completion notices remain
+conversation evidence. Literal snapshots continue to show the exact terminal
+frame, including all of this chrome and any shell scrollback.
 
 Bounded `terminal.presentation` audit records report program, version, outcome,
 reason, whether a model was present, and normalized activity. Identical
@@ -184,7 +192,7 @@ not recorded.
 ## Tests
 
 The ordinary test suite replays a checked-in corpus covering observed Codex,
-sanitized Claude Code `2.1.219`/`2.1.222`/`2.1.223`, hermetic Claude Code `2.1.206`, and OpenCode
+sanitized Claude Code `2.1.219`/`2.1.222`/`2.1.223`/`2.1.224`, hermetic Claude Code `2.1.206`, and OpenCode
 structures plus false-positive, model-switch, process-replacement, and
 identity-change cases. These tests are deterministic, stdlib-only, and make no
 network calls.
