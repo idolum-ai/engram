@@ -212,6 +212,29 @@ func TestRecoveryReconciliationPersistsProviderHookAndProcessObservation(t *test
 	}
 }
 
+func TestRecoveryReconciliationAutomaticallyPersistsClaudeHook(t *testing.T) {
+	app, session := recoveryTestApp(t)
+	encoded, err := recovery.Encode(recovery.Metadata{
+		Program: recovery.ProgramClaude, SessionID: recoveryTestSessionID, CWD: "/work",
+		TranscriptPath: "/tmp/" + recoveryTestSessionID + ".jsonl",
+		Source:         "fork", Observed: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Tmux = tmux.New(&recoveryMetadataRunner{metadata: encoded})
+	if err := app.reconcileRecoverySession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := app.Store.FindSession(session.ID)
+	if current.ResumeProgram != recovery.ProgramClaude || current.ResumeSessionID != recoveryTestSessionID {
+		t.Fatalf("Claude provider mapping = %#v", current)
+	}
+	if len(current.RecoveryEvents) != 1 || current.RecoveryEvents[0].Validation != "provider_hook" {
+		t.Fatalf("Claude recovery events = %#v", current.RecoveryEvents)
+	}
+}
+
 func TestRecoveryReconciliationResetsConversationEpochWhenProviderSessionChanges(t *testing.T) {
 	app, session := recoveryTestApp(t)
 	const previousSessionID = "019f7607-c8b0-74b3-87ca-64a7e6e7ede1"

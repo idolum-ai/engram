@@ -11,6 +11,29 @@ func supportedRuntime(identity string) Runtime {
 	return Runtime{Detected: true, Supported: true, Version: SupportedVersion, Identity: identity}
 }
 
+func TestDeclaredNativeVersionsShareTheFixtureBackedPresentationContract(t *testing.T) {
+	frame := claudeFrame(strings.Join([]string{
+		"╭──────────────────────────────────╮",
+		"│ Opus 4.8 · API Usage Billing     │",
+		"╰──────────────────────────────────╯",
+		"",
+		"⏺ Visible answer.",
+		"",
+		"────────────────────────────────────",
+		"❯ next prompt",
+		"────────────────────────────────────",
+		"  bypass permissions on · ● high · /effort",
+	}, "\n"))
+	for _, version := range []string{SupportedVersion, previousSupportedVersion, legacySupportedVersion, supportedFixtureVersion} {
+		t.Run(version, func(t *testing.T) {
+			got := Analyze(Runtime{Detected: true, Supported: supportedVersion(version), Version: version, Identity: "runtime-" + version}, agentui.Observation{Current: frame}, "")
+			if !got.Applied || got.Model != "claude-opus-4-8" || got.Effort != "high" || !strings.Contains(got.Conversation, "Visible answer") || !strings.Contains(got.Conversation, "next prompt") {
+				t.Fatalf("analysis = %#v", got)
+			}
+		})
+	}
+}
+
 func claudeFrame(text string) agentui.Frame {
 	return agentui.Frame{Text: text, CurrentCommand: "claude", Columns: 80, VisibleRows: 24, AlternateScreen: "on", CopyMode: "off"}
 }

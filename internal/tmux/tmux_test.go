@@ -243,10 +243,11 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 	}
 	wantCommands := []string{
 		"set-option -p -q -u -t %7 @engram",
+		"set-option -p -q -u -t %7 @engram_codex",
 		"set-option -p -q -t %7 @engram_watch_id '42'",
 		"set-option -p -q -t %7 @engram_notify 'run: engram signal --stdout MESSAGE (tool output) or engram signal MESSAGE (interactive TTY)'",
 		"set-option -p -q -t %7 @engram_artifact 'print a visible file:// URI (OSC 8 optional), then run @engram_notify'",
-		"set-option -p -q -t %7 @engram_codex 'active Codex session: run engram codex-bind once; future sessions: configure the documented SessionStart hook'",
+		"set-option -p -q -t %7 @engram_agent 'agent sessions: configure the documented Codex or Claude SessionStart hook; existing sessions: run engram codex-bind or engram claude-bind'",
 		"set-option -p -q -t %7 @engram_github 'run: engram github exec --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write -- COMMAND; renewable: engram github grant ... [--installation-id ID] --for DURATION --purpose TEXT'",
 		"set-option -p -q -t %7 @engram 'v1 watch=42 remote=telegram'",
 	}
@@ -277,6 +278,7 @@ func TestEngramAdvertisementUsesPaneOptionsBehindBindingGuard(t *testing.T) {
 		"set-option -p -q -u -t %7 @engram_watch_id",
 		"set-option -p -q -u -t %7 @engram_notify",
 		"set-option -p -q -u -t %7 @engram_artifact",
+		"set-option -p -q -u -t %7 @engram_agent",
 		"set-option -p -q -u -t %7 @engram_codex",
 		"set-option -p -q -u -t %7 @engram_github",
 	}
@@ -772,6 +774,20 @@ func TestPublishRecoveryMetadataUsesPaneLocalOption(t *testing.T) {
 	call := runner.calls[0]
 	if len(call) != 7 || !reflect.DeepEqual(call[:6], []string{"set-option", "-p", "-q", "-t", "%7", EngramRecoveryOption}) || !strings.Contains(call[6], metadata.SessionID) {
 		t.Fatalf("calls = %#v", runner.calls)
+	}
+}
+
+func TestPaneProcessReadsOnlyBoundMigrationAnchor(t *testing.T) {
+	runner := &fakeRunner{out: "4242\x1f2.1.223\n"}
+	pid, command, err := New(runner).PaneProcess(context.Background(), "%7")
+	if err != nil || pid != 4242 || command != "2.1.223" {
+		t.Fatalf("pid=%d command=%q err=%v", pid, command, err)
+	}
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], []string{"display-message", "-p", "-t", "%7", "#{pane_pid}\x1f#{pane_current_command}"}) {
+		t.Fatalf("calls = %#v", runner.calls)
+	}
+	if _, _, err := New(runner).PaneProcess(context.Background(), "7"); err == nil {
+		t.Fatal("invalid pane id was accepted")
 	}
 }
 
