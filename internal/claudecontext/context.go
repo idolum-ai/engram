@@ -193,6 +193,7 @@ type transcriptRecord struct {
 	IsMeta      bool   `json:"isMeta"`
 	IsSidechain bool   `json:"isSidechain"`
 	AgentID     string `json:"agentId"`
+	UserType    string `json:"userType"`
 	Message     struct {
 		ID              string          `json:"id"`
 		Role            string          `json:"role"`
@@ -204,6 +205,9 @@ type transcriptRecord struct {
 func parseUser(record transcriptRecord, transforms ...func(string) string) (sessioncontext.Message, bool, error) {
 	if record.IsMeta || record.AgentID != "" || record.Message.ParentToolUseID != "" || record.Message.Role != "user" || len(record.Message.Content) == 0 {
 		return sessioncontext.Message{}, false, nil
+	}
+	if record.UserType != "" && record.UserType != "external" {
+		return sessioncontext.Message{}, false, fmt.Errorf("unsupported %s user provenance", ParserVersion)
 	}
 	var text string
 	if err := json.Unmarshal(record.Message.Content, &text); err != nil {

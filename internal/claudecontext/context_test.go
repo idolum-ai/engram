@@ -14,7 +14,7 @@ const testSessionID = "019f7607-c8b0-74b3-87ca-64a7e6e7ede0"
 func TestReaderAdmitsOnlyHumanAndVisibleAssistantText(t *testing.T) {
 	path := writeTranscript(t, []string{
 		`{"type":"mode","sessionId":"` + testSessionID + `","mode":"default"}`,
-		`{"type":"user","sessionId":"` + testSessionID + `","uuid":"u1","message":{"role":"user","content":"first prompt"}}`,
+		`{"type":"user","sessionId":"` + testSessionID + `","uuid":"u1","userType":"external","message":{"role":"user","content":"first prompt"}}`,
 		`{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"tool_use","name":"Bash","input":{"command":"secret"}},{"type":"text","text":"visible answer"}]}}`,
 		`{"type":"user","sessionId":"` + testSessionID + `","uuid":"tool","message":{"role":"user","content":[{"type":"tool_result","content":"tool secret"}]}}`,
 		`{"type":"user","sessionId":"` + testSessionID + `","uuid":"meta","isMeta":true,"message":{"role":"user","content":"generated metadata"}}`,
@@ -70,6 +70,12 @@ func TestReaderFailsClosedOnIdentityAndRecognizedSchemaChanges(t *testing.T) {
 	})
 	if _, err := (Reader{}).Load(unknown, testSessionID, 1); err == nil {
 		t.Fatal("unknown assistant block was accepted")
+	}
+	unknownUser := writeTranscript(t, []string{
+		`{"type":"user","sessionId":"` + testSessionID + `","userType":"synthetic","message":{"role":"user","content":"unsafe generated prompt"}}`,
+	})
+	if _, err := (Reader{}).Load(unknownUser, testSessionID, 1); err == nil {
+		t.Fatal("unknown user provenance was accepted")
 	}
 
 	mismatch := writeTranscript(t, []string{`{"type":"user","sessionId":"019f7607-c8b0-74b3-87ca-64a7e6e7ede1","message":{"role":"user","content":"wrong"}}`})
