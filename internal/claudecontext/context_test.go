@@ -18,6 +18,7 @@ func TestReaderAdmitsOnlyHumanAndVisibleAssistantText(t *testing.T) {
 		`{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"tool_use","name":"Bash","input":{"command":"secret"}},{"type":"text","text":"visible answer"}]}}`,
 		`{"type":"user","sessionId":"` + testSessionID + `","uuid":"tool","message":{"role":"user","content":[{"type":"tool_result","content":"tool secret"}]}}`,
 		`{"type":"user","sessionId":"` + testSessionID + `","uuid":"meta","isMeta":true,"message":{"role":"user","content":"generated metadata"}}`,
+		`{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"meta-assistant","isMeta":true,"message":{"id":"meta-assistant","role":"assistant","content":[{"type":"text","text":"assistant metadata secret"}]}}`,
 		`{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"side","isSidechain":true,"message":{"id":"side","role":"assistant","content":[{"type":"text","text":"subagent secret"}]}}`,
 		`{"type":"assistant","sessionId":"` + testSessionID + `","uuid":"forwarded","agentId":"agent-1","message":{"id":"forwarded","role":"assistant","parent_tool_use_id":"tool-1","content":[{"type":"text","text":"forwarded subagent secret"}]}}`,
 		`{"type":"user","sessionId":"` + testSessionID + `","uuid":"u2","message":{"role":"user","content":"second prompt"}}`,
@@ -33,7 +34,7 @@ func TestReaderAdmitsOnlyHumanAndVisibleAssistantText(t *testing.T) {
 		t.Fatalf("context = %#v", got)
 	}
 	joined := codexcontext.PromptText(got.Messages)
-	for _, absent := range []string{"hidden", "secret", "generated metadata", "subagent"} {
+	for _, absent := range []string{"hidden", "secret", "generated metadata", "assistant metadata", "subagent"} {
 		if strings.Contains(joined, absent) {
 			t.Fatalf("context leaked %q: %s", absent, joined)
 		}

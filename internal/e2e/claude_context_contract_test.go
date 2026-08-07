@@ -16,6 +16,9 @@ import (
 // parser with the provider prompt, shared diagram detector, and provenance
 // renderer. It never reads a real Claude configuration directory.
 func TestSyntheticClaudeContextContract(t *testing.T) {
+	if !strings.Contains(guide.SystemPrompt, "exactly identified active agent session") || strings.Contains(guide.SystemPrompt, "active Codex session") {
+		t.Fatal("Claude history provenance is not provider-neutral")
+	}
 	const sessionID = "123e4567-e89b-12d3-a456-426614174001"
 	path := filepath.Join(t.TempDir(), sessionID+".jsonl")
 	transcript := strings.Join([]string{

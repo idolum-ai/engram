@@ -120,7 +120,7 @@ func parseRecords(reader io.Reader, sessionID string, turnLimit int, verified bo
 			}
 			verified = true
 		}
-		if !verified || record.IsSidechain {
+		if !verified || record.IsSidechain || record.IsMeta {
 			continue
 		}
 		switch record.Type {
