@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"html"
 	"path/filepath"
@@ -21,6 +22,8 @@ import (
 const githubApprovalTTL = githubauth.ApprovalTimeout
 const githubUnlockTombstoneTTL = 10 * time.Minute
 const githubApprovalTimeFormat = "2006-01-02 15:04 MST"
+
+var errConfiguredGitHubAppPEMUnavailable = errors.New("configured local GitHub App PEM is unavailable")
 
 type githubApproval struct {
 	passphrase    []byte
@@ -895,7 +898,7 @@ func (a *App) resolveConfiguredGitHubAppPEM(selected githubauth.App) (*githubaut
 	}
 	privateKey, identity, err := githubauth.ReadPrivateKeyFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("configured local GitHub App PEM is unavailable: %w", err)
+		return nil, errConfiguredGitHubAppPEMUnavailable
 	}
 	defer githubauth.Zero(privateKey)
 
@@ -915,7 +918,7 @@ func (a *App) readMatchingConfiguredGitHubAppPEM(pending *githubPendingRequest) 
 	}
 	privateKey, identity, err := githubauth.ReadPrivateKeyFile(a.Config.GitHubAppPEMPath)
 	if err != nil {
-		return nil, fmt.Errorf("configured local GitHub App PEM is unavailable: %w", err)
+		return nil, errConfiguredGitHubAppPEMUnavailable
 	}
 	state := a.configuredGitHubAppPEMIdentityState(pending.Enrollment, identity)
 	if state != configuredGitHubAppPEMReady || !pending.ConfiguredPEM.Equal(identity) {

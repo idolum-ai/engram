@@ -907,10 +907,11 @@ func TestGitHubConfiguredPEMRouteFailsClosedWithoutPassphraseFallback(t *testing
 }
 
 func TestGitHubConfiguredPEMUnreadableRouteDoesNotStartApproval(t *testing.T) {
-	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	const sentinel = "DO_NOT_DISCLOSE_MISSING_CONFIGURED_PEM_PATH"
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
 	app.GitHubVault = testGitHubVault(t, true)
 	app.Config.GitHubAppPEMAlias = "idolum"
-	app.Config.GitHubAppPEMPath = filepath.Join(t.TempDir(), "missing.pem")
+	app.Config.GitHubAppPEMPath = filepath.Join(t.TempDir(), sentinel+".pem")
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
 	request.Passphrase = nil
@@ -918,6 +919,14 @@ func TestGitHubConfiguredPEMUnreadableRouteDoesNotStartApproval(t *testing.T) {
 	response := app.handleGitHubBrokerRequest(context.Background(), request)
 	if response.OK || !strings.Contains(response.Error, "configured local GitHub App PEM is unavailable") || len(app.githubPending) != 0 {
 		t.Fatalf("broker response = %#v, pending = %d", response, len(app.githubPending))
+	}
+	audit, err := os.ReadFile(app.Config.AuditPath())
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(response.Error, sentinel) || strings.Contains(response.Error, app.Config.GitHubAppPEMPath) ||
+		bytes.Contains(audit, []byte(sentinel)) || bytes.Contains(audit, []byte(app.Config.GitHubAppPEMPath)) || len(transport.sent) != 0 {
+		t.Fatalf("unavailable configured PEM path escaped: response=%q audit=%s Telegram=%d", response.Error, audit, len(transport.sent))
 	}
 }
 
@@ -999,6 +1008,87 @@ func TestGitHubConfiguredPEMReplacementBeforeApprovalDoesNotFallBack(t *testing.
 	}
 	if !bytes.Contains(audit, []byte(`"status":"credential_invalidated"`)) || bytes.Contains(audit, []byte(`"status":"denied"`)) {
 		t.Fatalf("credential failure audit = %s", audit)
+	}
+}
+
+func TestGitHubConfiguredPEMPathNeverCrossesBrokerBoundary(t *testing.T) {
+	const sentinel = "DO_NOT_DISCLOSE_CONFIGURED_PEM_PATH"
+	minter := &fakeGitHubMinter{}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
+	app.Config.GitHubAppPEMPath = filepath.Join(t.TempDir(), sentinel+".pem")
+	if err := os.WriteFile(app.Config.GitHubAppPEMPath, privateKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+	brokerDir, err := os.MkdirTemp("/tmp", "eg-pem-path-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(brokerDir) })
+	brokerPath := filepath.Join(brokerDir, "github.sock")
+	broker, err := githubauth.Listen(brokerPath, app.handleGitHubBrokerRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveContext, stopServing := context.WithCancel(context.Background())
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- broker.Serve(serveContext) }()
+	t.Cleanup(func() {
+		stopServing()
+		_ = broker.Close()
+		if serveErr := <-serveDone; serveErr != nil {
+			t.Errorf("serve GitHub broker: %v", serveErr)
+		}
+	})
+
+	type brokerResult struct {
+		response githubauth.BrokerResponse
+		err      error
+	}
+	results := make(chan brokerResult, 1)
+	requestContext, cancelRequest := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRequest()
+	go func() {
+		response, requestErr := githubauth.Request(requestContext, brokerPath, request)
+		results <- brokerResult{response: response, err: requestErr}
+	}()
+	approval := <-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if err := os.Remove(app.Config.GitHubAppPEMPath); err != nil {
+		t.Fatal(err)
+	}
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "configured-pem-path-private", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_user_error" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	result := <-results
+	if result.err == nil || result.response.OK || !strings.Contains(result.response.Error, errConfiguredGitHubAppPEMUnavailable.Error()) {
+		t.Fatalf("broker result = %#v, err = %v", result.response, result.err)
+	}
+	completion := <-transport.edited
+	audit, err := os.ReadFile(app.Config.AuditPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for surface, text := range map[string]string{
+		"approval":        approval.text,
+		"completion":      completion.text,
+		"broker response": result.response.Error,
+		"CLI error":       result.err.Error(),
+		"audit":           string(audit),
+	} {
+		if strings.Contains(text, sentinel) || strings.Contains(text, app.Config.GitHubAppPEMPath) {
+			t.Fatalf("%s exposed configured PEM path: %q", surface, text)
+		}
 	}
 }
 

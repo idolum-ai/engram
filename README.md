@@ -367,7 +367,8 @@ must be a bounded, valid single private-key PEM in an owner-only directory,
 owned by the Engram process UID, regular, non-symlink, single-link, and have no
 group or other permission bits. Mode `0600` is recommended; another owner-only
 mode such as `0400` is accepted. Engram reads it as a live credential; it never
-copies the contents into configuration, state, audit output, or Telegram.
+copies the contents into configuration, state, audit output, or Telegram. The
+configured path stays out of Telegram, audit output, and broker or CLI errors.
 
 The PEM fingerprint must match the configured enrolled alias and no other
 enrollment. Requests for that alias use **configured local PEM** in the approval

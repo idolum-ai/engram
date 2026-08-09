@@ -151,7 +151,8 @@ must own the regular, non-symlink, single-link file, it must have no group or
 other permission bits, it must remain within Engram's size bound, and it must
 contain exactly one supported RSA private key. Mode `0600` is recommended;
 another owner-only mode such as `0400` is accepted. Enrollment and runtime use
-the same validator.
+the same validator. The configured path is local diagnostic context and is not
+returned through Telegram, audit output, or broker and CLI errors.
 
 Engram requires the public fingerprint to match the configured alias and no
 other current enrollment. Requests for that alias show

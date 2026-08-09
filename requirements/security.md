@@ -318,7 +318,8 @@ privacy model must stay small and explicit.
   Telegram/tmux startup depend on its health. GitHub requests must visibly fail
   only that alias's configured route when the file is unreadable, malformed,
   unmatched, or matches more than one enrollment. Other enrolled Apps retain
-  their configured passphrase routes.
+  their configured passphrase routes. The configured path must not enter
+  Telegram text, audit output, broker responses, or CLI-visible errors.
 - A configured-PEM approval must bind the selected App, selected installation,
   complete enrollment fingerprint, and live file identity before presentation.
   Engram must reopen and revalidate the owner-owned, regular, non-symlink,
