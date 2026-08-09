@@ -143,6 +143,43 @@ func TestGroupGitHubCapabilityRequiresLocalPassphraseBeforeApproval(t *testing.T
 	}
 }
 
+func TestGroupGitHubConfiguredPEMApprovalMintsWithoutForceReply(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(42 * time.Minute)}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	app.Config = multiUserTelegramConfig()
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	approval := <-transport.sent
+	if approval.forceReply || !strings.Contains(approval.text, "Unlock: configured local PEM") {
+		t.Fatalf("group configured-PEM approval = %#v", approval)
+	}
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "group-configured-pem-approve", From: telegram.User{ID: app.Config.TelegramAllowedUserID},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: app.Config.TelegramChatID, Type: "supergroup"}},
+		Data:    "github-approve:" + requestID,
+	})
+	if status != "callback_ok" {
+		t.Fatalf("group configured-PEM callback = %q", status)
+	}
+	response := <-responses
+	if !response.OK || response.Token == "" || minter.mintCount() != 1 {
+		t.Fatalf("group configured-PEM response = %#v, mints = %d", response, minter.mintCount())
+	}
+	if len(transport.sent) != 0 {
+		t.Fatal("group configured-PEM approval opened a Telegram passphrase prompt")
+	}
+}
+
 func TestGroupGitHubApprovalCanNeverCreatePassphraseForceReply(t *testing.T) {
 	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
 	app.Config = multiUserTelegramConfig()

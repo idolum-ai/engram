@@ -481,7 +481,8 @@ execution.
 Telegram unlock is available only in backward-compatible private-DM mode.
 Engram never issues a ForceReply in a configured group. Group requests without
 a locally supplied passphrase fail with `local_passphrase_required` before an
-approval card is presented; use local unlock for every group request.
+approval card is presented unless the selected App has a valid configured
+local PEM route.
 
 The GitHub installation is inspected before minting. Requested permission names
 must exist on the installation, requested levels cannot exceed its current

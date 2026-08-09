@@ -132,9 +132,10 @@ traverses Telegram's cloud and is exposed to anyone controlling the Telegram
 account or bot token. Enable this mode only when that tradeoff is understood.
 
 Telegram unlock is disabled for every configured group. A group request must
-supply the passphrase locally; otherwise Engram returns
-`local_passphrase_required` before sending an approval card. Engram never
-creates a passphrase ForceReply in a group.
+supply the passphrase locally unless the selected App has a valid configured
+local PEM route; otherwise Engram returns `local_passphrase_required` before
+sending an approval card. Engram never creates a passphrase ForceReply in a
+group.
 
 `--local-unlock` overrides a Telegram-enabled enrollment for one execution.
 
@@ -602,8 +603,9 @@ it is absent.
 ### Local passphrase entry is required
 
 Enter the passphrase locally. In private-DM mode, an administrator may instead
-intentionally update the enrollment with `--telegram-unlock`; group mode always
-requires local entry.
+intentionally update the enrollment with `--telegram-unlock`. Group mode
+requires local entry unless the selected App has a valid configured local PEM
+route.
 
 ### The credential could not be unlocked
 
