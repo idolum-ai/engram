@@ -23,8 +23,9 @@ const githubUnlockTombstoneTTL = 10 * time.Minute
 const githubApprovalTimeFormat = "2006-01-02 15:04 MST"
 
 type githubApproval struct {
-	passphrase []byte
-	err        error
+	passphrase    []byte
+	configuredPEM bool
+	err           error
 }
 
 type githubPendingRequest struct {
@@ -33,6 +34,7 @@ type githubPendingRequest struct {
 	BindingKey        string
 	Request           githubauth.BrokerRequest
 	LocalPassphrase   []byte
+	ConfiguredPEM     *githubauth.PrivateKeyFileIdentity
 	ExpiresAt         time.Time
 	ApprovalMessageID int
 	ApprovalText      string
@@ -143,10 +145,14 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 			a.Config.EffectiveGitHubGrantMaxDuration(),
 		)}
 	}
-	if (!app.TelegramUnlock || request.LocalUnlock) && len(request.Passphrase) == 0 {
+	configuredPEM, err := a.resolveConfiguredGitHubAppPEM(app)
+	if err != nil {
+		return githubauth.BrokerResponse{Error: err.Error()}
+	}
+	if configuredPEM == nil && (!app.TelegramUnlock || request.LocalUnlock) && len(request.Passphrase) == 0 {
 		return githubauth.BrokerResponse{Error: "this GitHub App requires local passphrase entry", ErrorCode: githubauth.ErrorCodeLocalPassphraseRequired}
 	}
-	pending, err := a.beginGitHubApproval(ctx, session, request, app)
+	pending, err := a.beginGitHubApproval(ctx, session, request, app, configuredPEM)
 	if err != nil {
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
@@ -176,16 +182,27 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		_ = a.audit("github.approval", "invalidated", githubAuditRequest(session.ID, request))
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
-	if _, err := a.reloadMatchingGitHubEnrollment(pending.Enrollment); err != nil {
+	currentEnrollment, err := a.reloadMatchingGitHubEnrollment(pending.Enrollment)
+	if err != nil {
 		a.completeGitHubApprovalMessage(pending, "Canceled: the GitHub App enrollment changed during approval.")
 		_ = a.audit("github.approval", "enrollment_changed", githubAuditRequest(session.ID, request))
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
 
-	privateKey, unlockedApp, err := a.GitHubVault.Unlock(request.App, approval.passphrase)
+	var privateKey []byte
+	var unlockedApp githubauth.App
+	if approval.configuredPEM {
+		privateKey, err = a.readMatchingConfiguredGitHubAppPEM(pending)
+		unlockedApp = currentEnrollment
+	} else {
+		privateKey, unlockedApp, err = a.GitHubVault.Unlock(request.App, approval.passphrase)
+	}
 	if err != nil {
 		a.completeGitHubApprovalMessage(pending, "Failed: the GitHub App credential could not be unlocked.")
 		_ = a.audit("github.unlock", "failed", githubAuditRequest(session.ID, request))
+		if approval.configuredPEM {
+			return githubauth.BrokerResponse{Error: err.Error()}
+		}
 		return githubauth.BrokerResponse{Error: githubauth.ErrUnlock.Error()}
 	}
 	defer githubauth.Zero(privateKey)
@@ -260,6 +277,15 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		})
 		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
 	}
+	if err := a.validateConfiguredGitHubAppPEM(pending); err != nil {
+		cleanupErr := a.revokeDiscardedGitHubToken(ctx, githubRevocation{
+			Token: token.Value, SessionID: session.ID, App: request.App,
+			InstallationID: request.InstallationID, ExpiresAt: token.ExpiresAt,
+		}, err)
+		a.completeGitHubApprovalMessage(pending, "Canceled: the configured local GitHub App PEM changed before the capability could be delivered.")
+		_ = a.audit("github.mint", "credential_changed", githubAuditRequest(session.ID, request))
+		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
+	}
 	oldTokens := a.storeGitHubLease(lease)
 	a.revokeGitHubLeases(oldTokens)
 	a.queueManualRefresh(session.ID)
@@ -326,7 +352,7 @@ func githubRevocationForLease(lease githubLease) githubRevocation {
 	}
 }
 
-func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App) (*githubPendingRequest, error) {
+func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App, configuredPEM *githubauth.PrivateKeyFileIdentity) (*githubPendingRequest, error) {
 	requestID, err := githubRequestID()
 	if err != nil {
 		return nil, err
@@ -343,7 +369,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 	if request.Action == githubauth.ActionGrant {
 		grantExpiresAt = now.Add(request.GrantFor)
 	}
-	text := a.githubApprovalText(session, request, app, grantExpiresAt)
+	text := a.githubApprovalText(session, request, app, grantExpiresAt, configuredPEM != nil)
 	if len(text) > 3500 {
 		return nil, fmt.Errorf("GitHub capability request is too large to present safely in Telegram")
 	}
@@ -355,6 +381,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 		BindingKey:      githubBindingKey(request.Binding),
 		Request:         pendingRequest,
 		LocalPassphrase: append([]byte(nil), request.Passphrase...),
+		ConfiguredPEM:   configuredPEM,
 		ExpiresAt:       now.Add(githubApprovalTTL),
 		ApprovalText:    text,
 		ApprovalSummary: githubApprovalCompletionSummary(session, request, app),
@@ -388,7 +415,7 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 	return pending, nil
 }
 
-func (a *App) githubApprovalText(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App, grantExpiresAt time.Time) string {
+func (a *App) githubApprovalText(session state.TerminalSession, request githubauth.BrokerRequest, app githubauth.App, grantExpiresAt time.Time, configuredPEM bool) string {
 	var text strings.Builder
 	text.WriteString(githubApprovalRequestSummary(session, request))
 	text.WriteString("\n\n")
@@ -401,7 +428,9 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 		fmt.Fprintf(&text, "\n<b>Run:</b> <code>%s</code>", html.EscapeString(a.redactText(compactGitHubCommand(request.Command))))
 	}
 	text.WriteString("\n\nApprove within 15 minutes.")
-	if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
+	if configuredPEM {
+		text.WriteString(" The configured local PEM will be read after approval.")
+	} else if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
 		text.WriteString(" The password reply is not end-to-end encrypted.")
 	} else {
 		text.WriteString(" Unlock happens locally.")
@@ -412,7 +441,9 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 		html.EscapeString(request.Binding.WindowID), html.EscapeString(request.Binding.PaneID))
 	fmt.Fprintf(&text, "App ID: %d\nInstallation: %d\nFingerprint: %s\n",
 		app.AppID, app.EffectiveInstallationID(), html.EscapeString(app.PublicFingerprint))
-	if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
+	if configuredPEM {
+		text.WriteString("Unlock: configured local PEM\n")
+	} else if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
 		text.WriteString("Unlock: Telegram reply\n")
 	} else {
 		text.WriteString("Unlock: local passphrase\n")
@@ -548,6 +579,20 @@ func (a *App) handleGitHubApprovalCallback(ctx context.Context, cb telegram.Call
 		a.githubMu.Unlock()
 		a.answerCallback(ctx, cb.ID, "app enrollment changed")
 		return "callback_user_error"
+	}
+	if pending.ConfiguredPEM != nil {
+		if err := a.validateConfiguredGitHubAppPEM(pending); err != nil {
+			pending.State = "resolved"
+			pending.Result <- githubApproval{err: err}
+			a.githubMu.Unlock()
+			a.answerCallback(ctx, cb.ID, "configured local PEM changed or is unavailable")
+			return "callback_user_error"
+		}
+		pending.State = "resolved"
+		pending.Result <- githubApproval{configuredPEM: true}
+		a.githubMu.Unlock()
+		a.answerCallback(ctx, cb.ID, "approved")
+		return "callback_ok"
 	}
 	if len(pending.LocalPassphrase) > 0 {
 		passphrase := append([]byte(nil), pending.LocalPassphrase...)
@@ -789,6 +834,67 @@ func (a *App) reloadMatchingGitHubEnrollment(expected githubauth.App) (githubaut
 		return githubauth.App{}, fmt.Errorf("GitHub App %q enrollment changed", expected.Alias)
 	}
 	return current, nil
+}
+
+func (a *App) resolveConfiguredGitHubAppPEM(selected githubauth.App) (*githubauth.PrivateKeyFileIdentity, error) {
+	path := strings.TrimSpace(a.Config.GitHubAppPEMPath)
+	if path == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("configured local GitHub App PEM path must be absolute")
+	}
+	privateKey, identity, err := githubauth.ReadPrivateKeyFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("configured local GitHub App PEM is unavailable: %w", err)
+	}
+	defer githubauth.Zero(privateKey)
+
+	var matched *githubauth.App
+	for _, enrollment := range a.GitHubVault.List() {
+		if enrollment.PublicFingerprint != identity.Fingerprint {
+			continue
+		}
+		if matched != nil {
+			return nil, fmt.Errorf("configured local GitHub App PEM matches multiple enrolled Apps")
+		}
+		candidate := enrollment
+		matched = &candidate
+	}
+	if matched == nil {
+		return nil, fmt.Errorf("configured local GitHub App PEM does not match an enrolled App")
+	}
+	if matched.Alias != selected.Alias {
+		return nil, nil
+	}
+	if selected.PublicFingerprint != identity.Fingerprint {
+		return nil, fmt.Errorf("configured local GitHub App PEM does not match the selected enrollment")
+	}
+	return &identity, nil
+}
+
+func (a *App) readMatchingConfiguredGitHubAppPEM(pending *githubPendingRequest) ([]byte, error) {
+	if pending == nil || pending.ConfiguredPEM == nil {
+		return nil, fmt.Errorf("configured local GitHub App PEM was not bound to this approval")
+	}
+	privateKey, identity, err := githubauth.ReadPrivateKeyFile(a.Config.GitHubAppPEMPath)
+	if err != nil {
+		return nil, fmt.Errorf("configured local GitHub App PEM is unavailable: %w", err)
+	}
+	if !pending.ConfiguredPEM.Equal(identity) || identity.Fingerprint != pending.Enrollment.PublicFingerprint {
+		githubauth.Zero(privateKey)
+		return nil, fmt.Errorf("configured local GitHub App PEM changed or no longer matches the selected enrollment")
+	}
+	return privateKey, nil
+}
+
+func (a *App) validateConfiguredGitHubAppPEM(pending *githubPendingRequest) error {
+	if pending == nil || pending.ConfiguredPEM == nil {
+		return nil
+	}
+	privateKey, err := a.readMatchingConfiguredGitHubAppPEM(pending)
+	githubauth.Zero(privateKey)
+	return err
 }
 
 func matchingCurrentGitHubEnrollment(current, expected githubauth.App) (githubauth.App, bool) {

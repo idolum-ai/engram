@@ -807,6 +807,174 @@ func TestGitHubApprovalUsesLocalUnlockOverrideWithoutTelegramPassphrasePrompt(t 
 	}
 }
 
+func TestGitHubConfiguredPEMApprovalMintsWithoutPassphrasePrompt(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(42 * time.Minute)}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+	request.LocalUnlock = true
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	approval := <-transport.sent
+	if !strings.Contains(approval.text, "Unlock: configured local PEM") ||
+		!strings.Contains(approval.text, "configured local PEM will be read after approval") ||
+		strings.Contains(approval.text, "not end-to-end encrypted") {
+		t.Fatalf("approval text = %q", approval.text)
+	}
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "configured-pem-approve", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID)
+	if status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	response := <-responses
+	if !response.OK || response.Token == "" || minter.mintCount() != 1 {
+		t.Fatalf("broker response = %#v, mints = %d", response, minter.mintCount())
+	}
+	if len(transport.sent) != 0 {
+		t.Fatal("configured PEM approval requested a Telegram passphrase")
+	}
+}
+
+func TestGitHubConfiguredPEMRouteFailsClosedWithoutPassphraseFallback(t *testing.T) {
+	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.GitHubVault = testGitHubVault(t, true)
+	otherKey := testGitHubPrivateKeyPEM(t)
+	defer githubauth.Zero(otherKey)
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, otherKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "does not match an enrolled App") || len(app.githubPending) != 0 {
+		t.Fatalf("broker response = %#v, pending = %d", response, len(app.githubPending))
+	}
+}
+
+func TestGitHubConfiguredPEMUnreadableRouteDoesNotStartApproval(t *testing.T) {
+	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.GitHubVault = testGitHubVault(t, true)
+	app.Config.GitHubAppPEMPath = filepath.Join(t.TempDir(), "missing.pem")
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "configured local GitHub App PEM is unavailable") || len(app.githubPending) != 0 {
+		t.Fatalf("broker response = %#v, pending = %d", response, len(app.githubPending))
+	}
+}
+
+func TestGitHubConfiguredPEMRelativePathDoesNotStartApproval(t *testing.T) {
+	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.GitHubVault = testGitHubVault(t, true)
+	app.Config.GitHubAppPEMPath = "relative.pem"
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "path must be absolute") || len(app.githubPending) != 0 {
+		t.Fatalf("broker response = %#v, pending = %d", response, len(app.githubPending))
+	}
+}
+
+func TestGitHubConfiguredPEMRejectsAmbiguousEnrollment(t *testing.T) {
+	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	passphrase := []byte("another correct passphrase")
+	defer githubauth.Zero(passphrase)
+	if _, _, err := vault.Add("duplicate", 124, 457, privateKey, passphrase, false); err != nil {
+		t.Fatal(err)
+	}
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || !strings.Contains(response.Error, "matches multiple enrolled Apps") || len(app.githubPending) != 0 {
+		t.Fatalf("broker response = %#v, pending = %d", response, len(app.githubPending))
+	}
+}
+
+func TestGitHubConfiguredPEMReplacementBeforeApprovalDoesNotFallBack(t *testing.T) {
+	minter := &fakeGitHubMinter{}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	vault, privateKey := testGitHubVaultAndPEM(t, true, 456)
+	defer githubauth.Zero(privateKey)
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	replaceConfiguredGitHubPEM(t, app.Config.GitHubAppPEMPath, privateKey)
+	status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "configured-pem-replaced", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID)
+	if status != "callback_user_error" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	response := <-responses
+	if response.OK || !strings.Contains(response.Error, "configured local GitHub App PEM") || minter.mintCount() != 0 {
+		t.Fatalf("broker response = %#v, mints = %d", response, minter.mintCount())
+	}
+	if len(transport.sent) != 0 {
+		t.Fatal("replaced configured PEM fell back to a Telegram passphrase prompt")
+	}
+}
+
+func TestGitHubConfiguredPEMReplacementDuringMintRevokesToken(t *testing.T) {
+	minter := &fakeGitHubMinter{
+		expiresAt:   time.Now().UTC().Add(time.Hour),
+		mintStarted: make(chan struct{}), mintRelease: make(chan struct{}),
+	}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "configured-pem-race", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	<-minter.mintStarted
+	replaceConfiguredGitHubPEM(t, app.Config.GitHubAppPEMPath, privateKey)
+	close(minter.mintRelease)
+	response := <-responses
+	if response.OK || !strings.Contains(response.Error, "configured local GitHub App PEM") ||
+		minter.revokeCount() != 1 || len(app.githubLeases) != 0 {
+		t.Fatalf("broker response = %#v, revokes = %d, leases = %d", response, minter.revokeCount(), len(app.githubLeases))
+	}
+}
+
 func TestGitHubApprovalLabelsLocalUnlockOverrideTruthfully(t *testing.T) {
 	app, _, sessionID := newSafetyApp(t, state.TerminalOriginAttached)
 	session, found := app.Store.FindSession(sessionID)
@@ -814,7 +982,7 @@ func TestGitHubApprovalLabelsLocalUnlockOverrideTruthfully(t *testing.T) {
 		t.Fatal("session not found")
 	}
 	request := testLocalGitHubBrokerRequest()
-	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true}, time.Time{})
+	text := app.githubApprovalText(session, request, githubauth.App{TelegramUnlock: true}, time.Time{}, false)
 	if !strings.Contains(text, "Unlock: local passphrase") || strings.Contains(text, "password reply is not end-to-end encrypted") {
 		t.Fatalf("approval text = %q", text)
 	}
@@ -846,7 +1014,7 @@ func TestGitHubGrantApprovalKeepsDecisionCopyCompactAndDetailsExpandable(t *test
 		InstallationID:    148080021,
 		PublicFingerprint: "sha256:fingerprint",
 		TelegramUnlock:    true,
-	}, expiresAt)
+	}, expiresAt, false)
 
 	parts := strings.SplitN(text, "<blockquote expandable>", 2)
 	if len(parts) != 2 {
@@ -902,7 +1070,7 @@ func TestGitHubApprovalUsesSharedFifteenMinuteDeadline(t *testing.T) {
 	if !found {
 		t.Fatal("test enrollment missing")
 	}
-	pending, err := app.beginGitHubApproval(context.Background(), session, testLocalGitHubBrokerRequest(), enrollment)
+	pending, err := app.beginGitHubApproval(context.Background(), session, testLocalGitHubBrokerRequest(), enrollment, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +1163,7 @@ func TestGitHubApprovalRejectsCommandThatCannotBeShownInFull(t *testing.T) {
 	}
 	request := testLocalGitHubBrokerRequest()
 	request.Command = []string{"gh", "api", strings.Repeat("x", 4000) + "TRAILING_ARGUMENT"}
-	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{})
+	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{}, nil)
 	if pending != nil {
 		app.finishGitHubPending(pending)
 	}
@@ -1021,7 +1189,7 @@ func TestGitHubApprovalRejectsCommandThatRedactionWouldHide(t *testing.T) {
 	}
 	request := testLocalGitHubBrokerRequest()
 	request.Command = []string{"gh", "api", "--field", "token=ghp_1234567890abcdef"}
-	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{})
+	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{}, nil)
 	if pending != nil {
 		app.finishGitHubPending(pending)
 	}
@@ -1075,23 +1243,54 @@ func testGitHubVault(t *testing.T, telegramUnlock bool) *githubauth.Vault {
 }
 
 func testGitHubVaultWithInstallations(t *testing.T, telegramUnlock bool, installationIDs ...int64) *githubauth.Vault {
+	vault, privateKey := testGitHubVaultAndPEM(t, telegramUnlock, installationIDs...)
+	githubauth.Zero(privateKey)
+	return vault
+}
+
+func testGitHubVaultAndPEM(t *testing.T, telegramUnlock bool, installationIDs ...int64) (*githubauth.Vault, []byte) {
 	t.Helper()
 	vault, err := githubauth.OpenVault(filepath.Join(t.TempDir(), "github-apps.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	privateKey := testGitHubPrivateKeyPEM(t)
+	passphrase := []byte("correct horse battery staple")
+	defer githubauth.Zero(passphrase)
+	if _, _, err := vault.AddInstallations("idolum", 123, installationIDs, privateKey, passphrase, telegramUnlock); err != nil {
+		githubauth.Zero(privateKey)
+		t.Fatal(err)
+	}
+	return vault, privateKey
+}
+
+func testGitHubPrivateKeyPEM(t *testing.T) []byte {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
-	privateKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	defer githubauth.Zero(privateKey)
-	passphrase := []byte("correct horse battery staple")
-	defer githubauth.Zero(passphrase)
-	if _, _, err := vault.AddInstallations("idolum", 123, installationIDs, privateKey, passphrase, telegramUnlock); err != nil {
+	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+}
+
+func writeConfiguredGitHubPEM(t *testing.T, privateKey []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "configured.pem")
+	if err := os.WriteFile(path, privateKey, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return vault
+	return path
+}
+
+func replaceConfiguredGitHubPEM(t *testing.T, path string, privateKey []byte) {
+	t.Helper()
+	replacement := path + ".replacement"
+	if err := os.WriteFile(replacement, privateKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type fakeGitHubMinter struct {

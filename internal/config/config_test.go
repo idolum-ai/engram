@@ -437,6 +437,23 @@ func TestLoadBoundsRenewableGitHubGrantMaximum(t *testing.T) {
 	}
 }
 
+func TestLoadRecordsConfiguredGitHubAppPEMWithoutReadingIt(t *testing.T) {
+	dir := t.TempDir()
+	env := filepath.Join(dir, ".env")
+	configured := filepath.Join(dir, "missing-github-app.pem")
+	body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_GITHUB_APP_PEM_PATH=" + configured + "\n"
+	if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatalf("optional unavailable PEM prevented config load: %v", err)
+	}
+	if cfg.GitHubAppPEMPath != configured {
+		t.Fatalf("GitHubAppPEMPath = %q, want %q", cfg.GitHubAppPEMPath, configured)
+	}
+}
+
 func TestLoadRejectsUnsupportedTranscriptionModelWhenEnabled(t *testing.T) {
 	dir := t.TempDir()
 	env := filepath.Join(dir, ".env")

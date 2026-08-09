@@ -10,6 +10,10 @@ runtime state.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
+- `ENGRAM_GITHUB_APP_PEM_PATH` optionally names one live local GitHub App PEM
+  used for passwordless approval of its unique enrolled fingerprint match. The
+  path is loaded at startup, but file health is checked only by the GitHub
+  capability route so failure cannot take down Telegram/tmux core startup.
 - `TELEGRAM_API_BASE` selects the Telegram Bot API server root and defaults to
   `https://api.telegram.org`. It must be an absolute HTTP(S) URL without
   userinfo, query, or fragment; an optional path prefix and trailing slash are

@@ -74,6 +74,93 @@ func TestGitHubGrantApprovalStoresMemoryOnlyRenewalAuthority(t *testing.T) {
 	}
 }
 
+func TestGitHubConfiguredPEMGrantRetainsBoundedMemoryOnlyRenewal(t *testing.T) {
+	now := time.Now().UTC()
+	minter := &fakeGitHubMinter{expiresAt: now.Add(30 * time.Minute)}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	app.githubGrants = map[string]githubGrant{}
+	app.githubNow = func() time.Time { return now }
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+	request.Action = githubauth.ActionGrant
+	request.Command = nil
+	request.GrantFor = time.Hour
+	request.Purpose = "Complete the current pull-request batch"
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	approval := <-transport.sent
+	if !strings.Contains(approval.text, "Unlock: configured local PEM") {
+		t.Fatalf("approval text = %q", approval.text)
+	}
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "configured-grant", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	response := <-responses
+	if !response.OK || len(response.Grants) != 1 || !response.Grants[0].ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("grant response = %#v", response)
+	}
+	stored := app.githubGrants[githubBindingKey(request.Binding)]
+	if len(stored.PrivateKey) == 0 || !stored.Info.ExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("stored grant = %#v", stored.Info)
+	}
+
+	if err := os.Remove(app.Config.GitHubAppPEMPath); err != nil {
+		t.Fatal(err)
+	}
+	execRequest := testLocalGitHubBrokerRequest()
+	githubauth.Zero(execRequest.Passphrase)
+	execRequest.Passphrase = nil
+	execResponse := app.handleGitHubBrokerRequest(context.Background(), execRequest)
+	if !execResponse.OK || execResponse.Token == "" || minter.mintCount() != 1 {
+		t.Fatalf("grant consume response = %#v, mints = %d", execResponse, minter.mintCount())
+	}
+}
+
+func TestGitHubConfiguredPEMReplacementDuringGrantInspectionStoresNoAuthority(t *testing.T) {
+	minter := &fakeGitHubMinter{inspectStart: make(chan struct{}), inspectWait: make(chan struct{})}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	app.githubGrants = map[string]githubGrant{}
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+	request.Action = githubauth.ActionGrant
+	request.Command = nil
+	request.GrantFor = time.Hour
+	request.Purpose = "Review the current pull-request batch"
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "configured-grant-race", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	<-minter.inspectStart
+	replaceConfiguredGitHubPEM(t, app.Config.GitHubAppPEMPath, privateKey)
+	close(minter.inspectWait)
+	response := <-responses
+	if response.OK || !strings.Contains(response.Error, "configured local GitHub App PEM") || len(app.githubGrants) != 0 {
+		t.Fatalf("grant response = %#v, grants = %d", response, len(app.githubGrants))
+	}
+}
+
 func TestGitHubGrantApprovedAtDeadlineRetainsMinimumUsableLifetime(t *testing.T) {
 	now := time.Now().UTC()
 	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
@@ -269,7 +356,7 @@ func TestGitHubGrantRejectsPurposeRequiringSecretRedaction(t *testing.T) {
 	if !found {
 		t.Fatal("missing session")
 	}
-	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{})
+	pending, err := app.beginGitHubApproval(context.Background(), session, request, githubauth.App{}, nil)
 	if pending != nil || err == nil || !strings.Contains(err.Error(), "secret material") {
 		t.Fatalf("secret-bearing purpose pending=%#v error=%v", pending, err)
 	}

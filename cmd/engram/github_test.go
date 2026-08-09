@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -137,13 +141,21 @@ func TestGitHubStatusJSONUsesDocumentedAuthorityObject(t *testing.T) {
 
 func TestReadPrivateKeyFileRequiresOwnerOnlyRegularFile(t *testing.T) {
 	dir := t.TempDir()
-	private := filepath.Join(dir, "private.pem")
-	if err := os.WriteFile(private, []byte("private"), 0o600); err != nil {
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if data, err := readPrivateKeyFile(private); err != nil || string(data) != "private" {
-		t.Fatalf("private file data = %q, error = %v", data, err)
+	privateKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	defer githubauth.Zero(privateKey)
+	private := filepath.Join(dir, "private.pem")
+	if err := os.WriteFile(private, privateKey, 0o600); err != nil {
+		t.Fatal(err)
 	}
+	data, err := readPrivateKeyFile(private)
+	if err != nil || !bytes.Equal(data, privateKey) {
+		t.Fatalf("private file validation error = %v", err)
+	}
+	githubauth.Zero(data)
 
 	public := filepath.Join(dir, "public.pem")
 	if err := os.WriteFile(public, []byte("public"), 0o644); err != nil {

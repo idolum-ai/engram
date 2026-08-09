@@ -102,14 +102,15 @@ Do not use `cat`, paste the key into a prompt, add it to a repository, or send
 it through Telegram. Enrollment rejects symlinks, files not owned by the
 current UID, and files with any group or other permission bits.
 
-## Choose the passphrase route
+## Choose the unlock route
 
 Engram encrypts a copy of the PEM in
 `$ENGRAM_HOME/github-apps.json`. Enrollment prompts twice for a passphrase of at
 least 12 bytes. The passphrase is not stored. Use a unique, high-entropy
 passphrase rather than a GitHub, operating-system, or API credential.
 
-There are two unlock modes.
+There are three unlock modes. Enrollment always creates the encrypted vault
+copy and passphrase regardless of the runtime route.
 
 ### Local unlock: safer default
 
@@ -130,6 +131,39 @@ traverses Telegram's cloud and is exposed to anyone controlling the Telegram
 account or bot token. Enable this mode only when that tradeoff is understood.
 
 `--local-unlock` overrides a Telegram-enabled enrollment for one execution.
+
+### Configured local PEM: optional passwordless route
+
+To let Telegram approval complete without entering or replying with a
+passphrase, keep the source PEM on the Engram host and add its path to the
+protected `~/.engram/.env`:
+
+```env
+ENGRAM_GITHUB_APP_PEM_PATH=/home/example/.config/engram/example-app.private-key.pem
+```
+
+Use an absolute path and restart Engram after changing it. This setting names
+one live credential file; never put PEM contents in the env value. The service
+process must own the regular, non-symlink file, it must have no group or other
+permission bits, it must remain within Engram's size bound, and it must contain
+exactly one supported RSA private key. Enrollment and runtime use the same
+validator.
+
+Engram compares the public fingerprint with all current enrollments. Exactly one
+alias may match. Requests for that alias show `Unlock: configured local PEM` and
+tapping **Approve** does not request a passphrase, even if the enrollment also
+allows Telegram unlock or the request uses `--local-unlock`. Other aliases
+retain their enrolled passphrase route.
+An unreadable, malformed, unmatched, or multiply matched configured source
+fails the GitHub request without stopping Telegram/tmux core startup.
+
+The source remains live rather than being loaded once at startup. Engram binds
+its file identity and fingerprint when presenting approval, then reopens and
+revalidates it at approval, credential use, and post-mint or grant-storage
+continuation boundaries. Replacement, permission or metadata mutation,
+fingerprint mismatch, App/installation selection change, or enrollment change
+cancels the request. A request already resolved to configured local PEM never
+falls back to local entry or a Telegram passphrase reply.
 
 ## Enroll the App
 
@@ -314,7 +348,8 @@ otherwise.
 For Telegram unlock, reply directly to Engram's forced-reply prompt with the
 vault passphrase. The prompt and reply should disappear after processing. For
 local unlock, the passphrase was collected in the terminal before the approval
-message appeared.
+message appeared. For configured local PEM, tapping **Approve** is the complete
+human interaction; exact capability approval remains mandatory.
 
 On success, the child command prints the requested repository metadata. Engram
 does not print the token. It removes ambient `GH_TOKEN` and `GITHUB_TOKEN`
@@ -507,9 +542,11 @@ first.
 ## Decide what to do with the source PEM
 
 After successful enrollment, Engram uses its encrypted vault copy and no longer
-needs the source PEM for ordinary operation. Removing that file may still break
-other scripts, services, backup procedures, or token wrappers that read it
-directly.
+needs the source PEM for ordinary passphrase unlock. When
+`ENGRAM_GITHUB_APP_PEM_PATH` selects it, however, the file is a live credential
+and must remain at that identity and path for new approvals. Removing that file
+may also break other scripts, services, backup procedures, or token wrappers
+that read it directly.
 
 Before moving or deleting a source PEM:
 
@@ -523,6 +560,13 @@ Before moving or deleting a source PEM:
 
 Engram does not provide a command to export the encrypted PEM back out of its
 vault.
+
+A renewable grant created through configured local PEM revalidates the source
+before storing authority, then retains the signing capability only in Engram
+memory under the same pane, enrollment, scope, and expiry bounds as a
+passphrase-created grant. Moving the source afterward does not extend the grant;
+the usual expiry, pane loss, enrollment change, revoke, shutdown, and restart
+rules still erase it.
 
 ## Troubleshooting
 
@@ -550,6 +594,15 @@ intentionally update the enrollment with `--telegram-unlock`.
 The passphrase was wrong or the encrypted record could not be authenticated.
 No token is returned. Start a fresh request after checking the intended
 passphrase.
+
+### The configured local PEM is unavailable or changed
+
+Inspect only its metadata, not its contents. Confirm the configured path exists,
+is owned by the Engram service UID, is a regular non-symlink file with mode
+`0600`, and still has the public fingerprint of exactly one enrolled alias.
+Atomic replacement with the same key still changes file identity and cancels an
+already presented approval; start a new request only after the intended source
+is stable. Engram does not downgrade that request to either passphrase route.
 
 ### The requested permission exceeds the installation
 

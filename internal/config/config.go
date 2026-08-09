@@ -58,6 +58,7 @@ type Config struct {
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
 	GitHubGrantMaxDuration     time.Duration
+	GitHubAppPEMPath           string
 	CodexContextTurns          int
 	ClaudeContextTurns         int
 }
@@ -162,6 +163,7 @@ func Load(path string) (Config, error) {
 		AttachmentSoftMaxBytes:     softMax,
 		TelegramPollTimeoutSeconds: int(pollTimeout),
 		GitHubGrantMaxDuration:     grantMaxDuration,
+		GitHubAppPEMPath:           ExpandPath(values["ENGRAM_GITHUB_APP_PEM_PATH"]),
 		CodexContextTurns:          int(codexContextTurns),
 		ClaudeContextTurns:         int(claudeContextTurns),
 	}
