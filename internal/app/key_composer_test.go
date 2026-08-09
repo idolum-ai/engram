@@ -575,11 +575,11 @@ func TestConsumedKeyPromptLeavesReusableBoundedTombstone(t *testing.T) {
 	if _, err := app.issueKeyPrompt(ref.ChatID, ref.MessageID, 42, session); err != nil {
 		t.Fatal(err)
 	}
-	if _, current, recognized := app.consumeKeyPrompt(ref); !recognized || !current {
+	if _, current, recognized, owned := app.consumeKeyPrompt(ref, 42); !recognized || !current || !owned {
 		t.Fatalf("first consumption: current=%v recognized=%v", current, recognized)
 	}
 	for range 2 {
-		if _, current, recognized := app.consumeKeyPrompt(ref); !recognized || current {
+		if _, current, recognized, owned := app.consumeKeyPrompt(ref, 42); !recognized || current || !owned {
 			t.Fatalf("late consumption: current=%v recognized=%v", current, recognized)
 		}
 	}

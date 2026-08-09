@@ -13,7 +13,24 @@ Telegram is Engram's only user interface.
 
 ## Admission And Commands
 
-- Engram accepts exactly one configured user and one private chat.
+- Engram accepts one required administrator and a canonical, deduplicated list
+  of subordinate operator user IDs in exactly one configured chat. User IDs
+  must be positive. The empty operator list preserves the administrator's DM;
+  any operator requires an explicit negative group/supergroup chat ID.
+- Admission is centralized across messages, anchor replies, attachments, voice
+  input, commands, callbacks, journal references, ForceReply workflows, and
+  GitHub approval. Anonymous and channel senders, unlisted members, wrong chats,
+  and incoherent private-chat updates fail closed without retaining identifiers.
+- Operators retain the complete terminal collaboration surface and are trusted
+  to execute arbitrary pane input. `/restart` and GitHub capability approval,
+  denial, and Telegram unlock are administrator-only. Session close,
+  stop/unwatch, and recovery actions remain operator-accessible; no public
+  `/quit` command exists.
+- Every configured-group member can observe all outgoing bot cards and files,
+  including members who cannot interact. With Telegram bot privacy mode
+  enabled, commands, callbacks, mentions, and replies to bot messages are
+  delivered, but standalone group text, attachments, and voice may not be;
+  disabling privacy changes delivery, not Engram authorization.
 - Unauthorized updates must not reach tmux or application handlers. Bounded
   admission bookkeeping may advance without retaining rejected identifiers.
 - Command metadata has one source: `/help`, Bot API registration, and
@@ -55,9 +72,10 @@ Telegram is Engram's only user interface.
 
 ## Callbacks And Alternate Views
 
-- Every callback is answered and authorized against configured user, chat, and
+- Every callback is answered and authorized against configured role, chat, and
   current canonical message. Retired controls are inert.
-- GitHub capability Approve and Deny callbacks are accepted only on the exact
+- GitHub capability Approve and Deny callbacks are accepted only from the
+  administrator on the exact
   process-local approval message for one unexpired request. An approved
   Telegram-unlock enrollment creates one ForceReply whose message ID is bound
   to that request; replies to any other message cannot unlock it. The secret
@@ -136,7 +154,7 @@ Telegram is Engram's only user interface.
   tmux capture; when restart has cleared its companion, it asks the user to wait
   for the startup refresh. The `/raw` command separately recaptures with the
   active mode's corresponding 96- or 64-row budget.
-- `⌨️` opens a Telegram ForceReply in the configured private chat and is
+- `⌨️` opens a Telegram ForceReply in the configured chat and is
   bound to the exact canonical anchor and immutable tmux identity. A reply
   supplies natural-language key intent to one bounded non-streaming provider
   request containing no terminal frame, guide history, session metadata, or
@@ -146,9 +164,10 @@ Telegram is Engram's only user interface.
   intent as clarification; Engram renders that outcome with deterministic prose,
   but semantic classification remains model judgment and explicit confirmation
   remains the authority boundary.
-- Key-composer prompts and confirmations are memory-only, single-use, limited
+- Key-composer prompts and confirmations are memory-only, initiating-user-bound,
+  single-use, limited
   to one current workflow per session, bounded globally, and expire after two
-  minutes. A decision must come from the configured user and chat on the exact
+  minutes. A decision must come from that configured user and chat on the exact
   confirmation message. Approval revalidates the original canonical anchor and
   immutable tmux binding under the ordinary delivery locks; cancel, expiry,
   restart, reattachment, collapse, close, anchor rotation, duplicate callbacks,

@@ -24,7 +24,7 @@ var registry = []Metadata{
 	{Command: "status", Usage: "/status", Description: "Show service, state, and tmux status", Category: "service"},
 	{Command: "mode", Usage: "/mode [guide|snapshot]", Description: "Show or change the live anchor mode", Category: "service"},
 	{Command: "logs", Usage: "/logs", Description: "Send service audit logs as an attachment", Category: "service"},
-	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions", Category: "service"},
+	{Command: "restart", Usage: "/restart", Description: "Restart Engram without closing tmux sessions (administrator only)", Category: "service"},
 	{Command: "remember", Usage: "/remember [<name> [text]]", Description: "List, inspect, or save an input template", Category: "input"},
 	{Command: "forget", Usage: "/forget <name>", Description: "Forget a saved input template", Category: "input"},
 	{Command: "templates", Usage: "/templates export", Description: "Export all remembered input templates as JSON", Category: "input"},

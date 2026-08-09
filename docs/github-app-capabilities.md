@@ -350,11 +350,13 @@ Before approving, verify every field:
 - permission names and levels; and
 - complete shell-quoted child command.
 
-Tap **Approve** only when all fields match the intended operation. Tap **Deny**
-otherwise.
+The configured Telegram administrator alone may tap **Approve** or **Deny**;
+operator callbacks are rejected. Tap **Approve** only when all fields match the
+intended operation. Tap **Deny** otherwise.
 
-For Telegram unlock, reply directly to Engram's forced-reply prompt with the
-vault passphrase. The prompt and reply should disappear after processing. For
+For Telegram unlock, the administrator replies directly to Engram's
+forced-reply prompt with the vault passphrase. Operator replies cannot unlock
+the request. The prompt and reply should disappear after processing. For
 local unlock, the passphrase was collected in the terminal before the approval
 message appeared. For configured local PEM, tapping **Approve** is the complete
 human interaction; exact capability approval remains mandatory.

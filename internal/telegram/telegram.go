@@ -160,6 +160,7 @@ func IsMessageNotPinned(err error) bool {
 type Update struct {
 	UpdateID      int            `json:"update_id"`
 	Message       *Message       `json:"message,omitempty"`
+	ChannelPost   *Message       `json:"channel_post,omitempty"`
 	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
@@ -185,6 +186,7 @@ type Chat struct {
 type Message struct {
 	MessageID      int       `json:"message_id"`
 	From           *User     `json:"from,omitempty"`
+	SenderChat     *Chat     `json:"sender_chat,omitempty"`
 	Chat           Chat      `json:"chat"`
 	Date           int64     `json:"date,omitempty"`
 	Text           string    `json:"text,omitempty"`

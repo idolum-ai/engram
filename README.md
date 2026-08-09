@@ -8,10 +8,12 @@
   <strong>Remote tmux, rendered as a quiet signal.</strong>
 </p>
 
-Engram is a single-user Telegram control surface for local tmux sessions. It
+Engram is an administrator-operated Telegram control surface for local tmux sessions. It
 creates or attaches to tmux windows, routes Telegram messages into panes, and
 presents each pane as one stable, pinned Telegram anchor. That anchor can be a
 conversational guide or an exact terminal image rendered locally by Chromium.
+It preserves a single-user DM mode and can explicitly admit fully trusted
+operators in one configured Telegram group.
 
 **Why tmux?** Its mature, narrow command surface has effectively crystallized.
 Very little API drift is expected, which makes tmux an unusually durable
@@ -133,6 +135,31 @@ ENGRAM_ANCHOR_MODE=snapshot
 Leave `TELEGRAM_CHAT_ID` empty for DM-only use. Engram then uses the allowed
 user ID as the private chat ID. Never commit or post the completed env file.
 
+For shared operation, add the bot to one Telegram group or supergroup and use
+the positive `message.from.id` values for each operator plus the group's
+negative `message.chat.id`:
+
+```dotenv
+TELEGRAM_ALLOWED_USER_ID=the-administrator-user-id
+TELEGRAM_OPERATOR_USER_IDS=the-first-operator-id,the-second-operator-id
+TELEGRAM_CHAT_ID=-1001234567890
+```
+
+The list is manual startup configuration: entries must be comma-separated
+positive integers, are sorted and deduplicated, and changes require an Engram
+restart. The administrator ID is redundant in the operator list and is ignored.
+When any operator is configured, Engram rejects a missing or DM chat ID and
+admits updates only when Telegram identifies the configured chat as a group or
+supergroup.
+
+Telegram's default bot privacy mode delivers commands, callbacks, mentions,
+and replies to bot messages, which is enough for anchor replies and controls.
+Standalone plain text, attachments, and voice notes in a group may not reach
+Engram while privacy mode is enabled. Disable privacy for the bot through
+`@BotFather` only if those standalone workflows are required, then remove and
+re-add the bot as Telegram instructs. Engram's own allowlist remains the
+authorization boundary either way.
+
 ### 4. Validate without network calls
 
 Both commands load and validate the config without calling Telegram or the
@@ -145,7 +172,8 @@ go run ./cmd/engram dry-start --env "$HOME/.engram/.env"
 ```
 
 Confirm that each command ends with `status: ok`, that `tmux` is not reported as
-`missing`, and that the displayed user and chat IDs are your private DM IDs.
+`missing`, and that the displayed administrator and chat IDs match the intended
+DM or group.
 
 ### 5. Start Engram
 
@@ -245,8 +273,9 @@ text, paths, UUIDs, task text, or agent names. Diagnose one pane locally with
 | --- | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | none | yes, secret | Token issued by `@BotFather`. Treat it as access to the Engram control channel. |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | no | Telegram Bot API server root. Engram appends `/bot<token>` and `/file/bot<token>`. HTTP is accepted for local servers but exposes credentials and content in transit. |
-| `TELEGRAM_ALLOWED_USER_ID` | none | yes | The one Telegram user ID allowed to issue commands. |
-| `TELEGRAM_CHAT_ID` | allowed user ID | no | The one allowed chat. Leave empty for a private DM; group operation is unsupported. |
+| `TELEGRAM_ALLOWED_USER_ID` | none | yes | Required positive Telegram user ID for the administrator. It remains the sole user in backward-compatible DM mode. |
+| `TELEGRAM_OPERATOR_USER_IDS` | none | no | Comma-separated positive Telegram user IDs for fully trusted terminal operators. Values are deduplicated and canonicalized at startup; changes require restart. |
+| `TELEGRAM_CHAT_ID` | allowed user ID | with operators | The one served chat. Leave empty for the administrator DM; operators require an explicit negative group/supergroup ID. |
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
 | `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: conversational `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v9. |
 | `ENGRAM_CODEX_CONTEXT_TURNS` | `0` | no | Privacy opt-in (`0` disables; maximum `8`) for recent user turns and their visible assistant messages from an exactly identified active Codex session. This text is redacted and bounded before it is added as historical—not current-state—guide context. |
@@ -402,7 +431,8 @@ engram github exec \
 Repository and permission flags are mandatory and repeatable. Engram rejects
 requests that omit either boundary. It validates the live tmux
 server/window/pane identity, sends an exact approval request to the configured
-Telegram user, and blocks for at most fifteen minutes. Approval is single-use and
+Telegram chat, and blocks for at most fifteen minutes. Only the administrator
+may approve or deny it. Approval is single-use and
 bound to the waiting local connection. The approval card includes the complete
 shell-quoted child command; if the repositories, permissions, and full command
 cannot fit safely in one card, Engram refuses the request instead of presenting
@@ -589,19 +619,34 @@ without moving provider workflows into the terminal bridge.
 
 ## Data Flow / Privacy
 
-Engram deliberately connects a private chat, a local shell, and an external
-model API. Compromise of the authorized Telegram account can become shell
-access for the configured local user. A stolen bot token can expose or disrupt
-the bot channel and must be revoked immediately.
+Engram deliberately connects a Telegram chat, a local shell, and an external
+model API. Compromise of any configured administrator or operator account can
+become shell access for the configured local user. Operators are fully trusted
+terminal users: they can create sessions, execute arbitrary pane input and key
+sequences, read captures, and upload local files. A stolen bot token can expose
+or disrupt the bot channel and must be revoked immediately.
+
+**Group privacy boundary:** every member of the configured group can see every
+outgoing Engram card, terminal summary or image, approval prompt, and uploaded
+file even when that member is not allowed to interact. The user allowlist
+restricts input; it does not make bot output private within the group. Use a
+group whose entire membership is permitted to observe the terminal data.
 
 - **Telegram:** Engram long-polls the Bot API for messages and attachments, then
   sends messages, rotates and pins live anchors, edits retired anchors, and
   sends requested files, remembered-template exports, and terminal snapshot
-  photos back to the configured DM.
+  photos back to the configured chat.
   Telegram receives command text, summaries, terminal image snapshots, `/raw`,
   `/dump`, `/logs`, `/templates export`, and `/download` results sent through the bot.
   In Chromium mode, every changed anchor frame is an exact, unredacted terminal
   image sent automatically to Telegram at most once every ten seconds.
+- **Authorization:** The administrator and configured operators may use all
+  terminal collaboration commands, replies, attachments, voice input, and
+  ordinary callbacks. `/restart`, GitHub Approve/Deny callbacks, and GitHub
+  Telegram-unlock passphrase replies are administrator-only. `/close`,
+  `/stop`/`/unwatch`, recovery, and their callbacks are session lifecycle
+  actions, not service lifecycle actions, and remain available to operators.
+  Engram has no public `/quit` command.
 - **tmux and local processes:** Authorized messages can create windows and send
   literal shell input or key presses. Engram-created windows use the stable
   `ENGRAM_TMUX_SIZE` geometry, including while detached or while the selected

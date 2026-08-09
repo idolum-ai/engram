@@ -166,12 +166,7 @@ func New(cfg config.Config) (*App, error) {
 		snapshotProbeFailures = 1
 		snapshotNextProbe = snapshotProbeAt.Add(snapshotProbeInitialDelay)
 	}
-	key := lockfile.Key(cfg.TelegramBotToken, strconv.FormatInt(cfg.TelegramAllowedUserID, 10), strconv.FormatInt(cfg.TelegramChatID, 10))
-	l, err := lockfile.Acquire(cfg.LockDir(), key, lockfile.Metadata{Details: map[string]string{
-		"telegram_user_id": strconv.FormatInt(cfg.TelegramAllowedUserID, 10),
-		"telegram_chat_id": strconv.FormatInt(cfg.TelegramChatID, 10),
-		"version":          version.String(),
-	}})
+	l, err := lockfile.Acquire(cfg.PollingLockDir(), telegramPollingLockKey(cfg), telegramPollingLockMetadata(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -441,6 +436,10 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if update.CallbackQuery != nil {
 		return a.handleCallback(ctx, *update.CallbackQuery)
 	}
+	if update.ChannelPost != nil {
+		_ = a.audit("auth.reject", "rejected", map[string]any{"kind": "channel_post"})
+		return "rejected_unauthorized"
+	}
 	if update.Message == nil {
 		return "skipped_no_message"
 	}
@@ -457,7 +456,7 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 		_ = a.audit("state.message", "failed", map[string]any{"message_id": msg.MessageID, "error": err.Error()})
 		return "failed_state_mark_message"
 	}
-	if status, handled := a.handleGitHubUnlockReply(ctx, msg); handled {
+	if status, handled := a.handleAuthorizedGitHubUnlockReply(ctx, msg); handled {
 		return status
 	}
 	if status, handled := a.handleKeyPromptReply(ctx, msg); handled {
@@ -552,16 +551,6 @@ func escapedSlashInput(text string) (string, bool) {
 		return "", false
 	}
 	return text[:start] + text[start+1:], true
-}
-
-func (a *App) authorized(msg *telegram.Message) bool {
-	if msg.Chat.ID != a.Config.TelegramChatID {
-		return false
-	}
-	if msg.From == nil || msg.From.ID != a.Config.TelegramAllowedUserID {
-		return false
-	}
-	return true
 }
 
 func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text string) (status string) {
@@ -774,6 +763,11 @@ func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text stri
 		a.reconcileAnchorPresentation(ctx, id)
 		a.reply(ctx, msg, fmt.Sprintf("[%d] watch stopped", id))
 	case "restart":
+		if a.messageRole(&msg) != telegramAdministrator {
+			_ = a.audit("auth.reject", "rejected", map[string]any{"kind": "administrator_command", "command": "restart"})
+			a.reply(ctx, msg, "administrator access required")
+			return "command_unauthorized"
+		}
 		a.reply(ctx, msg, "Engram restarting. tmux sessions remain open.")
 		a.quitCode = 2
 		a.stop()
@@ -866,7 +860,7 @@ func (a *App) audit(eventType, status string, payload any) error {
 func (a *App) redactAuditPayload(payload any) any {
 	switch v := payload.(type) {
 	case string:
-		return redact.Secrets(v, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+		return redact.Secrets(v, a.Config.RedactionSecrets()...)
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, value := range v {
@@ -885,7 +879,7 @@ func (a *App) redactAuditPayload(payload any) any {
 }
 
 func (a *App) redactText(text string) string {
-	return redact.Secrets(text, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+	return redact.Secrets(text, a.Config.RedactionSecrets()...)
 }
 
 func (a *App) redactSessionPresentation(ts *state.TerminalSession) {
@@ -902,17 +896,17 @@ func (a *App) renderLocal(ts state.TerminalSession, summary string) string {
 }
 
 func (a *App) visibleReferences(capture string) visibleReferences {
-	return visibleReferencesForCapture(capture, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+	return visibleReferencesForCapture(capture, a.Config.RedactionSecrets()...)
 }
 
 func (a *App) visibleReferencesForStyledCapture(capture string, hyperlinks []string) visibleReferences {
-	return visibleReferencesForStyledCapture(capture, hyperlinks, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey)
+	return visibleReferencesForStyledCapture(capture, hyperlinks, a.Config.RedactionSecrets()...)
 }
 
 func (a *App) intentionalArtifactPaths(capture string, hyperlinks []string) []string {
 	targets := append([]string(nil), hyperlinks...)
 	targets = append(targets, extractVisibleFileURIs(capture, maxVisiblePaths)...)
-	return visibleReferencesForHyperlinks(targets, maxVisiblePaths, 0, a.Config.TelegramBotToken, a.Config.AnthropicAPIKey, a.Config.OpenAIAPIKey).Paths
+	return visibleReferencesForHyperlinks(targets, maxVisiblePaths, 0, a.Config.RedactionSecrets()...).Paths
 }
 
 func (a *App) statusText() string {
@@ -1213,6 +1207,9 @@ func (a *App) updateJournalRefs(update telegram.Update) (string, state.UpdateRef
 			refs.UserID = update.Message.From.ID
 		}
 		return "message", refs
+	}
+	if update.ChannelPost != nil {
+		return "channel_post", state.UpdateRefs{}
 	}
 	return "unknown", state.UpdateRefs{}
 }

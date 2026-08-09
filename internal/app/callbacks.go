@@ -39,8 +39,14 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 	}
 	switch parts[0] {
 	case "github-approve":
+		if a.callbackRole(cb) != telegramAdministrator {
+			return a.rejectAdministratorCallback(ctx, cb, "github_approval")
+		}
 		return a.handleGitHubApprovalCallback(ctx, cb, true, parts[1])
 	case "github-deny":
+		if a.callbackRole(cb) != telegramAdministrator {
+			return a.rejectAdministratorCallback(ctx, cb, "github_approval")
+		}
 		return a.handleGitHubApprovalCallback(ctx, cb, false, parts[1])
 	case "agent-info":
 		id, err := strconv.Atoi(parts[1])
@@ -416,6 +422,14 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 	}
 }
 
+func (a *App) rejectAdministratorCallback(ctx context.Context, cb telegram.CallbackQuery, kind string) string {
+	_ = a.audit("auth.reject", "rejected", map[string]any{"kind": kind})
+	if !a.answerCallback(ctx, cb.ID, "administrator access required") {
+		return "rejected_unauthorized_callback_answer_failed"
+	}
+	return "rejected_unauthorized_callback"
+}
+
 func (a *App) validateSessionListCallback(ctx context.Context, cb telegram.CallbackQuery, value string) (int, state.TerminalSession, string) {
 	parts := strings.Split(value, ":")
 	if len(parts) != 2 {
@@ -495,10 +509,6 @@ func (a *App) queueCallbackTransfer(
 		return "callback_telegram_failed"
 	}
 	return "callback_ok"
-}
-
-func (a *App) callbackAuthorized(cb telegram.CallbackQuery) bool {
-	return cb.From.ID == a.Config.TelegramAllowedUserID && cb.Message != nil && cb.Message.Chat.ID == a.Config.TelegramChatID
 }
 
 func (a *App) validateAnchorCallback(ctx context.Context, cb telegram.CallbackQuery, id int) (state.TerminalSession, string) {

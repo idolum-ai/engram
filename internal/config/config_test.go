@@ -70,6 +70,7 @@ func TestGitHubBrokerSocketPathIsStableAndInstanceScoped(t *testing.T) {
 		TelegramChatID:        42,
 	}
 	same := first
+	same.TelegramOperatorUserIDs = []int64{77, 88}
 	otherHome := first
 	otherHome.Home = "/home/example/.engram-two"
 	otherTelegram := first
@@ -86,6 +87,85 @@ func TestGitHubBrokerSocketPathIsStableAndInstanceScoped(t *testing.T) {
 	}
 	if strings.Contains(first.GitHubBrokerSocketPath(), first.TelegramBotToken) {
 		t.Fatal("GitHub broker socket path exposed the Telegram bot token")
+	}
+}
+
+func TestLoadCanonicalizesTelegramOperatorsAndRequiresGroup(t *testing.T) {
+	env := filepath.Join(t.TempDir(), ".env")
+	body := "TELEGRAM_BOT_TOKEN=tg-token\n" +
+		"TELEGRAM_ALLOWED_USER_ID=42\n" +
+		"TELEGRAM_OPERATOR_USER_IDS=0009, 7,9,42,0007\n" +
+		"TELEGRAM_CHAT_ID=-1001234567890\n"
+	if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(cfg.TelegramOperatorUserIDs); got != "[7 9]" {
+		t.Fatalf("canonical operator IDs = %s", got)
+	}
+	if !cfg.TelegramMultiUser() || !cfg.IsTelegramAdministrator(42) || !cfg.IsTelegramOperator(7) || cfg.IsTelegramOperator(42) || cfg.IsTelegramUserAllowed(8) {
+		t.Fatalf("Telegram roles do not match canonical config: %#v", cfg)
+	}
+	operatorSocket := cfg.GitHubBrokerSocketPath()
+	cfg.TelegramOperatorUserIDs = []int64{7, 10, 11}
+	if cfg.GitHubBrokerSocketPath() != operatorSocket {
+		t.Fatal("GitHub broker socket changed with the operator list")
+	}
+}
+
+func TestLoadRejectsInvalidTelegramMultiUserConfiguration(t *testing.T) {
+	tests := []struct {
+		name      string
+		admin     string
+		operators string
+		chat      string
+	}{
+		{name: "negative administrator", admin: "-42"},
+		{name: "zero operator", admin: "42", operators: "0", chat: "-1001"},
+		{name: "negative operator", admin: "42", operators: "-7", chat: "-1001"},
+		{name: "signed operator", admin: "42", operators: "+7", chat: "-1001"},
+		{name: "empty element", admin: "42", operators: "7,,9", chat: "-1001"},
+		{name: "trailing comma", admin: "42", operators: "7,", chat: "-1001"},
+		{name: "space separated", admin: "42", operators: "7 9", chat: "-1001"},
+		{name: "missing group", admin: "42", operators: "7"},
+		{name: "private chat", admin: "42", operators: "7", chat: "42"},
+		{name: "positive other chat", admin: "42", operators: "7", chat: "99"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := filepath.Join(t.TempDir(), ".env")
+			body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=" + test.admin + "\n"
+			if test.operators != "" {
+				body += "TELEGRAM_OPERATOR_USER_IDS=" + test.operators + "\n"
+			}
+			if test.chat != "" {
+				body += "TELEGRAM_CHAT_ID=" + test.chat + "\n"
+			}
+			if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(env); err == nil {
+				t.Fatal("invalid Telegram multi-user configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestTelegramRedactionSecretsIncludeEveryConfiguredIdentity(t *testing.T) {
+	cfg := Config{
+		TelegramBotToken:        "token-value",
+		TelegramAllowedUserID:   42000001,
+		TelegramOperatorUserIDs: []int64{77000001, 88000001},
+		TelegramChatID:          -1001234567890,
+	}
+	got := strings.Join(cfg.RedactionSecrets(), " ")
+	for _, want := range []string{"token-value", "42000001", "77000001", "88000001", "-1001234567890"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("redaction secrets omitted %q: %q", want, got)
+		}
 	}
 }
 

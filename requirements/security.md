@@ -6,9 +6,18 @@ privacy model must stay small and explicit.
 
 ## Identity
 
-- Exactly one Telegram user is authorized.
+- Exactly one required Telegram administrator and zero or more explicitly
+  configured Telegram operators are authorized.
 - Exactly one Telegram chat is authorized.
-- DM-only operation is supported; group operation is out of scope.
+- An empty operator list preserves administrator-only DM operation. A non-empty
+  operator list requires an explicit group or supergroup chat and fails closed
+  for missing, positive, private, anonymous, channel, or unlisted identities.
+- Operators are fully trusted terminal users with arbitrary pane-input and
+  file-disclosure authority. Only the administrator may restart Engram or
+  approve, deny, or unlock a GitHub capability request.
+- Authorization does not restrict observation inside a group. Every group
+  member can see outgoing cards, terminal content, prompts, and files even when
+  Engram rejects that member's interactions.
 - Unauthorized messages and callbacks must not mutate tmux, sessions,
   attachments, or processed-message state. Poll offsets and a generic bounded
   rejection record may advance so rejected updates are not replayed.
@@ -228,13 +237,15 @@ privacy model must stay small and explicit.
   as owner-only real directories rather than followed through a recursive
   symlink traversal.
 - `/templates export` is an explicit bulk disclosure of every remembered body
-  to the authorized Telegram DM. It reuses the guarded local-file download path
+  to the configured Telegram chat. It reuses the guarded local-file download path
   and removes its private transfer copy afterward.
 - `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
   treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
   Unauthorized audit and update-journal records must not retain the rejected
   sender's user or chat identifiers.
+- Configured administrator, operator, and chat identifiers participate in the
+  same configured-value redaction surfaces as other Telegram configuration.
 - Uninstall must not silently destroy local state or tmux sessions.
 
 ## Local Effects
@@ -286,7 +297,7 @@ privacy model must stay small and explicit.
   protocol must stay connected through the approval handshake so requester exit
   cancels pending authority.
 - GitHub capability approvals are process-local, random, single-use, expire
-  within fifteen minutes, and bind the authorized Telegram identity and message
+  within fifteen minutes, and bind the administrator Telegram identity and message
   to one current immutable tmux server/window/pane identity and one exact
   enrolled GitHub App identity. Removing or replacing that enrollment while an
   approval is pending cancels the request. Client and broker transport deadlines
@@ -427,14 +438,17 @@ privacy model must stay small and explicit.
   guide card and is not a general
   redacted screenshot. Engram refuses the crop when its configured secret
   redactor would change any selected or context row, but unrecognized sensitive
-  terminal content can still appear. The same single-user Telegram boundary
+  terminal content can still appear. The same configured-chat visibility boundary
   therefore applies; full snapshots remain explicitly user-requested in guide
   mode.
 
 ## Process Ownership
 
-- One lock prevents two Engram instances from polling the same Telegram
-  settings. A second home-scoped lock prevents differently configured instances
+- One per-user runtime lock, keyed only by bot token and effective Bot API base,
+  prevents two Engram instances from polling the same Telegram bot identity
+  even when homes, administrators, chats, or operator lists differ. Its
+  metadata contains only a derived identity and no token material. A second
+  home-scoped lock prevents differently configured instances
   from writing the same `state.json` or `templates.json`.
 - Service restart should preserve tmux sessions and state.
 - Nested environments signal only through terminal output. They receive no
