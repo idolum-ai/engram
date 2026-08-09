@@ -457,7 +457,7 @@ privacy model must stay small and explicit.
 
 ## Process Ownership
 
-- One per-user runtime lock, keyed only by bot token and effective Bot API base,
+- One per-user runtime lock, keyed only by bot token regardless of Bot API base,
   prevents two Engram instances from polling the same Telegram bot identity
   even when homes, administrators, chats, operator lists, service styles,
   `XDG_RUNTIME_DIR`, or `TMPDIR` differ. It lives in one canonical private

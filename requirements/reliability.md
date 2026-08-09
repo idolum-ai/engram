@@ -171,7 +171,7 @@ exports a bounded recent tail, not an unbounded full audit file.
 - Reattachment clears every binding-scoped capture, snapshot cadence, upstream
   deduplication, persisted retry, and process-local retry value before the new
   pane can produce presentation or attention.
-- A per-user runtime lock keyed only by bot token and effective Bot API base
+- A per-user runtime lock keyed only by bot token regardless of Bot API base
   prevents duplicate pollers across different homes and local user lists.
 - Upstream-signal record-ID deduplication is bounded per terminal. Successful
   persistence suppresses a visible record across restart; a crash between

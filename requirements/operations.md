@@ -80,8 +80,8 @@ runtime state.
   operators and do not stop the Engram process.
 - The Telegram polling lock uses one fixed private per-UID `/tmp` namespace,
   independent of `ENGRAM_HOME`, `XDG_RUNTIME_DIR`, `TMPDIR`, foreground versus
-  service execution, and cron. Its key is only the bot token plus effective Bot
-  API base; lock metadata exposes only a derived identity.
+  service execution, cron, and Bot API base. Its key is only the bot token;
+  lock metadata exposes only a derived identity.
 - Automatic Codex recovery mapping is opt-in operator configuration through a
   trusted `SessionStart` hook that invokes the installed `engram codex-hook`.
   Engram does not edit Codex hook configuration during installation.

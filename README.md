@@ -199,8 +199,8 @@ make service-start PREFIX="$HOME/.local"
 make service-status PREFIX="$HOME/.local"
 ```
 
-Only one Engram process per operating-system user may poll the same bot-token
-and effective Bot API base identity, and only one process may own an
+Only one Engram process per operating-system user may poll the same bot token,
+regardless of Bot API base, and only one process may own an
 `ENGRAM_HOME`. The poll lock uses a fixed private per-UID `/tmp` namespace, so
 changing service style, `ENGRAM_HOME`, `XDG_RUNTIME_DIR`, or `TMPDIR` does not
 bypass it. Do not run a foreground copy while the systemd

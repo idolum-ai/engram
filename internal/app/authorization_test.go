@@ -160,7 +160,7 @@ func TestUnauthorizedJournalAndAuditDoNotRetainIdentifiers(t *testing.T) {
 	}
 }
 
-func TestTelegramPollingIdentityIgnoresLocalAuthorizationConfig(t *testing.T) {
+func TestTelegramPollingIdentityDependsOnlyOnBotToken(t *testing.T) {
 	base := multiUserTelegramConfig()
 	base.TelegramBotToken = "123456789:high-entropy-bot-token"
 	base.TelegramAPIBase = "https://telegram.example.invalid/root/"
@@ -173,8 +173,8 @@ func TestTelegramPollingIdentityIgnoresLocalAuthorizationConfig(t *testing.T) {
 	}
 	differentAPI := base
 	differentAPI.TelegramAPIBase = "https://other.example.invalid"
-	if telegramPollingLockKey(base) == telegramPollingLockKey(differentAPI) {
-		t.Fatal("different effective Telegram API bases shared a polling identity")
+	if telegramPollingLockKey(base) != telegramPollingLockKey(differentAPI) || telegramPollingIdentity(base) != telegramPollingIdentity(differentAPI) {
+		t.Fatal("API base changes bypassed the bot-token polling identity")
 	}
 	differentBot := base
 	differentBot.TelegramBotToken += "-other"
@@ -217,6 +217,7 @@ func TestGroupCommandTargetingIsExactAndCaseInsensitive(t *testing.T) {
 		{text: "/restart@engram_bot", want: false},
 		{text: "/restart@EngramBotExtra", want: false},
 		{text: "/restart@EngramBot@OtherBot", want: false},
+		{text: "\u00a0/close@OtherBot 1", want: false},
 		{text: "//restart@OtherBot", want: true},
 		{text: "ordinary terminal input", want: true},
 	} {

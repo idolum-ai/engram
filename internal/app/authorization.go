@@ -114,7 +114,7 @@ func (a *App) telegramCommandAddressedToSelf(text string) bool {
 	if !a.Config.TelegramGroupChat() {
 		return true
 	}
-	trimmed := strings.TrimLeft(text, " \t\r\n")
+	trimmed := strings.TrimSpace(text)
 	if !strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "//") {
 		return true
 	}
@@ -145,11 +145,11 @@ func validTelegramUsername(username string) bool {
 }
 
 func telegramPollingLockKey(cfg config.Config) string {
-	return lockfile.Key("telegram-poller-v1", cfg.TelegramBotToken, cfg.EffectiveTelegramAPIBase())
+	return lockfile.Key("telegram-poller-v1", cfg.TelegramBotToken)
 }
 
 func telegramPollingIdentity(cfg config.Config) string {
-	digest := sha256.Sum256([]byte(strings.Join([]string{cfg.TelegramBotToken, cfg.EffectiveTelegramAPIBase()}, "\x00")))
+	digest := sha256.Sum256([]byte(cfg.TelegramBotToken))
 	return hex.EncodeToString(digest[:8])
 }
 

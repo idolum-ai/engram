@@ -21,7 +21,8 @@ Notable user-visible and operational changes are recorded here.
   restart-bound `TELEGRAM_OPERATOR_USER_IDS` allowlist. Preserve single-user DM
   configuration, make `/restart` and GitHub capability decisions
   administrator-only, centralize admission across messages and callbacks, and
-  key polling locks by Bot API identity rather than local user lists.
+  key polling locks by bot credential rather than local user lists or endpoint
+  spellings.
 - Document that operators are fully trusted terminal users, Telegram group
   members can observe all outgoing cards even when they cannot interact, and
   privacy mode can suppress standalone group messages, attachments, and voice.
