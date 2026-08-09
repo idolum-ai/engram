@@ -561,7 +561,7 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 	if cfg.ClaudeContextTurns > 0 {
 		claudeContextStatus = fmt.Sprintf("enabled, %d recent visible turns max (exact active session only)", cfg.ClaudeContextTurns)
 	}
-	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nguide: %s\ncodex context: %s\nclaude context: %s\nvoice input: %s\nsnapshots: %s\ntelegram user: %d\ntelegram chat: %d\nprovider: %s\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\nopenai_api: not_called\npolling: not_started\nstatus: ok\n",
+	return fmt.Sprintf("Engram %s\nversion: %s\nenv: %s\nstate: %s (%s)\naudit: %s\nattachments: %s\nworkdir: %s\ntmux: %s\nanchor mode: %s\nguide: %s\ncodex context: %s\nclaude context: %s\nvoice input: %s\nsnapshots: %s\ntelegram administrator: %d\ntelegram operators: %d configured\ntelegram chat: %d\nprovider: %s\nmodel: %s\nsessions: %d\nlast update: %d\nupdate journal: %d\ntelegram_api: not_called\nanthropic_api: not_called\nopenai_api: not_called\npolling: not_started\nstatus: ok\n",
 		mode,
 		version.String(),
 		cfg.EnvPath,
@@ -578,6 +578,7 @@ func formatDiagnostics(cfg config.Config, mode string, st state.State, stateRead
 		voiceStatus,
 		snapshotPath,
 		cfg.TelegramAllowedUserID,
+		len(cfg.TelegramOperatorUserIDs),
 		cfg.TelegramChatID,
 		cfg.EffectiveLLMProvider(),
 		model,

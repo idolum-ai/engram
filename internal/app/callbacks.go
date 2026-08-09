@@ -21,8 +21,19 @@ type closeConfirmation struct {
 	TmuxServerID string
 	TmuxWindowID string
 	TmuxPaneID   string
+	UserID       int64
+	ChatID       int64
+	MessageID    int
 	ExpiresAt    time.Time
 }
+
+type confirmationConsumeResult uint8
+
+const (
+	confirmationUnavailable confirmationConsumeResult = iota
+	confirmationOwnershipMismatch
+	confirmationConsumed
+)
 
 func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) string {
 	if !a.callbackAuthorized(cb) {
@@ -39,8 +50,14 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 	}
 	switch parts[0] {
 	case "github-approve":
+		if a.callbackRole(cb) != telegramAdministrator {
+			return a.rejectAdministratorCallback(ctx, cb, "github_approval")
+		}
 		return a.handleGitHubApprovalCallback(ctx, cb, true, parts[1])
 	case "github-deny":
+		if a.callbackRole(cb) != telegramAdministrator {
+			return a.rejectAdministratorCallback(ctx, cb, "github_approval")
+		}
 		return a.handleGitHubApprovalCallback(ctx, cb, false, parts[1])
 	case "agent-info":
 		id, err := strconv.Atoi(parts[1])
@@ -353,15 +370,21 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if status != "" {
 			return status
 		}
-		token, err := a.issueCloseConfirmation(ts)
+		token, err := a.issueCloseConfirmation(ts, cb.From.ID, cb.Message.Chat.ID)
 		if err != nil {
 			a.answerCallback(ctx, cb.ID, "could not create confirmation")
 			return "callback_state_failed"
 		}
-		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(token)); err != nil {
-			a.consumeCloseConfirmation(token)
+		confirmationMessage, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(token))
+		if err != nil {
+			a.discardCloseConfirmation(token)
 			a.answerCallback(ctx, cb.ID, "could not open confirmation")
 			return "callback_telegram_failed"
+		}
+		if !a.bindCloseConfirmationMessage(token, confirmationMessage.MessageID) {
+			a.retireCloseConfirmation(ctx, &confirmationMessage)
+			a.answerCallback(ctx, cb.ID, "could not bind confirmation")
+			return "callback_state_failed"
 		}
 		return callbackAnswerStatus(a.answerCallback(ctx, cb.ID, "confirm below"), "callback_ok")
 	case "close":
@@ -374,33 +397,53 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		if status != "" {
 			return status
 		}
-		token, err := a.issueCloseConfirmation(ts)
+		token, err := a.issueCloseConfirmation(ts, cb.From.ID, cb.Message.Chat.ID)
 		if err != nil {
 			a.answerCallback(ctx, cb.ID, "could not create confirmation")
 			return "callback_state_failed"
 		}
-		if _, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(token)); err != nil {
-			a.consumeCloseConfirmation(token)
+		confirmationMessage, err := a.Telegram.SendMessage(ctx, cb.Message.Chat.ID, closeConfirmationText(ts), cb.Message.MessageID, closeConfirmationMarkup(token))
+		if err != nil {
+			a.discardCloseConfirmation(token)
 			a.answerCallback(ctx, cb.ID, "could not open confirmation")
 			return "callback_telegram_failed"
+		}
+		if !a.bindCloseConfirmationMessage(token, confirmationMessage.MessageID) {
+			a.retireCloseConfirmation(ctx, &confirmationMessage)
+			a.answerCallback(ctx, cb.ID, "could not bind confirmation")
+			return "callback_state_failed"
 		}
 		if !a.answerCallback(ctx, cb.ID, "confirm below") {
 			return "callback_telegram_failed"
 		}
 		return "callback_ok"
 	case "close-confirm":
-		confirmation, ok := a.consumeCloseConfirmation(parts[1])
-		if !ok {
+		confirmation, result := a.consumeCloseConfirmation(parts[1], cb)
+		if result == confirmationOwnershipMismatch {
+			a.answerCallback(ctx, cb.ID, "confirmation belongs to another user or message")
+			return "callback_ownership_mismatch"
+		}
+		if result != confirmationConsumed {
 			a.answerCallback(ctx, cb.ID, "confirmation expired")
 			return "callback_user_error"
 		}
-		result := a.closeSessionExpected(ctx, confirmation.SessionID, &confirmation)
-		if !a.answerCallback(ctx, cb.ID, result.Message) {
+		a.retireCloseConfirmation(ctx, cb.Message)
+		action := a.closeSessionExpected(ctx, confirmation.SessionID, &confirmation)
+		if !a.answerCallback(ctx, cb.ID, action.Message) {
 			return "callback_telegram_failed"
 		}
-		return result.status("callback")
+		return action.status("callback")
 	case "close-cancel":
-		a.consumeCloseConfirmation(parts[1])
+		_, result := a.consumeCloseConfirmation(parts[1], cb)
+		if result == confirmationOwnershipMismatch {
+			a.answerCallback(ctx, cb.ID, "confirmation belongs to another user or message")
+			return "callback_ownership_mismatch"
+		}
+		if result != confirmationConsumed {
+			a.answerCallback(ctx, cb.ID, "confirmation expired")
+			return "callback_user_error"
+		}
+		a.retireCloseConfirmation(ctx, cb.Message)
 		return callbackAnswerStatus(a.answerCallback(ctx, cb.ID, "canceled"), "callback_ok")
 	case "attach":
 		msg := *cb.Message
@@ -414,6 +457,14 @@ func (a *App) handleCallback(ctx context.Context, cb telegram.CallbackQuery) str
 		a.answerCallback(ctx, cb.ID, "unknown action")
 		return "skipped_unknown_callback"
 	}
+}
+
+func (a *App) rejectAdministratorCallback(ctx context.Context, cb telegram.CallbackQuery, kind string) string {
+	_ = a.audit("auth.reject", "rejected", map[string]any{"kind": kind})
+	if !a.answerCallback(ctx, cb.ID, "administrator access required") {
+		return "rejected_unauthorized_callback_answer_failed"
+	}
+	return "rejected_unauthorized_callback"
 }
 
 func (a *App) validateSessionListCallback(ctx context.Context, cb telegram.CallbackQuery, value string) (int, state.TerminalSession, string) {
@@ -497,10 +548,6 @@ func (a *App) queueCallbackTransfer(
 	return "callback_ok"
 }
 
-func (a *App) callbackAuthorized(cb telegram.CallbackQuery) bool {
-	return cb.From.ID == a.Config.TelegramAllowedUserID && cb.Message != nil && cb.Message.Chat.ID == a.Config.TelegramChatID
-}
-
 func (a *App) validateAnchorCallback(ctx context.Context, cb telegram.CallbackQuery, id int) (state.TerminalSession, string) {
 	ts, ok := a.Store.FindSession(id)
 	if !ok {
@@ -559,7 +606,7 @@ func closeConfirmationMarkup(token string) *telegram.InlineKeyboardMarkup {
 	return telegram.CloseConfirmationMarkup(token)
 }
 
-func (a *App) issueCloseConfirmation(session state.TerminalSession) (string, error) {
+func (a *App) issueCloseConfirmation(session state.TerminalSession, userID, chatID int64) (string, error) {
 	random := make([]byte, 8)
 	if _, err := rand.Read(random); err != nil {
 		return "", err
@@ -590,20 +637,55 @@ func (a *App) issueCloseConfirmation(session state.TerminalSession) (string, err
 	a.closeConfirms[token] = closeConfirmation{
 		SessionID: session.ID, TmuxServerID: session.TmuxServerID,
 		TmuxWindowID: session.TmuxWindowID, TmuxPaneID: session.TmuxPaneID,
+		UserID: userID, ChatID: chatID,
 		ExpiresAt: now.Add(closeConfirmationTTL),
 	}
 	return token, nil
 }
 
-func (a *App) consumeCloseConfirmation(token string) (closeConfirmation, bool) {
+func (a *App) bindCloseConfirmationMessage(token string, messageID int) bool {
 	a.closeConfirmMu.Lock()
 	defer a.closeConfirmMu.Unlock()
 	confirmation, ok := a.closeConfirms[token]
-	delete(a.closeConfirms, token)
-	if !ok || !confirmation.ExpiresAt.After(time.Now()) {
-		return closeConfirmation{}, false
+	if !ok || messageID <= 0 || !confirmation.ExpiresAt.After(time.Now()) {
+		delete(a.closeConfirms, token)
+		return false
 	}
-	return confirmation, true
+	confirmation.MessageID = messageID
+	a.closeConfirms[token] = confirmation
+	return true
+}
+
+func (a *App) discardCloseConfirmation(token string) {
+	a.closeConfirmMu.Lock()
+	delete(a.closeConfirms, token)
+	a.closeConfirmMu.Unlock()
+}
+
+func (a *App) consumeCloseConfirmation(token string, cb telegram.CallbackQuery) (closeConfirmation, confirmationConsumeResult) {
+	a.closeConfirmMu.Lock()
+	defer a.closeConfirmMu.Unlock()
+	confirmation, ok := a.closeConfirms[token]
+	if !ok {
+		return closeConfirmation{}, confirmationUnavailable
+	}
+	if cb.Message == nil || cb.From.ID != confirmation.UserID || cb.Message.Chat.ID != confirmation.ChatID ||
+		cb.Message.MessageID != confirmation.MessageID {
+		return closeConfirmation{}, confirmationOwnershipMismatch
+	}
+	if !confirmation.ExpiresAt.After(time.Now()) {
+		delete(a.closeConfirms, token)
+		return closeConfirmation{}, confirmationUnavailable
+	}
+	delete(a.closeConfirms, token)
+	return confirmation, confirmationConsumed
+}
+
+func (a *App) retireCloseConfirmation(ctx context.Context, message *telegram.Message) {
+	if message == nil || a.Telegram == nil {
+		return
+	}
+	_, _ = a.Telegram.EditReplyMarkup(ctx, message.Chat.ID, message.MessageID, telegram.ClearMarkup())
 }
 
 type anchorKeyPreset struct {

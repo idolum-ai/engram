@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,7 @@ const (
 	VoiceInputModeTranscribe        = "transcribe"
 	DefaultGitHubGrantMaxDuration   = 8 * time.Hour
 	AbsoluteGitHubGrantMaxDuration  = 24 * time.Hour
+	MaxTelegramOperatorUserIDs      = 32
 	MaxCodexContextTurns            = 8
 	MaxClaudeContextTurns           = 8
 	DefaultTmuxSize                 = "100x48"
@@ -39,6 +41,7 @@ type Config struct {
 	TelegramBotToken           string
 	TelegramAPIBase            string
 	TelegramAllowedUserID      int64
+	TelegramOperatorUserIDs    []int64
 	TelegramChatID             int64
 	LLMProvider                string
 	AnthropicAPIKey            string
@@ -172,6 +175,9 @@ func Load(path string) (Config, error) {
 	if cfg.TelegramAllowedUserID, err = parseOptionalInt64(values["TELEGRAM_ALLOWED_USER_ID"], "TELEGRAM_ALLOWED_USER_ID"); err != nil {
 		return Config{}, err
 	}
+	if cfg.TelegramOperatorUserIDs, err = parseTelegramOperatorUserIDs(values["TELEGRAM_OPERATOR_USER_IDS"], cfg.TelegramAllowedUserID); err != nil {
+		return Config{}, err
+	}
 	if cfg.TelegramChatID, err = parseOptionalInt64(firstNonEmpty(values["TELEGRAM_CHAT_ID"], values["TELEGRAM_GROUP_CHAT_ID"]), "TELEGRAM_CHAT_ID"); err != nil {
 		return Config{}, err
 	}
@@ -195,6 +201,17 @@ func (c Config) Validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
 	}
+	if c.TelegramAllowedUserID < 0 {
+		return fmt.Errorf("TELEGRAM_ALLOWED_USER_ID must be a positive integer")
+	}
+	for _, id := range c.TelegramOperatorUserIDs {
+		if id <= 0 {
+			return fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must contain only positive integers")
+		}
+	}
+	if len(c.TelegramOperatorUserIDs) > MaxTelegramOperatorUserIDs {
+		return fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must contain at most %d unique subordinate user IDs", MaxTelegramOperatorUserIDs)
+	}
 	switch c.EffectiveLLMProvider() {
 	case LLMProviderAnthropic:
 		if c.GuideConfigured() && c.AnthropicModel != DefaultAnthropicModel && c.AnthropicModel != AnthropicModelAlias {
@@ -214,6 +231,9 @@ func (c Config) Validate() error {
 	}
 	if c.TelegramChatID == 0 {
 		return fmt.Errorf("TELEGRAM_CHAT_ID resolved to zero")
+	}
+	if len(c.TelegramOperatorUserIDs) > 0 && c.TelegramChatID >= 0 {
+		return fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS requires an explicit negative TELEGRAM_CHAT_ID for a group or supergroup")
 	}
 	switch c.EffectiveVoiceInputMode() {
 	case VoiceInputModePath:
@@ -360,6 +380,42 @@ func (c Config) EffectiveTelegramAPIBase() string {
 	return strings.TrimRight(firstNonEmpty(strings.TrimSpace(c.TelegramAPIBase), DefaultTelegramAPIBase), "/")
 }
 
+func (c Config) TelegramMultiUser() bool {
+	return len(c.TelegramOperatorUserIDs) > 0
+}
+
+func (c Config) TelegramGroupChat() bool {
+	return c.TelegramChatID < 0
+}
+
+func (c Config) IsTelegramAdministrator(userID int64) bool {
+	return userID > 0 && userID == c.TelegramAllowedUserID
+}
+
+func (c Config) IsTelegramOperator(userID int64) bool {
+	if userID <= 0 {
+		return false
+	}
+	for _, operatorID := range c.TelegramOperatorUserIDs {
+		if userID == operatorID {
+			return true
+		}
+	}
+	return false
+}
+
+func (c Config) IsTelegramUserAllowed(userID int64) bool {
+	return c.IsTelegramAdministrator(userID) || c.IsTelegramOperator(userID)
+}
+
+func (c Config) RedactionSecrets() []string {
+	return []string{
+		c.TelegramBotToken,
+		c.AnthropicAPIKey,
+		c.OpenAIAPIKey,
+	}
+}
+
 func (c Config) StatePath() string    { return filepath.Join(c.Home, "state.json") }
 func (c Config) AuditPath() string    { return filepath.Join(c.Home, "audit.jsonl") }
 func (c Config) TemplatePath() string { return filepath.Join(c.Home, "templates.json") }
@@ -375,9 +431,10 @@ func (c Config) GitHubBrokerSocketPath() string {
 	}, "\x00")))
 	return filepath.Join(c.ArtifactDir(), fmt.Sprintf("github-%x.sock", instance[:8]))
 }
-func (c Config) LockDir() string       { return filepath.Join(c.Home, "locks") }
-func (c Config) AttachmentDir() string { return filepath.Join(c.ArtifactDir(), "attachments") }
-func (c Config) ArtifactDir() string   { return artifactRoot() }
+func (c Config) LockDir() string        { return filepath.Join(c.Home, "locks") }
+func (c Config) PollingLockDir() string { return filepath.Join(pollingLockRoot(), "locks") }
+func (c Config) AttachmentDir() string  { return filepath.Join(c.ArtifactDir(), "attachments") }
+func (c Config) ArtifactDir() string    { return artifactRoot() }
 
 func validateTelegramAPIBase(value string) error {
 	parsed, err := url.Parse(value)
@@ -396,6 +453,10 @@ func artifactRoot() string {
 	}
 	tempDir := canonicalDir(os.TempDir())
 	return filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+}
+
+func pollingLockRoot() string {
+	return filepath.Join(canonicalDir("/tmp"), "engram-"+strconv.Itoa(os.Getuid()))
 }
 
 func privateRuntimeBase(path string) (string, bool) {
@@ -489,6 +550,41 @@ func parseOptionalInt64(raw string, key string) (int64, error) {
 	return n, nil
 }
 
+func parseTelegramOperatorUserIDs(raw string, administratorID int64) ([]int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	seen := make(map[int64]struct{})
+	for _, field := range strings.Split(raw, ",") {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			return nil, fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must be a comma-separated list of positive integers")
+		}
+		for _, r := range field {
+			if r < '0' || r > '9' {
+				return nil, fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must be a comma-separated list of positive integers")
+			}
+		}
+		id, err := strconv.ParseInt(field, 10, 64)
+		if err != nil || id <= 0 {
+			return nil, fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must be a comma-separated list of positive integers")
+		}
+		if id != administratorID {
+			seen[id] = struct{}{}
+		}
+	}
+	ids := make([]int64, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	if len(ids) > MaxTelegramOperatorUserIDs {
+		return nil, fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must contain at most %d unique subordinate user IDs", MaxTelegramOperatorUserIDs)
+	}
+	return ids, nil
+}
+
 func parseInt64Default(raw string, key string, def int64) (int64, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -517,7 +613,7 @@ func EnsureDirs(cfg Config) error {
 	if err := ensurePrivateDir(cfg.LockDir()); err != nil {
 		return err
 	}
-	for _, dir := range []string{cfg.ArtifactDir(), cfg.AttachmentDir()} {
+	for _, dir := range []string{cfg.ArtifactDir(), cfg.PollingLockDir(), cfg.AttachmentDir()} {
 		if err := ensurePrivateDir(dir); err != nil {
 			return err
 		}

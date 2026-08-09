@@ -172,7 +172,7 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if err != nil {
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
-	if configuredPEM == nil && (!app.TelegramUnlock || request.LocalUnlock) && len(request.Passphrase) == 0 {
+	if configuredPEM == nil && (a.Config.TelegramGroupChat() || !app.TelegramUnlock || request.LocalUnlock) && len(request.Passphrase) == 0 {
 		return githubauth.BrokerResponse{Error: "this GitHub App requires local passphrase entry", ErrorCode: githubauth.ErrorCodeLocalPassphraseRequired}
 	}
 	pending, err := a.beginGitHubApproval(ctx, session, request, app, configuredPEM)
@@ -651,6 +651,13 @@ func (a *App) handleGitHubApprovalCallback(ctx context.Context, cb telegram.Call
 		a.githubMu.Unlock()
 		a.answerCallback(ctx, cb.ID, "approved")
 		return "callback_ok"
+	}
+	if a.Config.TelegramGroupChat() {
+		pending.State = "resolved"
+		pending.Result <- githubApproval{err: fmt.Errorf("this GitHub App requires local passphrase entry")}
+		a.githubMu.Unlock()
+		a.answerCallback(ctx, cb.ID, "local passphrase is required")
+		return "callback_user_error"
 	}
 	if !app.TelegramUnlock {
 		pending.State = "resolved"

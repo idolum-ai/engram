@@ -2,7 +2,8 @@
 
 Status: draft design direction.
 
-Engram is a Telegram control surface for tmux. It exists so one user can move
+Engram is a Telegram control surface for tmux. It exists so an administrator,
+optionally with a small explicit set of fully trusted operators, can move
 quickly across many terminal sessions from a phone, recover context in seconds,
 and avoid getting trapped in any single pane.
 
@@ -24,6 +25,7 @@ anchors, copyable references, and simple recovery.
 - Slow automatic edits, instant manual refresh.
 - Recoverable local service.
 - Small Go, no third-party dependencies.
+- One chat, explicit roles.
 - Quiet monochrome signal.
 - Recursion collapses to the terminal.
 
@@ -50,6 +52,26 @@ Engram-created windows use a stable configured size, defaulting to `100x48`, so
 their applications render against real tmux geometry consistently across
 attached and detached hosts. Engram does not resize windows that the user
 explicitly attaches.
+
+### One chat, explicit roles
+
+Engram serves one configured Telegram chat. The default remains one
+administrator in a private DM. Shared operation is an explicit startup choice:
+every subordinate user ID is manually allowlisted and the destination must be
+a group or supergroup. Operators have the same arbitrary terminal-input and
+file-disclosure authority as the administrator because a weaker terminal role
+would be misleading. The narrow exceptions are process restart and GitHub
+capability decisions, which remain administrator-only.
+
+Group operation has no ForceReply surface: GitHub unlock must happen locally,
+and natural-language keyboard composition remains a private-DM workflow. The
+bot establishes its own username before group polling so commands explicitly
+addressed to another bot remain inert.
+
+Authorization controls interaction, not visibility. Every member of a
+configured group can read outgoing cards and files, including members Engram
+will reject. This observer boundary and Telegram privacy-mode delivery behavior
+must remain visible in operator documentation.
 
 ### Phone-first anchors
 

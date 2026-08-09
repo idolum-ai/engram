@@ -487,6 +487,71 @@ func TestCloseCallbackRequiresSecondConfirmation(t *testing.T) {
 	}
 }
 
+func TestCloseConfirmationOwnershipMismatchPreservesTokenAndControls(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config = multiUserTelegramConfig()
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.HTTPClient = &http.Client{Transport: safetyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)), Header: make(http.Header)}, nil
+	})}
+	app.Telegram = client
+	session, _ := app.Store.FindSession(id)
+	group := telegram.Chat{ID: app.Config.TelegramChatID, Type: "supergroup"}
+	for _, test := range []struct {
+		name      string
+		action    string
+		userID    int64
+		chat      telegram.Chat
+		messageID int
+		expired   bool
+		want      string
+	}{
+		{name: "foreign confirm", action: "close-confirm", userID: 88, chat: group, messageID: 90, want: "callback_ownership_mismatch"},
+		{name: "foreign cancel", action: "close-cancel", userID: 88, chat: group, messageID: 90, want: "callback_ownership_mismatch"},
+		{name: "foreign expired confirm", action: "close-confirm", userID: 88, chat: group, messageID: 90, expired: true, want: "callback_ownership_mismatch"},
+		{name: "copied confirm", action: "close-confirm", userID: 77, chat: group, messageID: 91, want: "callback_ownership_mismatch"},
+		{name: "copied cancel", action: "close-cancel", userID: 77, chat: group, messageID: 91, want: "callback_ownership_mismatch"},
+		{name: "wrong chat confirm", action: "close-confirm", userID: 77, chat: telegram.Chat{ID: -1009, Type: "supergroup"}, messageID: 90, want: "rejected_unauthorized_callback"},
+		{name: "wrong chat cancel", action: "close-cancel", userID: 77, chat: telegram.Chat{ID: -1009, Type: "supergroup"}, messageID: 90, want: "rejected_unauthorized_callback"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			token, err := app.issueCloseConfirmation(session, 77, group.ID)
+			if err != nil || !app.bindCloseConfirmationMessage(token, 90) {
+				t.Fatalf("issue confirmation token=%q err=%v", token, err)
+			}
+			if test.expired {
+				confirmation := app.closeConfirms[token]
+				confirmation.ExpiresAt = time.Now().Add(-time.Second)
+				app.closeConfirms[token] = confirmation
+			}
+			before := len(paths)
+			status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+				ID: test.name, From: telegram.User{ID: test.userID},
+				Message: &telegram.Message{MessageID: test.messageID, Chat: test.chat},
+				Data:    test.action + ":" + token,
+			})
+			if status != test.want {
+				t.Fatalf("status = %q, want %q", status, test.want)
+			}
+			if _, ok := app.closeConfirms[token]; !ok {
+				t.Fatal("ownership mismatch consumed close confirmation")
+			}
+			if got := paths[before:]; len(got) != 1 || got[0] != "/botTOKEN/answerCallbackQuery" {
+				t.Fatalf("ownership mismatch Telegram calls = %#v", got)
+			}
+			app.discardCloseConfirmation(token)
+		})
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("ownership mismatches touched tmux: %#v", runner.calls)
+	}
+	if current, _ := app.Store.FindSession(id); current.State == state.TerminalClosed {
+		t.Fatal("ownership mismatch closed the session")
+	}
+}
+
 func TestCloseCallbackRejectsRetiredAnchor(t *testing.T) {
 	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
 	if _, _, err := app.Store.UpdateSession(id, func(session *state.TerminalSession) {

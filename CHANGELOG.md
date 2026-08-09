@@ -15,6 +15,24 @@ Notable user-visible and operational changes are recorded here.
   reports configured-PEM health without exposing its path, and bad optional
   sources do not stop core startup.
 
+### Telegram collaboration
+
+- Add explicit administrator/operator group-chat support through the strict,
+  restart-bound `TELEGRAM_OPERATOR_USER_IDS` allowlist. Preserve single-user DM
+  configuration, make `/restart` and GitHub capability decisions
+  administrator-only, centralize admission across messages and callbacks, and
+  key polling locks by bot credential rather than local user lists or endpoint
+  spellings.
+- Document that operators are fully trusted terminal users, Telegram group
+  members can observe all outgoing cards even when they cannot interact, and
+  privacy mode can suppress standalone group messages, attachments, and voice.
+- Forbid ForceReply and Telegram passphrase unlock in groups, resolve the bot's
+  username before group polling, and ignore commands addressed to other bots.
+  Bind close and key decisions to their initiating user and exact message.
+- Move Telegram polling locks to one environment-invariant per-UID namespace,
+  cap operator allowlists at 32, and keep numeric routing IDs out of the global
+  terminal-text redactor while preserving structural rejection privacy.
+
 ## [v0.9.0] - 2026-08-07
 
 ### Agent compatibility

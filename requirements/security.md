@@ -6,12 +6,24 @@ privacy model must stay small and explicit.
 
 ## Identity
 
-- Exactly one Telegram user is authorized.
+- Exactly one required Telegram administrator and at most 32 explicitly
+  configured Telegram operators are authorized.
 - Exactly one Telegram chat is authorized.
-- DM-only operation is supported; group operation is out of scope.
+- An empty operator list preserves administrator-only DM operation. A non-empty
+  operator list requires an explicit group or supergroup chat and fails closed
+  for missing, positive, private, anonymous, channel, or unlisted identities.
+- Operators are fully trusted terminal users with arbitrary pane-input and
+  file-disclosure authority. Only the administrator may restart Engram or
+  approve, deny, or unlock a GitHub capability request.
+- Authorization does not restrict observation inside a group. Every group
+  member can see outgoing cards, terminal content, prompts, and files even when
+  Engram rejects that member's interactions.
 - Unauthorized messages and callbacks must not mutate tmux, sessions,
   attachments, or processed-message state. Poll offsets and a generic bounded
   rejection record may advance so rejected updates are not replayed.
+- Group startup must establish the bot's own username through Bot API `getMe`.
+  Group commands addressed to another or malformed bot username are ignored
+  before processed-message, command, terminal, session, or reply effects.
 
 ## Secrets
 
@@ -21,6 +33,10 @@ privacy model must stay small and explicit.
   issues, or test fixtures.
 - Audit payloads and `/logs` output must redact configured credentials and
   common credential patterns.
+- Telegram user and chat IDs are routing identifiers, not global substring
+  secrets. They must not be added to the terminal-text redactor because common
+  numeric pane content would be altered; rejected identities remain private
+  through structural admission and journal sanitization.
 - Model-derived conversational prose must pass through the same best-effort
   redaction before persistence and Telegram delivery.
 - Documentation must state that redaction is best effort and does not make an
@@ -228,13 +244,15 @@ privacy model must stay small and explicit.
   as owner-only real directories rather than followed through a recursive
   symlink traversal.
 - `/templates export` is an explicit bulk disclosure of every remembered body
-  to the authorized Telegram DM. It reuses the guarded local-file download path
+  to the configured Telegram chat. It reuses the guarded local-file download path
   and removes its private transfer copy afterward.
 - `audit.jsonl`, lock metadata, tmux history, and runtime artifacts must be
   treated as sensitive.
 - Audit storage retains only a bounded current file and one bounded predecessor.
   Unauthorized audit and update-journal records must not retain the rejected
   sender's user or chat identifiers.
+- Bot and provider credentials remain in configured-value redaction surfaces.
+  Telegram numeric routing IDs do not participate in global substring redaction.
 - Uninstall must not silently destroy local state or tmux sessions.
 
 ## Local Effects
@@ -286,7 +304,7 @@ privacy model must stay small and explicit.
   protocol must stay connected through the approval handshake so requester exit
   cancels pending authority.
 - GitHub capability approvals are process-local, random, single-use, expire
-  within fifteen minutes, and bind the authorized Telegram identity and message
+  within fifteen minutes, and bind the administrator Telegram identity and message
   to one current immutable tmux server/window/pane identity and one exact
   enrolled GitHub App identity. Removing or replacing that enrollment while an
   approval is pending cancels the request. Client and broker transport deadlines
@@ -328,6 +346,12 @@ privacy model must stay small and explicit.
   app-selection change, or fingerprint mismatch must fail closed without
   falling back to a local or Telegram passphrase. Transient PEM bytes must be
   zeroed.
+- Every group configuration forbids Telegram passphrase unlock and all
+  ForceReply prompts. A GitHub request without a locally supplied passphrase
+  must return `local_passphrase_required` before approval unless the selected
+  App matches a valid configured PEM route. Because no group
+  secret prompt can exist, unauthorized group replies are not treated as
+  secrets or deleted arbitrarily.
 - Active GitHub leases are process-local and pane-bound. A reused request must
   be a repository and permission subset of the lease and must match the complete
   enrollment identity that minted it, including App ID, selected installation
@@ -427,14 +451,19 @@ privacy model must stay small and explicit.
   guide card and is not a general
   redacted screenshot. Engram refuses the crop when its configured secret
   redactor would change any selected or context row, but unrecognized sensitive
-  terminal content can still appear. The same single-user Telegram boundary
+  terminal content can still appear. The same configured-chat visibility boundary
   therefore applies; full snapshots remain explicitly user-requested in guide
   mode.
 
 ## Process Ownership
 
-- One lock prevents two Engram instances from polling the same Telegram
-  settings. A second home-scoped lock prevents differently configured instances
+- One per-user runtime lock, keyed only by bot token regardless of Bot API base,
+  prevents two Engram instances from polling the same Telegram bot identity
+  even when homes, administrators, chats, operator lists, service styles,
+  `XDG_RUNTIME_DIR`, or `TMPDIR` differ. It lives in one canonical private
+  per-UID `/tmp` namespace. Its metadata contains only a derived identity and
+  no token material. A second
+  home-scoped lock prevents differently configured instances
   from writing the same `state.json` or `templates.json`.
 - Service restart should preserve tmux sessions and state.
 - Nested environments signal only through terminal output. They receive no

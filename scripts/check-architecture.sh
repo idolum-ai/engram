@@ -41,7 +41,7 @@ contains_pattern() {
   fi
 }
 
-for phrase in "make check" "Command metadata" "tmux is the source" "Audit" "Exactly one Telegram user"; do
+for phrase in "make check" "Command metadata" "tmux is the source" "Audit" "Exactly one required Telegram administrator"; do
   if ! contains_fixed "$phrase" requirements README.md; then
     echo "required architecture phrase missing: $phrase" >&2
     exit 1

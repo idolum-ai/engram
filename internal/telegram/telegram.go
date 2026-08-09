@@ -160,6 +160,7 @@ func IsMessageNotPinned(err error) bool {
 type Update struct {
 	UpdateID      int            `json:"update_id"`
 	Message       *Message       `json:"message,omitempty"`
+	ChannelPost   *Message       `json:"channel_post,omitempty"`
 	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
@@ -172,6 +173,7 @@ type CallbackQuery struct {
 
 type User struct {
 	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot,omitempty"`
 	Username  string `json:"username,omitempty"`
 	FirstName string `json:"first_name,omitempty"`
 }
@@ -185,6 +187,7 @@ type Chat struct {
 type Message struct {
 	MessageID      int       `json:"message_id"`
 	From           *User     `json:"from,omitempty"`
+	SenderChat     *Chat     `json:"sender_chat,omitempty"`
 	Chat           Chat      `json:"chat"`
 	Date           int64     `json:"date,omitempty"`
 	Text           string    `json:"text,omitempty"`
@@ -278,6 +281,11 @@ func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error
 	body := map[string]any{"commands": commands}
 	var out bool
 	return c.postJSON(ctx, "setMyCommands", body, &out)
+}
+
+func (c *Client) GetMe(ctx context.Context) (User, error) {
+	var out User
+	return out, c.postJSON(ctx, "getMe", map[string]any{}, &out)
 }
 
 func (c *Client) GetUpdates(ctx context.Context, offset int, timeout int) ([]Update, error) {

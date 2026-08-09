@@ -58,6 +58,10 @@ type keyMessageRetirements struct {
 }
 
 func (a *App) openKeyComposer(ctx context.Context, cb telegram.CallbackQuery, session state.TerminalSession) string {
+	if a.Config.TelegramGroupChat() {
+		a.answerCallback(ctx, cb.ID, "keyboard composer is unavailable in group chats")
+		return "callback_user_error"
+	}
 	if a.KeyInterpreter == nil || session.State != state.TerminalRunning || !session.WatchEnabled ||
 		session.Collapsed || session.RetiringAnchorMessageID != 0 {
 		a.answerCallback(ctx, cb.ID, "keyboard composer is unavailable")
@@ -86,9 +90,13 @@ func (a *App) handleKeyPromptReply(ctx context.Context, msg telegram.Message) (s
 	if msg.ReplyToMessage == nil {
 		return "", false
 	}
-	prompt, current, recognized := a.consumeKeyPrompt(keyPromptRef{ChatID: msg.Chat.ID, MessageID: msg.ReplyToMessage.MessageID})
+	prompt, current, recognized, owned := a.consumeKeyPrompt(keyPromptRef{ChatID: msg.Chat.ID, MessageID: msg.ReplyToMessage.MessageID}, msg.From.ID)
 	if !recognized {
 		return "", false
+	}
+	if !owned {
+		a.reply(ctx, msg, "That keyboard prompt belongs to another authorized user.")
+		return "key_prompt_unauthorized", true
 	}
 	if !current {
 		a.reply(ctx, msg, "That keyboard prompt expired or was superseded. Open ⌨️ from the latest session card.")
@@ -189,8 +197,14 @@ func (a *App) interpretKeyPrompt(ctx context.Context, msg telegram.Message, prom
 }
 
 func (a *App) confirmKeys(ctx context.Context, cb telegram.CallbackQuery, token string) string {
-	confirmation, ok := a.consumeKeyConfirmation(token, cb)
-	if !ok {
+	confirmation, consumeResult := a.consumeKeyConfirmation(token, cb)
+	if consumeResult == confirmationOwnershipMismatch {
+		if !a.answerCallback(ctx, cb.ID, "confirmation belongs to another user or message") {
+			return "callback_telegram_failed"
+		}
+		return "callback_ownership_mismatch"
+	}
+	if consumeResult != confirmationConsumed {
 		answered := a.answerCallback(ctx, cb.ID, "confirmation expired")
 		a.retireKeyConfirmation(ctx, cb.Message)
 		if !answered {
@@ -231,8 +245,14 @@ func (a *App) confirmKeys(ctx context.Context, cb telegram.CallbackQuery, token 
 }
 
 func (a *App) cancelKeys(ctx context.Context, cb telegram.CallbackQuery, token string) string {
-	_, ok := a.consumeKeyConfirmation(token, cb)
-	if !ok {
+	_, consumeResult := a.consumeKeyConfirmation(token, cb)
+	if consumeResult == confirmationOwnershipMismatch {
+		if !a.answerCallback(ctx, cb.ID, "confirmation belongs to another user or message") {
+			return "callback_telegram_failed"
+		}
+		return "callback_ownership_mismatch"
+	}
+	if consumeResult != confirmationConsumed {
 		answered := a.answerCallback(ctx, cb.ID, "confirmation expired")
 		a.retireKeyConfirmation(ctx, cb.Message)
 		if !answered {
@@ -340,23 +360,26 @@ func (a *App) issueKeyPrompt(chatID int64, messageID int, userID int64, session 
 	return retired, nil
 }
 
-func (a *App) consumeKeyPrompt(ref keyPromptRef) (keyPrompt, bool, bool) {
+func (a *App) consumeKeyPrompt(ref keyPromptRef, userID int64) (keyPrompt, bool, bool, bool) {
 	a.keyComposerMu.Lock()
 	defer a.keyComposerMu.Unlock()
 	prompt, ok := a.keyPrompts[ref]
-	delete(a.keyPrompts, ref)
 	if !ok {
 		expiresAt, stale := a.keyPromptTombstones[ref]
 		if stale && expiresAt.After(time.Now()) {
-			return keyPrompt{}, false, true
+			return keyPrompt{}, false, true, true
 		}
 		delete(a.keyPromptTombstones, ref)
-		return keyPrompt{}, false, false
+		return keyPrompt{}, false, false, false
 	}
+	if prompt.UserID != userID {
+		return prompt, false, true, false
+	}
+	delete(a.keyPrompts, ref)
 	a.addKeyPromptTombstoneLocked(ref, time.Now())
 	workflow := a.keyPromptSessions[prompt.Session.ID]
 	current := prompt.ExpiresAt.After(time.Now()) && workflow.Token == prompt.Token && workflow.ExpiresAt.After(time.Now())
-	return prompt, current, true
+	return prompt, current, true, true
 }
 
 func (a *App) storeKeyConfirmation(token string, confirmation keyConfirmation) bool {
@@ -370,21 +393,27 @@ func (a *App) storeKeyConfirmation(token string, confirmation keyConfirmation) b
 	return true
 }
 
-func (a *App) consumeKeyConfirmation(token string, cb telegram.CallbackQuery) (keyConfirmation, bool) {
+func (a *App) consumeKeyConfirmation(token string, cb telegram.CallbackQuery) (keyConfirmation, confirmationConsumeResult) {
 	a.keyComposerMu.Lock()
 	defer a.keyComposerMu.Unlock()
 	confirmation, ok := a.keyConfirmations[token]
-	if !ok || !confirmation.ExpiresAt.After(time.Now()) || cb.Message == nil ||
-		cb.From.ID != confirmation.UserID || cb.Message.Chat.ID != confirmation.ChatID ||
-		cb.Message.MessageID != confirmation.MessageID ||
+	if !ok {
+		return keyConfirmation{}, confirmationUnavailable
+	}
+	if cb.Message == nil || cb.From.ID != confirmation.UserID || cb.Message.Chat.ID != confirmation.ChatID ||
+		cb.Message.MessageID != confirmation.MessageID {
+		return keyConfirmation{}, confirmationOwnershipMismatch
+	}
+	if !confirmation.ExpiresAt.After(time.Now()) ||
 		a.keyPromptSessions[confirmation.Session.ID].Token != confirmation.WorkflowToken {
-		return keyConfirmation{}, false
+		delete(a.keyConfirmations, token)
+		return keyConfirmation{}, confirmationUnavailable
 	}
 	delete(a.keyConfirmations, token)
 	if a.keyPromptSessions[confirmation.Session.ID].Token == confirmation.WorkflowToken {
 		delete(a.keyPromptSessions, confirmation.Session.ID)
 	}
-	return confirmation, true
+	return confirmation, confirmationConsumed
 }
 
 func (a *App) keyWorkflowCurrent(sessionID int, token string) bool {

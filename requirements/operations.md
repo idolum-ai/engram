@@ -19,6 +19,14 @@ runtime state.
   unavailable, unmatched, or ambiguous without exposing the configured path.
   Recovery clears both configured PEM variables and restarts into the encrypted
   vault passphrase route; restart also clears process-local leases and grants.
+- `TELEGRAM_ALLOWED_USER_ID` is the required positive administrator ID.
+  `TELEGRAM_OPERATOR_USER_IDS` is the one optional, comma-separated allowlist
+  for at most 32 positive subordinate user IDs; startup canonicalizes and
+  deduplicates it, and changes are manual and restart-bound. A non-empty list requires an
+  explicit negative `TELEGRAM_CHAT_ID` for one group or supergroup and must not
+  silently fall back to the administrator DM.
+- Group startup resolves the bot's own username with Bot API `getMe` before
+  polling and fails closed when identity cannot be established.
 - `TELEGRAM_API_BASE` selects the Telegram Bot API server root and defaults to
   `https://api.telegram.org`. It must be an absolute HTTP(S) URL without
   userinfo, query, or fragment; an optional path prefix and trailing slash are
@@ -67,6 +75,13 @@ runtime state.
   tmux server or terminal processes Engram started.
 - Updating a running installation replaces the binary; the operator chooses
   the explicit activation or restart point.
+- Telegram `/restart` is administrator-only. Terminal session lifecycle actions
+  such as close, stop/unwatch, and recovery remain available to configured
+  operators and do not stop the Engram process.
+- The Telegram polling lock uses one fixed private per-UID `/tmp` namespace,
+  independent of `ENGRAM_HOME`, `XDG_RUNTIME_DIR`, `TMPDIR`, foreground versus
+  service execution, cron, and Bot API base. Its key is only the bot token;
+  lock metadata exposes only a derived identity.
 - Automatic Codex recovery mapping is opt-in operator configuration through a
   trusted `SessionStart` hook that invokes the installed `engram codex-hook`.
   Engram does not edit Codex hook configuration during installation.
@@ -103,6 +118,8 @@ runtime state.
   It also reports whether Codex historical context is disabled or the exact
   configured recent-turn ceiling; this is a privacy disclosure, not a claim
   that any pane currently satisfies the provenance checks.
+- Credential-free startup diagnostics identify the administrator and chat and
+  report the configured operator count without listing subordinate IDs.
 - `/logs` uploads a bounded recent redacted audit log tail as an attachment,
   spanning the current and rotated audit files when necessary.
 - `engram version` reports binary version, commit, date, and Go version locally.
