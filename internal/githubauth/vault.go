@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -231,11 +232,7 @@ func (v *Vault) AddInstallations(alias string, appID int64, installationIDs []in
 	if len(passphrase) < minPassphraseSize {
 		return App{}, false, fmt.Errorf("passphrase must be at least %d bytes", minPassphraseSize)
 	}
-	key, err := ParsePrivateKey(privateKeyPEM)
-	if err != nil {
-		return App{}, false, err
-	}
-	fingerprint, err := PublicFingerprint(key)
+	fingerprint, err := PrivateKeyFingerprint(privateKeyPEM)
 	if err != nil {
 		return App{}, false, err
 	}
@@ -376,10 +373,12 @@ func (v *Vault) Unlock(alias string, passphrase []byte) ([]byte, App, error) {
 	if err != nil {
 		return nil, App{}, ErrUnlock
 	}
-	if _, err := ParsePrivateKey(plaintext); err != nil {
+	key, err := ParsePrivateKey(plaintext)
+	if err != nil {
 		zeroBytes(plaintext)
 		return nil, App{}, ErrUnlock
 	}
+	ZeroPrivateKey(key)
 	public := stored
 	public.PrivateKey = EncryptedPrivateKey{}
 	public.InstallationIDs = public.Installations()
@@ -391,6 +390,7 @@ func ParsePrivateKey(data []byte) (*rsa.PrivateKey, error) {
 	if block == nil || len(strings.TrimSpace(string(rest))) != 0 {
 		return nil, fmt.Errorf("GitHub App private key must contain exactly one PEM block")
 	}
+	defer zeroBytes(block.Bytes)
 	var key *rsa.PrivateKey
 	switch block.Type {
 	case "RSA PRIVATE KEY":
@@ -413,9 +413,21 @@ func ParsePrivateKey(data []byte) (*rsa.PrivateKey, error) {
 		return nil, fmt.Errorf("unsupported GitHub App private key PEM type %q", block.Type)
 	}
 	if err := key.Validate(); err != nil {
+		ZeroPrivateKey(key)
 		return nil, fmt.Errorf("validate GitHub App private key: %w", err)
 	}
 	return key, nil
+}
+
+// PrivateKeyFingerprint derives the public identity of one validated key and
+// clears the parsed private representation before returning.
+func PrivateKeyFingerprint(data []byte) (string, error) {
+	key, err := ParsePrivateKey(data)
+	if err != nil {
+		return "", err
+	}
+	defer ZeroPrivateKey(key)
+	return PublicFingerprint(key)
 }
 
 func PublicFingerprint(key *rsa.PrivateKey) (string, error) {
@@ -423,8 +435,42 @@ func PublicFingerprint(key *rsa.PrivateKey) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal GitHub App public key: %w", err)
 	}
+	defer zeroBytes(der)
 	sum := sha256.Sum256(der)
 	return "sha256:" + base64.RawURLEncoding.EncodeToString(sum[:]), nil
+}
+
+// ZeroPrivateKey clears the exported secret big integers in an RSA key on a
+// best-effort basis. Go does not provide guarantees about copies made by the
+// runtime or cryptographic implementation.
+func ZeroPrivateKey(key *rsa.PrivateKey) {
+	if key == nil {
+		return
+	}
+	zeroBigInt(key.D)
+	for _, prime := range key.Primes {
+		zeroBigInt(prime)
+	}
+	zeroBigInt(key.Precomputed.Dp)
+	zeroBigInt(key.Precomputed.Dq)
+	zeroBigInt(key.Precomputed.Qinv)
+	for index := range key.Precomputed.CRTValues {
+		zeroBigInt(key.Precomputed.CRTValues[index].Exp)
+		zeroBigInt(key.Precomputed.CRTValues[index].Coeff)
+		zeroBigInt(key.Precomputed.CRTValues[index].R)
+	}
+	key.Precomputed = rsa.PrecomputedValues{}
+}
+
+func zeroBigInt(value *big.Int) {
+	if value == nil {
+		return
+	}
+	words := value.Bits()
+	for index := range words {
+		words[index] = 0
+	}
+	value.SetInt64(0)
 }
 
 func encryptPrivateKey(alias string, appID, installationID int64, plaintext, passphrase []byte) (EncryptedPrivateKey, error) {

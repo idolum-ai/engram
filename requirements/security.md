@@ -311,19 +311,22 @@ privacy model must stay small and explicit.
   not end-to-end encrypted. Per-app opt-in must be explicit and visibly warned;
   accepted passphrase replies and prompts must be deleted immediately and
   their text must not enter state, audit, or error output.
-- `ENGRAM_GITHUB_APP_PEM_PATH` may opt one uniquely matching enrolled App into
-  passwordless local unlock. Its runtime path must be absolute. The configured
+- `ENGRAM_GITHUB_APP_PEM_ALIAS` and `ENGRAM_GITHUB_APP_PEM_PATH` may together
+  opt one named enrolled App into passwordless local unlock. Both or neither
+  must be configured, and the runtime path must be absolute. The configured
   source must never be read during general config validation or make
   Telegram/tmux startup depend on its health. GitHub requests must visibly fail
-  that route when the file is unreadable, malformed, unmatched, or matches more
-  than one enrollment.
+  only that alias's configured route when the file is unreadable, malformed,
+  unmatched, or matches more than one enrollment. Other enrolled Apps retain
+  their configured passphrase routes.
 - A configured-PEM approval must bind the selected App, selected installation,
   complete enrollment fingerprint, and live file identity before presentation.
   Engram must reopen and revalidate the owner-owned, regular, non-symlink,
-  owner-only, bounded, single-key PEM on approval and at the continuation/use
-  boundary. Replacement, metadata mutation, enrollment change, app-selection
-  change, or fingerprint mismatch must fail closed without falling back to a
-  local or Telegram passphrase. Transient PEM bytes must be zeroed.
+  owner-only, single-link, bounded, single-key PEM on approval and at the
+  continuation/use boundary. Replacement, metadata mutation, enrollment change,
+  app-selection change, or fingerprint mismatch must fail closed without
+  falling back to a local or Telegram passphrase. Transient PEM bytes must be
+  zeroed.
 - Active GitHub leases are process-local and pane-bound. A reused request must
   be a repository and permission subset of the lease and must match the complete
   enrollment identity that minted it, including App ID, selected installation

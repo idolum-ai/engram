@@ -813,6 +813,7 @@ func TestGitHubConfiguredPEMApprovalMintsWithoutPassphrasePrompt(t *testing.T) {
 	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
 	defer githubauth.Zero(privateKey)
 	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
@@ -823,7 +824,7 @@ func TestGitHubConfiguredPEMApprovalMintsWithoutPassphrasePrompt(t *testing.T) {
 	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
 	approval := <-transport.sent
 	if !strings.Contains(approval.text, "Unlock: configured local PEM") ||
-		!strings.Contains(approval.text, "configured local PEM will be read after approval") ||
+		!strings.Contains(approval.text, "configured local PEM was validated for this request and will be reopened and revalidated after approval") ||
 		strings.Contains(approval.text, "not end-to-end encrypted") {
 		t.Fatalf("approval text = %q", approval.text)
 	}
@@ -844,18 +845,63 @@ func TestGitHubConfiguredPEMApprovalMintsWithoutPassphrasePrompt(t *testing.T) {
 	}
 }
 
+func TestGitHubConfiguredPEMFailureIsScopedToConfiguredAlias(t *testing.T) {
+	for _, source := range []string{"unavailable", "wrong-key"} {
+		t.Run(source, func(t *testing.T) {
+			minter := &fakeGitHubMinter{}
+			app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+			vault := app.GitHubVault
+			otherKey := testGitHubPrivateKeyPEM(t)
+			defer githubauth.Zero(otherKey)
+			passphrase := []byte("correct horse battery staple")
+			defer githubauth.Zero(passphrase)
+			if _, _, err := vault.Add("other", 321, 654, otherKey, passphrase, false); err != nil {
+				t.Fatal(err)
+			}
+			app.Config.GitHubAppPEMAlias = "idolum"
+			if source == "unavailable" {
+				app.Config.GitHubAppPEMPath = filepath.Join(t.TempDir(), "missing.pem")
+			} else {
+				app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, otherKey)
+			}
+			request := testLocalGitHubBrokerRequest()
+			request.App = "other"
+			request.InstallationID = 654
+
+			responses := make(chan githubauth.BrokerResponse, 1)
+			go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+			approval := <-transport.sent
+			if !strings.Contains(approval.text, "Unlock: local passphrase") || strings.Contains(approval.text, "configured local PEM") {
+				t.Fatalf("approval text = %q", approval.text)
+			}
+			requestID, approvalID := pendingGitHubTestIdentity(t, app)
+			if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+				ID: "other-approve", From: telegram.User{ID: 42},
+				Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+			}, true, requestID); status != "callback_ok" {
+				t.Fatalf("approval callback = %q", status)
+			}
+			response := <-responses
+			if !response.OK || response.Token == "" || minter.mintCount() != 1 {
+				t.Fatalf("broker response = %#v, mints = %d", response, minter.mintCount())
+			}
+		})
+	}
+}
+
 func TestGitHubConfiguredPEMRouteFailsClosedWithoutPassphraseFallback(t *testing.T) {
 	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
 	app.GitHubVault = testGitHubVault(t, true)
 	otherKey := testGitHubPrivateKeyPEM(t)
 	defer githubauth.Zero(otherKey)
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, otherKey)
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
 	request.Passphrase = nil
 
 	response := app.handleGitHubBrokerRequest(context.Background(), request)
-	if response.OK || !strings.Contains(response.Error, "does not match an enrolled App") || len(app.githubPending) != 0 {
+	if response.OK || !strings.Contains(response.Error, "does not match the configured enrollment") || len(app.githubPending) != 0 {
 		t.Fatalf("broker response = %#v, pending = %d", response, len(app.githubPending))
 	}
 }
@@ -863,6 +909,7 @@ func TestGitHubConfiguredPEMRouteFailsClosedWithoutPassphraseFallback(t *testing
 func TestGitHubConfiguredPEMUnreadableRouteDoesNotStartApproval(t *testing.T) {
 	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
 	app.GitHubVault = testGitHubVault(t, true)
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = filepath.Join(t.TempDir(), "missing.pem")
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
@@ -877,6 +924,7 @@ func TestGitHubConfiguredPEMUnreadableRouteDoesNotStartApproval(t *testing.T) {
 func TestGitHubConfiguredPEMRelativePathDoesNotStartApproval(t *testing.T) {
 	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
 	app.GitHubVault = testGitHubVault(t, true)
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = "relative.pem"
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
@@ -898,6 +946,7 @@ func TestGitHubConfiguredPEMRejectsAmbiguousEnrollment(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
@@ -915,6 +964,7 @@ func TestGitHubConfiguredPEMReplacementBeforeApprovalDoesNotFallBack(t *testing.
 	vault, privateKey := testGitHubVaultAndPEM(t, true, 456)
 	defer githubauth.Zero(privateKey)
 	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
@@ -939,6 +989,48 @@ func TestGitHubConfiguredPEMReplacementBeforeApprovalDoesNotFallBack(t *testing.
 	if len(transport.sent) != 0 {
 		t.Fatal("replaced configured PEM fell back to a Telegram passphrase prompt")
 	}
+	completion := <-transport.edited
+	if !strings.Contains(completion.text, "Canceled:") || strings.Contains(completion.text, "Denied:") {
+		t.Fatalf("credential failure completion = %q", completion.text)
+	}
+	audit, err := os.ReadFile(app.Config.AuditPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(audit, []byte(`"status":"credential_invalidated"`)) || bytes.Contains(audit, []byte(`"status":"denied"`)) {
+		t.Fatalf("credential failure audit = %s", audit)
+	}
+}
+
+func TestGitHubOperatorDenyRemainsDistinctFromCredentialCancellation(t *testing.T) {
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() {
+		responses <- app.handleGitHubBrokerRequest(context.Background(), testLocalGitHubBrokerRequest())
+	}()
+	<-transport.sent
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "operator-deny", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, false, requestID); status != "callback_ok" {
+		t.Fatalf("deny callback = %q", status)
+	}
+	response := <-responses
+	if response.OK || !strings.Contains(response.Error, "denied") {
+		t.Fatalf("broker response = %#v", response)
+	}
+	completion := <-transport.edited
+	if !strings.Contains(completion.text, "Denied:") || strings.Contains(completion.text, "Canceled:") {
+		t.Fatalf("operator denial completion = %q", completion.text)
+	}
+	audit, err := os.ReadFile(app.Config.AuditPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(audit, []byte(`"status":"denied"`)) || bytes.Contains(audit, []byte(`"status":"credential_invalidated"`)) {
+		t.Fatalf("operator denial audit = %s", audit)
+	}
 }
 
 func TestGitHubConfiguredPEMReplacementDuringMintRevokesToken(t *testing.T) {
@@ -950,6 +1042,7 @@ func TestGitHubConfiguredPEMReplacementDuringMintRevokesToken(t *testing.T) {
 	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
 	defer githubauth.Zero(privateKey)
 	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
@@ -1113,6 +1206,57 @@ func TestNewKeepsCoreServiceAvailableWhenGitHubVaultIsCorrupt(t *testing.T) {
 	}
 	if status := app.statusText(); !strings.Contains(status, "github apps: unavailable") {
 		t.Fatalf("status omitted degraded GitHub capability:\n%s", status)
+	}
+}
+
+func TestStatusReportsConfiguredGitHubAppPEMHealthWithoutPath(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+		if status := app.statusText(); !strings.Contains(status, "github configured pem: disabled") {
+			t.Fatalf("status = %q", status)
+		}
+	})
+
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T, *App, *githubauth.Vault, []byte) string
+		want  string
+	}{
+		{name: "ready", want: "ready for alias idolum", setup: func(t *testing.T, _ *App, _ *githubauth.Vault, key []byte) string {
+			return writeConfiguredGitHubPEM(t, key)
+		}},
+		{name: "unavailable", want: "unavailable", setup: func(t *testing.T, _ *App, _ *githubauth.Vault, _ []byte) string {
+			return filepath.Join(t.TempDir(), "configured-secret.pem")
+		}},
+		{name: "unmatched", want: "unmatched", setup: func(t *testing.T, _ *App, _ *githubauth.Vault, _ []byte) string {
+			key := testGitHubPrivateKeyPEM(t)
+			defer githubauth.Zero(key)
+			return writeConfiguredGitHubPEM(t, key)
+		}},
+		{name: "ambiguous", want: "ambiguous", setup: func(t *testing.T, _ *App, vault *githubauth.Vault, key []byte) string {
+			passphrase := []byte("another correct passphrase")
+			defer githubauth.Zero(passphrase)
+			if _, _, err := vault.Add("duplicate", 999, 998, key, passphrase, false); err != nil {
+				t.Fatal(err)
+			}
+			return writeConfiguredGitHubPEM(t, key)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+			vault, key := testGitHubVaultAndPEM(t, false, 456)
+			defer githubauth.Zero(key)
+			app.GitHubVault = vault
+			app.Config.GitHubAppPEMAlias = "idolum"
+			app.Config.GitHubAppPEMPath = test.setup(t, app, vault, key)
+			status := app.statusText()
+			if !strings.Contains(status, "github configured pem: "+test.want) {
+				t.Fatalf("status = %q", status)
+			}
+			if strings.Contains(status, app.Config.GitHubAppPEMPath) {
+				t.Fatalf("status exposed configured PEM path: %q", status)
+			}
+		})
 	}
 }
 

@@ -85,7 +85,7 @@ Shell variables are local to the current shell. Set `APP_ALIAS`, `OWNER`, and
 
 ## Protect the source PEM
 
-Store the PEM in an owner-only directory and set mode `0600`:
+Store the PEM in an owner-only directory. Mode `0600` is recommended:
 
 ```sh
 chmod 600 "$PEM_PATH"
@@ -99,8 +99,9 @@ stat -c '%A %U %G %s %n' "$PEM_PATH"     # Linux
 ```
 
 Do not use `cat`, paste the key into a prompt, add it to a repository, or send
-it through Telegram. Enrollment rejects symlinks, files not owned by the
-current UID, and files with any group or other permission bits.
+it through Telegram. Enrollment rejects symlinks, hard-linked files, files not
+owned by the current UID, and files with any group or other permission bits.
+Owner-only modes such as `0400` and `0600` satisfy the permission check.
 
 ## Choose the unlock route
 
@@ -135,27 +136,33 @@ account or bot token. Enable this mode only when that tradeoff is understood.
 ### Configured local PEM: optional passwordless route
 
 To let Telegram approval complete without entering or replying with a
-passphrase, keep the source PEM on the Engram host and add its path to the
-protected `~/.engram/.env`:
+passphrase, keep the source PEM on the Engram host and add its alias and path to
+the protected `~/.engram/.env`:
 
 ```env
+ENGRAM_GITHUB_APP_PEM_ALIAS=example-app
 ENGRAM_GITHUB_APP_PEM_PATH=/home/example/.config/engram/example-app.private-key.pem
 ```
 
-Use an absolute path and restart Engram after changing it. This setting names
-one live credential file; never put PEM contents in the env value. The service
-process must own the regular, non-symlink file, it must have no group or other
-permission bits, it must remain within Engram's size bound, and it must contain
-exactly one supported RSA private key. Enrollment and runtime use the same
-validator.
+Set both values or neither. Use an absolute path and restart Engram after
+changing either value. These settings name one enrolled alias and one live
+credential file; never put PEM contents in an env value. The service process
+must own the regular, non-symlink, single-link file, it must have no group or
+other permission bits, it must remain within Engram's size bound, and it must
+contain exactly one supported RSA private key. Mode `0600` is recommended;
+another owner-only mode such as `0400` is accepted. Enrollment and runtime use
+the same validator.
 
-Engram compares the public fingerprint with all current enrollments. Exactly one
-alias may match. Requests for that alias show `Unlock: configured local PEM` and
-tapping **Approve** does not request a passphrase, even if the enrollment also
-allows Telegram unlock or the request uses `--local-unlock`. Other aliases
-retain their enrolled passphrase route.
-An unreadable, malformed, unmatched, or multiply matched configured source
-fails the GitHub request without stopping Telegram/tmux core startup.
+Engram requires the public fingerprint to match the configured alias and no
+other current enrollment. Requests for that alias show
+`Unlock: configured local PEM` and tapping **Approve** does not request a
+passphrase, even if the enrollment also allows Telegram unlock or the request
+uses `--local-unlock`. Other aliases retain their enrolled passphrase route,
+including when the configured source is unreadable or wrong. An unreadable,
+malformed, unmatched, or multiply matched configured source fails only the
+configured alias's request without stopping Telegram/tmux core startup.
+`/status` reports the route as disabled, ready for the alias, unavailable,
+unmatched, or ambiguous without exposing the configured path.
 
 The source remains live rather than being loaded once at startup. Engram binds
 its file identity and fingerprint when presenting approval, then reopens and
@@ -542,11 +549,11 @@ first.
 ## Decide what to do with the source PEM
 
 After successful enrollment, Engram uses its encrypted vault copy and no longer
-needs the source PEM for ordinary passphrase unlock. When
-`ENGRAM_GITHUB_APP_PEM_PATH` selects it, however, the file is a live credential
-and must remain at that identity and path for new approvals. Removing that file
-may also break other scripts, services, backup procedures, or token wrappers
-that read it directly.
+needs the source PEM for ordinary passphrase unlock. When the configured PEM
+alias and path select it, however, the file is a live credential and must remain
+at that identity and path for new approvals. Removing that file may also break
+other scripts, services, backup procedures, or token wrappers that read it
+directly.
 
 Before moving or deleting a source PEM:
 
@@ -598,11 +605,19 @@ passphrase.
 ### The configured local PEM is unavailable or changed
 
 Inspect only its metadata, not its contents. Confirm the configured path exists,
-is owned by the Engram service UID, is a regular non-symlink file with mode
-`0600`, and still has the public fingerprint of exactly one enrolled alias.
+is owned by the Engram service UID, is a regular non-symlink, single-link file
+with no group or other permission bits, and still has the public fingerprint of
+the configured enrolled alias only. Mode `0600` is recommended; `0400` is also
+accepted.
+
 Atomic replacement with the same key still changes file identity and cancels an
 already presented approval; start a new request only after the intended source
 is stable. Engram does not downgrade that request to either passphrase route.
+
+To recover through the encrypted-vault route, clear both
+`ENGRAM_GITHUB_APP_PEM_ALIAS` and `ENGRAM_GITHUB_APP_PEM_PATH`, restart Engram,
+and start a fresh request using the enrollment's local passphrase. Restarting
+also clears all process-local GitHub leases and renewable grants.
 
 ### The requested permission exceeds the installation
 

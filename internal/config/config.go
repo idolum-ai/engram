@@ -58,6 +58,7 @@ type Config struct {
 	AttachmentSoftMaxBytes     int64
 	TelegramPollTimeoutSeconds int
 	GitHubGrantMaxDuration     time.Duration
+	GitHubAppPEMAlias          string
 	GitHubAppPEMPath           string
 	CodexContextTurns          int
 	ClaudeContextTurns         int
@@ -163,6 +164,7 @@ func Load(path string) (Config, error) {
 		AttachmentSoftMaxBytes:     softMax,
 		TelegramPollTimeoutSeconds: int(pollTimeout),
 		GitHubGrantMaxDuration:     grantMaxDuration,
+		GitHubAppPEMAlias:          strings.TrimSpace(values["ENGRAM_GITHUB_APP_PEM_ALIAS"]),
 		GitHubAppPEMPath:           ExpandPath(values["ENGRAM_GITHUB_APP_PEM_PATH"]),
 		CodexContextTurns:          int(codexContextTurns),
 		ClaudeContextTurns:         int(claudeContextTurns),
@@ -244,6 +246,11 @@ func (c Config) Validate() error {
 	}
 	if c.EffectiveGitHubGrantMaxDuration() <= 0 || c.EffectiveGitHubGrantMaxDuration() > AbsoluteGitHubGrantMaxDuration {
 		return fmt.Errorf("ENGRAM_GITHUB_GRANT_MAX_DURATION must be positive and no greater than %s", AbsoluteGitHubGrantMaxDuration)
+	}
+	hasGitHubAppPEMAlias := strings.TrimSpace(c.GitHubAppPEMAlias) != ""
+	hasGitHubAppPEMPath := strings.TrimSpace(c.GitHubAppPEMPath) != ""
+	if hasGitHubAppPEMAlias != hasGitHubAppPEMPath {
+		return fmt.Errorf("ENGRAM_GITHUB_APP_PEM_ALIAS and ENGRAM_GITHUB_APP_PEM_PATH must be set together")
 	}
 	if strings.ContainsAny(strings.TrimSpace(c.TmuxSession), ":.") {
 		return fmt.Errorf("ENGRAM_TMUX_SESSION must not contain ':' or '.'")

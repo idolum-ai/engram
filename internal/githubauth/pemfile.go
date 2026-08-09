@@ -12,24 +12,45 @@ import (
 // PrivateKeyFileIdentity is non-secret metadata that binds a credential read
 // to one file identity and one public key.
 type PrivateKeyFileIdentity struct {
-	Fingerprint string
-	device      uint64
-	inode       uint64
-	size        int64
-	modTimeNano int64
+	Fingerprint    string
+	device         uint64
+	inode          uint64
+	size           int64
+	modTimeNano    int64
+	mode           os.FileMode
+	uid            uint32
+	gid            uint32
+	linkCount      uint64
+	changeTimeSec  int64
+	changeTimeNano int64
+	changeTimeOK   bool
 }
 
 func (i PrivateKeyFileIdentity) Equal(other PrivateKeyFileIdentity) bool {
-	return i.Fingerprint == other.Fingerprint &&
-		i.device == other.device &&
+	return i.Fingerprint == other.Fingerprint && i.sameFile(other)
+}
+
+func (i PrivateKeyFileIdentity) sameFile(other PrivateKeyFileIdentity) bool {
+	return i.device == other.device &&
 		i.inode == other.inode &&
 		i.size == other.size &&
-		i.modTimeNano == other.modTimeNano
+		i.modTimeNano == other.modTimeNano &&
+		i.mode == other.mode &&
+		i.uid == other.uid &&
+		i.gid == other.gid &&
+		i.linkCount == other.linkCount &&
+		i.changeTimeSec == other.changeTimeSec &&
+		i.changeTimeNano == other.changeTimeNano &&
+		i.changeTimeOK == other.changeTimeOK
 }
 
 // ReadPrivateKeyFile securely reads and validates one live GitHub App private
 // key source. The caller must zero the returned bytes.
 func ReadPrivateKeyFile(path string) ([]byte, PrivateKeyFileIdentity, error) {
+	return readPrivateKeyFile(path, nil)
+}
+
+func readPrivateKeyFile(path string, afterRead func()) ([]byte, PrivateKeyFileIdentity, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
 	if path == "." {
 		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("GitHub App private key path is empty")
@@ -40,57 +61,91 @@ func ReadPrivateKeyFile(path string) ([]byte, PrivateKeyFileIdentity, error) {
 	}
 	defer file.Close()
 
-	before, err := privateKeyFileIdentity(file)
+	info, err := file.Stat()
+	if err != nil {
+		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("stat GitHub App private key: %w", err)
+	}
+	identity, err := privateKeyFileIdentity(info)
 	if err != nil {
 		return nil, PrivateKeyFileIdentity{}, err
 	}
+	if err := validatePrivateKeyFileIdentity(identity); err != nil {
+		return nil, PrivateKeyFileIdentity{}, err
+	}
+
 	data, err := io.ReadAll(io.LimitReader(file, maxPrivateKeySize+1))
 	if err != nil {
 		zeroBytes(data)
 		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("read GitHub App private key: %w", err)
 	}
-	if len(data) == 0 || len(data) > maxPrivateKeySize || int64(len(data)) != before.size {
+	if afterRead != nil {
+		afterRead()
+	}
+	if len(data) == 0 || len(data) > maxPrivateKeySize || int64(len(data)) != identity.size {
 		zeroBytes(data)
 		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("GitHub App private key must be between 1 and %d bytes and remain stable while read", maxPrivateKeySize)
 	}
-	after, err := privateKeyFileIdentity(file)
-	if err != nil || !before.Equal(after) {
+
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
 		zeroBytes(data)
-		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("GitHub App private key changed while it was read")
+		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("revalidate GitHub App private key pathname: %w", err)
 	}
-	key, err := ParsePrivateKey(data)
+	pathIdentity, err := privateKeyFileIdentity(pathInfo)
+	if err != nil || !identity.sameFile(pathIdentity) {
+		zeroBytes(data)
+		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("GitHub App private key pathname changed while it was read")
+	}
+
+	fingerprint, err := PrivateKeyFingerprint(data)
 	if err != nil {
 		zeroBytes(data)
 		return nil, PrivateKeyFileIdentity{}, err
 	}
-	fingerprint, err := PublicFingerprint(key)
-	if err != nil {
-		zeroBytes(data)
-		return nil, PrivateKeyFileIdentity{}, err
-	}
-	before.Fingerprint = fingerprint
-	return data, before, nil
+	identity.Fingerprint = fingerprint
+	return data, identity, nil
 }
 
-func privateKeyFileIdentity(file *os.File) (PrivateKeyFileIdentity, error) {
-	if err := validatePrivateFile(file, "GitHub App private key"); err != nil {
-		return PrivateKeyFileIdentity{}, err
-	}
-	info, err := file.Stat()
-	if err != nil {
-		return PrivateKeyFileIdentity{}, fmt.Errorf("stat GitHub App private key: %w", err)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
+func privateKeyFileIdentity(info os.FileInfo) (PrivateKeyFileIdentity, error) {
+	platform, ok := privateKeyPlatformMetadata(info)
 	if !ok {
 		return PrivateKeyFileIdentity{}, fmt.Errorf("GitHub App private key file identity is unavailable")
 	}
-	if info.Size() <= 0 || info.Size() > maxPrivateKeySize {
-		return PrivateKeyFileIdentity{}, fmt.Errorf("GitHub App private key must be between 1 and %d bytes", maxPrivateKeySize)
-	}
 	return PrivateKeyFileIdentity{
-		device:      uint64(stat.Dev),
-		inode:       uint64(stat.Ino),
-		size:        info.Size(),
-		modTimeNano: info.ModTime().UnixNano(),
+		device:         platform.device,
+		inode:          platform.inode,
+		size:           info.Size(),
+		modTimeNano:    info.ModTime().UnixNano(),
+		mode:           info.Mode(),
+		uid:            platform.uid,
+		gid:            platform.gid,
+		linkCount:      platform.linkCount,
+		changeTimeSec:  platform.changeTimeSec,
+		changeTimeNano: platform.changeTimeNano,
+		changeTimeOK:   platform.changeTimeOK,
 	}, nil
+}
+
+func validatePrivateKeyFileIdentity(identity PrivateKeyFileIdentity) error {
+	if !identity.mode.IsRegular() || identity.mode.Perm()&0o077 != 0 || int(identity.uid) != os.Geteuid() {
+		return fmt.Errorf("GitHub App private key must be a private regular file owned by uid %d", os.Geteuid())
+	}
+	if identity.linkCount != 1 {
+		return fmt.Errorf("GitHub App private key must have exactly one hard link")
+	}
+	if identity.size <= 0 || identity.size > maxPrivateKeySize {
+		return fmt.Errorf("GitHub App private key must be between 1 and %d bytes", maxPrivateKeySize)
+	}
+	return nil
+}
+
+type privateKeyFilePlatformMetadata struct {
+	device         uint64
+	inode          uint64
+	uid            uint32
+	gid            uint32
+	linkCount      uint64
+	changeTimeSec  int64
+	changeTimeNano int64
+	changeTimeOK   bool
 }

@@ -6,12 +6,14 @@ Notable user-visible and operational changes are recorded here.
 
 ### GitHub capabilities
 
-- Add optional `ENGRAM_GITHUB_APP_PEM_PATH` passwordless local unlock. A
-  uniquely matching enrolled App can complete exact Telegram approvals without
-  a passphrase; the live owner-only PEM is revalidated across approval, use,
-  mint, and grant-storage boundaries, and replacement or mismatch fails closed
-  without passphrase fallback. Enrollment and runtime now share one bounded
-  non-symlink PEM validator, while bad optional sources do not stop core startup.
+- Add optional paired `ENGRAM_GITHUB_APP_PEM_ALIAS` and
+  `ENGRAM_GITHUB_APP_PEM_PATH` passwordless local unlock. The selected enrolled
+  App can complete exact Telegram approvals without a passphrase; the live
+  owner-only, single-link PEM is revalidated across approval, use, mint, and
+  grant-storage boundaries, and replacement or mismatch fails closed without
+  passphrase fallback. Other Apps retain their passphrase routes, `/status`
+  reports configured-PEM health without exposing its path, and bad optional
+  sources do not stop core startup.
 
 ## [v0.9.0] - 2026-08-07
 

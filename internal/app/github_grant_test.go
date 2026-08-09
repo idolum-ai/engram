@@ -83,6 +83,7 @@ func TestGitHubConfiguredPEMGrantRetainsBoundedMemoryOnlyRenewal(t *testing.T) {
 	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
 	defer githubauth.Zero(privateKey)
 	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)
@@ -133,6 +134,7 @@ func TestGitHubConfiguredPEMReplacementDuringGrantInspectionStoresNoAuthority(t 
 	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
 	defer githubauth.Zero(privateKey)
 	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
 	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, privateKey)
 	request := testLocalGitHubBrokerRequest()
 	githubauth.Zero(request.Passphrase)

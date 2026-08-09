@@ -441,7 +441,7 @@ func TestLoadRecordsConfiguredGitHubAppPEMWithoutReadingIt(t *testing.T) {
 	dir := t.TempDir()
 	env := filepath.Join(dir, ".env")
 	configured := filepath.Join(dir, "missing-github-app.pem")
-	body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_GITHUB_APP_PEM_PATH=" + configured + "\n"
+	body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\nENGRAM_GITHUB_APP_PEM_ALIAS=idolum\nENGRAM_GITHUB_APP_PEM_PATH=" + configured + "\n"
 	if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -451,6 +451,27 @@ func TestLoadRecordsConfiguredGitHubAppPEMWithoutReadingIt(t *testing.T) {
 	}
 	if cfg.GitHubAppPEMPath != configured {
 		t.Fatalf("GitHubAppPEMPath = %q, want %q", cfg.GitHubAppPEMPath, configured)
+	}
+	if cfg.GitHubAppPEMAlias != "idolum" {
+		t.Fatalf("GitHubAppPEMAlias = %q, want idolum", cfg.GitHubAppPEMAlias)
+	}
+}
+
+func TestLoadRequiresConfiguredGitHubAppPEMAliasAndPathTogether(t *testing.T) {
+	for _, configured := range []string{
+		"ENGRAM_GITHUB_APP_PEM_ALIAS=idolum\n",
+		"ENGRAM_GITHUB_APP_PEM_PATH=/missing/app.pem\n",
+	} {
+		t.Run(strings.TrimSpace(configured), func(t *testing.T) {
+			env := filepath.Join(t.TempDir(), ".env")
+			body := "TELEGRAM_BOT_TOKEN=tg-token\nTELEGRAM_ALLOWED_USER_ID=123\n" + configured
+			if err := os.WriteFile(env, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(env); err == nil || !strings.Contains(err.Error(), "must be set together") {
+				t.Fatalf("Load error = %v", err)
+			}
+		})
 	}
 }
 
