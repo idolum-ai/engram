@@ -161,6 +161,13 @@ func TestGitHubConfiguredPEMReplacementDuringGrantInspectionStoresNoAuthority(t 
 	if response.OK || !strings.Contains(response.Error, "configured local GitHub App PEM") || len(app.githubGrants) != 0 {
 		t.Fatalf("grant response = %#v, grants = %d", response, len(app.githubGrants))
 	}
+	completion := <-transport.edited
+	if !strings.Contains(completion.text, "Canceled:") || strings.Contains(completion.text, "Failed:") {
+		t.Fatalf("grant credential completion = %q", completion.text)
+	}
+	if !githubAuditRecordExists(t, app.Config.AuditPath(), "github.grant", "credential_invalidated") {
+		t.Fatal("grant inspection credential invalidation was not audited")
+	}
 }
 
 func TestGitHubGrantApprovedAtDeadlineRetainsMinimumUsableLifetime(t *testing.T) {

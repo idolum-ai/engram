@@ -231,11 +231,18 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 		privateKey, unlockedApp, err = a.GitHubVault.Unlock(request.App, approval.passphrase)
 	}
 	if err != nil {
-		a.completeGitHubApprovalMessage(pending, "Failed: the GitHub App credential could not be unlocked.")
-		_ = a.audit("github.unlock", "failed", githubAuditRequest(session.ID, request))
 		if approval.configuredPEM {
+			a.cancelConfiguredGitHubAppPEM(
+				pending,
+				"github.unlock",
+				"Canceled: the configured local GitHub App PEM changed before the credential could be used.",
+				session.ID,
+				request,
+			)
 			return githubauth.BrokerResponse{Error: err.Error()}
 		}
+		a.completeGitHubApprovalMessage(pending, "Failed: the GitHub App credential could not be unlocked.")
+		_ = a.audit("github.unlock", "failed", githubAuditRequest(session.ID, request))
 		return githubauth.BrokerResponse{Error: githubauth.ErrUnlock.Error()}
 	}
 	defer githubauth.Zero(privateKey)
@@ -315,8 +322,13 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 			Token: token.Value, SessionID: session.ID, App: request.App,
 			InstallationID: request.InstallationID, ExpiresAt: token.ExpiresAt,
 		}, err)
-		a.completeGitHubApprovalMessage(pending, "Canceled: the configured local GitHub App PEM changed before the capability could be delivered.")
-		_ = a.audit("github.mint", "credential_changed", githubAuditRequest(session.ID, request))
+		a.cancelConfiguredGitHubAppPEM(
+			pending,
+			"github.mint",
+			"Canceled: the configured local GitHub App PEM changed before the capability could be delivered.",
+			session.ID,
+			request,
+		)
 		return githubauth.BrokerResponse{Error: cleanupErr.Error()}
 	}
 	oldTokens := a.storeGitHubLease(lease)
@@ -983,6 +995,17 @@ func (a *App) validateConfiguredGitHubAppPEM(pending *githubPendingRequest) erro
 	privateKey, err := a.readMatchingConfiguredGitHubAppPEM(pending)
 	githubauth.Zero(privateKey)
 	return err
+}
+
+func (a *App) cancelConfiguredGitHubAppPEM(
+	pending *githubPendingRequest,
+	eventType string,
+	message string,
+	sessionID int,
+	request githubauth.BrokerRequest,
+) {
+	a.completeGitHubApprovalMessage(pending, message)
+	_ = a.audit(eventType, "credential_invalidated", githubAuditRequest(sessionID, request))
 }
 
 func matchingCurrentGitHubEnrollment(current, expected githubauth.App) (githubauth.App, bool) {
