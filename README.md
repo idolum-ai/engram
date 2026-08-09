@@ -145,12 +145,18 @@ TELEGRAM_OPERATOR_USER_IDS=the-first-operator-id,the-second-operator-id
 TELEGRAM_CHAT_ID=-1001234567890
 ```
 
-The list is manual startup configuration: entries must be comma-separated
-positive integers, are sorted and deduplicated, and changes require an Engram
+The list is manual startup configuration with at most 32 unique positive
+integer entries. Engram sorts and deduplicates it at startup; changes require a
 restart. The administrator ID is redundant in the operator list and is ignored.
 When any operator is configured, Engram rejects a missing or DM chat ID and
 admits updates only when Telegram identifies the configured chat as a group or
-supergroup.
+supergroup. Before polling a group, Engram resolves its own bot username with
+Bot API `getMe` and fails closed if that identity is unavailable.
+
+**The allowlist controls interaction, not visibility. Every member of the
+configured group can read every outgoing card, terminal excerpt, image, and
+file, including members Engram will reject. Use only a group whose entire
+membership may observe that data.**
 
 Telegram's default bot privacy mode delivers commands, callbacks, mentions,
 and replies to bot messages, which is enough for anchor replies and controls.
@@ -193,13 +199,16 @@ make service-start PREFIX="$HOME/.local"
 make service-status PREFIX="$HOME/.local"
 ```
 
-Only one Engram process may poll a configured bot/user/chat tuple, and only one
-process may own an `ENGRAM_HOME`. Do not run a foreground copy while the systemd
+Only one Engram process per operating-system user may poll the same bot-token
+and effective Bot API base identity, and only one process may own an
+`ENGRAM_HOME`. The poll lock uses a fixed private per-UID `/tmp` namespace, so
+changing service style, `ENGRAM_HOME`, `XDG_RUNTIME_DIR`, or `TMPDIR` does not
+bypass it. Do not run a foreground copy while the systemd
 service is active.
 
 ### 6. Verify the first session
 
-In the bot DM, send:
+In the configured bot DM or group, send:
 
 ```text
 /new pwd
@@ -274,7 +283,7 @@ text, paths, UUIDs, task text, or agent names. Diagnose one pane locally with
 | `TELEGRAM_BOT_TOKEN` | none | yes, secret | Token issued by `@BotFather`. Treat it as access to the Engram control channel. |
 | `TELEGRAM_API_BASE` | `https://api.telegram.org` | no | Telegram Bot API server root. Engram appends `/bot<token>` and `/file/bot<token>`. HTTP is accepted for local servers but exposes credentials and content in transit. |
 | `TELEGRAM_ALLOWED_USER_ID` | none | yes | Required positive Telegram user ID for the administrator. It remains the sole user in backward-compatible DM mode. |
-| `TELEGRAM_OPERATOR_USER_IDS` | none | no | Comma-separated positive Telegram user IDs for fully trusted terminal operators. Values are deduplicated and canonicalized at startup; changes require restart. |
+| `TELEGRAM_OPERATOR_USER_IDS` | none | no | Comma-separated positive Telegram user IDs for at most 32 fully trusted terminal operators. Values are deduplicated and canonicalized at startup; changes require restart. |
 | `TELEGRAM_CHAT_ID` | allowed user ID | with operators | The one served chat. Leave empty for the administrator DM; operators require an explicit negative group/supergroup ID. |
 | `TELEGRAM_POLL_TIMEOUT_SECONDS` | `50` | no | Positive Telegram long-poll timeout in seconds. |
 | `ENGRAM_ANCHOR_MODE` | `guide` | no | Startup presentation and fallback: conversational `guide` or Chromium `snapshot`. A valid runtime `/mode` choice is persisted in state v9. |
@@ -469,6 +478,11 @@ is exposed to anyone controlling the Telegram account or bot token. Use a
 unique, high-entropy passphrase. `--local-unlock` overrides the opt-in for one
 execution.
 
+Telegram unlock is available only in backward-compatible private-DM mode.
+Engram never issues a ForceReply in a configured group. Group requests without
+a locally supplied passphrase fail with `local_passphrase_required` before an
+approval card is presented; use local unlock for every group request.
+
 The GitHub installation is inspected before minting. Requested permission names
 must exist on the installation, requested levels cannot exceed its current
 grants, and GitHub's response must contain the exact repository and permission
@@ -642,8 +656,9 @@ group whose entire membership is permitted to observe the terminal data.
   image sent automatically to Telegram at most once every ten seconds.
 - **Authorization:** The administrator and configured operators may use all
   terminal collaboration commands, replies, attachments, voice input, and
-  ordinary callbacks. `/restart`, GitHub Approve/Deny callbacks, and GitHub
-  Telegram-unlock passphrase replies are administrator-only. `/close`,
+  ordinary callbacks. `/restart` and GitHub Approve/Deny callbacks are
+  administrator-only. Private-DM Telegram-unlock passphrase replies are also
+  administrator-only; group mode disables that workflow entirely. `/close`,
   `/stop`/`/unwatch`, recovery, and their callbacks are session lifecycle
   actions, not service lifecycle actions, and remain available to operators.
   Engram has no public `/quit` command.
@@ -838,7 +853,7 @@ make service-restart PREFIX="$HOME/.local"
 make service-status PREFIX="$HOME/.local"
 ```
 
-After restart, `/version` or `/status` in the bot DM verifies the running
+After restart, `/version` or `/status` in the configured bot DM or group verifies the running
 process rather than only the binary on disk.
 
 Install the systemd user unit on Linux or LaunchAgent on macOS. This seeds
@@ -1036,6 +1051,11 @@ Reply to a session anchor to send text to its pane. To send input beginning
 with a slash, add one extra leading slash: replying with `//clear` sends
 `/clear` and presses Enter.
 
+In a group, unsuffixed commands and commands addressed to Engram's exact bot
+username execute; username matching is case-insensitive. Commands addressed to
+another bot are ignored without marking or dispatching them. Private-DM mode
+keeps the historical behavior of accepting command suffixes.
+
 Remember exact input with `/remember <name> <text>`, then type
 `{engram:name}` in an ordinary reply, a new-session message, or `/new`, `/send`,
 or `/text`. Engram substitutes the body once before using its normal guarded
@@ -1068,14 +1088,15 @@ snapshot replies. The latest upstream-signal notification is another reply
 route to the same outer pane. Replacing any alternate of the same kind makes
 its predecessor stale;
 replying to a stale view produces a short error and never reaches tmux.
-When a guide model is configured, every anchor replaces its fixed key rows with
-one `⌨️` control. Tap it and describe ordinary physical key presses in natural
-language, such as `up three times, Enter, then Ctrl+C`. Engram shows the exact
+When a guide model is configured in private-DM mode, every anchor replaces its
+fixed key rows with one `⌨️` control. Tap it and describe ordinary physical key
+presses in natural language, such as `up three times, Enter, then Ctrl+C`.
+Engram shows the exact
 normalized sequence and target in a separate `✅`/`❌` confirmation; the model
 can propose keys but cannot send them. Ambiguous intent and requests to type
 text are instructed to produce clarification. Unsupported keys, malformed or
 oversized proposals, stale cards, and expired confirmations fail closed.
-Without a configured model, anchors retain the direct `Esc`,
+In group mode, and without a configured model, anchors retain the direct `Esc`,
 `Escx2`, `^C`, `^D`, and `Enter` controls, with `← ↑ ↓ →` additionally available
 in snapshot mode. `/key` remains the expert interface for exact tmux key names.
 Tap `➖ Hide` to move a running anchor into one shared, pinned
@@ -1249,9 +1270,12 @@ first-seen spelling, and order are preserved. Engram does not rewrite or prefer
 links for particular services.
 
 Engram-created windows and attached tmux panes have different close semantics.
-`/close <id>` kills a window created by Engram, but only untracks an attached or
-legacy session and leaves its tmux window running. Inline close buttons always
-ask for confirmation. `/raw` recaptures the complete bounded plain-text frame
+`/close <id>` immediately kills a window created by Engram, but only untracks
+an attached or legacy session and leaves its tmux window running. Inline close
+buttons always ask for an initiating-user, chat, and
+confirmation-message-bound confirmation. Copied controls and another
+operator's taps cannot consume that token. `/raw` recaptures the complete
+bounded plain-text frame
 for the active presentation: 96 physical rows in guide mode or 64 in snapshot
 mode. `🖼️ View` always makes a fresh 64-row image capture, while inline `📄 Raw`
 returns the process-local companion for its current canonical media anchor

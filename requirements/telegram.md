@@ -14,16 +14,18 @@ Telegram is Engram's only user interface.
 ## Admission And Commands
 
 - Engram accepts one required administrator and a canonical, deduplicated list
-  of subordinate operator user IDs in exactly one configured chat. User IDs
-  must be positive. The empty operator list preserves the administrator's DM;
-  any operator requires an explicit negative group/supergroup chat ID.
+  of at most 32 subordinate operator user IDs in exactly one configured chat.
+  User IDs must be positive. The empty operator list preserves the
+  administrator's DM; any operator requires an explicit negative
+  group/supergroup chat ID.
 - Admission is centralized across messages, anchor replies, attachments, voice
-  input, commands, callbacks, journal references, ForceReply workflows, and
-  GitHub approval. Anonymous and channel senders, unlisted members, wrong chats,
+  input, commands, callbacks, journal references, private-DM ForceReply
+  workflows, and GitHub approval. Anonymous and channel senders, unlisted members, wrong chats,
   and incoherent private-chat updates fail closed without retaining identifiers.
 - Operators retain the complete terminal collaboration surface and are trusted
-  to execute arbitrary pane input. `/restart` and GitHub capability approval,
-  denial, and Telegram unlock are administrator-only. Session close,
+  to execute arbitrary pane input. `/restart` and GitHub capability approval
+  and denial are administrator-only. Telegram unlock is administrator-only in
+  private-DM mode and forbidden in every group configuration. Session close,
   stop/unwatch, and recovery actions remain operator-accessible; no public
   `/quit` command exists.
 - Every configured-group member can observe all outgoing bot cards and files,
@@ -37,6 +39,12 @@ Telegram is Engram's only user interface.
   `engram commands` derive from the registry. Every public slash command handled
   by the app has metadata.
 - Replies beginning `//` are escaped pane input, not Engram commands.
+- Before group polling, Engram must establish its bot username through `getMe`
+  and fail closed if it cannot. Unsuffixed commands and commands whose complete
+  ASCII Telegram username suffix matches that bot case-insensitively execute;
+  commands addressed to any other or malformed username are ignored without
+  command, tmux, session, processed-message, or reply side effects. Private-DM
+  command-suffix handling remains backward compatible.
 - `/remember` lists templates, `/remember <name>` inspects one, and `/remember
   <name> <text>` creates or replaces one. `/forget <name>` removes one.
 - `/templates export` uploads one consistent JSON snapshot of the complete
@@ -76,10 +84,14 @@ Telegram is Engram's only user interface.
   current canonical message. Retired controls are inert.
 - GitHub capability Approve and Deny callbacks are accepted only from the
   administrator on the exact
-  process-local approval message for one unexpired request. An approved
-  Telegram-unlock enrollment creates one ForceReply whose message ID is bound
-  to that request; replies to any other message cannot unlock it. The secret
-  reply and ForceReply prompt are deleted immediately after capture.
+  process-local approval message for one unexpired request. In private-DM mode,
+  an approved Telegram-unlock enrollment creates one ForceReply whose message
+  ID is bound to that request; replies to any other message cannot unlock it.
+  The secret reply and ForceReply prompt are deleted immediately after capture.
+  A group request without a locally supplied passphrase returns
+  `local_passphrase_required` before approval, and no group path may create a
+  ForceReply. Therefore operator or unlisted secret replies are outside any
+  live group workflow and are not deleted as arbitrary unauthorized messages.
 - Every inline button label is limited to the seven-rune budget established by
   `🖼️ View`. Dynamic display labels are shortened locally when necessary while
   their callback data remains exact; dense Telegram rows must not rely on the
@@ -92,7 +104,10 @@ Telegram is Engram's only user interface.
   title, CWD, UUID, paths, terminal/task text, or agent names.
 - Close controls are accepted only from the current canonical message. Close
   uses a random, single-use confirmation token expiring after two minutes; the
-  token records the immutable tmux binding and becomes stale after reattachment.
+  token records the initiating user, exact chat, exact confirmation message,
+  and immutable tmux binding. A foreign, copied, or wrong-message confirm or
+  cancel neither consumes it nor clears controls. Typed `/close <id>` remains
+  an explicit immediate action without the inline confirmation step.
 - Lost anchors expose `🧭 Link` for exact-identity recovery and add `♻️ Go`
   only when an allowlisted provider and valid persisted session UUID make a
   native resume exact.
@@ -154,8 +169,8 @@ Telegram is Engram's only user interface.
   tmux capture; when restart has cleared its companion, it asks the user to wait
   for the startup refresh. The `/raw` command separately recaptures with the
   active mode's corresponding 96- or 64-row budget.
-- `⌨️` opens a Telegram ForceReply in the configured chat and is
-  bound to the exact canonical anchor and immutable tmux identity. A reply
+- In private-DM mode, `⌨️` opens a Telegram ForceReply in the configured chat
+  and is bound to the exact canonical anchor and immutable tmux identity. A reply
   supplies natural-language key intent to one bounded non-streaming provider
   request containing no terminal frame, guide history, session metadata, or
   other chat messages. Engram accepts only its closed physical-key schema,
@@ -164,6 +179,8 @@ Telegram is Engram's only user interface.
   intent as clarification; Engram renders that outcome with deterministic prose,
   but semantic classification remains model judgment and explicit confirmation
   remains the authority boundary.
+- Group mode exposes the direct fixed key controls instead of `⌨️`; no
+  ForceReply is issued in a configured group.
 - Key-composer prompts and confirmations are memory-only, initiating-user-bound,
   single-use, limited
   to one current workflow per session, bounded globally, and expire after two
@@ -172,6 +189,9 @@ Telegram is Engram's only user interface.
   immutable tmux binding under the ordinary delivery locks; cancel, expiry,
   restart, reattachment, collapse, close, anchor rotation, duplicate callbacks,
   and superseding `⌨️` use send no keys.
+- A key send/cancel callback from another configured user or copied message has
+  a distinct ownership outcome and neither consumes the workflow nor clears the
+  original inline controls.
 - The original two-minute deadline includes waiting for guide capacity,
   provider latency, waiting for transfer capacity, and terminal delivery.
   Expiry before either worker begins prevents the provider call or every tmux

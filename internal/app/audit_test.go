@@ -45,13 +45,18 @@ func TestAuditRedactsConfiguredSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(b)
-	for _, secret := range []string{"tg-secret-token", "anthropic-secret-key", "openai-secret-key", "42000001", "77000001", "88000001", "-1001234567890"} {
+	for _, secret := range []string{"tg-secret-token", "anthropic-secret-key", "openai-secret-key"} {
 		if strings.Contains(got, secret) {
 			t.Fatalf("audit log contains secret %q: %s", secret, got)
 		}
 	}
 	if !strings.Contains(got, "redacted") {
 		t.Fatalf("audit log was not redacted: %s", got)
+	}
+	for _, identifier := range []string{"42000001", "77000001", "88000001", "-1001234567890"} {
+		if !strings.Contains(got, identifier) {
+			t.Fatalf("global redactor removed numeric routing identifier %q: %s", identifier, got)
+		}
 	}
 }
 

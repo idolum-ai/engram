@@ -262,7 +262,9 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
 
 - Sessions record whether Engram created their window. Legacy sessions without
   provenance are treated as attached.
-- `/close <id>` kills only an Engram-created window after identity validation.
+- Typed `/close <id>` immediately kills only an Engram-created window after
+  identity validation; inline close controls require their separate bound
+  confirmation workflow.
   Attached and legacy sessions are merely untracked.
 - Inline close requires a separate, expiring confirm/cancel callback. A failed
   tmux close does not mark a session closed.

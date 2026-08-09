@@ -131,6 +131,11 @@ Telegram bot chats are **not end-to-end encrypted**. The passphrase still
 traverses Telegram's cloud and is exposed to anyone controlling the Telegram
 account or bot token. Enable this mode only when that tradeoff is understood.
 
+Telegram unlock is disabled for every configured group. A group request must
+supply the passphrase locally; otherwise Engram returns
+`local_passphrase_required` before sending an approval card. Engram never
+creates a passphrase ForceReply in a group.
+
 `--local-unlock` overrides a Telegram-enabled enrollment for one execution.
 
 ### Configured local PEM: optional passwordless route
@@ -354,7 +359,7 @@ The configured Telegram administrator alone may tap **Approve** or **Deny**;
 operator callbacks are rejected. Tap **Approve** only when all fields match the
 intended operation. Tap **Deny** otherwise.
 
-For Telegram unlock, the administrator replies directly to Engram's
+For private-DM Telegram unlock, the administrator replies directly to Engram's
 forced-reply prompt with the vault passphrase. Operator replies cannot unlock
 the request. The prompt and reply should disappear after processing. For
 local unlock, the passphrase was collected in the terminal before the approval
@@ -596,8 +601,9 @@ it is absent.
 
 ### Local passphrase entry is required
 
-The enrollment is in local-unlock mode. Enter the passphrase locally, or
-intentionally update the enrollment with `--telegram-unlock`.
+Enter the passphrase locally. In private-DM mode, an administrator may instead
+intentionally update the enrollment with `--telegram-unlock`; group mode always
+requires local entry.
 
 ### The credential could not be unlocked
 
@@ -639,8 +645,11 @@ revoked before the error returns.
 
 Approvals expire after fifteen minutes. The connected CLI and broker keep a
 separate two-minute post-approval reserve. Requester disconnect, cancellation, or
-pane invalidation abandons the request. Late Telegram passphrase replies are
-consumed and deleted rather than falling through to terminal input.
+pane invalidation abandons the request. In private-DM mode, late Telegram
+passphrase replies are consumed and deleted rather than falling through to
+terminal input. Group mode cannot create such a prompt, so replies from
+operators or unlisted members are outside a live secret workflow and Engram
+does not delete arbitrary unauthorized messages.
 
 Removing or replacing an enrolled App while its approval is pending also
 cancels the request. Engram repeats that exact enrollment check after token

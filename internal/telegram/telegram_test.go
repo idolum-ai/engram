@@ -30,6 +30,20 @@ func TestNewAtDerivesMethodAndFileEndpoints(t *testing.T) {
 	}
 }
 
+func TestGetMeReturnsBotIdentity(t *testing.T) {
+	client := New("TOKEN")
+	client.HTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/botTOKEN/getMe" {
+			return nil, fmt.Errorf("unexpected path %s", request.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"id":123,"is_bot":true,"username":"EngramBot"}}`))}, nil
+	})}
+	bot, err := client.GetMe(context.Background())
+	if err != nil || bot.ID != 123 || !bot.IsBot || bot.Username != "EngramBot" {
+		t.Fatalf("GetMe bot=%#v err=%v", bot, err)
+	}
+}
+
 func TestCustomAPIBaseRoutesMethodsAndFilesThroughPrefix(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

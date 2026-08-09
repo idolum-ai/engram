@@ -41,7 +41,7 @@ var registry = []Metadata{
 	{Command: "cd", Usage: "/cd <id> <path>", Description: "Change a session pane's working directory", Category: "session"},
 	{Command: "watch", Usage: "/watch <id>", Description: "Enable anchor updates for a session", Category: "session"},
 	{Command: "unwatch", Usage: "/unwatch <id>", Description: "Disable anchor updates for a session", Category: "session"},
-	{Command: "close", Usage: "/close <id>", Description: "Close a tracked tmux window", Category: "session"},
+	{Command: "close", Usage: "/close <id>", Description: "Immediately close or untrack a session", Category: "session"},
 	{Command: "dump", Usage: "/dump <id>", Description: "Send the full tmux scrollback as an attachment", Category: "capture"},
 	{Command: "raw", Usage: "/raw <id>", Description: "Send the visible tmux pane as an attachment", Category: "capture"},
 	{Command: "attachments", Usage: "/attachments", Description: "List files received from Telegram", Category: "files"},

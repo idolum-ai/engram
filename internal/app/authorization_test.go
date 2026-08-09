@@ -94,14 +94,11 @@ func TestAdministratorOnlyTelegramControls(t *testing.T) {
 			t.Fatalf("operator %s callback status=%q state=%q", action, status, pending.State)
 		}
 	}
-	operatorUnlock := telegram.Message{
-		MessageID: 52, Chat: group, From: &telegram.User{ID: 77}, Text: "not-the-secret",
-		ReplyToMessage: &telegram.Message{MessageID: 51, Chat: group},
-	}
 	pending.State = "unlocking"
 	pending.UnlockMessageID = 51
-	if status, handled := app.handleAuthorizedGitHubUnlockReply(context.Background(), operatorUnlock); !handled || status != "github_unlock_unauthorized" || pending.State != "unlocking" {
-		t.Fatalf("operator unlock reply status=%q handled=%v state=%q", status, handled, pending.State)
+	operatorUnlock := telegram.Message{MessageID: 52, Chat: group, From: &telegram.User{ID: 77}, Text: "not-the-secret", ReplyToMessage: &telegram.Message{MessageID: 51, Chat: group}}
+	if status, handled := app.handleAuthorizedGitHubUnlockReply(context.Background(), operatorUnlock); handled || status != "" || pending.State != "unlocking" {
+		t.Fatalf("group unlock reply status=%q handled=%v state=%q", status, handled, pending.State)
 	}
 
 	adminCallback := operatorCallback
@@ -209,6 +206,105 @@ func TestTelegramPollingIdentityIgnoresLocalAuthorizationConfig(t *testing.T) {
 	}
 }
 
+func TestGroupCommandTargetingIsExactAndCaseInsensitive(t *testing.T) {
+	app := &App{Config: multiUserTelegramConfig(), telegramBotUsername: "EngramBot"}
+	for _, test := range []struct {
+		text string
+		want bool
+	}{
+		{text: "/restart", want: true},
+		{text: "/restart@ENGRAMBOT", want: true},
+		{text: "/restart@engram_bot", want: false},
+		{text: "/restart@EngramBotExtra", want: false},
+		{text: "/restart@EngramBot@OtherBot", want: false},
+		{text: "//restart@OtherBot", want: true},
+		{text: "ordinary terminal input", want: true},
+	} {
+		if got := app.telegramCommandAddressedToSelf(test.text); got != test.want {
+			t.Errorf("telegramCommandAddressedToSelf(%q) = %v, want %v", test.text, got, test.want)
+		}
+	}
+	dm := &App{Config: config.Config{TelegramChatID: 42}}
+	if !dm.telegramCommandAddressedToSelf("/restart@AnotherBot") {
+		t.Fatal("single-user DM lost legacy command suffix compatibility")
+	}
+}
+
+func TestForeignBotGroupCommandsHaveNoSideEffects(t *testing.T) {
+	app, runner, id := newSafetyApp(t, state.TerminalOriginCreated)
+	app.Config = multiUserTelegramConfig()
+	app.telegramBotUsername = "EngramBot"
+	app.stopCh = make(chan struct{})
+	var telegramCalls int
+	client := telegram.New("TOKEN")
+	client.HTTPClient = &http.Client{Transport: authorizationRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		telegramCalls++
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`))}, nil
+	})}
+	app.Telegram = client
+	group := telegram.Chat{ID: app.Config.TelegramChatID, Type: "supergroup"}
+	commands := []string{
+		"/restart@OtherBot",
+		fmt.Sprintf("/close@OtherBot %d", id),
+		fmt.Sprintf("/send@OtherBot %d printf-should-not-run", id),
+	}
+	for index, command := range commands {
+		messageID := 700 + index
+		status := app.handleUpdate(context.Background(), telegram.Update{Message: &telegram.Message{
+			MessageID: messageID, Chat: group, From: &telegram.User{ID: 42}, Text: command,
+		}})
+		if status != "skipped_foreign_bot_command" || app.Store.SeenMessage(fmt.Sprintf("%d:%d", group.ID, messageID)) {
+			t.Fatalf("foreign command %q status=%q seen=%v", command, status, app.Store.SeenMessage(fmt.Sprintf("%d:%d", group.ID, messageID)))
+		}
+	}
+	if len(runner.calls) != 0 || telegramCalls != 0 {
+		t.Fatalf("foreign commands touched tmux=%#v Telegram calls=%d", runner.calls, telegramCalls)
+	}
+	if session, _ := app.Store.FindSession(id); session.State == state.TerminalClosed {
+		t.Fatal("foreign /close mutated the session")
+	}
+	select {
+	case <-app.stopCh:
+		t.Fatal("foreign /restart stopped Engram")
+	default:
+	}
+}
+
+func TestGroupRunFailsClosedBeforePollingWithoutBotIdentity(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(filepath.Join(dir, "state.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	client := telegram.New("TOKEN")
+	client.HTTPClient = &http.Client{Transport: authorizationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		paths = append(paths, request.URL.Path)
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":false,"error_code":401,"description":"unauthorized"}`))}, nil
+	})}
+	app := &App{Config: multiUserTelegramConfig(), Store: store, Telegram: client}
+	if code := app.Run(context.Background()); code != 1 {
+		t.Fatalf("Run code = %d, want 1", code)
+	}
+	if got := strings.Join(paths, ","); got != "/botTOKEN/getMe" {
+		t.Fatalf("Telegram methods before identity failure = %q", got)
+	}
+}
+
+func TestEstablishTelegramBotIdentity(t *testing.T) {
+	client := telegram.New("TOKEN")
+	client.HTTPClient = &http.Client{Transport: authorizationRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/botTOKEN/getMe" {
+			return nil, fmt.Errorf("unexpected path %s", request.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true,"result":{"id":123,"is_bot":true,"username":"EngramBot"}}`))}, nil
+	})}
+	app := &App{Telegram: client}
+	if err := app.establishTelegramBotIdentity(context.Background()); err != nil || app.telegramBotUsername != "EngramBot" {
+		t.Fatalf("identity username=%q err=%v", app.telegramBotUsername, err)
+	}
+}
+
 func TestNewPreventsSameBotPollingAcrossHomesAndUserLists(t *testing.T) {
 	firstHome := t.TempDir()
 	secondHome := t.TempDir()
@@ -273,7 +369,7 @@ func newAuthorizationTestApp(t *testing.T) *App {
 			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)),
 		}, nil
 	})}
-	return &App{Config: cfg, Store: store, Telegram: client, stopCh: make(chan struct{}), githubUnlockTombstones: map[int]time.Time{}}
+	return &App{Config: cfg, Store: store, Telegram: client, telegramBotUsername: "EngramBot", stopCh: make(chan struct{}), githubUnlockTombstones: map[int]time.Time{}}
 }
 
 func multiUserTelegramConfig() config.Config {

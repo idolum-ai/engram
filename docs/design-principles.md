@@ -63,6 +63,11 @@ file-disclosure authority as the administrator because a weaker terminal role
 would be misleading. The narrow exceptions are process restart and GitHub
 capability decisions, which remain administrator-only.
 
+Group operation has no ForceReply surface: GitHub unlock must happen locally,
+and natural-language keyboard composition remains a private-DM workflow. The
+bot establishes its own username before group polling so commands explicitly
+addressed to another bot remain inert.
+
 Authorization controls interaction, not visibility. Every member of a
 configured group can read outgoing cards and files, including members Engram
 will reject. This observer boundary and Telegram privacy-mode delivery behavior

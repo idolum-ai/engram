@@ -117,6 +117,10 @@ func TestLoadCanonicalizesTelegramOperatorsAndRequiresGroup(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidTelegramMultiUserConfiguration(t *testing.T) {
+	tooManyOperators := make([]string, MaxTelegramOperatorUserIDs+1)
+	for index := range tooManyOperators {
+		tooManyOperators[index] = strconv.Itoa(index + 100)
+	}
 	tests := []struct {
 		name      string
 		admin     string
@@ -133,6 +137,7 @@ func TestLoadRejectsInvalidTelegramMultiUserConfiguration(t *testing.T) {
 		{name: "missing group", admin: "42", operators: "7"},
 		{name: "private chat", admin: "42", operators: "7", chat: "42"},
 		{name: "positive other chat", admin: "42", operators: "7", chat: "99"},
+		{name: "too many operators", admin: "42", operators: strings.Join(tooManyOperators, ","), chat: "-1001"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -154,7 +159,7 @@ func TestLoadRejectsInvalidTelegramMultiUserConfiguration(t *testing.T) {
 	}
 }
 
-func TestTelegramRedactionSecretsIncludeEveryConfiguredIdentity(t *testing.T) {
+func TestTelegramRedactionSecretsExcludeNumericRoutingIdentifiers(t *testing.T) {
 	cfg := Config{
 		TelegramBotToken:        "token-value",
 		TelegramAllowedUserID:   42000001,
@@ -162,10 +167,27 @@ func TestTelegramRedactionSecretsIncludeEveryConfiguredIdentity(t *testing.T) {
 		TelegramChatID:          -1001234567890,
 	}
 	got := strings.Join(cfg.RedactionSecrets(), " ")
-	for _, want := range []string{"token-value", "42000001", "77000001", "88000001", "-1001234567890"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("redaction secrets omitted %q: %q", want, got)
+	if !strings.Contains(got, "token-value") {
+		t.Fatalf("redaction secrets omitted bot credential: %q", got)
+	}
+	for _, want := range []string{"42000001", "77000001", "88000001", "-1001234567890"} {
+		if strings.Contains(got, want) {
+			t.Fatalf("redaction secrets included numeric routing identifier %q: %q", want, got)
 		}
+	}
+}
+
+func TestPollingLockDirIsInvariantAcrossRuntimeEnvironments(t *testing.T) {
+	cfg := Config{Home: filepath.Join(t.TempDir(), "first-home")}
+	want := filepath.Join(canonicalDir("/tmp"), "engram-"+strconv.Itoa(os.Getuid()), "locks")
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "runtime-one"))
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "tmp-one"))
+	first := cfg.PollingLockDir()
+	cfg.Home = filepath.Join(t.TempDir(), "second-home")
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(t.TempDir(), "runtime-two"))
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "tmp-two"))
+	if second := cfg.PollingLockDir(); first != want || second != want {
+		t.Fatalf("polling lock dirs = %q and %q, want %q", first, second, want)
 	}
 }
 

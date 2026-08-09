@@ -122,6 +122,85 @@ func TestKeyComposerExecutesExactPlanOnlyAfterCurrentConfirmation(t *testing.T) 
 	}
 }
 
+func TestGroupKeyComposerNeverIssuesForceReply(t *testing.T) {
+	app, _, _ := newAnchorKeyTestApp(t)
+	app.Config = multiUserTelegramConfig()
+	session, _ := app.Store.FindSession(1)
+	markup := app.anchorMarkup(session)
+	for _, row := range markup.InlineKeyboard {
+		for _, button := range row {
+			if strings.HasPrefix(button.CallbackData, "keyboard:") {
+				t.Fatal("group anchor exposed a ForceReply keyboard control")
+			}
+		}
+	}
+	var paths []string
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		if req.URL.Path != "/botTOKEN/answerCallbackQuery" {
+			return nil, fmt.Errorf("unexpected Telegram path %s", req.URL.Path)
+		}
+		return anchorKeyJSONResponse(`true`), nil
+	})}
+	status := app.openKeyComposer(context.Background(), telegram.CallbackQuery{
+		ID: "keyboard", From: telegram.User{ID: 77},
+		Message: &telegram.Message{MessageID: 10, Chat: telegram.Chat{ID: app.Config.TelegramChatID, Type: "supergroup"}},
+	}, session)
+	if status != "callback_user_error" || fmt.Sprint(paths) != "[/botTOKEN/answerCallbackQuery]" {
+		t.Fatalf("group keyboard status=%q paths=%v", status, paths)
+	}
+}
+
+func TestForeignUserKeyDecisionsPreserveWorkflowAndControls(t *testing.T) {
+	app, runner, _ := newAnchorKeyTestApp(t)
+	app.Config = multiUserTelegramConfig()
+	session, _ := app.Store.FindSession(1)
+	token := "0123456789abcdef"
+	expiresAt := time.Now().Add(time.Minute)
+	app.keyPromptSessions = map[int]keyWorkflow{1: {Token: "workflow", ExpiresAt: expiresAt}}
+	app.keyConfirmations = map[string]keyConfirmation{token: {
+		WorkflowToken: "workflow", Session: session, UserID: 77,
+		ChatID: app.Config.TelegramChatID, MessageID: 72, ExpiresAt: expiresAt,
+	}}
+	var paths []string
+	app.Telegram.HTTPClient = &http.Client{Transport: anchorKeyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		switch req.URL.Path {
+		case "/botTOKEN/answerCallbackQuery":
+			return anchorKeyJSONResponse(`true`), nil
+		case "/botTOKEN/editMessageReplyMarkup":
+			return anchorKeyJSONResponse(`{"message_id":72,"chat":{"id":-1001234567890}}`), nil
+		default:
+			return nil, fmt.Errorf("unexpected Telegram path %s", req.URL.Path)
+		}
+	})}
+	foreign := telegram.CallbackQuery{ID: "foreign", From: telegram.User{ID: 88}, Message: &telegram.Message{
+		MessageID: 72, Chat: telegram.Chat{ID: app.Config.TelegramChatID, Type: "supergroup"},
+	}}
+	if status := app.confirmKeys(context.Background(), foreign, token); status != "callback_ownership_mismatch" {
+		t.Fatalf("foreign send status = %q", status)
+	}
+	foreign.ID = "foreign-cancel"
+	if status := app.cancelKeys(context.Background(), foreign, token); status != "callback_ownership_mismatch" {
+		t.Fatalf("foreign cancel status = %q", status)
+	}
+	if _, ok := app.keyConfirmations[token]; !ok || app.keyPromptSessions[1].Token != "workflow" {
+		t.Fatal("foreign decision consumed key workflow")
+	}
+	if fmt.Sprint(paths) != "[/botTOKEN/answerCallbackQuery /botTOKEN/answerCallbackQuery]" {
+		t.Fatalf("foreign decisions changed controls: %v", paths)
+	}
+	owner := foreign
+	owner.ID = "owner-cancel"
+	owner.From.ID = 77
+	if status := app.cancelKeys(context.Background(), owner, token); status != "callback_ok" {
+		t.Fatalf("owner cancel status = %q", status)
+	}
+	if _, ok := app.keyConfirmations[token]; ok || len(runner.calls) != 0 {
+		t.Fatalf("owner cancel confirmation=%v tmux=%#v", ok, runner.calls)
+	}
+}
+
 func TestKeyConfirmationGuardsNeverTouchTmux(t *testing.T) {
 	tests := []struct {
 		name   string

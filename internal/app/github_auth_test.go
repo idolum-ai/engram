@@ -128,6 +128,58 @@ func TestGitHubCapabilityRemoteApprovalMintsLeaseAndDeletesPassphraseReply(t *te
 	}
 }
 
+func TestGroupGitHubCapabilityRequiresLocalPassphraseBeforeApproval(t *testing.T) {
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.Config = multiUserTelegramConfig()
+	app.GitHubVault = testGitHubVault(t, true)
+	request := testLocalGitHubBrokerRequest()
+	request.Passphrase = nil
+	response := app.handleGitHubBrokerRequest(context.Background(), request)
+	if response.OK || response.ErrorCode != githubauth.ErrorCodeLocalPassphraseRequired {
+		t.Fatalf("group broker response = %#v", response)
+	}
+	if len(transport.sent) != 0 || len(app.githubPending) != 0 {
+		t.Fatalf("group request presented approval: sent=%d pending=%d", len(transport.sent), len(app.githubPending))
+	}
+}
+
+func TestGroupGitHubApprovalCanNeverCreatePassphraseForceReply(t *testing.T) {
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	app.Config = multiUserTelegramConfig()
+	app.GitHubVault = testGitHubVault(t, true)
+	enrollment, found := app.GitHubVault.Get("idolum")
+	if !found {
+		t.Fatal("test enrollment missing")
+	}
+	pending := &githubPendingRequest{
+		ID: "group-request", Request: testLocalGitHubBrokerRequest(), Enrollment: enrollment,
+		ApprovalMessageID: 50, State: "pending", ExpiresAt: time.Now().Add(time.Minute),
+		Result: make(chan githubApproval, 1),
+	}
+	pending.LocalPassphrase = nil
+	app.githubPending = map[string]*githubPendingRequest{pending.ID: pending}
+	status := app.handleCallback(context.Background(), telegram.CallbackQuery{
+		ID: "approve", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: 50, Chat: telegram.Chat{ID: app.Config.TelegramChatID, Type: "supergroup"}},
+		Data:    "github-approve:" + pending.ID,
+	})
+	if status != "callback_user_error" || pending.State != "resolved" {
+		t.Fatalf("group approval status=%q state=%q", status, pending.State)
+	}
+	if len(transport.sent) != 0 {
+		message := <-transport.sent
+		t.Fatalf("group approval sent Telegram message: %#v", message)
+	}
+	select {
+	case result := <-pending.Result:
+		if result.err == nil || !strings.Contains(result.err.Error(), "local passphrase") {
+			t.Fatalf("group approval result = %#v", result)
+		}
+	default:
+		t.Fatal("group approval did not fail the pending request")
+	}
+}
+
 func TestGitHubCapabilityRequiresExplicitInstallationForMultiInstallationApp(t *testing.T) {
 	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
 	app.GitHubVault = testGitHubVaultWithInstallations(t, false, 456, 789)

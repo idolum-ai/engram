@@ -42,6 +42,7 @@ type App struct {
 	GitHubVault                   *githubauth.Vault
 	GitHubMinter                  githubauth.Minter
 	Telegram                      *telegram.Client
+	telegramBotUsername           string
 	Guide                         guide.Renderer
 	KeyInterpreter                keyseq.Interpreter
 	Transcriber                   voiceTranscriber
@@ -367,6 +368,13 @@ func (a *App) Run(ctx context.Context) int {
 		a.refreshWG.Wait()
 		a.transferWG.Wait()
 	}()
+	if a.Config.TelegramGroupChat() {
+		if err := a.establishTelegramBotIdentity(runCtx); err != nil {
+			_ = a.audit("telegram.identity", "failed", map[string]any{"error": err.Error()})
+			fmt.Fprintln(os.Stderr, "telegram bot identity:", err)
+			return 1
+		}
+	}
 	_ = a.audit("service.start", "ok", map[string]any{"version": version.String()})
 	if a.GitHubVault != nil {
 		a.startGitHubBroker(runCtx)
@@ -447,6 +455,9 @@ func (a *App) handleUpdate(ctx context.Context, update telegram.Update) string {
 	if !a.authorized(&msg) {
 		_ = a.audit("auth.reject", "rejected", map[string]any{"kind": "message"})
 		return "rejected_unauthorized"
+	}
+	if !a.telegramCommandAddressedToSelf(msg.Text) {
+		return "skipped_foreign_bot_command"
 	}
 	key := fmt.Sprintf("%d:%d", msg.Chat.ID, msg.MessageID)
 	if a.Store.SeenMessage(key) {
@@ -556,6 +567,12 @@ func escapedSlashInput(text string) (string, bool) {
 func (a *App) handleCommand(ctx context.Context, msg telegram.Message, text string) (status string) {
 	status = "command_ok"
 	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 {
+		return "command_user_error"
+	}
+	if !a.telegramCommandAddressedToSelf(text) {
+		return "skipped_foreign_bot_command"
+	}
 	cmd := strings.TrimPrefix(fields[0], "/")
 	if at := strings.IndexByte(cmd, '@'); at >= 0 {
 		cmd = cmd[:at]

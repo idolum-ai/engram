@@ -173,6 +173,7 @@ type CallbackQuery struct {
 
 type User struct {
 	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot,omitempty"`
 	Username  string `json:"username,omitempty"`
 	FirstName string `json:"first_name,omitempty"`
 }
@@ -280,6 +281,11 @@ func (c *Client) SetMyCommands(ctx context.Context, commands []BotCommand) error
 	body := map[string]any{"commands": commands}
 	var out bool
 	return c.postJSON(ctx, "setMyCommands", body, &out)
+}
+
+func (c *Client) GetMe(ctx context.Context) (User, error) {
+	var out User
+	return out, c.postJSON(ctx, "getMe", map[string]any{}, &out)
 }
 
 func (c *Client) GetUpdates(ctx context.Context, offset int, timeout int) ([]Update, error) {

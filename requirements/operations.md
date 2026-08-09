@@ -21,10 +21,12 @@ runtime state.
   vault passphrase route; restart also clears process-local leases and grants.
 - `TELEGRAM_ALLOWED_USER_ID` is the required positive administrator ID.
   `TELEGRAM_OPERATOR_USER_IDS` is the one optional, comma-separated allowlist
-  for positive subordinate user IDs; startup canonicalizes and deduplicates it,
-  and changes are manual and restart-bound. A non-empty list requires an
+  for at most 32 positive subordinate user IDs; startup canonicalizes and
+  deduplicates it, and changes are manual and restart-bound. A non-empty list requires an
   explicit negative `TELEGRAM_CHAT_ID` for one group or supergroup and must not
   silently fall back to the administrator DM.
+- Group startup resolves the bot's own username with Bot API `getMe` before
+  polling and fails closed when identity cannot be established.
 - `TELEGRAM_API_BASE` selects the Telegram Bot API server root and defaults to
   `https://api.telegram.org`. It must be an absolute HTTP(S) URL without
   userinfo, query, or fragment; an optional path prefix and trailing slash are
@@ -76,6 +78,10 @@ runtime state.
 - Telegram `/restart` is administrator-only. Terminal session lifecycle actions
   such as close, stop/unwatch, and recovery remain available to configured
   operators and do not stop the Engram process.
+- The Telegram polling lock uses one fixed private per-UID `/tmp` namespace,
+  independent of `ENGRAM_HOME`, `XDG_RUNTIME_DIR`, `TMPDIR`, foreground versus
+  service execution, and cron. Its key is only the bot token plus effective Bot
+  API base; lock metadata exposes only a derived identity.
 - Automatic Codex recovery mapping is opt-in operator configuration through a
   trusted `SessionStart` hook that invokes the installed `engram codex-hook`.
   Engram does not edit Codex hook configuration during installation.

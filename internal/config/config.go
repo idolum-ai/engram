@@ -30,6 +30,7 @@ const (
 	VoiceInputModeTranscribe        = "transcribe"
 	DefaultGitHubGrantMaxDuration   = 8 * time.Hour
 	AbsoluteGitHubGrantMaxDuration  = 24 * time.Hour
+	MaxTelegramOperatorUserIDs      = 32
 	MaxCodexContextTurns            = 8
 	MaxClaudeContextTurns           = 8
 	DefaultTmuxSize                 = "100x48"
@@ -208,6 +209,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must contain only positive integers")
 		}
 	}
+	if len(c.TelegramOperatorUserIDs) > MaxTelegramOperatorUserIDs {
+		return fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must contain at most %d unique subordinate user IDs", MaxTelegramOperatorUserIDs)
+	}
 	switch c.EffectiveLLMProvider() {
 	case LLMProviderAnthropic:
 		if c.GuideConfigured() && c.AnthropicModel != DefaultAnthropicModel && c.AnthropicModel != AnthropicModelAlias {
@@ -380,6 +384,10 @@ func (c Config) TelegramMultiUser() bool {
 	return len(c.TelegramOperatorUserIDs) > 0
 }
 
+func (c Config) TelegramGroupChat() bool {
+	return c.TelegramChatID < 0
+}
+
 func (c Config) IsTelegramAdministrator(userID int64) bool {
 	return userID > 0 && userID == c.TelegramAllowedUserID
 }
@@ -401,17 +409,11 @@ func (c Config) IsTelegramUserAllowed(userID int64) bool {
 }
 
 func (c Config) RedactionSecrets() []string {
-	secrets := []string{
+	return []string{
 		c.TelegramBotToken,
 		c.AnthropicAPIKey,
 		c.OpenAIAPIKey,
-		strconv.FormatInt(c.TelegramAllowedUserID, 10),
-		strconv.FormatInt(c.TelegramChatID, 10),
 	}
-	for _, operatorID := range c.TelegramOperatorUserIDs {
-		secrets = append(secrets, strconv.FormatInt(operatorID, 10))
-	}
-	return secrets
 }
 
 func (c Config) StatePath() string    { return filepath.Join(c.Home, "state.json") }
@@ -430,7 +432,7 @@ func (c Config) GitHubBrokerSocketPath() string {
 	return filepath.Join(c.ArtifactDir(), fmt.Sprintf("github-%x.sock", instance[:8]))
 }
 func (c Config) LockDir() string        { return filepath.Join(c.Home, "locks") }
-func (c Config) PollingLockDir() string { return filepath.Join(c.ArtifactDir(), "locks") }
+func (c Config) PollingLockDir() string { return filepath.Join(pollingLockRoot(), "locks") }
 func (c Config) AttachmentDir() string  { return filepath.Join(c.ArtifactDir(), "attachments") }
 func (c Config) ArtifactDir() string    { return artifactRoot() }
 
@@ -451,6 +453,10 @@ func artifactRoot() string {
 	}
 	tempDir := canonicalDir(os.TempDir())
 	return filepath.Join(tempDir, "engram-"+strconv.Itoa(os.Getuid()))
+}
+
+func pollingLockRoot() string {
+	return filepath.Join(canonicalDir("/tmp"), "engram-"+strconv.Itoa(os.Getuid()))
 }
 
 func privateRuntimeBase(path string) (string, bool) {
@@ -573,6 +579,9 @@ func parseTelegramOperatorUserIDs(raw string, administratorID int64) ([]int64, e
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	if len(ids) > MaxTelegramOperatorUserIDs {
+		return nil, fmt.Errorf("TELEGRAM_OPERATOR_USER_IDS must contain at most %d unique subordinate user IDs", MaxTelegramOperatorUserIDs)
+	}
 	return ids, nil
 }
 

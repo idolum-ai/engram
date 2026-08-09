@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 
 	"github.com/idolum-ai/engram/internal/config"
@@ -38,7 +39,7 @@ func (a *App) telegramChatAllowed(chat telegram.Chat) bool {
 	if chat.ID != a.Config.TelegramChatID {
 		return false
 	}
-	if !a.Config.TelegramMultiUser() {
+	if !a.Config.TelegramGroupChat() {
 		return true
 	}
 	return chat.Type == "group" || chat.Type == "supergroup"
@@ -63,6 +64,9 @@ func (a *App) callbackAuthorized(callback telegram.CallbackQuery) bool {
 }
 
 func (a *App) handleAuthorizedGitHubUnlockReply(ctx context.Context, message telegram.Message) (string, bool) {
+	if a.Config.TelegramGroupChat() {
+		return "", false
+	}
 	if a.messageRole(&message) == telegramAdministrator {
 		return a.handleGitHubUnlockReply(ctx, message)
 	}
@@ -74,6 +78,9 @@ func (a *App) handleAuthorizedGitHubUnlockReply(ctx context.Context, message tel
 }
 
 func (a *App) isGitHubUnlockReply(message telegram.Message) bool {
+	if a.Config.TelegramGroupChat() {
+		return false
+	}
 	if message.ReplyToMessage == nil || message.Text == "" {
 		return false
 	}
@@ -86,6 +93,55 @@ func (a *App) isGitHubUnlockReply(message telegram.Message) bool {
 		}
 	}
 	return a.githubUnlockTombstones[replyToMessageID].After(a.githubTime())
+}
+
+func (a *App) establishTelegramBotIdentity(ctx context.Context) error {
+	if a.Telegram == nil {
+		return fmt.Errorf("Telegram client is unavailable")
+	}
+	bot, err := a.Telegram.GetMe(ctx)
+	if err != nil {
+		return err
+	}
+	if !bot.IsBot || !validTelegramUsername(bot.Username) {
+		return fmt.Errorf("getMe returned an invalid bot identity")
+	}
+	a.telegramBotUsername = bot.Username
+	return nil
+}
+
+func (a *App) telegramCommandAddressedToSelf(text string) bool {
+	if !a.Config.TelegramGroupChat() {
+		return true
+	}
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "//") {
+		return true
+	}
+	token := trimmed
+	if end := strings.IndexAny(token, " \t\r\n"); end >= 0 {
+		token = token[:end]
+	}
+	at := strings.IndexByte(token, '@')
+	if at < 0 {
+		return true
+	}
+	suffix := token[at+1:]
+	return validTelegramUsername(suffix) && validTelegramUsername(a.telegramBotUsername) &&
+		strings.EqualFold(suffix, a.telegramBotUsername)
+}
+
+func validTelegramUsername(username string) bool {
+	if len(username) < 5 || len(username) > 32 {
+		return false
+	}
+	for _, char := range username {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') &&
+			(char < '0' || char > '9') && char != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func telegramPollingLockKey(cfg config.Config) string {
