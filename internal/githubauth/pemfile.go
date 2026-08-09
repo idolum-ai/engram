@@ -73,7 +73,10 @@ func readPrivateKeyFile(path string, afterRead func()) ([]byte, PrivateKeyFileId
 		return nil, PrivateKeyFileIdentity{}, err
 	}
 
-	data, err := io.ReadAll(io.LimitReader(file, maxPrivateKeySize+1))
+	// The validated size is bounded and stable metadata. Allocate once so
+	// growing read buffers cannot leave abandoned copies of credential bytes.
+	data := make([]byte, int(identity.size))
+	_, err = io.ReadFull(file, data)
 	if err != nil {
 		zeroBytes(data)
 		return nil, PrivateKeyFileIdentity{}, fmt.Errorf("read GitHub App private key: %w", err)

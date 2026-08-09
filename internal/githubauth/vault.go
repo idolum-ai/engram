@@ -1,6 +1,7 @@
 package githubauth
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -8,6 +9,8 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -387,7 +390,7 @@ func (v *Vault) Unlock(alias string, passphrase []byte) ([]byte, App, error) {
 
 func ParsePrivateKey(data []byte) (*rsa.PrivateKey, error) {
 	block, rest := pem.Decode(data)
-	if block == nil || len(strings.TrimSpace(string(rest))) != 0 {
+	if block == nil || len(bytes.TrimSpace(rest)) != 0 {
 		return nil, fmt.Errorf("GitHub App private key must contain exactly one PEM block")
 	}
 	defer zeroBytes(block.Bytes)
@@ -400,6 +403,20 @@ func ParsePrivateKey(data []byte) (*rsa.PrivateKey, error) {
 		}
 		key = parsed
 	case "PRIVATE KEY":
+		var envelope struct {
+			Version    int
+			Algorithm  pkix.AlgorithmIdentifier
+			PrivateKey []byte
+		}
+		rest, envelopeErr := asn1.Unmarshal(block.Bytes, &envelope)
+		defer zeroBytes(envelope.PrivateKey)
+		if envelopeErr != nil || len(rest) != 0 {
+			return nil, fmt.Errorf("parse GitHub App private key: invalid PKCS#8 structure")
+		}
+		rsaAlgorithm := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+		if !envelope.Algorithm.Algorithm.Equal(rsaAlgorithm) {
+			return nil, fmt.Errorf("GitHub App private key must be RSA")
+		}
 		parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
 			return nil, fmt.Errorf("parse GitHub App private key: %w", err)

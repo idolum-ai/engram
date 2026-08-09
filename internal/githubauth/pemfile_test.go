@@ -2,6 +2,9 @@ package githubauth
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -13,6 +16,37 @@ import (
 	"testing"
 	"time"
 )
+
+func TestParsePrivateKeyRejectsNonRSAPKCS8(t *testing.T) {
+	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zeroBigInt(ecdsaKey.D)
+	_, ed25519Key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Zero(ed25519Key)
+
+	for name, privateKey := range map[string]any{
+		"ecdsa":   ecdsaKey,
+		"ed25519": ed25519Key,
+	} {
+		t.Run(name, func(t *testing.T) {
+			der, err := x509.MarshalPKCS8PrivateKey(privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer Zero(der)
+			encoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+			defer Zero(encoded)
+			if _, err := ParsePrivateKey(encoded); err == nil || !strings.Contains(err.Error(), "must be RSA") {
+				t.Fatalf("ParsePrivateKey error = %v", err)
+			}
+		})
+	}
+}
 
 func TestReadPrivateKeyFileValidatesPEMAndStableIdentity(t *testing.T) {
 	privateKey := testPrivateKeyPEM(t)
