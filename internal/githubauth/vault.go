@@ -417,15 +417,11 @@ func ParsePrivateKey(data []byte) (*rsa.PrivateKey, error) {
 		if !envelope.Algorithm.Algorithm.Equal(rsaAlgorithm) {
 			return nil, fmt.Errorf("GitHub App private key must be RSA")
 		}
-		parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		parsed, err := x509.ParsePKCS1PrivateKey(envelope.PrivateKey)
 		if err != nil {
-			return nil, fmt.Errorf("parse GitHub App private key: %w", err)
+			return nil, fmt.Errorf("parse GitHub App RSA private key: %w", err)
 		}
-		var ok bool
-		key, ok = parsed.(*rsa.PrivateKey)
-		if !ok {
-			return nil, fmt.Errorf("GitHub App private key must be RSA")
-		}
+		key = parsed
 	default:
 		return nil, fmt.Errorf("unsupported GitHub App private key PEM type %q", block.Type)
 	}

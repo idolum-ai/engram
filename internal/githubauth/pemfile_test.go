@@ -48,6 +48,30 @@ func TestParsePrivateKeyRejectsNonRSAPKCS8(t *testing.T) {
 	}
 }
 
+func TestParsePrivateKeyAcceptsRSAPKCS8(t *testing.T) {
+	original, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ZeroPrivateKey(original)
+	der, err := x509.MarshalPKCS8PrivateKey(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Zero(der)
+	encoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	defer Zero(encoded)
+
+	parsed, err := ParsePrivateKey(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ZeroPrivateKey(parsed)
+	if parsed.PublicKey.N.Cmp(original.PublicKey.N) != 0 || parsed.PublicKey.E != original.PublicKey.E {
+		t.Fatal("parsed RSA PKCS#8 public identity changed")
+	}
+}
+
 func TestReadPrivateKeyFileValidatesPEMAndStableIdentity(t *testing.T) {
 	privateKey := testPrivateKeyPEM(t)
 	defer Zero(privateKey)
