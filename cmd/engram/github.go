@@ -11,11 +11,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/idolum-ai/engram/internal/config"
@@ -591,28 +589,8 @@ func parsePermissionFlags(values []string) (map[string]string, error) {
 }
 
 func readPrivateKeyFile(path string) ([]byte, error) {
-	path = filepath.Clean(strings.TrimSpace(path))
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, fmt.Errorf("open private key: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat private key: %w", err)
-	}
-	stat, ownerOK := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || !ownerOK || int(stat.Uid) != os.Geteuid() {
-		return nil, fmt.Errorf("private key must be a private regular file owned by uid %d", os.Geteuid())
-	}
-	data, err := io.ReadAll(io.LimitReader(file, (128<<10)+1))
-	if err != nil {
-		return nil, fmt.Errorf("read private key: %w", err)
-	}
-	if len(data) > 128<<10 {
-		return nil, fmt.Errorf("private key exceeds 131072 bytes")
-	}
-	return data, nil
+	privateKey, _, err := githubauth.ReadPrivateKeyFile(path)
+	return privateKey, err
 }
 
 func promptSecret(prompt string) ([]byte, error) {

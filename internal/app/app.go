@@ -944,7 +944,7 @@ func (a *App) statusText() string {
 	if a.Config.ClaudeContextTurns > 0 {
 		claudeContextStatus = fmt.Sprintf("enabled, %d recent visible turns max (exact active session only)", a.Config.ClaudeContextTurns)
 	}
-	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\ncodex context: %s\nclaude context: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\ngithub apps: %s\ngithub grants: %d\ngithub leases: %d\ngithub revocations pending: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
+	return fmt.Sprintf("Engram status\nversion: %s\nuptime: %s\nsessions: %d\nanchor mode: %s\nguide: %s\ncodex context: %s\nclaude context: %s\nvoice input: %s\nsnapshots: %s\ntemplates: %d (%s)\ngithub apps: %s\ngithub configured pem: %s\ngithub grants: %d\ngithub leases: %d\ngithub revocations pending: %d\nstate: %s\naudit: %s\nattachments: %s\n/tmp free: %d\nlast poll: %s\nlast update: %d\nupdate journal: %d\nlast guide: %s\nlast guide error: %s",
 		version.String(),
 		time.Since(a.startedAt).Round(time.Second),
 		len(st.TerminalSessions),
@@ -957,6 +957,7 @@ func (a *App) statusText() string {
 		templateCount,
 		a.Config.TemplatePath(),
 		githubApps,
+		a.configuredGitHubAppPEMStatus(),
 		a.githubGrantCount(),
 		a.githubLeaseCount(),
 		a.githubRevocationCount(),

@@ -221,6 +221,7 @@ func (c *Client) appJWT(appID int64, privateKeyPEM []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer ZeroPrivateKey(key)
 	now := c.now().UTC()
 	header, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT"})
 	claims, _ := json.Marshal(map[string]any{

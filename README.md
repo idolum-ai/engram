@@ -266,6 +266,9 @@ text, paths, UUIDs, task text, or agent names. Diagnose one pane locally with
 | `ENGRAM_SNAPSHOT_THEME` | `terminal` | no | Live and on-demand snapshot colors: faithful `terminal`, accessible `contrast-dark`, or accessible `contrast-light`. |
 | `ENGRAM_SNAPSHOT_STATUS_COMMAND` | none | no | Trusted local shell command whose sanitized one-line stdout occupies a bounded snapshot-footer slot. It runs only while an image is already being rendered, from the pane directory when available. |
 | `ENGRAM_ATTACHMENT_SOFT_MAX_BYTES` | `16777216` | no | Incoming attachment soft limit. An exact SHA-256 bypass may authorize up to the 20 MiB cloud Bot API hard limit and available disk. |
+| `ENGRAM_GITHUB_GRANT_MAX_DURATION` | `8h` | no | Maximum approved lifetime for a process-local renewable GitHub grant. Must be positive and no greater than the hard `24h` ceiling. |
+| `ENGRAM_GITHUB_APP_PEM_ALIAS` | none | no | Alias of the one enrolled GitHub App selected for configured local PEM unlock. Set with `ENGRAM_GITHUB_APP_PEM_PATH`; changing either setting requires a restart. |
+| `ENGRAM_GITHUB_APP_PEM_PATH` | none | no, secret file path | Absolute path of the live PEM for `ENGRAM_GITHUB_APP_PEM_ALIAS`. The file remains on disk and is validated at each approval/use boundary. |
 
 `make run` uses `~/.engram/.env` by default. For a protected local config at a
 different path, override it explicitly:
@@ -348,7 +351,41 @@ under `ENGRAM_HOME/github-apps.json` using PBKDF2-HMAC-SHA256 with 600,000
 iterations and authenticated AES-256-GCM encryption. This standard-library-only
 KDF is CPU-hard rather than memory-hard, so a unique high-entropy passphrase is
 important. The passphrase is not stored. The source PEM remains untouched;
-remove or secure it separately after confirming enrollment.
+remove or secure it separately after confirming enrollment unless it is selected
+as the configured live credential below.
+
+For unattended local unlock without sending or entering a passphrase, keep one
+source PEM on the Engram host and set its path in the protected env file:
+
+```env
+ENGRAM_GITHUB_APP_PEM_ALIAS=idolum
+ENGRAM_GITHUB_APP_PEM_PATH=/home/example/.config/engram/example-app.private-key.pem
+```
+
+Set both values or neither, and restart Engram after changing them. The file
+must be a bounded, valid single private-key PEM in an owner-only directory,
+owned by the Engram process UID, regular, non-symlink, single-link, and have no
+group or other permission bits. Mode `0600` is recommended; another owner-only
+mode such as `0400` is accepted. Engram reads it as a live credential; it never
+copies the contents into configuration, state, audit output, or Telegram. The
+configured path stays out of Telegram, audit output, and broker or CLI errors.
+
+The PEM fingerprint must match the configured enrolled alias and no other
+enrollment. Requests for that alias use **configured local PEM** in the approval
+details and tapping Approve proceeds without any passphrase prompt. Other App
+aliases keep their existing local or Telegram passphrase behavior even when the
+configured source is unhealthy. An unreadable, malformed, unmatched, or
+ambiguously enrolled configured PEM fails only the configured alias route
+visibly without preventing Telegram/tmux startup. `/status` reports that route
+as disabled, ready for the alias, unavailable, unmatched, or ambiguous without
+displaying the path. Once an approval is bound to the configured PEM,
+replacement, metadata changes, or a fingerprint mismatch cancels it; Engram
+never falls back to a Telegram reply or local passphrase for that approval.
+
+To recover through the encrypted-vault route, clear both configured PEM
+variables, restart Engram, and start a fresh request with the enrolled App's
+local passphrase. Restarting clears all process-local GitHub leases and
+renewable grants.
 
 From a watched tmux pane, request only the repositories and permissions the
 child command needs:
@@ -450,6 +487,10 @@ capability only in Engram memory, bound to the exact watched pane, enrollment,
 repository ceiling, permission ceiling, and expiry. Later `github exec`
 requests inside that envelope mint or reuse one ordinary short-lived
 installation token at the approved grant ceiling without another approval.
+For a configured-PEM grant, the source is revalidated before the grant is
+stored; afterward the existing bounded in-memory signing capability is the
+renewal authority, so source removal does not widen or prolong it. Enrollment,
+pane, expiry, revocation, and restart invalidation remain unchanged.
 Engram does not infer or preflight that envelope: the requesting program must
 declare its repositories, permissions, duration, and purpose. Commands run
 through `gh` consume the injected `GH_TOKEN` directly; plain `git push`

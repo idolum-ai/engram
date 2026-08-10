@@ -10,6 +10,15 @@ runtime state.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
+- `ENGRAM_GITHUB_APP_PEM_ALIAS` and `ENGRAM_GITHUB_APP_PEM_PATH` optionally
+  name one enrolled alias and its live local PEM for passwordless approval.
+  Both or neither are required. Their values are loaded at startup, but file
+  health is checked only by the selected GitHub route and `/status`, so failure
+  cannot take down Telegram/tmux core startup or another App's passphrase route.
+- `/status` reports configured PEM as disabled, ready for its alias,
+  unavailable, unmatched, or ambiguous without exposing the configured path.
+  Recovery clears both configured PEM variables and restarts into the encrypted
+  vault passphrase route; restart also clears process-local leases and grants.
 - `TELEGRAM_API_BASE` selects the Telegram Bot API server root and defaults to
   `https://api.telegram.org`. It must be an absolute HTTP(S) URL without
   userinfo, query, or fragment; an optional path prefix and trailing slash are

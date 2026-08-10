@@ -845,7 +845,7 @@ func newSafetyApp(t *testing.T, origin state.TerminalOrigin) (*App, *safetyRunne
 	}
 	runner := &safetyRunner{identityWindow: "@1"}
 	return &App{
-		Config: config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100},
+		Config: config.Config{TelegramAllowedUserID: 42, TelegramChatID: 100, Home: dir},
 		Store:  store,
 		Tmux:   tmux.New(runner),
 	}, runner, ts.ID

@@ -57,6 +57,16 @@ func (a *App) createGitHubGrant(
 		a.completeGitHubApprovalMessage(pending, "Canceled: the GitHub App enrollment changed before the grant could be stored.")
 		return githubauth.BrokerResponse{Error: err.Error()}
 	}
+	if err := a.validateConfiguredGitHubAppPEM(pending); err != nil {
+		a.cancelConfiguredGitHubAppPEM(
+			pending,
+			"github.grant",
+			"Canceled: the configured local GitHub App PEM changed before the grant could be stored.",
+			session.ID,
+			request,
+		)
+		return githubauth.BrokerResponse{Error: err.Error()}
+	}
 	grantID, err := githubRequestID()
 	if err != nil {
 		return githubauth.BrokerResponse{Error: err.Error()}
