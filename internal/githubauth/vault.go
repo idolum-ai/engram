@@ -30,13 +30,14 @@ import (
 )
 
 const (
-	vaultVersion              = 2
-	credentialIdentityVersion = 2
-	maxVaultBytes             = 2 << 20
-	maxPrivateKeySize         = 128 << 10
-	minPassphraseSize         = 12
-	pbkdf2Iterations          = 600_000
-	pbkdf2KeyBytes            = 32
+	vaultVersion                   = 3
+	credentialIdentityVersion      = 3
+	installationSetIdentityVersion = 2
+	maxVaultBytes                  = 2 << 20
+	maxPrivateKeySize              = 128 << 10
+	minPassphraseSize              = 12
+	pbkdf2Iterations               = 600_000
+	pbkdf2KeyBytes                 = 32
 )
 
 var ErrUnlock = errors.New("GitHub App credential could not be unlocked")
@@ -61,6 +62,7 @@ type App struct {
 	InstallationIDs           []int64             `json:"installation_ids,omitempty"`
 	CredentialIdentityVersion int                 `json:"credential_identity_version,omitempty"`
 	TelegramUnlock            bool                `json:"telegram_unlock,omitempty"`
+	ApprovalOnly              bool                `json:"approval_only,omitempty"`
 	PublicFingerprint         string              `json:"public_fingerprint"`
 	CreatedAt                 time.Time           `json:"created_at"`
 	PrivateKey                EncryptedPrivateKey `json:"private_key"`
@@ -73,9 +75,10 @@ type persistedVault struct {
 }
 
 type Vault struct {
-	mu    sync.Mutex
-	path  string
-	state persistedVault
+	mu             sync.Mutex
+	path           string
+	deviceSealPath string
+	state          persistedVault
 }
 
 func OpenVault(path string) (*Vault, error) {
@@ -86,7 +89,11 @@ func OpenVault(path string) (*Vault, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create GitHub credential directory: %w", err)
 	}
-	vault := &Vault{path: path, state: persistedVault{Version: vaultVersion}}
+	vault := &Vault{
+		path:           path,
+		deviceSealPath: filepath.Join(filepath.Dir(path), "github-device-seal.key"),
+		state:          persistedVault{Version: vaultVersion},
+	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if os.IsNotExist(err) {
 		if err := vault.saveLocked(); err != nil {
@@ -133,6 +140,15 @@ func (v *Vault) Path() string {
 		return ""
 	}
 	return v.path
+}
+
+// DeviceSealPath returns the separate owner-only key used by approval-only
+// enrollments. The device key is never stored in the credential vault.
+func (v *Vault) DeviceSealPath() string {
+	if v == nil {
+		return ""
+	}
+	return v.deviceSealPath
 }
 
 // Reload observes enrollment changes made by another Engram CLI process.
@@ -215,9 +231,61 @@ func (v *Vault) Add(alias string, appID, installationID int64, privateKeyPEM, pa
 
 // AddInstallations atomically enrolls or replaces one App credential and the
 // complete set of installation IDs that may use it. New ciphertext binds the
-// complete set as authenticated metadata. Version-1 entries remain readable
+// complete set as authenticated metadata. Earlier entries remain readable
 // without being rewritten until the operator explicitly re-enrolls them.
 func (v *Vault) AddInstallations(alias string, appID int64, installationIDs []int64, privateKeyPEM, passphrase []byte, telegramUnlock bool) (App, bool, error) {
+	return v.addInstallations(alias, appID, installationIDs, privateKeyPEM, passphrase, telegramUnlock, false)
+}
+
+// AddApprovalOnlyInstallations encrypts an enrollment with this Engram home's
+// random device seal. The separate seal is read again only after a matching
+// Telegram approval; no passphrase is accepted or retained for this mode.
+func (v *Vault) AddApprovalOnlyInstallations(alias string, appID int64, installationIDs []int64, privateKeyPEM []byte) (App, bool, error) {
+	if v == nil {
+		return App{}, false, fmt.Errorf("GitHub credential vault is unavailable")
+	}
+	// Validate before creating a new persistent seal so rejected enrollment
+	// input has no device-level side effect.
+	if err := validateAlias(strings.TrimSpace(alias)); err != nil {
+		return App{}, false, err
+	}
+	if appID <= 0 {
+		return App{}, false, fmt.Errorf("app ID must be positive")
+	}
+	if _, err := normalizeInstallationIDs(installationIDs); err != nil {
+		return App{}, false, err
+	}
+	if len(privateKeyPEM) == 0 || len(privateKeyPEM) > maxPrivateKeySize {
+		return App{}, false, fmt.Errorf("GitHub App private key must be between 1 and %d bytes", maxPrivateKeySize)
+	}
+	if _, err := PrivateKeyFingerprint(privateKeyPEM); err != nil {
+		return App{}, false, err
+	}
+
+	deviceKey, err := readDeviceSealKey(v.deviceSealPath)
+	if errors.Is(err, os.ErrNotExist) {
+		v.mu.Lock()
+		hasApprovalOnly := false
+		for _, app := range v.state.Apps {
+			if app.ApprovalOnly {
+				hasApprovalOnly = true
+				break
+			}
+		}
+		v.mu.Unlock()
+		if hasApprovalOnly {
+			return App{}, false, fmt.Errorf("GitHub device seal is missing while approval-only enrollments remain; restore the matching seal or remove and re-enroll the complete approval-only set")
+		}
+		deviceKey, err = ensureDeviceSealKey(v.deviceSealPath)
+	}
+	if err != nil {
+		return App{}, false, err
+	}
+	defer zeroBytes(deviceKey)
+	return v.addInstallations(alias, appID, installationIDs, privateKeyPEM, deviceKey, false, true)
+}
+
+func (v *Vault) addInstallations(alias string, appID int64, installationIDs []int64, privateKeyPEM, passphrase []byte, telegramUnlock, approvalOnly bool) (App, bool, error) {
 	alias = strings.TrimSpace(alias)
 	if err := validateAlias(alias); err != nil {
 		return App{}, false, err
@@ -232,6 +300,9 @@ func (v *Vault) AddInstallations(alias string, appID int64, installationIDs []in
 	if len(privateKeyPEM) == 0 || len(privateKeyPEM) > maxPrivateKeySize {
 		return App{}, false, fmt.Errorf("GitHub App private key must be between 1 and %d bytes", maxPrivateKeySize)
 	}
+	if telegramUnlock && approvalOnly {
+		return App{}, false, fmt.Errorf("approval-only and Telegram-passphrase unlock modes are mutually exclusive")
+	}
 	if len(passphrase) < minPassphraseSize {
 		return App{}, false, fmt.Errorf("passphrase must be at least %d bytes", minPassphraseSize)
 	}
@@ -240,7 +311,8 @@ func (v *Vault) AddInstallations(alias string, appID int64, installationIDs []in
 		return App{}, false, err
 	}
 	credentialInstallationID := installationIDs[0]
-	encrypted, err := encryptPrivateKeyForInstallations(alias, appID, installationIDs, privateKeyPEM, passphrase)
+	mode := credentialUnlockMode(telegramUnlock, approvalOnly)
+	encrypted, err := encryptPrivateKeyForInstallations(alias, appID, installationIDs, mode, privateKeyPEM, passphrase)
 	if err != nil {
 		return App{}, false, err
 	}
@@ -251,6 +323,7 @@ func (v *Vault) AddInstallations(alias string, appID int64, installationIDs []in
 		InstallationIDs:           append([]int64(nil), installationIDs...),
 		CredentialIdentityVersion: credentialIdentityVersion,
 		TelegramUnlock:            telegramUnlock,
+		ApprovalOnly:              approvalOnly,
 		PublicFingerprint:         fingerprint,
 		CreatedAt:                 time.Now().UTC(),
 		PrivateKey:                encrypted,
@@ -372,7 +445,52 @@ func (v *Vault) Unlock(alias string, passphrase []byte) ([]byte, App, error) {
 	if !found {
 		return nil, App{}, ErrUnlock
 	}
+	if stored.ApprovalOnly {
+		return nil, App{}, ErrUnlock
+	}
 	plaintext, err := decryptPrivateKey(stored, passphrase)
+	if err != nil {
+		return nil, App{}, ErrUnlock
+	}
+	key, err := ParsePrivateKey(plaintext)
+	if err != nil {
+		zeroBytes(plaintext)
+		return nil, App{}, ErrUnlock
+	}
+	ZeroPrivateKey(key)
+	public := stored
+	public.PrivateKey = EncryptedPrivateKey{}
+	public.InstallationIDs = public.Installations()
+	return plaintext, public, nil
+}
+
+// UnlockApprovalOnly opens a device-sealed enrollment. Callers must gate this
+// method behind the exact external approval event; the vault itself does not
+// interpret Telegram authorization.
+func (v *Vault) UnlockApprovalOnly(alias string) ([]byte, App, error) {
+	if v == nil {
+		return nil, App{}, ErrUnlock
+	}
+	v.mu.Lock()
+	var stored App
+	found := false
+	for _, app := range v.state.Apps {
+		if app.Alias == strings.TrimSpace(alias) {
+			stored = app
+			found = true
+			break
+		}
+	}
+	v.mu.Unlock()
+	if !found || !stored.ApprovalOnly {
+		return nil, App{}, ErrUnlock
+	}
+	deviceKey, err := readDeviceSealKey(v.deviceSealPath)
+	if err != nil {
+		return nil, App{}, ErrUnlock
+	}
+	defer zeroBytes(deviceKey)
+	plaintext, err := decryptPrivateKey(stored, deviceKey)
 	if err != nil {
 		return nil, App{}, ErrUnlock
 	}
@@ -490,8 +608,8 @@ func encryptPrivateKey(alias string, appID, installationID int64, plaintext, pas
 	return encryptPrivateKeyWithAAD(credentialAAD(alias, appID, installationID), plaintext, passphrase)
 }
 
-func encryptPrivateKeyForInstallations(alias string, appID int64, installationIDs []int64, plaintext, passphrase []byte) (EncryptedPrivateKey, error) {
-	return encryptPrivateKeyWithAAD(credentialInstallationSetAAD(alias, appID, installationIDs), plaintext, passphrase)
+func encryptPrivateKeyForInstallations(alias string, appID int64, installationIDs []int64, mode string, plaintext, passphrase []byte) (EncryptedPrivateKey, error) {
+	return encryptPrivateKeyWithAAD(credentialInstallationSetAAD(alias, appID, installationIDs, mode), plaintext, passphrase)
 }
 
 func encryptPrivateKeyWithAAD(aad, plaintext, passphrase []byte) (EncryptedPrivateKey, error) {
@@ -557,8 +675,10 @@ func decryptPrivateKey(app App, passphrase []byte) ([]byte, error) {
 		return nil, ErrUnlock
 	}
 	aad := credentialAAD(app.Alias, app.AppID, app.InstallationID)
-	if app.CredentialIdentityVersion == credentialIdentityVersion {
-		aad = credentialInstallationSetAAD(app.Alias, app.AppID, app.Installations())
+	if app.CredentialIdentityVersion == installationSetIdentityVersion {
+		aad = credentialInstallationSetAADV2(app.Alias, app.AppID, app.Installations())
+	} else if app.CredentialIdentityVersion == credentialIdentityVersion {
+		aad = credentialInstallationSetAAD(app.Alias, app.AppID, app.Installations(), credentialUnlockMode(app.TelegramUnlock, app.ApprovalOnly))
 	}
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
@@ -571,8 +691,22 @@ func credentialAAD(alias string, appID, installationID int64) []byte {
 	return []byte(fmt.Sprintf("engram-github-app-v1\x00%s\x00%d\x00%d", alias, appID, installationID))
 }
 
-func credentialInstallationSetAAD(alias string, appID int64, installationIDs []int64) []byte {
+func credentialInstallationSetAADV2(alias string, appID int64, installationIDs []int64) []byte {
 	return []byte(fmt.Sprintf("engram-github-app-v2\x00%s\x00%d\x00%s", alias, appID, formatInstallationIDs(installationIDs)))
+}
+
+func credentialInstallationSetAAD(alias string, appID int64, installationIDs []int64, mode string) []byte {
+	return []byte(fmt.Sprintf("engram-github-app-v3\x00%s\x00%d\x00%s\x00%s", alias, appID, formatInstallationIDs(installationIDs), mode))
+}
+
+func credentialUnlockMode(telegramUnlock, approvalOnly bool) string {
+	if approvalOnly {
+		return "approval-only"
+	}
+	if telegramUnlock {
+		return "telegram-passphrase"
+	}
+	return "local-passphrase"
 }
 
 func validateVault(state persistedVault) error {
@@ -599,15 +733,21 @@ func validateVault(state persistedVault) error {
 				break
 			}
 		}
-		if app.CredentialIdentityVersion != 0 && app.CredentialIdentityVersion != credentialIdentityVersion {
+		if app.CredentialIdentityVersion != 0 && app.CredentialIdentityVersion != installationSetIdentityVersion && app.CredentialIdentityVersion != credentialIdentityVersion {
 			return fmt.Errorf("invalid GitHub credential vault entry %q: unsupported credential identity version", app.Alias)
 		}
 		if app.CredentialIdentityVersion == 0 && len(app.InstallationIDs) != 0 &&
 			(len(app.InstallationIDs) != 1 || app.InstallationIDs[0] != app.InstallationID) {
 			return fmt.Errorf("invalid GitHub credential vault entry %q: legacy credential cannot enroll additional installations without re-enrollment", app.Alias)
 		}
-		if app.CredentialIdentityVersion == credentialIdentityVersion && len(app.InstallationIDs) == 0 {
+		if (app.CredentialIdentityVersion == installationSetIdentityVersion || app.CredentialIdentityVersion == credentialIdentityVersion) && len(app.InstallationIDs) == 0 {
 			return fmt.Errorf("invalid GitHub credential vault entry %q: missing authenticated installation set", app.Alias)
+		}
+		if app.TelegramUnlock && app.ApprovalOnly {
+			return fmt.Errorf("invalid GitHub credential vault entry %q: conflicting unlock modes", app.Alias)
+		}
+		if app.ApprovalOnly && app.CredentialIdentityVersion != credentialIdentityVersion {
+			return fmt.Errorf("invalid GitHub credential vault entry %q: approval-only mode is not authenticated", app.Alias)
 		}
 		if app.AppID <= 0 || app.InstallationID <= 0 || !anchorFound || strings.TrimSpace(app.PublicFingerprint) == "" ||
 			strings.TrimSpace(app.PrivateKey.Ciphertext) == "" || strings.TrimSpace(app.PrivateKey.Nonce) == "" {

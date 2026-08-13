@@ -105,13 +105,13 @@ Owner-only modes such as `0400` and `0600` satisfy the permission check.
 
 ## Choose the unlock route
 
-Engram encrypts a copy of the PEM in
-`$ENGRAM_HOME/github-apps.json`. Enrollment prompts twice for a passphrase of at
-least 12 bytes. The passphrase is not stored. Use a unique, high-entropy
+Engram always encrypts a copy of the PEM in
+`$ENGRAM_HOME/github-apps.json`. Passphrase enrollment prompts twice for at
+least 12 bytes and does not store that passphrase. Use a unique, high-entropy
 passphrase rather than a GitHub, operating-system, or API credential.
 
-There are three unlock modes. Enrollment always creates the encrypted vault
-copy and passphrase regardless of the runtime route.
+There are four unlock routes. Choose one deliberately when enrolling or
+configuring the App.
 
 ### Local unlock: safer default
 
@@ -132,6 +132,35 @@ traverses Telegram's cloud and is exposed to anyone controlling the Telegram
 account or bot token. Enable this mode only when that tradeoff is understood.
 
 `--local-unlock` overrides a Telegram-enabled enrollment for one execution.
+
+### Approval-only device seal: passwordless convenience
+
+With `--approval-only`, Engram generates one random 256-bit device-seal key per
+`ENGRAM_HOME`, stores it separately at
+`$ENGRAM_HOME/github-device-seal.key`, and uses it to encrypt the App PEM in the
+normal vault. Both files are owner-only; the seal never appears in the vault,
+environment, CLI arguments, Telegram, audit, or broker output.
+
+The running daemon reloads the enrollment normally but does not read the device
+seal or decrypt the PEM while presenting a request. After the exact pending
+Telegram **Approve** callback is validated, it reads the seal, opens the PEM in
+memory, and continues the ordinary installation inspection and token-minting
+checks. It never requests a local or Telegram passphrase and never falls back
+to one if the seal is unavailable or invalid.
+
+This mode protects against casual inspection, accidental disclosure of
+`github-apps.json` alone, and ordinary tools that stay within Engram's broker.
+It does **not** protect against a malicious process with the same local account
+authority: such a process can read both files and recover the credential. Use
+passphrase enrollment when that stronger portable at-rest boundary matters.
+Back up or migrate the vault and device seal together. Losing either makes
+approval-only enrollments unusable. No configuration setting or restart is
+required.
+
+If the alias was previously selected by `ENGRAM_GITHUB_APP_PEM_ALIAS`, clear
+both configured-PEM variables at the next convenient restart. Approval-only
+mode already takes precedence, and `/status` reports the old route as unused;
+clearing it removes misleading dead configuration.
 
 ### Configured local PEM: optional passwordless route
 
@@ -200,6 +229,16 @@ engram github app add "$APP_ALIAS" \
   --telegram-unlock
 ```
 
+For approval-only device-sealed unlock:
+
+```sh
+engram github app add "$APP_ALIAS" \
+  --app-id "$APP_ID" \
+  --installation-id "$INSTALLATION_ID" \
+  --pem "$PEM_PATH" \
+  --approval-only
+```
+
 To enroll several installations of the same App and key, repeat the flag in a
 single atomic enrollment:
 
@@ -211,8 +250,9 @@ engram github app add "$APP_ALIAS" \
   --pem "$PEM_PATH"
 ```
 
-Enter the new vault passphrase twice when prompted. Never place the passphrase
-in a command-line argument, environment variable, file, or shell history.
+For local and Telegram-passphrase modes, enter the new vault passphrase twice
+when prompted. Never place it in a command-line argument, environment variable,
+file, or shell history. Approval-only mode does not prompt for one.
 
 Successful enrollment prints the alias and a public-key fingerprint. The
 fingerprint is safe to compare; it is not the private key.
@@ -221,7 +261,9 @@ Enrollment:
 
 - reads the source PEM without modifying it;
 - validates that it contains a supported private key;
-- encrypts a copy with PBKDF2-HMAC-SHA256 and AES-256-GCM;
+- encrypts a copy with authenticated AES-256-GCM and PBKDF2-HMAC-SHA256, using
+  the entered passphrase or random separate device seal as the derivation
+  input;
 - stores the encrypted record in Engram's owner-only vault;
 - does not save the passphrase; and
 - does not mint a GitHub installation token.
@@ -234,9 +276,9 @@ Reusing an alias atomically replaces that enrollment. It does not silently
 preserve the previous installation set, unlock mode, or key: repeat every
 installation ID that should remain active. The complete set is authenticated
 with the encrypted credential so editing vault metadata cannot add an
-installation. Existing version-1 single-installation vault entries are read in
-place and are not automatically rewritten; explicitly re-enroll the alias to
-adopt the multi-installation format.
+installation or change a new-format unlock mode. Existing version-1 and
+version-2 vault entries are read in place and are not automatically rewritten;
+explicitly re-enroll the alias to adopt the current format.
 
 ## Verify enrollment
 
@@ -251,7 +293,7 @@ The entry shows:
 - alias;
 - App ID;
 - installation IDs;
-- `local` or `telegram opt-in` unlock mode; and
+- `local`, `telegram opt-in`, or `approval-only device seal` unlock mode; and
 - public-key fingerprint.
 
 In `github app list --json`, `installation_ids` is the authoritative set. The
@@ -264,6 +306,14 @@ Confirm the vault remains owner-only:
 ```sh
 stat -f '%Sp %Su %Sg %z %N' "$ENGRAM_HOME/github-apps.json"  # macOS
 stat -c '%A %U %G %s %n' "$ENGRAM_HOME/github-apps.json"     # Linux
+```
+
+For approval-only enrollment, confirm the separate seal is owner-only without
+displaying it:
+
+```sh
+stat -f '%Sp %Su %Sg %z %N' "$ENGRAM_HOME/github-device-seal.key"  # macOS
+stat -c '%A %U %G %s %n' "$ENGRAM_HOME/github-device-seal.key"     # Linux
 ```
 
 Do not display the vault. Its PEM payload is encrypted, but the file remains
@@ -356,8 +406,9 @@ otherwise.
 For Telegram unlock, reply directly to Engram's forced-reply prompt with the
 vault passphrase. The prompt and reply should disappear after processing. For
 local unlock, the passphrase was collected in the terminal before the approval
-message appeared. For configured local PEM, tapping **Approve** is the complete
-human interaction; exact capability approval remains mandatory.
+message appeared. For configured local PEM and approval-only device seal,
+tapping **Approve** is the complete human interaction; exact capability
+approval remains mandatory.
 
 On success, the child command prints the requested repository metadata. Engram
 does not print the token. It removes ambient `GH_TOKEN` and `GITHUB_TOKEN`
@@ -550,11 +601,11 @@ first.
 ## Decide what to do with the source PEM
 
 After successful enrollment, Engram uses its encrypted vault copy and no longer
-needs the source PEM for ordinary passphrase unlock. When the configured PEM
-alias and path select it, however, the file is a live credential and must remain
-at that identity and path for new approvals. Removing that file may also break
-other scripts, services, backup procedures, or token wrappers that read it
-directly.
+needs the source PEM for ordinary passphrase or approval-only unlock. When the
+configured PEM alias and path select it, however, the file is a live credential
+and must remain at that identity and path for new approvals. Removing that file
+may also break other scripts, services, backup procedures, or token wrappers
+that read it directly.
 
 Before moving or deleting a source PEM:
 
@@ -568,6 +619,13 @@ Before moving or deleting a source PEM:
 
 Engram does not provide a command to export the encrypted PEM back out of its
 vault.
+
+For approval-only enrollment, preserve
+`$ENGRAM_HOME/github-device-seal.key` with the vault in any deliberate backup
+or migration. The source PEM can be removed after the complete request cycle is
+verified, but losing the device seal makes every approval-only record in that
+vault unrecoverable. Re-enrollment with a retained or newly generated GitHub
+App PEM is the recovery path.
 
 A renewable grant created through configured local PEM revalidates the source
 before storing authority, then retains the signing capability only in Engram
@@ -602,6 +660,12 @@ intentionally update the enrollment with `--telegram-unlock`.
 The passphrase was wrong or the encrypted record could not be authenticated.
 No token is returned. Start a fresh request after checking the intended
 passphrase.
+
+For approval-only enrollment, inspect only the metadata of
+`$ENGRAM_HOME/github-device-seal.key`. It must be a 32-byte, owner-owned,
+owner-only, regular, non-symlink, single-link file. If it is missing or changed,
+restore the matching vault-and-seal pair or re-enroll every approval-only alias
+from a valid source PEM. Engram never falls back to a passphrase for this mode.
 
 ### The configured local PEM is unavailable or changed
 
@@ -694,5 +758,7 @@ startup records `github.broker` with status `ready`.
   permissions, and command shown.
 - The approved child is trusted with its token and can deliberately disclose
   its own environment.
-- Keep the source PEM and encrypted Engram vault owner-only.
+- Keep the source PEM and encrypted Engram vault owner-only. Treat the
+  approval-only device seal as equally sensitive, and back it up only together
+  with its vault.
 - Prefer refusal and a narrower retry over automatic permission escalation.

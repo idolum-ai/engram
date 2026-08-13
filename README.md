@@ -350,13 +350,44 @@ complete installation set and the intended unlock mode. Existing
 single-installation vaults continue to work without an automatic secret
 rewrite.
 
-Engram prompts twice for a passphrase of at least 12 bytes. It stores the PEM
-under `ENGRAM_HOME/github-apps.json` using PBKDF2-HMAC-SHA256 with 600,000
+For an approval-only local workflow with no reusable passphrase, enroll with:
+
+```sh
+engram github app add idolum \
+  --app-id 123456 \
+  --installation-id 987654 \
+  --pem ./github-app.private-key.pem \
+  --approval-only
+```
+
+Engram encrypts the PEM in `ENGRAM_HOME/github-apps.json` with a random 256-bit
+key stored separately at `ENGRAM_HOME/github-device-seal.key`. Both files are
+owner-only. The daemon opens this enrollment only after the exact Telegram
+**Approve** callback, so routine requests require no local entry or Telegram
+passphrase reply. After verifying one complete request, the source PEM may be
+removed if no other tool needs it.
+
+This is a deliberate convenience boundary, not protection from a fully
+compromised local account: any process that can read both owner-only Engram
+files can recover the App credential. It does protect against casual file
+inspection, accidental disclosure of the vault alone, and ordinary agents that
+use only the documented broker. Back up or migrate the vault and device seal as
+one credential set; losing either makes approval-only enrollments unusable.
+Passphrase enrollment remains the stronger portable mode.
+
+Passphrase modes prompt twice for a passphrase of at least 12 bytes. Engram
+stores the PEM under `ENGRAM_HOME/github-apps.json` using PBKDF2-HMAC-SHA256 with 600,000
 iterations and authenticated AES-256-GCM encryption. This standard-library-only
 KDF is CPU-hard rather than memory-hard, so a unique high-entropy passphrase is
-important. The passphrase is not stored. The source PEM remains untouched;
+important. The passphrase is not stored. Approval-only mode prompts for no
+passphrase. The source PEM remains untouched;
 remove or secure it separately after confirming enrollment unless it is selected
 as the configured live credential below.
+
+The configured live-PEM route predates approval-only enrollment and remains
+available for compatibility. New passwordless local setups should normally use
+`--approval-only`, which does not require either environment variable or a
+persistent source PEM.
 
 For unattended local unlock without sending or entering a passphrase, keep one
 source PEM on the Engram host and set its path in the protected env file:

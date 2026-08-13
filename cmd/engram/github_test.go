@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -47,6 +48,72 @@ func TestRepeatedInstallationIDFlagAcceptsPositiveIDs(t *testing.T) {
 	}
 	if err := values.Set("0"); err == nil {
 		t.Fatal("zero installation ID was accepted")
+	}
+}
+
+func TestGitHubAppApprovalOnlyCommandContract(t *testing.T) {
+	env := writeTestEnv(t)
+	dir := filepath.Dir(env)
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	defer githubauth.Zero(privateKey)
+	pemPath := filepath.Join(dir, "app.pem")
+	if err := os.WriteFile(pemPath, privateKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalPrompt := promptGitHubAppSecret
+	promptCalls := 0
+	promptGitHubAppSecret = func(string) ([]byte, error) {
+		promptCalls++
+		return nil, errors.New("approval-only enrollment must not prompt")
+	}
+	t.Cleanup(func() { promptGitHubAppSecret = originalPrompt })
+
+	stdout, stderr, code := captureCommand(t, func() int {
+		return run([]string{
+			"github", "app", "add", "approval-fixture",
+			"--app-id", "123", "--installation-id", "456",
+			"--pem", pemPath, "--approval-only", "--env", env,
+		})
+	})
+	if code != 0 || stderr != "" || promptCalls != 0 {
+		t.Fatalf("approval-only add: code=%d prompt_calls=%d stdout=%q stderr=%q", code, promptCalls, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Approval-only mode uses an owner-only device seal") {
+		t.Fatalf("approval-only add output = %q", stdout)
+	}
+
+	human, stderr, code := captureCommand(t, func() int {
+		return run([]string{"github", "app", "list", "--env", env})
+	})
+	if code != 0 || stderr != "" || !strings.Contains(human, "unlock=approval-only device seal") {
+		t.Fatalf("approval-only human list: code=%d stdout=%q stderr=%q", code, human, stderr)
+	}
+
+	jsonOutput, stderr, code := captureCommand(t, func() int {
+		return run([]string{"github", "app", "list", "--json", "--env", env})
+	})
+	var apps []githubauth.App
+	decodeErr := json.Unmarshal([]byte(jsonOutput), &apps)
+	if code != 0 || stderr != "" || decodeErr != nil || len(apps) != 1 || !apps[0].ApprovalOnly || apps[0].TelegramUnlock {
+		t.Fatalf("approval-only JSON list: code=%d decode_err=%v apps=%#v stdout=%q stderr=%q", code, decodeErr, apps, jsonOutput, stderr)
+	}
+}
+
+func TestGitHubAppApprovalOnlyRejectsTelegramUnlockBeforeEnrollment(t *testing.T) {
+	_, stderr, code := captureCommand(t, func() int {
+		return run([]string{
+			"github", "app", "add", "approval-fixture",
+			"--app-id", "123", "--installation-id", "456", "--pem", "/missing.pem",
+			"--approval-only", "--telegram-unlock", "--env", "/missing.env",
+		})
+	})
+	if code != 2 || !strings.Contains(stderr, "--telegram-unlock and --approval-only are mutually exclusive") {
+		t.Fatalf("mutually exclusive modes: code=%d stderr=%q", code, stderr)
 	}
 }
 

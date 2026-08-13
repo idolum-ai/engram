@@ -313,6 +313,26 @@ privacy model must stay small and explicit.
   not end-to-end encrypted. Per-app opt-in must be explicit and visibly warned;
   accepted passphrase replies and prompts must be deleted immediately and
   their text must not enter state, audit, or error output.
+- Approval-only GitHub App enrollment is an explicit convenience mode. It must
+  encrypt the PEM in the credential vault with a random 256-bit device key kept
+  in a separate owner-only, regular, non-symlink, single-link file under the
+  same Engram home. The device key must never enter the vault, environment,
+  command line, state, audit, Telegram, or broker output. The authenticated
+  ciphertext identity must bind the approval-only mode so metadata editing
+  cannot convert it to a passphrase enrollment or vice versa.
+- The daemon may read an approval-only device key and decrypt its PEM only
+  after validating the exact current Telegram Approve callback for the pending
+  pane-bound request. Approval-only requests must never create a passphrase
+  prompt or fall back to local or Telegram passphrase entry. Missing, replaced,
+  malformed, hard-linked, or permission-unsafe seal material fails that request
+  without minting a token or stopping Telegram/tmux core startup.
+- Approval-only mode is not an isolation boundary against a malicious process
+  running with the same local account authority: a process able to read both
+  the vault and device-seal file can recover the credential. User-facing help
+  and documentation must state this limitation, identify passphrase enrollment
+  as the stronger portable mode, and explain that the vault and seal must be
+  backed up or migrated together. The enrollment source PEM is not retained or
+  required after successful approval-only enrollment.
 - `ENGRAM_GITHUB_APP_PEM_ALIAS` and `ENGRAM_GITHUB_APP_PEM_PATH` may together
   opt one named enrolled App into passwordless local unlock. Both or neither
   must be configured, and the runtime path must be absolute. The configured
