@@ -24,6 +24,8 @@ import (
 
 const githubBrokerRequestTimeout = githubauth.BrokerExchangeTimeout
 
+var promptGitHubAppSecret = promptSecret
+
 type repeatedFlag []string
 
 func (f *repeatedFlag) String() string { return strings.Join(*f, ",") }
@@ -151,13 +153,13 @@ func runGitHubAppAdd(args []string) int {
 	if *approvalOnly {
 		item, created, err = vault.AddApprovalOnlyInstallations(alias, *appID, installationIDs, privateKey)
 	} else {
-		passphrase, promptErr := promptSecret("Passphrase: ")
+		passphrase, promptErr := promptGitHubAppSecret("Passphrase: ")
 		if promptErr != nil {
 			fmt.Fprintln(os.Stderr, "github app add:", promptErr)
 			return 1
 		}
 		defer githubauth.Zero(passphrase)
-		confirmation, promptErr := promptSecret("Confirm passphrase: ")
+		confirmation, promptErr := promptGitHubAppSecret("Confirm passphrase: ")
 		if promptErr != nil {
 			fmt.Fprintln(os.Stderr, "github app add:", promptErr)
 			return 1
