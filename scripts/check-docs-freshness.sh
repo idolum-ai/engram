@@ -8,6 +8,7 @@ required_docs=(
   docs/agent-screen-semantics.md
   docs/agent-compatibility.md
   docs/compatibility-fixtures.md
+  docs/conceptual-model.md
   docs/design-principles.md
   docs/github-app-capabilities.md
   docs/headless-operation.md

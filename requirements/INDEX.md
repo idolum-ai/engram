@@ -6,6 +6,10 @@ Engram keeps requirements small and executable. Each document states runtime
 contracts that should either be tested directly or checked by `make check`.
 The requirements documents are the binding source of truth.
 
+[`docs/conceptual-model.md`](../docs/conceptual-model.md) provides the shared
+repository vocabulary used to read these contracts. It is descriptive; when it
+and a requirement disagree, the requirement controls.
+
 ## Foundation
 
 1. [`telegram.md`](telegram.md) - Telegram command, callback, formatting, and delivery contracts.

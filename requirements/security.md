@@ -25,10 +25,14 @@ privacy model must stay small and explicit.
   redaction before persistence and Telegram delivery.
 - Documentation must state that redaction is best effort and does not make an
   artifact safe to share without review.
-- Enrolled GitHub App PEMs must be authenticated-encrypted at rest under a
-  passphrase-derived key. The passphrase, decrypted PEM, app JWT, and
-  installation token must never be persisted, audited, or emitted by Engram on
-  stdout or stderr.
+- Enrolled GitHub App PEMs must be authenticated-encrypted at rest. Local and
+  Telegram unlock derive the encryption key from the enrollment passphrase;
+  approval-only unlock derives it from the separate random device seal defined
+  below. The passphrase, decrypted PEM, app JWT, and installation token must
+  never be persisted, audited, or emitted by Engram on stdout or stderr. The
+  device-seal key's only persistent store is its owner-only seal file; it must
+  never enter the credential vault, audit, environment, command line,
+  Telegram, or broker output.
 - GitHub installation-token requests must contain at least one explicit
   repository and permission. They must not inherit GitHub's all-repositories
   or all-installation-permissions defaults.
@@ -218,9 +222,17 @@ privacy model must stay small and explicit.
   It must be an owner-only regular file, must not follow symlinks, and must be
   treated like `.env`. Template audit events retain names but not bodies.
 - `github-apps.json` contains encrypted GitHub App private keys, identifiers,
-  public-key fingerprints, and KDF parameters. It must be an owner-only regular
-  file under `ENGRAM_HOME`, must not follow symlinks, and remains sensitive
-  despite encryption because it permits offline passphrase guessing.
+  public-key fingerprints, unlock-mode metadata, and KDF parameters. It must be
+  an owner-only regular file under `ENGRAM_HOME`, must not follow symlinks, and
+  remains sensitive despite encryption. Passphrase records permit offline
+  guessing; approval-only records remain unusable without the matching device
+  seal but expose non-secret enrollment metadata and must not be treated as
+  public.
+- `github-device-seal.key`, when present, is the sole persistent key source for
+  approval-only records. It must be an owner-only regular single-link file
+  under `ENGRAM_HOME` and remains sensitive independently of the vault. The
+  vault and seal together permit recovery of every approval-only PEM encrypted
+  by that seal.
 - An existing owner-controlled `ENGRAM_HOME` is tightened to mode `0700` during
   startup so upgrades do not trade availability for privacy. A foreign-owned,
   non-directory, or symlinked home remains a hard failure. Canonical operating

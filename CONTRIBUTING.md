@@ -26,10 +26,13 @@ make secrets
   changing configuration, external data flow, storage, or service behavior.
 - Add focused tests for Telegram payloads, tmux behavior, state migration,
   attachment handling, and security boundaries.
-- Keep Linux systemd behavior distinct from macOS manual operation.
+- Keep Linux systemd activation distinct from the macOS LaunchAgent's explicit
+  activation.
 - Do not add third-party Go dependencies without an explicit requirements
   update and design review.
 - Keep terminology specific to Engram, Telegram, tmux, and Haiku.
+- Write documentation in simple English. Keep it professional, deadpan, and
+  concise. Use technical terms only when they make the behavior more exact.
 
 ## Sensitive Evidence
 
