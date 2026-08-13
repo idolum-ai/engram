@@ -845,6 +845,80 @@ func TestGitHubConfiguredPEMApprovalMintsWithoutPassphrasePrompt(t *testing.T) {
 	}
 }
 
+func TestGitHubApprovalOnlyEnrollmentMintsAfterButtonWithoutPassphrasePrompt(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(42 * time.Minute)}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	if _, _, err := vault.AddApprovalOnlyInstallations("idolum", 123, []int64{456}, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	app.GitHubVault = vault
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+	request.LocalUnlock = true
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	approval := <-transport.sent
+	if !strings.Contains(approval.text, "Unlock: approval-only device seal") ||
+		!strings.Contains(approval.text, "no passphrase is required") ||
+		strings.Contains(approval.text, "not end-to-end encrypted") {
+		t.Fatalf("approval text = %q", approval.text)
+	}
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "approval-only-approve", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID)
+	if status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	response := <-responses
+	if !response.OK || response.Token == "" || minter.mintCount() != 1 {
+		t.Fatalf("broker response = %#v, mints = %d", response, minter.mintCount())
+	}
+	if len(transport.sent) != 0 {
+		t.Fatal("approval-only enrollment requested a Telegram passphrase")
+	}
+}
+
+func TestGitHubApprovalOnlyEnrollmentFailsClosedWhenDeviceSealIsUnavailable(t *testing.T) {
+	minter := &fakeGitHubMinter{expiresAt: time.Now().UTC().Add(42 * time.Minute)}
+	app, transport, _ := newLocalGitHubApprovalTestApp(t, minter)
+	vault, privateKey := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(privateKey)
+	if _, _, err := vault.AddApprovalOnlyInstallations("idolum", 123, []int64{456}, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	app.GitHubVault = vault
+	request := testLocalGitHubBrokerRequest()
+	githubauth.Zero(request.Passphrase)
+	request.Passphrase = nil
+
+	responses := make(chan githubauth.BrokerResponse, 1)
+	go func() { responses <- app.handleGitHubBrokerRequest(context.Background(), request) }()
+	<-transport.sent
+	if err := os.Remove(vault.DeviceSealPath()); err != nil {
+		t.Fatal(err)
+	}
+	requestID, approvalID := pendingGitHubTestIdentity(t, app)
+	if status := app.handleGitHubApprovalCallback(context.Background(), telegram.CallbackQuery{
+		ID: "approval-only-missing-seal", From: telegram.User{ID: 42},
+		Message: &telegram.Message{MessageID: approvalID, Chat: telegram.Chat{ID: 100}},
+	}, true, requestID); status != "callback_ok" {
+		t.Fatalf("approval callback = %q", status)
+	}
+	response := <-responses
+	if response.OK || response.Token != "" || minter.mintCount() != 0 || !strings.Contains(response.Error, "could not be unlocked") {
+		t.Fatalf("broker response = %#v, mints = %d", response, minter.mintCount())
+	}
+	if len(transport.sent) != 0 {
+		t.Fatal("missing device seal fell back to a Telegram passphrase")
+	}
+}
+
 func TestGitHubConfiguredPEMFailureIsScopedToConfiguredAlias(t *testing.T) {
 	for _, source := range []string{"unavailable", "wrong-key"} {
 		t.Run(source, func(t *testing.T) {
@@ -1387,6 +1461,25 @@ func TestStatusReportsConfiguredGitHubAppPEMHealthWithoutPath(t *testing.T) {
 				t.Fatalf("status exposed configured PEM path: %q", status)
 			}
 		})
+	}
+}
+
+func TestStatusReportsConfiguredPEMAsUnusedForApprovalOnlyAlias(t *testing.T) {
+	app, _, _ := newLocalGitHubApprovalTestApp(t, &fakeGitHubMinter{})
+	vault, key := testGitHubVaultAndPEM(t, false, 456)
+	defer githubauth.Zero(key)
+	if _, _, err := vault.AddApprovalOnlyInstallations("idolum", 123, []int64{456}, key); err != nil {
+		t.Fatal(err)
+	}
+	app.GitHubVault = vault
+	app.Config.GitHubAppPEMAlias = "idolum"
+	app.Config.GitHubAppPEMPath = writeConfiguredGitHubPEM(t, key)
+	status := app.statusText()
+	if !strings.Contains(status, "github configured pem: not used for approval-only alias idolum") {
+		t.Fatalf("status = %q", status)
+	}
+	if strings.Contains(status, app.Config.GitHubAppPEMPath) {
+		t.Fatalf("status exposed configured PEM path: %q", status)
 	}
 }
 

@@ -16,6 +16,14 @@ Notable user-visible and operational changes are recorded here.
 
 ### GitHub capabilities
 
+- Add an explicit `--approval-only` GitHub App enrollment mode. Engram encrypts
+  the PEM in its existing vault with a random 256-bit key stored separately as
+  an owner-only device seal, opens it only after the exact Telegram Approve
+  callback, and never requests a local or Telegram passphrase. The source PEM
+  is no longer needed after enrollment. This convenience boundary protects
+  against casual inspection and vault-only disclosure, not a malicious process
+  with the same local account authority; passphrase enrollment remains the
+  stronger portable option.
 - Add optional paired `ENGRAM_GITHUB_APP_PEM_ALIAS` and
   `ENGRAM_GITHUB_APP_PEM_PATH` passwordless local unlock. The selected enrolled
   App can complete exact Telegram approvals without a passphrase; the live

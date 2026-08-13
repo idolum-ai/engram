@@ -10,13 +10,19 @@ runtime state.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
 - `.env.example` and the README configuration table must describe the complete
   supported configuration surface.
+- `engram github app add --approval-only` creates or reuses the owner-only
+  device seal under `ENGRAM_HOME` and atomically replaces the named enrollment
+  without prompting for a passphrase. `github app list` identifies this unlock
+  mode. No `.env` setting or daemon restart is required; the running daemon
+  reloads the vault when the next request arrives.
 - `ENGRAM_GITHUB_APP_PEM_ALIAS` and `ENGRAM_GITHUB_APP_PEM_PATH` optionally
   name one enrolled alias and its live local PEM for passwordless approval.
   Both or neither are required. Their values are loaded at startup, but file
   health is checked only by the selected GitHub route and `/status`, so failure
   cannot take down Telegram/tmux core startup or another App's passphrase route.
 - `/status` reports configured PEM as disabled, ready for its alias,
-  unavailable, unmatched, or ambiguous without exposing the configured path.
+  unavailable, unmatched, ambiguous, or unused because the alias is
+  approval-only, without exposing the configured path.
   Recovery clears both configured PEM variables and restarts into the encrypted
   vault passphrase route; restart also clears process-local leases and grants.
 - `TELEGRAM_API_BASE` selects the Telegram Bot API server root and defaults to

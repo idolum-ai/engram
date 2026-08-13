@@ -28,6 +28,7 @@ var errConfiguredGitHubAppPEMUnavailable = errors.New("configured local GitHub A
 type githubApproval struct {
 	passphrase    []byte
 	configuredPEM bool
+	approvalOnly  bool
 	failure       githubApprovalFailure
 	auditStatus   string
 	err           error
@@ -168,11 +169,14 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 			a.Config.EffectiveGitHubGrantMaxDuration(),
 		)}
 	}
-	configuredPEM, err := a.resolveConfiguredGitHubAppPEM(app)
-	if err != nil {
-		return githubauth.BrokerResponse{Error: err.Error()}
+	var configuredPEM *githubauth.PrivateKeyFileIdentity
+	if !app.ApprovalOnly {
+		configuredPEM, err = a.resolveConfiguredGitHubAppPEM(app)
+		if err != nil {
+			return githubauth.BrokerResponse{Error: err.Error()}
+		}
 	}
-	if configuredPEM == nil && (!app.TelegramUnlock || request.LocalUnlock) && len(request.Passphrase) == 0 {
+	if !app.ApprovalOnly && configuredPEM == nil && (!app.TelegramUnlock || request.LocalUnlock) && len(request.Passphrase) == 0 {
 		return githubauth.BrokerResponse{Error: "this GitHub App requires local passphrase entry", ErrorCode: githubauth.ErrorCodeLocalPassphraseRequired}
 	}
 	pending, err := a.beginGitHubApproval(ctx, session, request, app, configuredPEM)
@@ -230,6 +234,8 @@ func (a *App) handleGitHubBrokerRequest(ctx context.Context, request githubauth.
 	if approval.configuredPEM {
 		privateKey, err = a.readMatchingConfiguredGitHubAppPEM(pending)
 		unlockedApp = currentEnrollment
+	} else if approval.approvalOnly {
+		privateKey, unlockedApp, err = a.GitHubVault.UnlockApprovalOnly(request.App)
 	} else {
 		privateKey, unlockedApp, err = a.GitHubVault.Unlock(request.App, approval.passphrase)
 	}
@@ -423,12 +429,17 @@ func (a *App) beginGitHubApproval(ctx context.Context, session state.TerminalSes
 	}
 	pendingRequest := request
 	pendingRequest.Passphrase = nil
+	localPassphrase := append([]byte(nil), request.Passphrase...)
+	if app.ApprovalOnly {
+		githubauth.Zero(localPassphrase)
+		localPassphrase = nil
+	}
 	pending := &githubPendingRequest{
 		ID:              requestID,
 		SessionID:       session.ID,
 		BindingKey:      githubBindingKey(request.Binding),
 		Request:         pendingRequest,
-		LocalPassphrase: append([]byte(nil), request.Passphrase...),
+		LocalPassphrase: localPassphrase,
 		ConfiguredPEM:   configuredPEM,
 		ExpiresAt:       now.Add(githubApprovalTTL),
 		ApprovalText:    text,
@@ -478,6 +489,8 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 	text.WriteString("\n\nApprove within 15 minutes.")
 	if configuredPEM {
 		text.WriteString(" The configured local PEM was validated for this request and will be reopened and revalidated after approval.")
+	} else if app.ApprovalOnly {
+		text.WriteString(" The device-sealed credential will be opened only after approval; no passphrase is required.")
 	} else if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
 		text.WriteString(" The password reply is not end-to-end encrypted.")
 	} else {
@@ -491,6 +504,8 @@ func (a *App) githubApprovalText(session state.TerminalSession, request githubau
 		app.AppID, app.EffectiveInstallationID(), html.EscapeString(app.PublicFingerprint))
 	if configuredPEM {
 		text.WriteString("Unlock: configured local PEM\n")
+	} else if app.ApprovalOnly {
+		text.WriteString("Unlock: approval-only device seal\n")
 	} else if len(request.Passphrase) == 0 && app.TelegramUnlock && !request.LocalUnlock {
 		text.WriteString("Unlock: Telegram reply\n")
 	} else {
@@ -638,6 +653,13 @@ func (a *App) handleGitHubApprovalCallback(ctx context.Context, cb telegram.Call
 		}
 		pending.State = "resolved"
 		pending.Result <- githubApproval{configuredPEM: true}
+		a.githubMu.Unlock()
+		a.answerCallback(ctx, cb.ID, "approved")
+		return "callback_ok"
+	}
+	if app.ApprovalOnly {
+		pending.State = "resolved"
+		pending.Result <- githubApproval{approvalOnly: true}
 		a.githubMu.Unlock()
 		a.answerCallback(ctx, cb.ID, "approved")
 		return "callback_ok"
@@ -979,6 +1001,9 @@ func (a *App) configuredGitHubAppPEMStatus() string {
 	if !found {
 		return string(configuredGitHubAppPEMUnmatched)
 	}
+	if selected.ApprovalOnly {
+		return "not used for approval-only alias " + alias
+	}
 	privateKey, identity, err := githubauth.ReadPrivateKeyFile(path)
 	githubauth.Zero(privateKey)
 	if err != nil {
@@ -1024,6 +1049,7 @@ func sameGitHubEnrollment(left, right githubauth.App) bool {
 		sameInt64Set(left.Installations(), right.Installations()) &&
 		left.CredentialIdentityVersion == right.CredentialIdentityVersion &&
 		left.TelegramUnlock == right.TelegramUnlock &&
+		left.ApprovalOnly == right.ApprovalOnly &&
 		left.PublicFingerprint == right.PublicFingerprint &&
 		left.CreatedAt.Equal(right.CreatedAt)
 }

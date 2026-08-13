@@ -106,17 +106,22 @@ func runGitHubAppAdd(args []string) int {
 	fs.Var(&installationIDs, "installation-id", "GitHub App installation ID; repeatable")
 	pemPath := fs.String("pem", "", "path to GitHub App private key PEM")
 	telegramUnlock := fs.Bool("telegram-unlock", false, "allow passphrase replies through Telegram's non-E2E bot transport")
+	approvalOnly := fs.Bool("approval-only", false, "encrypt with this Engram home's device seal and unlock only after Telegram approval")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if alias == "" && fs.NArg() == 1 {
 		alias = fs.Arg(0)
 	} else if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]")
+		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock|--approval-only]")
+		return 2
+	}
+	if *telegramUnlock && *approvalOnly {
+		fmt.Fprintln(os.Stderr, "github app add: --telegram-unlock and --approval-only are mutually exclusive")
 		return 2
 	}
 	if alias == "" || *appID <= 0 || len(installationIDs) == 0 || strings.TrimSpace(*pemPath) == "" {
-		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]")
+		fmt.Fprintln(os.Stderr, "usage: engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock|--approval-only]")
 		return 2
 	}
 	cfg, err := loadGitHubConfig(*envPath)
@@ -136,28 +141,34 @@ func runGitHubAppAdd(args []string) int {
 		return 1
 	}
 	defer githubauth.Zero(privateKey)
-	passphrase, err := promptSecret("Passphrase: ")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "github app add:", err)
-		return 1
-	}
-	defer githubauth.Zero(passphrase)
-	confirmation, err := promptSecret("Confirm passphrase: ")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "github app add:", err)
-		return 1
-	}
-	defer githubauth.Zero(confirmation)
-	if !bytes.Equal(passphrase, confirmation) {
-		fmt.Fprintln(os.Stderr, "github app add: passphrases do not match")
-		return 1
-	}
 	vault, err := githubauth.OpenVault(cfg.GitHubVaultPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "github app add:", err)
 		return 1
 	}
-	item, created, err := vault.AddInstallations(alias, *appID, installationIDs, privateKey, passphrase, *telegramUnlock)
+	var item githubauth.App
+	var created bool
+	if *approvalOnly {
+		item, created, err = vault.AddApprovalOnlyInstallations(alias, *appID, installationIDs, privateKey)
+	} else {
+		passphrase, promptErr := promptSecret("Passphrase: ")
+		if promptErr != nil {
+			fmt.Fprintln(os.Stderr, "github app add:", promptErr)
+			return 1
+		}
+		defer githubauth.Zero(passphrase)
+		confirmation, promptErr := promptSecret("Confirm passphrase: ")
+		if promptErr != nil {
+			fmt.Fprintln(os.Stderr, "github app add:", promptErr)
+			return 1
+		}
+		defer githubauth.Zero(confirmation)
+		if !bytes.Equal(passphrase, confirmation) {
+			fmt.Fprintln(os.Stderr, "github app add: passphrases do not match")
+			return 1
+		}
+		item, created, err = vault.AddInstallations(alias, *appID, installationIDs, privateKey, passphrase, *telegramUnlock)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "github app add:", err)
 		return 1
@@ -174,6 +185,8 @@ func runGitHubAppAdd(args []string) int {
 		item.Alias, action, strings.Join(installationLabels, ","), item.PublicFingerprint)
 	if item.TelegramUnlock {
 		fmt.Fprintln(os.Stdout, "Warning: Telegram bot chats are not end-to-end encrypted; remote passphrase replies are deleted after processing but traverse Telegram's cloud.")
+	} else if item.ApprovalOnly {
+		fmt.Fprintln(os.Stdout, "Approval-only mode uses an owner-only device seal: no passphrase is required, but processes with the same local account authority can recover the credential.")
 	}
 	return 0
 }
@@ -214,7 +227,9 @@ func runGitHubAppList(args []string) int {
 	}
 	for _, app := range apps {
 		unlock := "local"
-		if app.TelegramUnlock {
+		if app.ApprovalOnly {
+			unlock = "approval-only device seal"
+		} else if app.TelegramUnlock {
 			unlock = "telegram opt-in"
 		}
 		installations := make([]string, 0, len(app.Installations()))
@@ -675,7 +690,7 @@ func leadingAlias(args []string) (string, []string) {
 
 func printGitHubHelp(output io.Writer) {
 	fmt.Fprint(output, `Usage:
-  engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]
+  engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock|--approval-only]
   engram github app list [--json]
   engram github app remove <alias> --yes
   engram github grant --app ALIAS [--installation-id ID] --repo OWNER/NAME --permission NAME=read|write --for DURATION --purpose TEXT
@@ -687,7 +702,7 @@ func printGitHubHelp(output io.Writer) {
 
 func printGitHubAppHelp(output io.Writer) {
 	fmt.Fprint(output, `Usage:
-  engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock]
+  engram github app add <alias> --app-id ID --installation-id ID [--installation-id ID...] --pem PATH [--telegram-unlock|--approval-only]
   engram github app list [--json]
   engram github app remove <alias> --yes
 `)
