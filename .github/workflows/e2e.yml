@@ -168,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           npm install --prefix "${RUNNER_TEMP}/agent-clis" \
-            @openai/codex@0.144.5 \
+            @openai/codex@0.147.0 \
             @anthropic-ai/claude-code@2.1.206 \
             opencode-ai@1.18.4
 

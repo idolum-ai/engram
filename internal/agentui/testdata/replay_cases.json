@@ -1,7 +1,7 @@
 [
   {
     "name": "observed_codex_active",
-    "source": "codex 0.144.5-0.144.6 regression corpus",
+    "source": "codex 0.144.5-0.147.0 regression corpus",
     "observation": {
       "current": {
         "text": "• Ran go test ./...\n  └ ok example/internal/app\n\n────────────────────────────────────────────────────────\n\n• Tests pass and the implementation is complete.\n\n─ Worked for 1m 08s ────────────────────────────────────\n\n› Write tests for @filename\n\n• Working (34s • esc to interrupt)\n\ngpt-5.6-sol high fast · ~/code/github.com/idolum-ai · Main [default]",
@@ -21,6 +21,25 @@
       "contains": ["Ran go test ./...", "ok example/internal/app", "Tests pass"],
       "excludes": ["Write tests", "Working (", "gpt-5.6-sol", "Worked for", "────"],
       "roles": {"tool_invocation": 1, "tool_result": 1, "activity": 1, "composer": 1, "status": 1}
+    }
+  },
+  {
+    "name": "observed_codex_parallel_approval",
+    "source": "codex 0.147.0 regression corpus",
+    "observation": {
+      "current": {
+        "text": "• Four commands are waiting for review.\n\n• Reviewing 4 approval requests (1m 55s • esc to interrupt)\n\ngpt-5.6-sol high · /work · Main [default]",
+        "current_command": "codex"
+      }
+    },
+    "want": {
+      "applied": true,
+      "model": "gpt-5.6-sol",
+      "effort": "high",
+      "activity": "awaiting_approval",
+      "contains": ["Four commands are waiting for review."],
+      "excludes": ["Reviewing 4 approval requests", "gpt-5.6-sol"],
+      "roles": {"assistant_message": 1, "activity": 1, "status": 1}
     }
   },
   {

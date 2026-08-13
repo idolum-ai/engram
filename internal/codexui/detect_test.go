@@ -259,15 +259,19 @@ func TestDetectorFallsBackForUnsupportedVersionAndUnrelatedProcess(t *testing.T)
 	}
 }
 
-func TestDetectorSupportsPreviousExplicitlyTestedVersion(t *testing.T) {
-	runner := &fakeCommandRunner{ps: stringsJoinLines(
-		"100 1 100 110 node node",
-		"110 100 110 110 node node /opt/codex/bin/codex",
-	)}
-	detector := testDetector(runner, &fakeVersionResolver{version: "0.144.5"})
-	got, err := detector.Detect(context.Background(), 100, "node")
-	if err != nil || !got.Detected || !got.Supported || got.Version != "0.144.5" {
-		t.Fatalf("previous tested runtime = %#v, err=%v", got, err)
+func TestDetectorSupportsExplicitlyTestedVersions(t *testing.T) {
+	for _, version := range []string{"0.144.5", "0.144.6", "0.147.0"} {
+		t.Run(version, func(t *testing.T) {
+			runner := &fakeCommandRunner{ps: stringsJoinLines(
+				"100 1 100 110 node node",
+				"110 100 110 110 node node /opt/codex/bin/codex",
+			)}
+			detector := testDetector(runner, &fakeVersionResolver{version: version})
+			got, err := detector.Detect(context.Background(), 100, "node")
+			if err != nil || !got.Detected || !got.Supported || got.Version != version {
+				t.Fatalf("tested runtime = %#v, err=%v", got, err)
+			}
+		})
 	}
 }
 
@@ -365,7 +369,7 @@ func TestPackageVersionResolverReadsOnlyOpenAICodexMetadata(t *testing.T) {
 	if err := os.WriteFile(launcher, []byte("#!/usr/bin/env node\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(packageDir, "package.json"), []byte(`{"name":"@openai/codex","version":"0.144.6"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(packageDir, "package.json"), []byte(`{"name":"@openai/codex","version":"0.147.0"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(binDir, "codex")
@@ -376,7 +380,7 @@ func TestPackageVersionResolverReadsOnlyOpenAICodexMetadata(t *testing.T) {
 	if err != nil || got != SupportedVersion {
 		t.Fatalf("Resolve() = %q, %v", got, err)
 	}
-	if err := os.WriteFile(filepath.Join(packageDir, "package.json"), []byte(`{"name":"lookalike","version":"0.144.6"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(packageDir, "package.json"), []byte(`{"name":"lookalike","version":"0.147.0"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := (PackageVersionResolver{}).Resolve(link); err == nil {

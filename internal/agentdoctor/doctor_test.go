@@ -42,8 +42,8 @@ func (runner *doctorRunner) Run(_ context.Context, args ...string) (string, erro
 		return doctorRecord("$1", "main", "0", "@2", "agent", "1", "%4", "/private/work", "claude"), nil
 	case args[0] == "show-options" && strings.Contains(joined, "-gqv"):
 		return strings.Repeat("a", 32) + "\n", nil
-	case args[0] == "display-message" && strings.Contains(joined, "#{pane_pid}\x1f"):
-		return "4242\x1fclaude\n", nil
+	case args[0] == "display-message" && len(args) == 5 && strings.Contains(joined, "pane_pid"):
+		return doctorRecord("4242", "claude"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "pane_pid"):
 		return doctorRecord(strings.Repeat("a", 32), "@2", "%4", "4242", "80", "24", "private", "/private/work", "claude", "on", "off"), nil
 	case args[0] == "display-message" && strings.Contains(joined, "@engram_server_id"):

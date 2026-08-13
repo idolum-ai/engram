@@ -186,10 +186,12 @@ When a tracked pane is confidently identified as the specifically tested Codex
 CLI version, Engram removes recognized Codex interface chrome before guide
 rendering and adds a deterministic line such as
 `Codex · gpt-5.6-sol · high · working` to the card. The adapter currently
-supports `codex-cli 0.144.5` and `0.144.6`. Other versions and uncertain layouts
-use the ordinary terminal path unchanged; raw views and snapshots always remain
-literal. When Codex reports its tested fast mode, the deterministic line retains
-that state as `Codex · gpt-5.6-sol · high · fast · working`.
+supports `codex-cli 0.144.5`, `0.144.6`, and `0.147.0`. Other versions and
+uncertain layouts use the ordinary terminal path unchanged; raw views and
+snapshots always remain literal. Codex `0.147.0` parallel approval review is
+shown as awaiting approval rather than idle. When Codex reports its tested fast
+mode, the deterministic line retains that state as
+`Codex · gpt-5.6-sol · high · fast · working`.
 
 An additional Codex-session context path is available only as an explicit
 privacy opt-in. Set `ENGRAM_CODEX_CONTEXT_TURNS` to `1` through `8` to let guide
@@ -211,10 +213,12 @@ facts, files, references, hashes, and screenshots. Only bounded text from
 visible `user` and `assistant` messages is admitted; system/developer messages,
 hidden reasoning, tool calls and results, generated environment metadata, and
 attachments are excluded. The normal secret redactor and fixed message/byte
-ceilings run before the selected guide provider sees this context. Each full
-message is redacted before its per-message byte ceiling is applied, so a secret
-spanning that boundary is not partially exposed. Engram does not persist
-transcript text.
+ceilings run before the selected guide provider sees this context. Codex JSONL
+records are capped at 4 MiB inside the independent 32 MiB rollout budget; this
+admits observed `0.147.0` generated-metadata records while still rejecting
+unbounded input. Each full message is redacted before its per-message byte
+ceiling is applied, so a secret spanning that boundary is not partially
+exposed. Engram does not persist transcript text.
 
 Claude Code has the same separately gated path. Set
 `ENGRAM_CLAUDE_CONTEXT_TURNS` to `1` through `8` and install the documented

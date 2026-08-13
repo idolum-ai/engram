@@ -84,7 +84,9 @@ from the prior session cannot publish.
 Long-lived rollout files may exceed Engram's fixed read budget. Engram verifies
 their identity from a bounded prefix and reads recent messages from a bounded
 tail ending at the size observed when the file was opened; total work remains
-bounded.
+bounded. Individual records are capped at 4 MiB inside the independent 32 MiB
+rollout budget. This covers observed Codex `0.147.0` generated-metadata records
+without allowing an unbounded JSONL allocation; anything larger fails closed.
 
 ## Disclosure boundary
 

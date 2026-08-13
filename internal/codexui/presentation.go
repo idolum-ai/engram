@@ -190,7 +190,24 @@ func codexWorkingLine(line string) bool {
 
 func codexApprovalReviewLine(line string) bool {
 	line = strings.TrimSpace(strings.TrimLeft(line, "•◦"))
-	return strings.HasPrefix(line, "Reviewing approval request (") && strings.Contains(line, "esc to interrupt")
+	if strings.HasPrefix(line, "Reviewing approval request (") {
+		return strings.Contains(line, "esc to interrupt")
+	}
+	const prefix = "Reviewing "
+	const suffix = " approval requests ("
+	if !strings.HasPrefix(line, prefix) || !strings.Contains(line, suffix) || !strings.Contains(line, "esc to interrupt") {
+		return false
+	}
+	count := strings.TrimSuffix(strings.TrimPrefix(strings.SplitN(line, suffix, 2)[0], prefix), " ")
+	if count == "" || len(count) > 3 || count[0] == '0' {
+		return false
+	}
+	for _, digit := range count {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func removeKnownPlaceholder(lines []string, remove []bool, footer int) {

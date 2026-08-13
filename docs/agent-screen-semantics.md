@@ -168,9 +168,10 @@ composers. Actual user prompts, approval questions, assistant messages, command
 invocations, results, keyboard guidance, and unknown approval prose remain
 evidence.
 
-The process-confirmed Codex adapter remains a fallback for supported Codex
-versions when a frame is too weak for the generic structural contract. The
-Claude adapter runs first because its remembered model is part of the
+The process-confirmed Codex adapter remains a fallback for Codex CLI `0.144.5`,
+`0.144.6`, and `0.147.0` when a frame is too weak for the generic structural
+contract. Version `0.147.0` includes a bounded plural approval-review status.
+The Claude adapter runs first because its remembered model is part of the
 structural proof. Engram currently supports Claude Code `2.1.219`, `2.1.222`,
 `2.1.223`, and `2.1.224`, plus the hermetic `2.1.206` fixture version. Unsupported versions, ambiguous process
 trees, unreadable process identity, and unknown layouts preserve the captured

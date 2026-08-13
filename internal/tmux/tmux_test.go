@@ -778,12 +778,12 @@ func TestPublishRecoveryMetadataUsesPaneLocalOption(t *testing.T) {
 }
 
 func TestPaneProcessReadsOnlyBoundMigrationAnchor(t *testing.T) {
-	runner := &fakeRunner{out: "4242\x1f2.1.223\n"}
+	runner := &fakeRunner{out: tmuxRecord("4242", "2.1.223")}
 	pid, command, err := New(runner).PaneProcess(context.Background(), "%7")
 	if err != nil || pid != 4242 || command != "2.1.223" {
 		t.Fatalf("pid=%d command=%q err=%v", pid, command, err)
 	}
-	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], []string{"display-message", "-p", "-t", "%7", "#{pane_pid}\x1f#{pane_current_command}"}) {
+	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], []string{"display-message", "-p", "-t", "%7", recordFormat("pane_pid", "pane_current_command")}) {
 		t.Fatalf("calls = %#v", runner.calls)
 	}
 	if _, _, err := New(runner).PaneProcess(context.Background(), "7"); err == nil {

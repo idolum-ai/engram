@@ -109,14 +109,15 @@ func (m Manager) PaneProcess(ctx context.Context, paneID string) (int, string, e
 	if !validImmutableID(paneID, '%') {
 		return 0, "", fmt.Errorf("invalid tmux pane id")
 	}
-	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, "#{pane_pid}\x1f#{pane_current_command}")
+	out, err := m.Runner.Run(ctx, "display-message", "-p", "-t", paneID, recordFormat("pane_pid", "pane_current_command"))
 	if err != nil {
 		return 0, "", err
 	}
-	parts := strings.Split(strings.TrimSuffix(out, "\n"), "\x1f")
-	if len(parts) != 2 {
+	records, err := parseRecords(out, 2)
+	if err != nil || len(records) != 1 {
 		return 0, "", fmt.Errorf("unexpected tmux pane process metadata")
 	}
+	parts := records[0]
 	pid, err := strconv.Atoi(parts[0])
 	if err != nil || pid <= 0 {
 		return 0, "", fmt.Errorf("invalid tmux pane process id")

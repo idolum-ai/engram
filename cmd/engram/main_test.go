@@ -36,7 +36,7 @@ type claudeBindRunner struct{ calls [][]string }
 func (r *claudeBindRunner) Run(_ context.Context, args ...string) (string, error) {
 	r.calls = append(r.calls, append([]string(nil), args...))
 	if len(args) > 0 && args[0] == "display-message" {
-		return "100\x1f2.1.223\n", nil
+		return "3:1007:2.1.223\n", nil
 	}
 	return "", nil
 }

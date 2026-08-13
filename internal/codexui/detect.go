@@ -17,8 +17,7 @@ import (
 	"time"
 )
 
-const SupportedVersion = "0.144.6"
-const supportedPreviousVersion = "0.144.5"
+const SupportedVersion = "0.147.0"
 const maxProcessOutputBytes = 2 << 20
 
 type Runtime struct {
@@ -121,7 +120,12 @@ func (d *Detector) Detect(ctx context.Context, panePID int, foreground string) (
 }
 
 func supportedVersion(version string) bool {
-	return version == SupportedVersion || version == supportedPreviousVersion
+	switch version {
+	case "0.144.5", "0.144.6", SupportedVersion:
+		return true
+	default:
+		return false
+	}
 }
 
 func possibleCodexForeground(command string) bool {
