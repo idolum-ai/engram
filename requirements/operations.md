@@ -8,8 +8,9 @@ runtime state.
 - The canonical runtime env file is `~/.engram/.env` with mode `0600`.
 - `make run` must use `ENGRAM_ENV`, defaulting to `$(HOME)/.engram/.env`.
 - A local run may override `ENGRAM_ENV` with another protected regular file.
-- `.env.example` and the README configuration table must describe the complete
-  supported configuration surface.
+- `.env.example` and `docs/configuration.md` must describe the same complete
+  supported configuration surface. `make docs-freshness` checks their key
+  parity.
 - `engram github app add --approval-only` creates or reuses the owner-only
   device seal under `ENGRAM_HOME` and atomically replaces the named enrollment
   without prompting for a passphrase. `github app list` identifies this unlock

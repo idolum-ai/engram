@@ -4,6 +4,17 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Documentation and diagnostics
+
+- Replace the single mixed-purpose README with a concise first-run path and
+  focused configuration, data-flow, session-control, operation, evaluation,
+  and product-surface references. Add a user-journey matrix that joins entry,
+  authority or disclosure, effect, evidence, recovery, and binding requirement.
+- Add `engram commands --format markdown` and generate the checked-in Telegram
+  command reference from the runtime registry. Documentation checks now reject
+  stale command output, configuration-key drift, broken local links, and the
+  unsupported Telegram `/version` guidance corrected in this release.
+
 ## [v0.10.0] - 2026-08-13
 
 ### Agent compatibility

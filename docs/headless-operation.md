@@ -18,6 +18,34 @@ service on Linux or LaunchAgent on macOS. It long-polls Telegram, observes local
 tmux, and preserves state under `~/.engram`. `KillMode=process` on Linux and
 `AbandonProcessGroup` on macOS preserve tmux descendants across Engram stops.
 
+### Install A Published Binary
+
+Choose a version from GitHub Releases, inspect the installer at that same tag,
+then run it. The installer verifies the archive checksum and embedded version
+before atomically replacing the binary:
+
+```sh
+version=vX.Y.Z # replace with the release you reviewed
+curl -fsSLo /tmp/engram-install-release.sh \
+  "https://raw.githubusercontent.com/idolum-ai/engram/${version}/scripts/install-release.sh"
+less /tmp/engram-install-release.sh
+bash /tmp/engram-install-release.sh "${version}"
+```
+
+Release installation does not modify `~/.engram`, create a service, or restart
+one. Use a source checkout for the initial configuration and native service
+definition:
+
+```sh
+make install-service-unit PREFIX="$HOME/.local"
+```
+
+Installing or replacing a binary never restarts the running process. Stop the
+service first when automatic failure recovery must not activate the replacement
+before the planned restart.
+
+### Install From Source
+
 From a source checkout:
 
 ```sh
@@ -27,9 +55,9 @@ ${EDITOR:-vi} "$HOME/.engram/.env"
 make install PREFIX="$HOME/.local"
 ```
 
-The required Telegram values and presentation choices are documented in the
-README configuration table. Check the local configuration before starting or
-restarting the service:
+The required Telegram values and presentation choices are documented in
+[Configuration](configuration.md). Check the local configuration before
+starting or restarting the service:
 
 ```sh
 "$HOME/.local/bin/engram" preflight --env "$HOME/.engram/.env"
@@ -48,10 +76,16 @@ make service-start PREFIX="$HOME/.local"
 Operate it without an attached terminal:
 
 ```sh
+make service-start PREFIX="$HOME/.local"
+make service-stop PREFIX="$HOME/.local"
 make service-status PREFIX="$HOME/.local"
 make service-restart PREFIX="$HOME/.local"
 make service-logs PREFIX="$HOME/.local"
+ENGRAM_LOG_LINES=1000 make service-logs PREFIX="$HOME/.local"
 ```
+
+`ENGRAM_LOG_LINES` accepts a bounded value from 1 through 1000 and defaults to
+200.
 
 `service-status` matches the service manager's live PID to an owner-only
 identity record written by that running Engram process. The reported build is
@@ -67,6 +101,32 @@ regenerates and validates the LaunchAgent or systemd unit from the installed
 binary and current environment path, then performs the explicit restart. Merely
 replacing the binary still does not activate or restart the service.
 
+### Upgrade And Roll Back
+
+From a source checkout:
+
+```sh
+git pull --ff-only
+make check
+make install PREFIX="$HOME/.local"
+make service-restart PREFIX="$HOME/.local"
+make service-status PREFIX="$HOME/.local"
+```
+
+For rollback, install the previously reviewed binary, restart explicitly, and
+verify `make service-status` plus Telegram `/status`.
+
+Remove the service before removing the binary:
+
+```sh
+make uninstall-service PREFIX="$HOME/.local"
+make uninstall PREFIX="$HOME/.local"
+```
+
+Uninstall does not remove tmux sessions, `~/.engram`, or the private runtime
+root. Review those separately when their state and attachments are no longer
+needed.
+
 To keep the user service alive after logout, explicitly enable lingering when
 that matches the host's security policy:
 
@@ -74,8 +134,10 @@ that matches the host's security policy:
 loginctl enable-linger "$USER"
 ```
 
-Use `/status`, `/sessions`, and `/version` in the authorized Telegram DM to
-verify the live process rather than only the binary on disk.
+Use `/status` in the authorized Telegram DM to verify the live application and
+`/sessions` to inspect its tracked work. The local `engram version` command
+identifies a binary on disk; it does not prove that binary is the running
+service.
 
 ### Foreground Equivalent
 

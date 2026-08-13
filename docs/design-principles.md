@@ -319,11 +319,14 @@ quiet and structural rather than competing with the tool.
 
 ## Design Review Questions
 
+- Which row in `docs/product-surface.md` changes, and can the entry, authority,
+  effect, evidence, and recovery still be followed end to end?
 - Does this reduce the time needed to understand a tmux session from Telegram?
 - Does input remain immediate and tmux remain the source of truth?
 - Do guide and snapshot presentations observe the same bounded frame?
 - Is this fact computed locally instead of guessed by a renderer?
 - Are approval, access, and outcome kept separate?
+- Is a capability only configured, or proven available at the point of use?
 - Do related checks follow the same pane, frame, enrollment, or request?
 - Does the anchor stay compact on a phone?
 - Does this help many-session multitasking without creating notification noise?

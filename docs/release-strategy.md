@@ -115,7 +115,7 @@ binary first with `engram version`. This preserves active tmux work and keeps
 service interruption explicit. Automatic failure recovery can activate the new
 file after an unexpected crash, so operators needing a strict activation
 boundary stop the service before replacement. After an explicit
-`make service-restart`, Telegram `/version` or `/status` and
+`make service-restart`, Telegram `/status`, and
 `make service-status` verify the running process.
 
 Initial systemd or LaunchAgent setup still uses a source checkout for

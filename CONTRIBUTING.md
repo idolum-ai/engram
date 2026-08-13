@@ -22,15 +22,27 @@ make secrets
 ## Change Guidance
 
 - Update command metadata when changing commands.
-- Update README, requirements, privacy guidance, and `.env.example` when
-  changing configuration, external data flow, storage, or service behavior.
+- Walk the affected row in [`docs/product-surface.md`](docs/product-surface.md)
+  from entry through authority, effect, evidence, and recovery. Add or revise a
+  row when a change creates a new user journey.
+- Update the binding requirement, implementation, focused test, and the one
+  owning user document when behavior changes. Link from the README instead of
+  copying detailed reference material into it.
+- Update [`docs/configuration.md`](docs/configuration.md) and `.env.example`
+  together when changing supported configuration.
+- Update [`docs/data-flow.md`](docs/data-flow.md), `SECURITY.md`, and
+  `requirements/security.md` when changing external transfer, local sensitive
+  storage, authority, or execution boundaries.
 - Add focused tests for Telegram payloads, tmux behavior, state migration,
   attachment handling, and security boundaries.
 - Keep Linux systemd activation distinct from the macOS LaunchAgent's explicit
   activation.
 - Do not add third-party Go dependencies without an explicit requirements
   update and design review.
-- Keep terminology specific to Engram, Telegram, tmux, and Haiku.
+- Use the terms in [`docs/conceptual-model.md`](docs/conceptual-model.md).
+  Distinguish a user-facing session from its watch and tmux pane; distinguish
+  configuration from availability; and distinguish approval, access, and
+  outcome.
 - Write documentation in simple English. Keep it professional, deadpan, and
   concise. Use technical terms only when they make the behavior more exact.
 

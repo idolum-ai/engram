@@ -18,7 +18,9 @@ Telegram is Engram's only user interface.
   admission bookkeeping may advance without retaining rejected identifiers.
 - Command metadata has one source: `/help`, Bot API registration, and
   `engram commands` derive from the registry. Every public slash command handled
-  by the app has metadata.
+  by the app has metadata. `engram commands --format markdown` renders the
+  checked-in `docs/telegram-commands.md`; the documentation freshness gate must
+  reject a stale rendering.
 - Replies beginning `//` are escaped pane input, not Engram commands.
 - `/remember` lists templates, `/remember <name>` inspects one, and `/remember
   <name> <text>` creates or replaces one. `/forget <name>` removes one.

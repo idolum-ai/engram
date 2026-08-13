@@ -10,6 +10,11 @@ The requirements documents are the binding source of truth.
 repository vocabulary used to read these contracts. It is descriptive; when it
 and a requirement disagree, the requirement controls.
 
+[`docs/product-surface.md`](../docs/product-surface.md) joins each user journey
+to its authority or disclosure, effect, visible evidence, recovery path, and
+binding requirement. A user-visible change should remain traceable across that
+path, its implementation, and focused tests.
+
 ## Foundation
 
 1. [`telegram.md`](telegram.md) - Telegram command, callback, formatting, and delivery contracts.
@@ -26,6 +31,8 @@ and a requirement disagree, the requirement controls.
 - `make public-readiness` checks public-facing repository hygiene.
 - `make secrets` scans tracked files for likely live secrets.
 - `make check` runs the full local quality gate.
+- `make docs-freshness` compares the supported configuration keys and generated
+  Telegram command reference to their code-owned sources.
 - The manually dispatched hermetic golden path is documented in
   [`docs/e2e-testing.md`](../docs/e2e-testing.md); it is intentionally separate
   from the default local gate.
