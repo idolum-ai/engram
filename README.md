@@ -51,9 +51,8 @@ You need:
   `ENGRAM_SNAPSHOT_BROWSER` explicitly to opt into another executable. A
   configured guide provider is optional and enables `🗣️`
 
-Linux with a systemd user session is the supported service installation. macOS
-is compile-checked and runs manually in the foreground; Engram does not install
-a launchd service.
+Linux uses a systemd user service. macOS uses an official LaunchAgent whose
+activation remains explicit. Both platforms also support foreground operation.
 
 On macOS, use the standalone `chrome-headless-shell` published through
 [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/).
@@ -166,8 +165,8 @@ make service-status PREFIX="$HOME/.local"
 ```
 
 Only one Engram process may poll a configured bot/user/chat tuple, and only one
-process may own an `ENGRAM_HOME`. Do not run a foreground copy while the systemd
-service is active.
+process may own an `ENGRAM_HOME`. Do not run a foreground copy while the native
+user service is active.
 
 ### 6. Verify the first session
 
@@ -324,6 +323,8 @@ with `GH_TOKEN` in its environment.
 For a complete enrollment, verification, approval, revocation, PEM-lifecycle,
 and troubleshooting walkthrough, see the
 [pane-scoped GitHub App capability guide](docs/github-app-capabilities.md).
+The [conceptual model](docs/conceptual-model.md) defines how credentials,
+enrollments, approvals, grants, leases, tokens, and outcomes relate.
 
 Enroll a GitHub App under a short local alias:
 
@@ -1310,6 +1311,8 @@ operating boundary of each.
 [`docs/protocol-posture.md`](docs/protocol-posture.md) explains why Engram should
 standardize its truth and attention invariants without becoming a general wire
 protocol.
+[`docs/conceptual-model.md`](docs/conceptual-model.md) maps the terminal,
+presentation, and GitHub access terms used across the code and requirements.
 
 The conversational Haiku fixture eval is opt-in because it makes live
 Anthropic calls. It fails each fixture on hard regressions such as injected

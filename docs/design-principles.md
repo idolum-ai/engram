@@ -20,6 +20,7 @@ anchors, copyable references, and simple recovery.
 - One frame, two presentations.
 - Deterministic facts beat guesses.
 - Interpretation is optional; tmux remains literal.
+- Keep approval, access, and outcome separate.
 - Existing tmux first.
 - Slow automatic edits, instant manual refresh.
 - Recoverable local service.
@@ -234,6 +235,16 @@ effort. Model output is presentation and is never executed automatically.
 The guide should not invent history, claim work succeeded, or explain Engram
 controls unless the terminal itself is about Engram.
 
+### Keep approval, access, and outcome separate
+
+Approval lets a request continue. It does not mean that GitHub accepted the
+scope, delivered a token, or that the child succeeded. Credentials and tokens
+provide bounded access; they do not record approval or outcome.
+
+The terminal path follows the same rule. A frame observes a pane, a guide
+interprets the frame, and proposed keys reach tmux only after the required
+validation and confirmation. See [`conceptual-model.md`](conceptual-model.md).
+
 ### Existing tmux first
 
 Engram should work with tmux sessions that already exist. Target selection is
@@ -312,6 +323,8 @@ quiet and structural rather than competing with the tool.
 - Does input remain immediate and tmux remain the source of truth?
 - Do guide and snapshot presentations observe the same bounded frame?
 - Is this fact computed locally instead of guessed by a renderer?
+- Are approval, access, and outcome kept separate?
+- Do related checks follow the same pane, frame, enrollment, or request?
 - Does the anchor stay compact on a phone?
 - Does this help many-session multitasking without creating notification noise?
 - What happens if a renderer, Telegram, or the service fails halfway through?

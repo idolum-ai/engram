@@ -23,8 +23,10 @@ runtime state.
 - `/status` reports configured PEM as disabled, ready for its alias,
   unavailable, unmatched, ambiguous, or unused because the alias is
   approval-only, without exposing the configured path.
-  Recovery clears both configured PEM variables and restarts into the encrypted
-  vault passphrase route; restart also clears process-local leases and grants.
+  For a passphrase enrollment, recovery clears both configured PEM variables
+  and restarts into the encrypted-vault passphrase route. Approval-only
+  enrollments continue to use their device seal instead. Restart also clears
+  process-local leases and grants.
 - `TELEGRAM_API_BASE` selects the Telegram Bot API server root and defaults to
   `https://api.telegram.org`. It must be an absolute HTTP(S) URL without
   userinfo, query, or fragment; an optional path prefix and trailing slash are
