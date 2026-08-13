@@ -104,13 +104,7 @@ func run(args []string) int {
 		fmt.Println(version.String())
 		return 0
 	case "commands":
-		data, err := commands.JSON()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "commands:", err)
-			return 1
-		}
-		fmt.Println(string(data))
-		return 0
+		return runCommands(args[1:])
 	case "signal":
 		stdout := len(args) >= 2 && args[1] == "--stdout"
 		messageStart := 1
@@ -185,26 +179,60 @@ func run(args []string) int {
 }
 
 func printHelp() {
-	fmt.Print(`Usage:
-  engram run [--env ~/.engram/.env]
-  engram preflight [--env ~/.engram/.env]
-  engram status [--env ~/.engram/.env]
-  engram dry-start [--env ~/.engram/.env]
+	fmt.Print(`Engram controls local tmux sessions from one authorized Telegram chat.
+
+Service:
+  engram run [--env PATH]       Run the Telegram service in the foreground
+  engram preflight [--env PATH] Validate configuration without network calls or writes
+  engram status [--env PATH]    Report configured readiness without network calls
+  engram dry-start [--env PATH] Validate and initialize local state without polling
+
+Local inspection:
   engram inspect status
   engram inspect sessions
   engram inspect frame <watch-id>
-  engram doctor agent [--provider codex|claude] [--pane %N] [--env ~/.engram/.env]
-  engram compatibility capture --provider codex|claude --pane %N --out /tmp/candidate
-  engram commands
+  engram doctor agent [--provider codex|claude] [--pane %N] [--env PATH]
+  engram compatibility capture --provider codex|claude --pane %N --out DIR
+
+Integration:
   engram signal [--stdout] <message>
-  engram codex-hook
-  engram codex-bind
-  engram claude-hook
-  engram claude-bind
+  engram codex-hook | codex-bind
+  engram claude-hook | claude-bind
   engram github help
+
+Reference:
+  engram commands [--format json|markdown]  Print registered Telegram commands
   engram version
   engram help
 `)
+}
+
+func runCommands(args []string) int {
+	fs := flag.NewFlagSet("commands", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	format := fs.String("format", "json", "output format: json or markdown")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: engram commands [--format json|markdown]")
+		return 2
+	}
+	switch strings.ToLower(strings.TrimSpace(*format)) {
+	case "json":
+		data, err := commands.JSON()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "commands:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+	case "markdown":
+		fmt.Print(commands.Markdown())
+	default:
+		fmt.Fprintln(os.Stderr, "commands: --format must be json or markdown")
+		return 2
+	}
+	return 0
 }
 
 func runAgentDoctor(args []string) int {

@@ -32,6 +32,10 @@ failure are in scope.
 
 ## Security Boundary
 
+The operational transfer and storage map is maintained in
+[`docs/data-flow.md`](docs/data-flow.md). The binding security requirements are
+in [`requirements/security.md`](requirements/security.md).
+
 - Exactly one Telegram user and one chat are authorized. DM-only operation is
   the supported deployment.
 - Authorized Telegram input can execute shell commands and key presses in tmux.

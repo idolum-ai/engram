@@ -62,6 +62,49 @@ type bindStartResolver struct{ at time.Time }
 
 func (r bindStartResolver) Resolve(int) (time.Time, string, error) { return r.at, "fixture-start", nil }
 
+func TestHelpExplainsLocalSurfaces(t *testing.T) {
+	stdout, stderr, code := captureCommand(t, func() int {
+		return run([]string{"help"})
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("help code=%d stderr=%q", code, stderr)
+	}
+	for _, want := range []string{
+		"Service:",
+		"Local inspection:",
+		"Integration:",
+		"Reference:",
+		"Validate configuration without network calls or writes",
+		"engram commands [--format json|markdown]",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("help missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
+func TestCommandsSupportsJSONAndMarkdown(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"commands"}, want: `"command": "help"`},
+		{args: []string{"commands", "--format", "markdown"}, want: "# Telegram Command Reference"},
+	} {
+		stdout, stderr, code := captureCommand(t, func() int { return run(test.args) })
+		if code != 0 || stderr != "" || !strings.Contains(stdout, test.want) {
+			t.Fatalf("run(%v) code=%d stderr=%q stdout=%q", test.args, code, stderr, stdout)
+		}
+	}
+
+	_, stderr, code := captureCommand(t, func() int {
+		return run([]string{"commands", "--format", "xml"})
+	})
+	if code != 2 || !strings.Contains(stderr, "--format must be json or markdown") {
+		t.Fatalf("invalid format code=%d stderr=%q", code, stderr)
+	}
+}
+
 func TestCodexHookPublishesExactSessionToInheritedPane(t *testing.T) {
 	runner := &hookRunner{}
 	input := strings.NewReader(`{"session_id":"019f7607-c8b0-74b3-87ca-64a7e6e7ede0","cwd":"/work","hook_event_name":"SessionStart","source":"resume"}`)
