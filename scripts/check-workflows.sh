@@ -67,7 +67,7 @@ required_e2e_phrases=(
   'ENGRAM_E2E=1'
   'ENGRAM_AGENT_UI_E2E=1'
   'ENGRAM_AGENT_UI_REQUIRE_ALL=1'
-  '@openai/codex@0.144.5'
+  '@openai/codex@0.147.0'
   '@anthropic-ai/claude-code@2.1.206'
   'opencode-ai@1.18.4'
   '.supervisor-done'

@@ -19,11 +19,15 @@ import (
 )
 
 const (
-	ParserVersion     = "codex-rollout-v1"
-	MaxContextBytes   = sessioncontext.MaxContextBytes
-	MaxMessageBytes   = sessioncontext.MaxMessageBytes
-	maxRolloutBytes   = 32 << 20
-	maxJSONLineBytes  = 2 << 20
+	ParserVersion   = "codex-rollout-v1"
+	MaxContextBytes = sessioncontext.MaxContextBytes
+	MaxMessageBytes = sessioncontext.MaxMessageBytes
+	maxRolloutBytes = 32 << 20
+	// Codex 0.147.0 can place generated environment and instruction metadata
+	// above 2 MiB in one user-message record. Keep the per-record ceiling well
+	// below the independent 32 MiB rollout budget while admitting that observed
+	// shape so generated metadata can be discarded before context composition.
+	maxJSONLineBytes  = 4 << 20
 	maxCandidateFiles = 2
 	maxWalkEntries    = 100000
 	maxWalkDepth      = 5

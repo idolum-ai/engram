@@ -341,8 +341,8 @@ func (r *resumeRunner) Run(_ context.Context, args ...string) (string, error) {
 				program = r.nativeForeground
 			}
 		}
-		if args[len(args)-1] == "#{pane_pid}\x1f#{pane_current_command}" {
-			return "1234\x1f" + program + "\n", nil
+		if strings.Contains(args[len(args)-1], "#{n:pane_pid}") {
+			return framedTmuxRecord("1234", program), nil
 		}
 		return framedTmuxBindingRecord("$1", "@2", "%2", "main", "1", "0", "1", r.cwd, program), nil
 	case "set-buffer":

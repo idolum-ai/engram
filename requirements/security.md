@@ -128,7 +128,9 @@ privacy model must stay small and explicit.
 - The versioned Codex rollout parser may admit only bounded visible text from
   user and assistant message records. It must exclude system/developer prompts,
   hidden reasoning, tool arguments and results, attachments, generated
-  environment/instruction metadata, and unrelated record types. Existing
+  environment/instruction metadata, and unrelated record types. An individual
+  JSONL record is capped at 4 MiB within the independent fixed rollout read
+  budget; records beyond that bound fail closed. Existing
   redaction and aggregate byte/message limits run before the selected provider
   receives the historical context. Complete decoded messages must be redacted
   before per-message truncation. Engram never persists or audits transcript

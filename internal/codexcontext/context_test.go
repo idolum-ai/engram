@@ -62,6 +62,55 @@ func TestReaderUsesExactSessionAndVisibleMessagesOnly(t *testing.T) {
 	}
 }
 
+func TestReaderAcceptsObservedCodex0147GeneratedMetadataRecordWithinBound(t *testing.T) {
+	root := t.TempDir()
+	largeGeneratedMetadata := "<environment_context>" + strings.Repeat("x", (2<<20)+(128<<10)) + "</environment_context>"
+	record, err := json.Marshal(map[string]any{
+		"type": "response_item",
+		"payload": map[string]any{
+			"type": "message", "role": "user",
+			"content": []map[string]string{
+				{"type": "input_text", "text": largeGeneratedMetadata},
+				{"type": "input_text", "text": "Keep only this visible request."},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record) <= 2<<20 || len(record) >= maxJSONLineBytes {
+		t.Fatalf("fixture record size = %d, want above legacy limit and below current bound", len(record))
+	}
+	writeFixture(t, root, fixtureSessionID, `{"type":"session_meta","payload":{"id":"`+fixtureSessionID+`"}}`+"\n"+string(record)+"\n")
+
+	got, err := (Reader{SessionsRoot: root}).Load(fixtureSessionID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].Text != "Keep only this visible request." {
+		t.Fatalf("visible messages = %#v", got.Messages)
+	}
+}
+
+func TestReaderRejectsRecordBeyondBound(t *testing.T) {
+	root := t.TempDir()
+	record, err := json.Marshal(map[string]any{
+		"type": "response_item",
+		"payload": map[string]any{
+			"type": "message", "role": "user",
+			"content": []map[string]string{{"type": "input_text", "text": strings.Repeat("x", maxJSONLineBytes)}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, root, fixtureSessionID, `{"type":"session_meta","payload":{"id":"`+fixtureSessionID+`"}}`+"\n"+string(record)+"\n")
+
+	if _, err := (Reader{SessionsRoot: root}).Load(fixtureSessionID, 1); err == nil {
+		t.Fatal("oversized Codex rollout record was accepted")
+	}
+}
+
 func TestReaderFailsClosedOnAmbiguousOrMismatchedRollout(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, fixtureSessionID, `{"type":"session_meta","payload":{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}}`+"\n")

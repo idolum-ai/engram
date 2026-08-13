@@ -103,6 +103,23 @@ func TestPresentExtractsSupportedModelSwitchNotice(t *testing.T) {
 	}
 }
 
+func TestPresentRecognizesObservedParallelApprovalReview(t *testing.T) {
+	input := strings.Join([]string{
+		"• Four commands are waiting for review.",
+		"",
+		"• Reviewing 4 approval requests (1m 55s • esc to interrupt)",
+		"",
+		"gpt-5.6-sol high · /work · Main [default]",
+	}, "\n")
+	got := Present(Runtime{Detected: true, Supported: true, Version: "0.147.0"}, input)
+	if !got.Applied || got.Version != "0.147.0" || got.Activity != "reviewing approval" || strings.Contains(got.Text, "Reviewing 4 approval requests") {
+		t.Fatalf("presentation = %#v", got)
+	}
+	if !strings.Contains(got.Text, "Four commands are waiting for review.") {
+		t.Fatalf("cleaned text dropped conversation evidence: %q", got.Text)
+	}
+}
+
 func TestPresentRecognizesObservedFastFooter(t *testing.T) {
 	input := strings.Join([]string{
 		"• The requested audit is complete.",

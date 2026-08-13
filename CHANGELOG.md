@@ -4,6 +4,16 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+### Agent compatibility
+
+- Extend the process-confirmed Codex screen adapter and hermetic client pin to
+  CLI `0.147.0`, including its plural parallel-approval status. Admit observed
+  generated-metadata rollout records up to a new 4 MiB per-record ceiling
+  within the unchanged 32 MiB total read budget, while retaining all existing
+  message and prompt bounds. Make the local compatibility doctor use tmux's
+  length-prefixed metadata framing so tmux cannot escape its delimiter into a
+  false `pane process metadata is unavailable` result.
+
 ### GitHub capabilities
 
 - Add optional paired `ENGRAM_GITHUB_APP_PEM_ALIAS` and

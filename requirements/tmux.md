@@ -144,9 +144,10 @@ Engram requires tmux 3.2 or newer for byte-length metadata formats.
   Codex placeholder prompts removed, to the selected guide provider in one
   non-streaming request. When the tmux pane process tree contains Codex and its
   read-only `@openai/codex` package metadata reports a specifically supported
-  `0.144.5` or `0.144.6` version, a versioned adapter may additionally remove
-  only tested Codex UI structures and extract model, effort, the tested
-  fast-mode marker, activity, and a narrow model-switch notice. Process
+  `0.144.5`, `0.144.6`, or `0.147.0` version, a versioned adapter may
+  additionally remove only tested Codex UI structures and extract model,
+  effort, the tested fast-mode marker, activity including bounded parallel
+  approval review, and a narrow model-switch notice. Process
   arguments are inspected only in memory and are never persisted or logged.
   Unsupported versions, missing metadata, and
   unmatched footer layouts retain the ordinary guide input unchanged. The
