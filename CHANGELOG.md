@@ -4,6 +4,8 @@ Notable user-visible and operational changes are recorded here.
 
 ## Unreleased
 
+## [v0.10.0] - 2026-08-13
+
 ### Agent compatibility
 
 - Extend the process-confirmed Codex screen adapter and hermetic client pin to
